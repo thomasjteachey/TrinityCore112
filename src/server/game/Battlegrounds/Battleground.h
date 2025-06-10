@@ -294,7 +294,7 @@ class TC_GAME_API Battleground
         uint32 GetScriptId() const          { return ScriptId; }
         uint32 GetFightId() const { return m_FightId; }
         uint32 GetReplayId() const { return m_ReplayId; }
-        bool IsReplay() const { return false; }
+        bool IsReplay() const { return m_IsReplay; }
         void SetReplay(bool isReplay) { m_IsReplay = isReplay; }
         void SetFightId(uint32 FightId) { m_FightId = FightId; }
         void SetReplayId(uint32 ReplayId) { m_ReplayId = ReplayId; }
@@ -363,7 +363,7 @@ class TC_GAME_API Battleground
 
         void StartBattleground();
 
-        void toggleReplay(uint32 replayId) { m_IsReplay = true; m_ReplayId = replayId; }
+        void toggleReplay(uint32 replayId) { m_IsReplay = replayId != 0; m_ReplayId = replayId; }
 
         GameObject* GetBGObject(uint32 type, bool logError = true);
         Creature* GetBGCreature(uint32 type, bool logError = true);
