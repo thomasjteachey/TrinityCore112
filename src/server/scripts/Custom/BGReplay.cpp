@@ -8,6 +8,7 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "GameTime.h"
 #include <unordered_map>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
@@ -73,7 +74,15 @@ std::vector<Opcodes> watchList = {
 
 
 struct PacketRecord { uint32 timestamp; WorldPacket packet; };
-struct MatchRecord { BattlegroundTypeId typeId; uint8 arenaTypeId; uint32 mapId; std::deque<PacketRecord> packets; };
+struct MatchRecord {
+    BattlegroundTypeId typeId;
+    uint8 arenaTypeId;
+    uint32 mapId;
+    uint32 startTime = 0;
+    ObjectGuid allianceRecorder;
+    ObjectGuid hordeRecorder;
+    std::deque<PacketRecord> packets;
+};
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
 
@@ -90,13 +99,23 @@ public:
         if (bg == nullptr || bg->IsReplay()) return;
         //ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
-        //record packets from 1 player of each team
-        //iterate just in case a player leaves and used as reference
-        for (auto it : bg->GetPlayers()) {
-            if (it.second.Team == session->GetPlayer()->GetBGTeam()) {
-                if (it.first.GetRawValue() != session->GetPlayer()->GetGUID())
-                    return; else break;
-            }
+        // record packets from only one player per team to avoid duplicates
+        TeamId team = session->GetPlayer()->GetBGTeam();
+        if (team == TEAM_ALLIANCE)
+        {
+            if (!record.allianceRecorder)
+                record.allianceRecorder = session->GetPlayer()->GetGUID();
+
+            if (record.allianceRecorder != session->GetPlayer()->GetGUID())
+                return;
+        }
+        else
+        {
+            if (!record.hordeRecorder)
+                record.hordeRecorder = session->GetPlayer()->GetGUID();
+
+            if (record.hordeRecorder != session->GetPlayer()->GetGUID())
+                return;
         }
         //ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
@@ -108,7 +127,10 @@ public:
             records[bg->GetInstanceID()].packets.clear();
         MatchRecord& record = records[bg->GetInstanceID()];
 
-        uint32 timestamp = bg->GetStartTime();
+        if (record.startTime == 0)
+            record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
+
+        uint32 timestamp = GameTime::GetGameTimeMS() - record.startTime;
         record.typeId = bg->GetTypeID(false);
         if (record.typeId == BATTLEGROUND_AA)
         {
@@ -188,6 +210,9 @@ public:
 
         //serialize arena replay data
         ByteBuffer buffer;
+        buffer << match.startTime;
+        buffer << match.allianceRecorder;
+        buffer << match.hordeRecorder;
         uint32 headerSize;
         uint32 timestamp;
         for (auto it : match.packets) {
@@ -319,6 +344,10 @@ public:
             record.mapId = uint32(fields[5].GetUInt32());
             ByteBuffer buffer;
             buffer.append(&data[0], data.size());
+
+            buffer >> record.startTime;
+            buffer >> record.allianceRecorder;
+            buffer >> record.hordeRecorder;
 
             /** deserialize replay binary data **/
             uint32 packetSize;
