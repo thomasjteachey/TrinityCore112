@@ -8,6 +8,8 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "GameTime.h"
+#include "Random.h"
 #include <unordered_map>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
@@ -73,7 +75,94 @@ std::vector<Opcodes> watchList = {
 
 
 struct PacketRecord { uint32 timestamp; WorldPacket packet; };
-struct MatchRecord { BattlegroundTypeId typeId; uint8 arenaTypeId; uint32 mapId; std::deque<PacketRecord> packets; };
+struct MatchRecord {
+    BattlegroundTypeId typeId;
+    uint8 arenaTypeId;
+    uint32 mapId;
+    uint32 startTime = 0;
+    ObjectGuid allianceRecorder;
+    ObjectGuid hordeRecorder;
+    std::deque<PacketRecord> packets;
+};
+
+namespace
+{
+    ObjectGuid GenerateAlternateGuid(ObjectGuid guid)
+    {
+        uint64 raw = guid.GetRawValue();
+        uint64 newRaw = raw;
+        for (int i = 0; i < 6; ++i)
+        {
+            uint8 oldByte = (raw >> (i * 8)) & 0xFF;
+            if (oldByte)
+            {
+                uint8 newByte = oldByte;
+                while (newByte == oldByte)
+                    newByte = uint8(urand(1, 255));
+                newRaw &= ~(uint64(0xFF) << (i * 8));
+                newRaw |= uint64(newByte) << (i * 8);
+            }
+        }
+        return ObjectGuid(newRaw);
+    }
+
+    void ReplaceGuid(WorldPacket& packet, ObjectGuid const& oldGuid, ObjectGuid const& newGuid)
+    {
+        if (oldGuid == newGuid || oldGuid.IsEmpty())
+            return;
+
+        uint64 oldRaw = oldGuid.GetRawValue();
+        uint64 newRaw = newGuid.GetRawValue();
+
+        size_t len = packet.wpos();
+        if (!len)
+            return;
+
+        uint8* data = packet.contents();
+        for (size_t i = 0; i + sizeof(uint64) <= len; ++i)
+        {
+            uint64 val;
+            memcpy(&val, data + i, sizeof(uint64));
+            if (val == oldRaw)
+                memcpy(data + i, &newRaw, sizeof(uint64));
+        }
+
+        ByteBuffer oldPack;
+        oldPack << oldGuid.WriteAsPacked();
+        ByteBuffer newPack;
+        newPack << newGuid.WriteAsPacked();
+
+        auto oldVec = oldPack.contentsAsVector();
+        auto newVec = newPack.contentsAsVector();
+
+        if (oldVec.size() == newVec.size())
+        {
+            for (size_t i = 0; i + oldVec.size() <= len; ++i)
+            {
+                if (memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
+                    memcpy(data + i, newVec.data(), newVec.size());
+            }
+        }
+    }
+
+    void RemapSpectatorGuid(MatchRecord& record, ObjectGuid spectator)
+    {
+        if (!spectator)
+            return;
+
+        if (record.allianceRecorder == spectator || record.hordeRecorder == spectator)
+        {
+            ObjectGuid newGuid = GenerateAlternateGuid(spectator);
+            for (PacketRecord& r : record.packets)
+                ReplaceGuid(r.packet, spectator, newGuid);
+
+            if (record.allianceRecorder == spectator)
+                record.allianceRecorder = newGuid;
+            if (record.hordeRecorder == spectator)
+                record.hordeRecorder = newGuid;
+        }
+    }
+}
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
 
@@ -90,13 +179,26 @@ public:
         if (bg == nullptr || bg->IsReplay()) return;
         //ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
-        //record packets from 1 player of each team
-        //iterate just in case a player leaves and used as reference
-        for (auto it : bg->GetPlayers()) {
-            if (it.second.Team == session->GetPlayer()->GetBGTeam()) {
-                if (it.first.GetRawValue() != session->GetPlayer()->GetGUID())
-                    return; else break;
-            }
+
+        MatchRecord& record = records[bg->GetInstanceID()];
+
+        // record packets from only one player per team to avoid duplicates
+        TeamId team = session->GetPlayer()->GetBGTeam();
+        if (team == TEAM_ALLIANCE)
+        {
+            if (!record.allianceRecorder)
+                record.allianceRecorder = session->GetPlayer()->GetGUID();
+
+            if (record.allianceRecorder != session->GetPlayer()->GetGUID())
+                return;
+        }
+        else
+        {
+            if (!record.hordeRecorder)
+                record.hordeRecorder = session->GetPlayer()->GetGUID();
+
+            if (record.hordeRecorder != session->GetPlayer()->GetGUID())
+                return;
         }
         //ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
@@ -104,11 +206,14 @@ public:
             return;
         }
 
+        // ensure the record container exists for this battleground instance
         if (records.find(bg->GetInstanceID()) == records.end())
-            records[bg->GetInstanceID()].packets.clear();
-        MatchRecord& record = records[bg->GetInstanceID()];
+            records[bg->GetInstanceID()] = MatchRecord();
 
-        uint32 timestamp = bg->GetStartTime();
+        if (record.startTime == 0)
+            record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
+
+        uint32 timestamp = GameTime::GetGameTimeMS() - record.startTime;
         record.typeId = bg->GetTypeID(false);
         if (record.typeId == BATTLEGROUND_AA)
         {
@@ -188,6 +293,9 @@ public:
 
         //serialize arena replay data
         ByteBuffer buffer;
+        buffer << match.startTime;
+        buffer << match.allianceRecorder;
+        buffer << match.hordeRecorder;
         uint32 headerSize;
         uint32 timestamp;
         for (auto it : match.packets) {
@@ -244,6 +352,8 @@ public:
                 return false;
 
             MatchRecord record = loadedReplays[player->GetGUID()];
+            RemapSpectatorGuid(record, player->GetGUID());
+            loadedReplays[player->GetGUID()] = record;
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
             if (!bg) {
                 handler.PSendSysMessage("Couldn't create arena map!");
@@ -288,6 +398,8 @@ public:
             MatchRecord record;
             deserializeMatchData(record, fields);
 
+            RemapSpectatorGuid(record, p->GetGUID());
+
             loadedReplays[p->GetGUID()] = std::move(record);
             return true;
         }
@@ -319,6 +431,10 @@ public:
             record.mapId = uint32(fields[5].GetUInt32());
             ByteBuffer buffer;
             buffer.append(&data[0], data.size());
+
+            buffer >> record.startTime;
+            buffer >> record.allianceRecorder;
+            buffer >> record.hordeRecorder;
 
             /** deserialize replay binary data **/
             uint32 packetSize;
