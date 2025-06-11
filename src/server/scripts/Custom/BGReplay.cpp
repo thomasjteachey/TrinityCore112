@@ -8,6 +8,7 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "Log.h"
 #include "Map.h"
 #include "ObjectMgr.h"
 #include "GameTime.h"
@@ -128,6 +129,7 @@ namespace
             if (uncompress(buffer.contents(), &realSize, packet.contents() + sizeof(uint32), packet.size() - sizeof(uint32)) != Z_OK)
                 return;
             buffer.resize(realSize);
+            TC_LOG_DEBUG("bg.replay", "Decompressed packet opcode {} from {} to {} bytes", GetOpcodeNameForLogging(static_cast<Opcodes>(packet.GetOpcode())), packet.size(), realSize);
         }
         else
         {
@@ -140,12 +142,16 @@ namespace
 
         size_t len = buffer.size();
         uint8* data = buffer.contents();
+        size_t replaced = 0;
         for (size_t i = 0; i + sizeof(uint64) <= len; ++i)
         {
             uint64 val;
             memcpy(&val, data + i, sizeof(uint64));
             if (val == oldRaw)
+            {
                 memcpy(data + i, &newRaw, sizeof(uint64));
+                ++replaced;
+            }
         }
 
         ByteBuffer oldPack; oldPack << oldGuid.WriteAsPacked();
@@ -184,6 +190,8 @@ namespace
                 data = buffer.contents();
             }
         }
+
+        TC_LOG_DEBUG("bg.replay", "ReplaceGuid {} -> {} replaced {} raw occurrences", oldGuid.ToString(), newGuid.ToString(), replaced);
 
         packet.clear();
         if (compressed)
@@ -377,6 +385,7 @@ public:
             Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
             if (!player)
                 break;
+            TC_LOG_TRACE("bg.replay", "Sending opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(match.packets.front().packet.GetOpcode())), match.packets.front().packet.size());
             player->GetSession()->SendPacket(&match.packets.front().packet);
             match.packets.pop_front();
         }
@@ -476,6 +485,7 @@ public:
         }
 
         bool loadReplayDataForPlayer(Player* p, uint32 matchId) {
+            TC_LOG_INFO("bg.replay", "Loading replay {} for player {} ({})", matchId, p->GetName(), p->GetGUID().ToString());
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ARENA_REPLAYS);
             stmt->setUInt32(0, matchId);
 
@@ -492,11 +502,13 @@ public:
             }
             MatchRecord record;
             deserializeMatchData(record, fields);
+            TC_LOG_INFO("bg.replay", "Deserialized replay: start {} map {} packets {}", record.startTime, record.mapId, record.packets.size());
 
             ObjectGuid spectator = p->GetGUID();
             if (record.allianceRecorder == spectator || record.hordeRecorder == spectator)
             {
                 ObjectGuid newGuid = ObjectGuid::Create<HighGuid::Player>(sObjectMgr->GetGenerator<HighGuid::Player>().Generate());
+                TC_LOG_INFO("bg.replay", "Replacing spectator GUID {} with {}", spectator.ToString(), newGuid.ToString());
                 for (PacketRecord& r : record.packets)
                     ReplaceGuid(r.packet, spectator, newGuid);
 
@@ -507,6 +519,7 @@ public:
             }
 
             loadedReplays[p->GetGUID()] = std::move(record);
+            TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[p->GetGUID()].packets.size(), p->GetGUID().ToString());
             return true;
         }
 
