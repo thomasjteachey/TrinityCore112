@@ -222,7 +222,6 @@ namespace
         WorldSession* botSession = new WorldSession(0, "ReplayBot", nullptr, SEC_ADMINISTRATOR,
             2, 0, Minutes(0), LOCALE_enUS, 0, false);
         Player* bot = new Player(botSession);
-        botSession->SetPlayer(bot);
 
         struct ReplayBotCreateInfo : CharacterCreateInfo
         {
@@ -236,6 +235,7 @@ namespace
         } createInfo;
 
         bot->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo);
+        botSession->SetPlayer(bot);
         bot->GetMotionMaster()->Initialize();
 
         bot->SetGameMaster(true);
