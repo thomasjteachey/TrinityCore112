@@ -237,9 +237,21 @@ public:
         if (record.startTime == 0)
         {
             record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
-            Player* bot = replayBots[bg->GetInstanceID()];
-            record.allianceRecorder = bot->GetGUID();
-            record.hordeRecorder = bot->GetGUID();
+            for (auto const& itr : bg->GetPlayers())
+            {
+                ObjectGuid guid = itr.first;
+                if (Player* plr = ObjectAccessor::FindPlayer(guid))
+                {
+                    uint32 team = plr->GetBGTeam();
+                    if (team == ALLIANCE && record.allianceRecorder.IsEmpty())
+                        record.allianceRecorder = plr->GetGUID();
+                    else if (team == HORDE && record.hordeRecorder.IsEmpty())
+                        record.hordeRecorder = plr->GetGUID();
+
+                    if (!record.allianceRecorder.IsEmpty() && !record.hordeRecorder.IsEmpty())
+                        break;
+                }
+            }
         }
 
         uint32 timestamp = GameTime::GetGameTimeMS() - record.startTime;
