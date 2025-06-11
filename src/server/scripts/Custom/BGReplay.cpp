@@ -223,7 +223,6 @@ namespace
             2, 0, Minutes(0), LOCALE_enUS, 0, false);
         Player* bot = new Player(botSession);
         botSession->SetPlayer(bot);
-        bot->GetMotionMaster()->Initialize();
 
         struct ReplayBotCreateInfo : CharacterCreateInfo
         {
@@ -237,6 +236,7 @@ namespace
         } createInfo;
 
         bot->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo);
+        bot->GetMotionMaster()->Initialize();
 
         bot->SetGameMaster(true);
         bot->SetGMVisible(false);
@@ -257,10 +257,12 @@ namespace
         if (itr == replayBots.end())
             return;
         Player* bot = itr->second;
+        WorldSession* session = bot->GetSession();
         if (bot->GetMap())
             bot->GetMap()->RemovePlayerFromMap(bot, true);
-        delete bot->GetSession();
-        delete bot;
+        if (session)
+            session->SetPlayer(nullptr);
+        delete session;
         replayBots.erase(itr);
     }
 }
