@@ -161,11 +161,16 @@ namespace
         botSession->SetPlayer(bot);
         bot->GetMotionMaster()->Initialize();
 
-        CharacterCreateInfo createInfo;
-        createInfo.Name = "ReplayBot";
-        createInfo.Race = RACE_HUMAN;
-        createInfo.Class = CLASS_MAGE;
-        createInfo.Gender = GENDER_MALE;
+        struct ReplayBotCreateInfo : CharacterCreateInfo
+        {
+            ReplayBotCreateInfo()
+            {
+                Name = "ReplayBot";
+                Race = RACE_HUMAN;
+                Class = CLASS_MAGE;
+                Gender = GENDER_MALE;
+            }
+        } createInfo;
 
         bot->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo);
 
