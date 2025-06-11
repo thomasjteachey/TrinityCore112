@@ -166,6 +166,7 @@ namespace
         createInfo.Race = RACE_HUMAN;
         createInfo.Class = CLASS_MAGE;
         createInfo.Gender = GENDER_MALE;
+
         bot->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo);
 
         bot->SetGameMaster(true);
