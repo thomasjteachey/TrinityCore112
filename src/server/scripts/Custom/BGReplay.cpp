@@ -245,6 +245,7 @@ namespace
         Position const* pos = bg->GetTeamStartPosition(TEAM_ALLIANCE);
         bot->Relocate(*pos);
         bot->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), PLAYER_MAX_BATTLEGROUND_QUEUES, false, false, TEAM_NEUTRAL);
+        bot->ResetMap();
         bot->SetMap(bg->GetBgMap());
         bg->GetBgMap()->AddPlayerToMap(bot);
         bg->AddSpectator(bot);
