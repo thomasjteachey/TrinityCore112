@@ -22,6 +22,7 @@
 #include "Player.h"
 #include "WorldSession.h"
 #include <DBCStores.h>
+#include <zlib.h>
 
 
 std::vector<Opcodes> watchList = {
@@ -113,14 +114,32 @@ namespace
         if (oldGuid == newGuid || oldGuid.IsEmpty())
             return;
 
+        bool compressed = packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT;
+        ByteBuffer buffer;
+
+        if (compressed)
+        {
+            if (packet.size() < sizeof(uint32))
+                return;
+
+            uint32 size = packet.read<uint32>(0);
+            buffer.resize(size);
+            uLongf realSize = size;
+            if (uncompress(buffer.contents(), &realSize, packet.contents() + sizeof(uint32), packet.size() - sizeof(uint32)) != Z_OK)
+                return;
+            buffer.resize(realSize);
+        }
+        else
+        {
+            buffer.resize(packet.size());
+            memcpy(buffer.contents(), packet.contents(), packet.size());
+        }
+
         uint64 oldRaw = oldGuid.GetRawValue();
         uint64 newRaw = newGuid.GetRawValue();
 
-        size_t len = packet.wpos();
-        if (!len)
-            return;
-
-        uint8* data = packet.contents();
+        size_t len = buffer.size();
+        uint8* data = buffer.contents();
         for (size_t i = 0; i + sizeof(uint64) <= len; ++i)
         {
             uint64 val;
@@ -129,21 +148,57 @@ namespace
                 memcpy(data + i, &newRaw, sizeof(uint64));
         }
 
-        ByteBuffer oldPack;
-        oldPack << oldGuid.WriteAsPacked();
-        ByteBuffer newPack;
-        newPack << newGuid.WriteAsPacked();
-
+        ByteBuffer oldPack; oldPack << oldGuid.WriteAsPacked();
+        ByteBuffer newPack; newPack << newGuid.WriteAsPacked();
         auto oldVec = oldPack.contentsAsVector();
         auto newVec = newPack.contentsAsVector();
 
-        if (oldVec.size() == newVec.size())
+        if (!oldVec.empty())
         {
-            for (size_t i = 0; i + oldVec.size() <= len; ++i)
+            if (oldVec.size() == newVec.size())
             {
-                if (memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
-                    memcpy(data + i, newVec.data(), newVec.size());
+                for (size_t i = 0; i + oldVec.size() <= len; ++i)
+                    if (memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
+                        memcpy(data + i, newVec.data(), newVec.size());
             }
+            else
+            {
+                std::vector<uint8> newData;
+                newData.reserve(len); // approximate
+                for (size_t i = 0; i < len;)
+                {
+                    if (i + oldVec.size() <= len && memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
+                    {
+                        newData.insert(newData.end(), newVec.begin(), newVec.end());
+                        i += oldVec.size();
+                    }
+                    else
+                    {
+                        newData.push_back(data[i]);
+                        ++i;
+                    }
+                }
+                buffer.clear();
+                buffer.append(newData.data(), newData.size());
+                len = buffer.size();
+                data = buffer.contents();
+            }
+        }
+
+        packet.clear();
+        if (compressed)
+        {
+            uLongf destSize = compressBound(len);
+            packet.resize(destSize + sizeof(uint32));
+            packet.put<uint32>(0, len);
+            if (compress(packet.contents() + sizeof(uint32), &destSize, buffer.contents(), len) != Z_OK)
+                return;
+            packet.resize(destSize + sizeof(uint32));
+            packet.SetOpcode(SMSG_COMPRESSED_UPDATE_OBJECT);
+        }
+        else
+        {
+            packet.append(buffer.contents(), len);
         }
     }
 }
@@ -441,7 +496,7 @@ public:
             ObjectGuid spectator = p->GetGUID();
             if (record.allianceRecorder == spectator || record.hordeRecorder == spectator)
             {
-                ObjectGuid newGuid = GenerateAlternateGuid(spectator);
+                ObjectGuid newGuid = ObjectGuid::Create<HighGuid::Player>(sObjectMgr->GetGenerator<HighGuid::Player>().Generate());
                 for (PacketRecord& r : record.packets)
                     ReplaceGuid(r.packet, spectator, newGuid);
 
