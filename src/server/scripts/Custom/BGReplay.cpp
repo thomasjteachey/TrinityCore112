@@ -8,6 +8,7 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "Log.h"
 #include "Map.h"
 #include "ObjectMgr.h"
 #include "GameTime.h"
@@ -128,7 +129,8 @@ namespace
             if (uncompress(buffer.contents(), &realSize, packet.contents() + sizeof(uint32), packet.size() - sizeof(uint32)) != Z_OK)
                 return;
             buffer.resize(realSize);
-            TC_LOG_DEBUG("bg.replay", "Decompressed packet opcode {} from {} to {} bytes", packet.GetOpcodeName(), packet.size(), realSize);
+            TC_LOG_DEBUG("bg.replay", "Decompressed packet opcode {} from {} to {} bytes", GetOpcodeNameForLogging(static_cast<Opcodes>(packet.GetOpcode())), packet.size(), realSize);
+
         }
         else
         {
@@ -384,7 +386,8 @@ public:
             Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
             if (!player)
                 break;
-            TC_LOG_TRACE("bg.replay", "Sending opcode {} size {}", match.packets.front().packet.GetOpcodeName(), match.packets.front().packet.size());
+
+            TC_LOG_TRACE("bg.replay", "Sending opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(match.packets.front().packet.GetOpcode())), match.packets.front().packet.size());
             player->GetSession()->SendPacket(&match.packets.front().packet);
             match.packets.pop_front();
         }
