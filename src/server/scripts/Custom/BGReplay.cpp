@@ -257,10 +257,12 @@ namespace
         if (itr == replayBots.end())
             return;
         Player* bot = itr->second;
+        WorldSession* session = bot->GetSession();
         if (bot->GetMap())
             bot->GetMap()->RemovePlayerFromMap(bot, true);
-        delete bot->GetSession();
-        delete bot;
+        if (session)
+            session->SetPlayer(nullptr);
+        delete session;
         replayBots.erase(itr);
     }
 }
