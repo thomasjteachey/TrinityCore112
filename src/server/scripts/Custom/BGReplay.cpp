@@ -162,6 +162,12 @@ public:
         //ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
 
+
+        // ensure the record container exists for this battleground instance
+        if (records.find(bg->GetInstanceID()) == records.end())
+            records[bg->GetInstanceID()] = MatchRecord();
+
+
         MatchRecord& record = records[bg->GetInstanceID()];
 
         // record packets from only one player per team to avoid duplicates
@@ -187,10 +193,6 @@ public:
         {
             return;
         }
-
-        // ensure the record container exists for this battleground instance
-        if (records.find(bg->GetInstanceID()) == records.end())
-            records[bg->GetInstanceID()] = MatchRecord();
 
         if (record.startTime == 0)
             record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
