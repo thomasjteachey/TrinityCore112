@@ -8,6 +8,8 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "Map.h"
+#include "ObjectMgr.h"
 #include "GameTime.h"
 #include "Random.h"
 #include <unordered_map>
@@ -147,6 +149,51 @@ namespace
 }
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
+std::unordered_map<uint32, Player*> replayBots;
+
+namespace
+{
+    Player* CreateReplayBot(Battleground* bg)
+    {
+        WorldSession* botSession = new WorldSession(0, "ReplayBot", nullptr, SEC_ADMINISTRATOR,
+            2, 0, Minutes(0), LOCALE_enUS, 0, false);
+        Player* bot = new Player(botSession);
+        botSession->SetPlayer(bot);
+        bot->GetMotionMaster()->Initialize();
+
+        CharacterCreateInfo createInfo;
+        createInfo.Name = "ReplayBot";
+        createInfo.Race = RACE_HUMAN;
+        createInfo.Class = CLASS_MAGE;
+        createInfo.Gender = GENDER_MALE;
+        bot->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo);
+
+        bot->SetGameMaster(true);
+        bot->SetGMVisible(false);
+        bot->SetIsSpectator(true);
+
+        Position const* pos = bg->GetTeamStartPosition(TEAM_ALLIANCE);
+        bot->Relocate(*pos);
+        bot->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), PLAYER_MAX_BATTLEGROUND_QUEUES, false, false, TEAM_NEUTRAL);
+        bot->SetMap(bg->GetBgMap());
+        bg->GetBgMap()->AddPlayerToMap(bot);
+        bg->AddSpectator(bot);
+        return bot;
+    }
+
+    void DestroyReplayBot(Battleground* bg)
+    {
+        auto itr = replayBots.find(bg->GetInstanceID());
+        if (itr == replayBots.end())
+            return;
+        Player* bot = itr->second;
+        if (bot->GetMap())
+            bot->GetMap()->RemovePlayerFromMap(bot, true);
+        delete bot->GetSession();
+        delete bot;
+        replayBots.erase(itr);
+    }
+}
 
 class BGReplayServerScript : public ServerScript {
 public:
@@ -170,24 +217,11 @@ public:
 
         MatchRecord& record = records[bg->GetInstanceID()];
 
-        // record packets from only one player per team to avoid duplicates
-        uint32 team = session->GetPlayer()->GetBGTeam();
-        if (team == ALLIANCE)
-        {
-            if (!record.allianceRecorder)
-                record.allianceRecorder = session->GetPlayer()->GetGUID();
+        if (!replayBots[bg->GetInstanceID()])
+            replayBots[bg->GetInstanceID()] = CreateReplayBot(bg);
 
-            if (record.allianceRecorder != session->GetPlayer()->GetGUID())
-                return;
-        }
-        else
-        {
-            if (!record.hordeRecorder)
-                record.hordeRecorder = session->GetPlayer()->GetGUID();
-
-            if (record.hordeRecorder != session->GetPlayer()->GetGUID())
-                return;
-        }
+        if (session->GetPlayer() != replayBots[bg->GetInstanceID()])
+            return;
         //ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
         {
@@ -195,7 +229,12 @@ public:
         }
 
         if (record.startTime == 0)
+        {
             record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
+            Player* bot = replayBots[bg->GetInstanceID()];
+            record.allianceRecorder = bot->GetGUID();
+            record.hordeRecorder = bot->GetGUID();
+        }
 
         uint32 timestamp = GameTime::GetGameTimeMS() - record.startTime;
         record.typeId = bg->GetTypeID(false);
@@ -221,8 +260,9 @@ public:
         //save replay when a bg ends
         if (!bg->IsReplay()) {
             saveReplay(bg);
-            return;
         }
+        DestroyReplayBot(bg);
+        return;
     }
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 diff) override {
