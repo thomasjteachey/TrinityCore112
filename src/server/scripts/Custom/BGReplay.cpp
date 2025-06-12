@@ -259,6 +259,7 @@ namespace
             return;
         Player* bot = itr->second;
         WorldSession* session = bot->GetSession();
+        bot->CleanupsBeforeDelete();
         if (bot->GetMap())
             bot->GetMap()->RemovePlayerFromMap(bot, true);
         if (session)
