@@ -128,6 +128,9 @@ namespace
                 return;
 
             uint32 size = packet.read<uint32>(0);
+            if (!size)
+                return;
+
             buffer.resize(size);
             uLongf realSize = size;
             if (uncompress(buffer.contents(), &realSize, packet.contents() + sizeof(uint32), packet.size() - sizeof(uint32)) != Z_OK)
@@ -139,7 +142,8 @@ namespace
         else
         {
             buffer.resize(packet.size());
-            memcpy(buffer.contents(), packet.contents(), packet.size());
+            if (packet.size() > 0)
+                memcpy(buffer.contents(), packet.contents(), packet.size());
         }
 
         uint64 oldRaw = oldGuid.GetRawValue();
