@@ -251,6 +251,8 @@ namespace
 
     Player* CreateReplayBot(Battleground* bg)
     {
+        if (!bg->FindBgMap())
+            return nullptr;
         WorldSession* botSession = new WorldSession(0, "ReplayBot", std::make_shared<ReplaySocket>(), SEC_ADMINISTRATOR,
             2, 0, Minutes(0), LOCALE_enUS, 0, false);
         Player* bot = new Player(botSession);
@@ -323,6 +325,14 @@ public:
 
 
         MatchRecord& record = records[bg->GetInstanceID()];
+
+        BattlegroundMap* map = bg->FindBgMap();
+        if (!map)
+            return; // map hasn't been created yet
+
+        // player hasn't teleported into the battleground instance
+        if (session->GetPlayer()->GetMap() != map)
+            return;
 
         uint32 instanceId = bg->GetInstanceID();
         if (!replayBots[instanceId])
