@@ -403,6 +403,18 @@ public:
         if (it == records.end()) return;
         MatchRecord& match = it->second;
 
+        if (match.typeId == BATTLEGROUND_TYPE_NONE)
+        {
+            match.typeId = bg->GetTypeID(false);
+            if (match.typeId == BATTLEGROUND_AA)
+                match.typeId = bg->GetTypeID(true);
+        }
+        if (!match.arenaTypeId)
+            match.arenaTypeId = bg->GetArenaType();
+        if (!match.mapId)
+            match.mapId = bg->GetMapId();
+
+
         //serialize arena replay data
         ByteBuffer buffer;
         buffer << match.startTime;
