@@ -13,6 +13,7 @@
 #include "ObjectMgr.h"
 #include "GameTime.h"
 #include "Random.h"
+#include <boost/asio.hpp>
 #include <unordered_map>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
@@ -213,13 +214,38 @@ namespace
 }
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
+// Headless spectators used for recording packets per battleground instance
 std::unordered_map<uint32, Player*> replayBots;
 
 namespace
 {
+    // Dummy socket used so the headless spectator can receive packets
+    class ReplaySocket : public WorldSocket
+    {
+    public:
+        ReplaySocket() : WorldSocket(Create()) {}
+
+        static tcp::socket Create()
+        {
+            static boost::asio::io_context io;
+            tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
+            tcp::socket server(io);
+            tcp::socket client(io);
+            acceptor.async_accept(server);
+            client.connect(acceptor.local_endpoint());
+            io.poll();
+            acceptor.close();
+            server.close();
+            return client;
+        }
+
+        void Start() override {}
+        bool Update() override { return true; }
+    };
+
     Player* CreateReplayBot(Battleground* bg)
     {
-        WorldSession* botSession = new WorldSession(0, "ReplayBot", nullptr, SEC_ADMINISTRATOR,
+        WorldSession* botSession = new WorldSession(0, "ReplayBot", std::make_shared<ReplaySocket>(), SEC_ADMINISTRATOR,
             2, 0, Minutes(0), LOCALE_enUS, 0, false);
         Player* bot = new Player(botSession);
 
@@ -249,6 +275,7 @@ namespace
         bot->SetMap(bg->GetBgMap());
         bg->GetBgMap()->AddPlayerToMap(bot);
         bg->AddSpectator(bot);
+        TC_LOG_DEBUG("bg.replay", "Created replay bot for instance {}", bg->GetInstanceID());
         return bot;
     }
 
@@ -298,9 +325,9 @@ public:
             return;
         //ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
-        {
             return;
-        }
+
+        TC_LOG_TRACE("bg.replay", "Recording opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(packet.GetOpcode())), packet.size());
 
         if (record.startTime == 0)
         {
@@ -403,25 +430,35 @@ public:
         if (it == records.end()) return;
         MatchRecord& match = it->second;
 
-        //serialize arena replay data
+        if (match.packets.empty())
+        {
+            TC_LOG_DEBUG("bg.replay", "Replay for instance {} contains no packets and will not be saved", bg->GetInstanceID());
+            records.erase(it);
+            return;
+        }
+
+        TC_LOG_INFO("bg.replay", "Saving replay for instance {} with {} packets", bg->GetInstanceID(), match.packets.size());
+
+        // serialize arena replay data
         ByteBuffer buffer;
         buffer << match.startTime;
         buffer << match.allianceRecorder;
         buffer << match.hordeRecorder;
         uint32 headerSize;
         uint32 timestamp;
-        for (auto it : match.packets) {
-            headerSize = it.packet.size(); //header 4Bytes packet size
+        for (auto it : match.packets)
+        {
+            headerSize = it.packet.size(); // header 4 Bytes packet size
             timestamp = it.timestamp;
 
-            buffer << headerSize; //4 bytes
-            buffer << timestamp; //4 bytes
+            buffer << headerSize; // 4 bytes
+            buffer << timestamp; // 4 bytes
             buffer << it.packet.GetOpcode(); // 2 bytes
             if (headerSize > 0)
                 buffer.append(it.packet.contents(), it.packet.size()); // headerSize bytes
         }
+
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ARENA_REPLAYS);
-        //stmt->setUInt32(0, id);
         stmt->setUInt32(0, uint32(match.arenaTypeId));
         stmt->setUInt32(1, uint32(match.typeId));
         stmt->setUInt32(2, buffer.size());
@@ -462,6 +499,13 @@ public:
 
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
+
+            if (loadedReplays[player->GetGUID()].packets.empty())
+            {
+                handler.PSendSysMessage("Replay data not found.");
+                handler.SetSentErrorMessage(true);
+                return false;
+            }
 
             MatchRecord record = loadedReplays[player->GetGUID()];
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
