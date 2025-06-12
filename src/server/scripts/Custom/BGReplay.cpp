@@ -326,12 +326,18 @@ public:
 
         MatchRecord& record = records[bg->GetInstanceID()];
 
+        BattlegroundMap* map = bg->FindBgMap();
+        if (!map)
+            return; // map hasn't been created yet
+
+        // player hasn't teleported into the battleground instance
+        if (session->GetPlayer()->GetMap() != map)
+            return;
+
         uint32 instanceId = bg->GetInstanceID();
         if (!replayBots[instanceId])
         {
             if (creatingReplayBots.count(instanceId))
-                return;
-            if (!bg->FindBgMap())
                 return;
 
             creatingReplayBots.insert(instanceId);
