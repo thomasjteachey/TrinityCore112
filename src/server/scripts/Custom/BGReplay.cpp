@@ -251,6 +251,8 @@ namespace
 
     Player* CreateReplayBot(Battleground* bg)
     {
+        if (!bg->FindBgMap())
+            return nullptr;
         WorldSession* botSession = new WorldSession(0, "ReplayBot", std::make_shared<ReplaySocket>(), SEC_ADMINISTRATOR,
             2, 0, Minutes(0), LOCALE_enUS, 0, false);
         Player* bot = new Player(botSession);
@@ -328,6 +330,8 @@ public:
         if (!replayBots[instanceId])
         {
             if (creatingReplayBots.count(instanceId))
+                return;
+            if (!bg->FindBgMap())
                 return;
 
             creatingReplayBots.insert(instanceId);
