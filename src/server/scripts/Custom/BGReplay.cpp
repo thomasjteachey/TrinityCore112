@@ -408,6 +408,11 @@ public:
         if (it == loadedReplays.end()) return;
         MatchRecord& match = it->second;
 
+        // ensure spectator has finished loading into the battleground
+        Player* spectator = ObjectAccessor::FindPlayerByLowGUID(bg->GetReplayId());
+        if (!spectator || spectator->GetMapId() != bg->GetMapId())
+            return;
+
         // free data once all spectators have left or the replay is finished
         if (match.packets.empty() || !bg->HaveSpectators()) {
             loadedReplays.erase(it);
@@ -426,13 +431,9 @@ public:
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
             if (!bg->HaveSpectators())
                 break;
-            uint32 playerGUID = bg->GetReplayId();
-            Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-            if (!player)
-                break;
 
             TC_LOG_TRACE("bg.replay", "Sending opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(match.packets.front().packet.GetOpcode())), match.packets.front().packet.size());
-            player->GetSession()->SendPacket(&match.packets.front().packet);
+            spectator->GetSession()->SendPacket(&match.packets.front().packet);
             match.packets.pop_front();
         }
     }
