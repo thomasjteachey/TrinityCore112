@@ -8,8 +8,10 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "WorldSocket.h"
 #include "Log.h"
 #include "Map.h"
+#include "ObjectDefines.h"
 #include "ObjectMgr.h"
 #include "GameTime.h"
 #include "Random.h"
@@ -231,8 +233,8 @@ namespace
             tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
             tcp::socket server(io);
             tcp::socket client(io);
-            acceptor.async_accept(server);
             client.connect(acceptor.local_endpoint());
+            acceptor.accept(server);
             io.poll();
             acceptor.close();
             server.close();
@@ -529,6 +531,7 @@ public:
             player->SetIsSpectator(true);
             bg->toggleReplay(player->GetGUID());
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
+            bg->GetBgMap()->SetVisibilityRange(MAX_VISIBILITY_DISTANCE);
             bg->StartBattleground();
 
             BattlegroundTypeId bgTypeId = bg->GetTypeID();
