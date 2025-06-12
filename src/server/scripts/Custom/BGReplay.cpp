@@ -233,7 +233,8 @@ namespace
             tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
             tcp::socket server(io);
             tcp::socket client(io);
-            client.connect(acceptor.local_endpoint());
+            client.connect(tcp::endpoint(boost::asio::ip::address_v4::loopback(),
+                                         acceptor.local_endpoint().port()));
             acceptor.accept(server);
             io.poll();
             acceptor.close();
