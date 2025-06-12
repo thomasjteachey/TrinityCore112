@@ -17,6 +17,7 @@
 #include "Random.h"
 #include <boost/asio.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
 #include "ScriptMgr.h"
@@ -218,6 +219,8 @@ std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
 // Headless spectators used for recording packets per battleground instance
 std::unordered_map<uint32, Player*> replayBots;
+// Helper container to avoid recursive bot creation
+std::unordered_set<uint32> creatingReplayBots;
 
 namespace
 {
@@ -321,10 +324,18 @@ public:
 
         MatchRecord& record = records[bg->GetInstanceID()];
 
-        if (!replayBots[bg->GetInstanceID()])
-            replayBots[bg->GetInstanceID()] = CreateReplayBot(bg);
+        uint32 instanceId = bg->GetInstanceID();
+        if (!replayBots[instanceId])
+        {
+            if (creatingReplayBots.count(instanceId))
+                return;
 
-        if (session->GetPlayer() != replayBots[bg->GetInstanceID()])
+            creatingReplayBots.insert(instanceId);
+            replayBots[instanceId] = CreateReplayBot(bg);
+            creatingReplayBots.erase(instanceId);
+            return;
+        }
+        if (session->GetPlayer() != replayBots[instanceId])
             return;
         //ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
