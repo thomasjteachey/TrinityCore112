@@ -430,6 +430,18 @@ public:
         if (it == records.end()) return;
         MatchRecord& match = it->second;
 
+        if (match.typeId == BATTLEGROUND_TYPE_NONE)
+        {
+            match.typeId = bg->GetTypeID(false);
+            if (match.typeId == BATTLEGROUND_AA)
+                match.typeId = bg->GetTypeID(true);
+        }
+        if (!match.arenaTypeId)
+            match.arenaTypeId = bg->GetArenaType();
+        if (!match.mapId)
+            match.mapId = bg->GetMapId();
+
+
         if (match.packets.empty())
         {
             TC_LOG_DEBUG("bg.replay", "Replay for instance {} contains no packets and will not be saved", bg->GetInstanceID());
