@@ -543,7 +543,6 @@ public:
             player->SetIsSpectator(true);
             bg->toggleReplay(player->GetGUID());
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
-            bg->GetBgMap()->SetVisibilityRange(MAX_VISIBILITY_DISTANCE);
             bg->StartBattleground();
 
             BattlegroundTypeId bgTypeId = bg->GetTypeID();
@@ -659,8 +658,23 @@ public:
     }
 };
 
+class BGReplayPlayerScript : public PlayerScript
+{
+public:
+    BGReplayPlayerScript() : PlayerScript("BGReplayPlayerScript") { }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (Battleground* bg = player->GetBattleground())
+            if (bg->IsReplay())
+                if (BattlegroundMap* map = bg->FindBgMap())
+                    map->SetVisibilityRange(MAX_VISIBILITY_DISTANCE);
+    }
+};
+
 void AddBGReplayScripts() {
     new BGReplayServerScript();
     new BGReplayBGScript();
     new ReplayGossip();
+    new BGReplayPlayerScript();
 }
