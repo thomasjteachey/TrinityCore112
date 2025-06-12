@@ -313,8 +313,8 @@ public:
 
         //ignore packet when no bg or casual games
         if (bg == nullptr || bg->IsReplay()) return;
-        //ignore packets until arena started
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
+        // ignore packets before players have entered the battleground
+        if (bg->GetStatus() <= BattlegroundStatus::STATUS_WAIT_QUEUE) return;
 
 
         // ensure the record container exists for this battleground instance
@@ -401,39 +401,39 @@ public:
             bg->SetStartDelayTime(5000);
             bg->SetStartTime(bg->GetStartTime() + (startDelayTime - 5000));
         }
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
+        if (bg->GetStatus() < BattlegroundStatus::STATUS_WAIT_JOIN) return;
 
         //retrieve replay data
         auto it = loadedReplays.find(bg->GetReplayId());
         if (it == loadedReplays.end()) return;
         MatchRecord& match = it->second;
 
-        //if replay ends or spectator left > free replay data and/or kick player
-        if (match.packets.empty() || bg->GetPlayers().empty()) {
-            loadedReplays.erase(it);
+        // ensure spectator has finished loading into the battleground
+        Player* spectator = ObjectAccessor::FindPlayerByLowGUID(bg->GetReplayId());
+        if (!spectator || spectator->GetMapId() != bg->GetMapId())
+            return;
 
-            if (!bg->GetPlayers().empty())
+        // free data once all spectators have left or the replay is finished
+        if (match.packets.empty() || !bg->HaveSpectators()) {
+            loadedReplays.erase(it);
+            if (bg->HaveSpectators())
             {
                 uint32 playerGUID = bg->GetReplayId();
                 bg->EndNow();
                 bg->toggleReplay(0);
-                Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-                player->LeaveBattleground(bg);
+                if (Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID))
+                    player->LeaveBattleground(bg);
             }
             return;
         }
 
         //send replay data to spectator
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
-            if (bg->GetPlayers().empty())
-                break;
-            uint32 playerGUID = bg->GetReplayId();
-            Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-            if (!player)
+            if (!bg->HaveSpectators())
                 break;
 
             TC_LOG_TRACE("bg.replay", "Sending opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(match.packets.front().packet.GetOpcode())), match.packets.front().packet.size());
-            player->GetSession()->SendPacket(&match.packets.front().packet);
+            spectator->GetSession()->SendPacket(&match.packets.front().packet);
             match.packets.pop_front();
         }
     }
