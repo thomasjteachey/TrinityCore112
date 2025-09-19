@@ -9,6 +9,8 @@
 #include "ScriptMgr.h"
 #include "WorldSession.h"
 #include <unordered_map>
+#include <unordered_set>
+#include <algorithm>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
 #include "ScriptMgr.h"
@@ -19,6 +21,31 @@
 #include "WorldSession.h"
 #include <DBCStores.h>
 
+
+namespace
+{
+    constexpr uint32 REPLAY_FORMAT_SIGNATURE = 0x5245504C; // 'REPL'
+    constexpr uint16 REPLAY_FORMAT_VERSION = 1;
+
+    std::unordered_set<Opcodes> const kSelfStreamSuppressedOpcodes = {
+        MSG_MOVE_START_FORWARD,
+        MSG_MOVE_STOP,
+        MSG_MOVE_START_BACKWARD,
+        MSG_MOVE_START_STRAFE_LEFT,
+        MSG_MOVE_START_STRAFE_RIGHT,
+        MSG_MOVE_STOP_STRAFE,
+        MSG_MOVE_START_TURN_LEFT,
+        MSG_MOVE_START_TURN_RIGHT,
+        MSG_MOVE_STOP_TURN,
+        MSG_MOVE_JUMP,
+        MSG_MOVE_FALL_LAND,
+        MSG_MOVE_HEARTBEAT,
+        MSG_MOVE_SET_FACING,
+        SMSG_FORCE_RUN_SPEED_CHANGE,
+        SMSG_FORCE_FLIGHT_SPEED_CHANGE,
+        SMSG_FORCE_SWIM_SPEED_CHANGE
+    };
+}
 
 std::vector<Opcodes> watchList = {
     SMSG_BATTLEGROUND_PLAYER_JOINED,
@@ -72,8 +99,20 @@ std::vector<Opcodes> watchList = {
 };
 
 
-struct PacketRecord { uint32 timestamp; WorldPacket packet; };
-struct MatchRecord { BattlegroundTypeId typeId; uint8 arenaTypeId; uint32 mapId; std::deque<PacketRecord> packets; };
+struct PacketRecord
+{
+    uint32 timestamp;
+    uint64 recipient;
+    WorldPacket packet;
+};
+
+struct MatchRecord
+{
+    BattlegroundTypeId typeId;
+    uint8 arenaTypeId;
+    uint32 mapId;
+    std::deque<PacketRecord> packets;
+};
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
 
@@ -90,14 +129,6 @@ public:
         if (bg == nullptr || bg->IsReplay()) return;
         //ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
-        //record packets from 1 player of each team
-        //iterate just in case a player leaves and used as reference
-        for (auto it : bg->GetPlayers()) {
-            if (it.second.Team == session->GetPlayer()->GetBGTeam()) {
-                if (it.first.GetRawValue() != session->GetPlayer()->GetGUID())
-                    return; else break;
-            }
-        }
         //ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
         {
@@ -118,7 +149,7 @@ public:
         record.mapId = bg->GetMapId();
 
         //push back packet inside queue of matchId 0
-        record.packets.push_back({ timestamp, /* copy */ WorldPacket(packet) });
+        record.packets.push_back({ timestamp, session->GetPlayer()->GetGUID().GetRawValue(), /* copy */ WorldPacket(packet) });
     }
 };
 
@@ -168,14 +199,30 @@ public:
         }
 
         //send replay data to spectator
+        if (match.packets.empty())
+            return;
+
+        if (bg->GetPlayers().empty())
+            return;
+
+        uint32 spectatorLowGuid = bg->GetReplayId();
+        Player* spectator = ObjectAccessor::FindPlayerByLowGUID(spectatorLowGuid);
+        if (!spectator)
+            return;
+
+        uint64 spectatorGuid = spectator->GetGUID().GetRawValue();
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
-            if (bg->GetPlayers().empty())
-                break;
-            uint32 playerGUID = bg->GetReplayId();
-            Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-            if (!player)
-                break;
-            player->GetSession()->SendPacket(&match.packets.front().packet);
+            PacketRecord& recordPacket = match.packets.front();
+
+            bool skipForSpectator = false;
+            if (recordPacket.recipient && recordPacket.recipient == spectatorGuid)
+            {
+                skipForSpectator = kSelfStreamSuppressedOpcodes.find(recordPacket.packet.GetOpcode()) != kSelfStreamSuppressedOpcodes.end();
+            }
+
+            if (!skipForSpectator)
+                spectator->GetSession()->SendPacket(&recordPacket.packet);
+
             match.packets.pop_front();
         }
     }
@@ -190,13 +237,17 @@ public:
         ByteBuffer buffer;
         uint32 headerSize;
         uint32 timestamp;
-        for (auto it : match.packets) {
+        buffer << uint32(REPLAY_FORMAT_SIGNATURE);
+        buffer << uint16(REPLAY_FORMAT_VERSION);
+
+        for (auto const& it : match.packets) {
             headerSize = it.packet.size(); //header 4Bytes packet size
             timestamp = it.timestamp;
 
             buffer << headerSize; //4 bytes
             buffer << timestamp; //4 bytes
             buffer << it.packet.GetOpcode(); // 2 bytes
+            buffer << uint64(it.recipient);
             if (headerSize > 0)
                 buffer.append(it.packet.contents(), it.packet.size()); // headerSize bytes
         }
@@ -243,7 +294,7 @@ public:
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
 
-            MatchRecord record = loadedReplays[player->GetGUID()];
+            MatchRecord const& record = loadedReplays[player->GetGUID()];
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
             if (!bg) {
                 handler.PSendSysMessage("Couldn't create arena map!");
@@ -321,6 +372,19 @@ public:
             buffer.append(&data[0], data.size());
 
             /** deserialize replay binary data **/
+            uint16 version = 0;
+            size_t startPos = buffer.rpos();
+            if (buffer.size() - startPos >= sizeof(uint32)) {
+                uint32 signature = 0;
+                buffer >> signature;
+                if (signature == REPLAY_FORMAT_SIGNATURE) {
+                    if (buffer.size() - buffer.rpos() >= sizeof(uint16))
+                        buffer >> version;
+                } else {
+                    buffer.rpos(startPos);
+                }
+            }
+
             uint32 packetSize;
             uint32 packetTimestamp;
             uint16 opcode;
@@ -328,6 +392,10 @@ public:
                 buffer >> packetSize;
                 buffer >> packetTimestamp;
                 buffer >> opcode;
+
+                uint64 recipient = 0;
+                if (version >= REPLAY_FORMAT_VERSION)
+                    buffer >> recipient;
 
                 WorldPacket packet(opcode, packetSize);
 
@@ -337,7 +405,7 @@ public:
                     packet.append(&tmp[0], packetSize);
                 }
 
-                record.packets.push_back({ packetTimestamp, packet });
+                record.packets.push_back({ packetTimestamp, recipient, packet });
             }
         }
     };
