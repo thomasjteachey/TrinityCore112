@@ -42,6 +42,10 @@
 #include "Weather.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 // Trait which indicates whether this script type
 // must be assigned in the database.
@@ -338,24 +342,30 @@ template<typename ObjectType, typename ScriptType, typename Base>
 class CreatureGameObjectScriptRegistrySwapHooks
     : public ScriptRegistrySwapHookBase
 {
-    template<typename W>
-    class AIFunctionMapWorker
+    template<typename VisitorType>
+    class AISwapVisitor
     {
     public:
-        template<typename T>
-        AIFunctionMapWorker(T&& worker)
-            : _worker(std::forward<T>(worker)) { }
+        AISwapVisitor(std::unordered_set<uint32> const& ids, VisitorType&& visitor)
+            : idsToRemove_(ids), visitor_(std::move(visitor)) { }
 
         void Visit(std::unordered_map<ObjectGuid, ObjectType*>& objects)
         {
-            _worker(objects);
+            for (auto const& object : objects)
+            {
+                // When the script Id of the script isn't removed in this
+                // context change, do nothing.
+                if (idsToRemove_.find(object.second->GetScriptId()) != idsToRemove_.end())
+                    visitor_(object.second);
+            }
         }
 
         template<typename O>
         void Visit(std::unordered_map<ObjectGuid, O*>&) { }
 
     private:
-        W _worker;
+        std::unordered_set<uint32> const& idsToRemove_;
+        VisitorType visitor_;
     };
 
     class AsyncCastHotswapEffectEvent : public BasicEvent
@@ -471,21 +481,13 @@ class CreatureGameObjectScriptRegistrySwapHooks
     }
 
     template<typename T>
-    static void VisitObjectsToSwapOnMap(Map* map, std::unordered_set<uint32> const& idsToRemove, T visitor)
+    static void VisitObjectsToSwapOnMap(Map* map, std::unordered_set<uint32> const& idsToRemove, T&& visitor)
     {
-        auto evaluator = [&](std::unordered_map<ObjectGuid, ObjectType*>& objects)
-        {
-            for (auto object : objects)
-            {
-                // When the script Id of the script isn't removed in this
-                // context change, do nothing.
-                if (idsToRemove.find(object.second->GetScriptId()) != idsToRemove.end())
-                    visitor(object.second);
-            }
-        };
+        using VisitorType = std::decay_t<T>;
 
-        AIFunctionMapWorker<typename std::decay<decltype(evaluator)>::type> worker(std::move(evaluator));
-        TypeContainerVisitor<decltype(worker), MapStoredObjectTypesContainer> containerVisitor(worker);
+        VisitorType visitorWrapper(std::forward<T>(visitor));
+        AISwapVisitor<VisitorType> worker(idsToRemove, std::move(visitorWrapper));
+        TypeContainerVisitor<AISwapVisitor<VisitorType>, MapStoredObjectTypesContainer> containerVisitor(worker);
 
         containerVisitor.Visit(map->GetObjectsStore());
     }
