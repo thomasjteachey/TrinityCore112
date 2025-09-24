@@ -19,9 +19,6 @@
 #define _DURATION_H_
 
 // HACKS TERRITORY
-#if __has_include(<__msvc_chrono.hpp>)
-#include <__msvc_chrono.hpp> // skip all the formatting/istream/locale/mutex bloat
-#endif
 #include <chrono>
 
 /// Milliseconds shorthand typedef.
@@ -48,7 +45,7 @@ using namespace std::chrono_literals;
 
 constexpr std::chrono::hours operator""_days(unsigned long long days)
 {
-    return std::chrono::hours(days * 24h);
+    return std::chrono::hours(24) * days;
 }
 
 #endif // _DURATION_H_
