@@ -44,8 +44,6 @@ class DuelResetScript : public PlayerScript
             {
                 player1->ResetAllPowers();
                 player2->ResetAllPowers();
-                player1->SetFullPower(POWER_MANA);
-                player2->SetFullPower(POWER_MANA);
             }
         }
 
@@ -64,9 +62,6 @@ class DuelResetScript : public PlayerScript
             {
                 winner->ResetAllPowers();
                 loser->ResetAllPowers();
-
-                winner->SetFullPower(POWER_MANA);
-                loser->SetFullPower(POWER_MANA);
 
                 // pet cooldowns
                 if (Pet* winpet = winner->GetPet())
