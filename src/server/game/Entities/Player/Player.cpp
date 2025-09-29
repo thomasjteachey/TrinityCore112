@@ -4994,7 +4994,8 @@ void Player::RepopAtGraveyard()
     WorldSafeLocsEntry const* ClosestGrave;
 
     // Special handle for battleground maps
-    if (Battleground* bg = GetBattleground())
+    Battleground* bg = GetBattleground();
+    if (bg)
         ClosestGrave = bg->GetClosestGraveyard(this);
     else
     {
@@ -5018,6 +5019,34 @@ void Player::RepopAtGraveyard()
             packet.MapID = ClosestGrave->Continent;
             packet.Loc = Position(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
             GetSession()->SendPacket(packet.Write());
+
+            if (bg && !shouldResurrect)
+            {
+                uint32 team = GetBGTeam();
+                if (!team)
+                    team = GetTeam();
+
+                Creature* spiritGuide = nullptr;
+
+                if (team == ALLIANCE || team == HORDE)
+                {
+                    TeamId teamId = Battleground::GetTeamIndexByTeamId(team);
+                    Position gravePosition(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z, 0.0f);
+                    spiritGuide = bg->GetClosestSpiritGuideForTeam(gravePosition, teamId);
+                }
+
+                if (!spiritGuide)
+                {
+                    uint32 spiritGuideEntry = team == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+                    spiritGuide = FindNearestCreature(spiritGuideEntry, 200.0f, false);
+                }
+
+                if (spiritGuide)
+                {
+                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                }
+            }
         }
     }
     else if (GetPositionZ() < GetMap()->GetMinHeight(GetPositionX(), GetPositionY()))
