@@ -44,7 +44,6 @@
 #include "WorldSession.h"
 #include "Item.h"
 #include <cstdarg>
-#include <limits>
 
 void BattlegroundScore::AppendToPacket(WorldPacket& data)
 {
@@ -91,6 +90,8 @@ Battleground::Battleground()
     m_IsRated           = false;
     m_BuffChange        = false;
     m_IsRandom          = false;
+    m_IsReplay          = false;
+    m_ReplayId          = 0;
     m_LevelMin          = 0;
     m_LevelMax          = 0;
     m_InBGFreeSlotQueue = false;
@@ -1532,7 +1533,6 @@ void Battleground::SpawnBGObject(uint32 type, uint32 respawntime)
                 obj->SetLootState(GO_READY);
             }
             obj->SetRespawnTime(respawntime);
-
             if (!obj->IsInWorld())
                 map->AddToMap(obj);
             else if (!respawntime)
@@ -1876,36 +1876,6 @@ void Battleground::SetBgRaid(uint32 TeamID, Group* bg_raid)
 WorldSafeLocsEntry const* Battleground::GetClosestGraveyard(Player* player)
 {
     return sObjectMgr->GetClosestGraveyard(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetMapId(), player->GetTeam());
-}
-
-Creature* Battleground::GetClosestSpiritGuideForTeam(Position const& position, TeamId teamId) const
-{
-    if (teamId != TEAM_ALLIANCE && teamId != TEAM_HORDE)
-        return nullptr;
-
-    uint32 spiritGuideEntry = teamId == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
-
-    Creature* closestGuide = nullptr;
-    float closestDistanceSq = std::numeric_limits<float>::max();
-
-    for (ObjectGuid const& guid : BgCreatures)
-    {
-        if (!guid)
-            continue;
-
-        Creature* creature = GetBgMap()->GetCreature(guid);
-        if (!creature || creature->GetEntry() != spiritGuideEntry)
-            continue;
-
-        float distanceSq = creature->GetExactDistSq(position.GetPositionX(), position.GetPositionY(), position.GetPositionZ());
-        if (distanceSq < closestDistanceSq)
-        {
-            closestDistanceSq = distanceSq;
-            closestGuide = creature;
-        }
-    }
-
-    return closestGuide;
 }
 
 void Battleground::StartTimedAchievement(AchievementCriteriaTimedTypes type, uint32 entry)
