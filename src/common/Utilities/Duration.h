@@ -19,11 +19,7 @@
 #define _DURATION_H_
 
 // HACKS TERRITORY
-#if __has_include(<__msvc_chrono.hpp>)
-#include <__msvc_chrono.hpp> // skip all the formatting/istream/locale/mutex bloat
-#else
 #include <chrono>
-#endif
 
 /// Milliseconds shorthand typedef.
 typedef std::chrono::milliseconds Milliseconds;
@@ -41,12 +37,15 @@ typedef std::chrono::hours Hours;
 typedef std::chrono::steady_clock::time_point TimePoint;
 typedef std::chrono::system_clock::time_point SystemTimePoint;
 
-/// Makes std::chrono_literals globally available.
+/// Makes chrono user-defined literals globally available.
+using namespace std::literals::chrono_literals;
+#if !defined(_MSC_VER)
 using namespace std::chrono_literals;
+#endif
 
 constexpr std::chrono::hours operator""_days(unsigned long long days)
 {
-    return std::chrono::hours(days * 24h);
+    return std::chrono::hours(24) * days;
 }
 
 #endif // _DURATION_H_

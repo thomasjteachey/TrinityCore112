@@ -2332,7 +2332,8 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()))
     {
         if(spell->m_spellInfo->Id != 14309 && spell->m_spellInfo->Id != 14308 && spell->m_spellInfo->Id != 3355 && spell->m_spellInfo->Id != 13810 && spell->m_spellInfo->Id != 63487 && spell->m_spellInfo->Id != 67035
-            && spell->m_spellInfo->Id != 72216 && spell->m_spellInfo->Id != 19185 && spell->m_spellInfo->Id != 3600) //freezing/frost traps don't put you in combat
+            && spell->m_spellInfo->Id != 72216 && spell->m_spellInfo->Id != 19185 && spell->m_spellInfo->Id != 3600
+            && spell->m_spellInfo->Id != 14299 && spell->m_spellInfo->Id != 14298 && spell->m_spellInfo->Id != 14300 && spell->m_spellInfo->Id != 14301 && spell->m_spellInfo->Id != 13797) //freezing/frost/immolation traps don't put you in combat
             unit->SetInCombatWith(spell->m_originalCaster);
     }
 
