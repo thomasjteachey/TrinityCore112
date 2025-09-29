@@ -44,6 +44,7 @@
 #include "WorldSession.h"
 #include "Item.h"
 #include <cstdarg>
+#include <limits>
 
 void BattlegroundScore::AppendToPacket(WorldPacket& data)
 {
@@ -1508,6 +1509,54 @@ Creature* Battleground::GetBGCreature(uint32 type, bool logError)
                 type, BgCreatures[type].ToString(), m_MapId, m_InstanceID);
     }
     return creature;
+}
+
+Creature* Battleground::GetClosestSpiritGuideForTeam(Position const& position, TeamId teamId) const
+{
+    BattlegroundMap* map = FindBgMap();
+    if (!map)
+        return nullptr;
+
+    uint32 requiredEntry = 0;
+    switch (teamId)
+    {
+        case TEAM_ALLIANCE:
+            requiredEntry = BG_CREATURE_ENTRY_A_SPIRITGUIDE;
+            break;
+        case TEAM_HORDE:
+            requiredEntry = BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+            break;
+        default:
+            break;
+    }
+
+    Creature* closestSpiritGuide = nullptr;
+    float closestDistance = std::numeric_limits<float>::max();
+
+    for (ObjectGuid const& guid : BgCreatures)
+    {
+        if (!guid)
+            continue;
+
+        Creature* creature = map->GetCreature(guid);
+        if (!creature)
+            continue;
+
+        if (!creature->IsSpiritGuide())
+            continue;
+
+        if (requiredEntry && creature->GetEntry() != requiredEntry)
+            continue;
+
+        float const distance = creature->GetDistance(position);
+        if (distance < closestDistance)
+        {
+            closestDistance = distance;
+            closestSpiritGuide = creature;
+        }
+    }
+
+    return closestSpiritGuide;
 }
 
 void Battleground::SpawnBGObject(uint32 type, uint32 respawntime)
