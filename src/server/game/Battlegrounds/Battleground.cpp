@@ -1531,7 +1531,11 @@ void Battleground::SpawnBGObject(uint32 type, uint32 respawntime)
                 obj->SetLootState(GO_READY);
             }
             obj->SetRespawnTime(respawntime);
-            map->AddToMap(obj);
+
+            if (!obj->IsInWorld())
+                map->AddToMap(obj);
+            else if (!respawntime)
+                obj->UpdateObjectVisibility(true);
         }
 }
 
