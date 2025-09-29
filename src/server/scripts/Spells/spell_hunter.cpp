@@ -88,7 +88,7 @@ enum HunterSpellIcons
 // 13161 - Aspect of the Beast
 class spell_hun_aspect_of_the_beast : public AuraScript
 {
-    PrepareAuraScript(spell_hun_aspect_of_the_beast);
+    PrepareAuraScript(spell_hun_aspect_of_the_beast); 
 
     bool Load() override
     {
