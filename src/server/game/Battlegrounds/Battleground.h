@@ -459,6 +459,7 @@ class TC_GAME_API Battleground
 
         // Death related
         virtual WorldSafeLocsEntry const* GetClosestGraveyard(Player* player);
+        Creature* GetClosestSpiritGuideForTeam(Position const& position, TeamId teamId) const;
 
         virtual void AddPlayer(Player* player);                // must be implemented in BG subclass
 
