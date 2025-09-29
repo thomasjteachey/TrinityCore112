@@ -4994,7 +4994,8 @@ void Player::RepopAtGraveyard()
     WorldSafeLocsEntry const* ClosestGrave;
 
     // Special handle for battleground maps
-    if (Battleground* bg = GetBattleground())
+    Battleground* bg = GetBattleground();
+    if (bg)
         ClosestGrave = bg->GetClosestGraveyard(this);
     else
     {
@@ -5018,6 +5019,16 @@ void Player::RepopAtGraveyard()
             packet.MapID = ClosestGrave->Continent;
             packet.Loc = Position(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
             GetSession()->SendPacket(packet.Write());
+
+            if (bg && !shouldResurrect)
+            {
+                uint32 spiritGuideEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+                if (Creature* spiritGuide = FindNearestCreature(spiritGuideEntry, 30.0f, false))
+                {
+                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                }
+            }
         }
     }
     else if (GetPositionZ() < GetMap()->GetMinHeight(GetPositionX(), GetPositionY()))
