@@ -640,6 +640,7 @@ void WorldSession::KickPlayer(std::string const& reason)
     {
         TC_LOG_INFO("network.kick", "Account: {} Character: '{}' {} kicked with reason: {}", GetAccountId(), _player ? _player->GetName() : "<none>",
             _player ? _player->GetGUID().ToString() : "", reason);
+        TC_LOG_INFO("network.disconnect", "{} kicked from server (IP: {}) Reason: {}", GetPlayerInfo(), GetRemoteAddress(), reason);
 
         m_Socket->CloseSocket();
         forceExit = true;

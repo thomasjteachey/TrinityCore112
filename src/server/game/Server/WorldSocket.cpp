@@ -137,8 +137,12 @@ void WorldSocket::HandleSendAuthSession()
 
 void WorldSocket::OnClose()
 {
+    std::string const remoteIp = GetRemoteIpAddress().to_string();
+
+    std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+    if (_worldSession)
     {
-        std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+        TC_LOG_INFO("network.disconnect", "{} connection closed (IP: {}).", _worldSession->GetPlayerInfo(), remoteIp);
         _worldSession = nullptr;
     }
 }
