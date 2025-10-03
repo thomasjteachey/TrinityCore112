@@ -688,8 +688,11 @@ void PathGenerator::UpdateFilter()
         }
 
         if (Creature const* _sourceCreature = _source->ToCreature())
-            if (_sourceCreature->IsInCombat() || _sourceCreature->IsInEvadeMode())
-                _filter.setIncludeFlags(_filter.getIncludeFlags() | NAV_GROUND_STEEP);
+        {
+            if (!_sourceCreature->IsPet() && !_sourceCreature->IsControlledByPlayer())
+                if (_sourceCreature->IsInCombat() || _sourceCreature->IsInEvadeMode())
+                    _filter.setIncludeFlags(_filter.getIncludeFlags() | NAV_GROUND_STEEP);
+        }
     }
 }
 
