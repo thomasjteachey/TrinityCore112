@@ -1682,7 +1682,7 @@ class spell_hun_weaving : public AuraScript
 // 81385 - trap cd remove
 class spell_hun_trap_cd_reduce : public SpellScript
 {
-    PrepareSpellScript(spell_hun_mongoose_bite_cd_reduce);
+    PrepareSpellScript(spell_hun_trap_cd_reduce);
 
     bool Load() override
     {
