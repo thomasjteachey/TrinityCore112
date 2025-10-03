@@ -1679,6 +1679,37 @@ class spell_hun_weaving : public AuraScript
     }
 };
 
+// 81382 - trap cd remove
+class spell_hun_trap_cd_reduce : public SpellScript
+{
+    PrepareSpellScript(spell_hun_mongoose_bite_cd_reduce);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        uint32 cdreduce = GetEffectValue();
+        GetCaster()->GetSpellHistory()->ModifyCooldown(13813, cdreduce);
+        GetCaster()->GetSpellHistory()->ModifyCooldown(14316, cdreduce);
+        GetCaster()->GetSpellHistory()->ModifyCooldown(14317, cdreduce);
+
+        GetCaster()->GetSpellHistory()->ModifyCooldown(1499, cdreduce);
+        GetCaster()->GetSpellHistory()->ModifyCooldown(14310, cdreduce);
+
+        GetCaster()->GetSpellHistory()->ModifyCooldown(14809, cdreduce);
+
+
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_hun_mongoose_bite_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 void AddSC_hunter_spell_scripts()
 {
     RegisterSpellScript(spell_hun_aspect_of_the_beast);
@@ -1723,4 +1754,5 @@ void AddSC_hunter_spell_scripts()
     RegisterSpellScript(spell_hun_mongoose_bite_cd_reduce);
     RegisterSpellScript(spell_hun_outmaneuver);
     RegisterSpellScript(spell_hun_weaving);
+    RegisterSpellScript(spell_hun_trap_cd_reduce);
 }
