@@ -2179,7 +2179,9 @@ void SpellInfo::_LoadSpellSpecific()
                     return SPELL_SPECIFIC_STING;
 
                 // only hunter aspects have this (but not all aspects in hunter family)
-                if (SpellFamilyFlags.HasFlag(0x00380000, 0x00440000, 0x00001010))
+                if (SpellFamilyFlags.HasFlag(0x00380000, 0x00440000, 0x00001010)
+                    || Id == 13161
+                    || Id == 20043 || Id == 20190)
                     return SPELL_SPECIFIC_ASPECT;
 
                 break;
