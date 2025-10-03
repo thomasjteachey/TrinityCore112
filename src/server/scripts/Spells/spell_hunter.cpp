@@ -1679,7 +1679,7 @@ class spell_hun_weaving : public AuraScript
     }
 };
 
-// 81382 - trap cd remove
+// 81385 - trap cd remove
 class spell_hun_trap_cd_reduce : public SpellScript
 {
     PrepareSpellScript(spell_hun_mongoose_bite_cd_reduce);
@@ -1706,7 +1706,7 @@ class spell_hun_trap_cd_reduce : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_hun_mongoose_bite_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        OnEffectHitTarget += SpellEffectFn(spell_hun_trap_cd_reduce::HandleDummy, EFFECT_2, SPELL_EFFECT_DUMMY);
     }
 };
 
