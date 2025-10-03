@@ -590,7 +590,6 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
 
             CharacterDatabaseTransaction characterTransaction = CharacterDatabase.BeginTransaction();
             LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
-
                                                                   // Player created, save it now
 
             newChar->SaveToDB(characterTransaction, true);
@@ -602,7 +601,6 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             stmt->setUInt32(1, GetAccountId());
             stmt->setUInt32(2, realm.Id.Realm);
             trans->Append(stmt);
-
             LoginDatabase.CommitTransaction(trans);
 
             std::string str = "call createCopyOfChar (" + std::to_string(createInfo->Class) + ", " + std::to_string(createInfo->Race)  + ", " + std::to_string(newChar->GetGUID()) + ", true, true)";

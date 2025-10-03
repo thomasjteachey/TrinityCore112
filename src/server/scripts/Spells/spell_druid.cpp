@@ -33,6 +33,10 @@
 
 enum DruidSpells
 {
+    SPELL_DRUID_FERAL_SWIFTNESS_R1 = 17002,
+    SPELL_DRUID_FERAL_SWIFTNESS_R2 = 24866,
+    SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_1 = 24867,
+    SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_2 = 24864,
     SPELL_DRUID_BEAR_FORM_PASSIVE           = 1178,
     SPELL_DRUID_DIRE_BEAR_FORM_PASSIVE      = 9635,
     SPELL_DRUID_ECLIPSE_LUNAR_PROC          = 48518,
@@ -93,7 +97,9 @@ enum DruidSpells
     SPELL_DRUID_FRENZIED_REGENERATION_HEAL  = 22845,
     SPELL_DRUID_GLYPH_OF_NOURISH            = 62971,
     SPELL_DRUID_NURTURING_INSTINCT_R1       = 47179,
-    SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180
+    SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180,
+    SPELL_DRUID_PRIMAL_PRECISION            = 48410,
+    SPELL_DRUID_MANGLE                      = 33876
 };
 
 enum MiscSpells
@@ -162,6 +168,31 @@ class spell_dru_bear_form_passive : public AuraScript
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_bear_form_passive::CalculateAmount, EFFECT_0, SPELL_AURA_MOD_BASE_RESISTANCE_PCT);
     }
 };
+
+class spell_dru_feral_swiftness : public AuraScript
+{
+    PrepareAuraScript(spell_dru_feral_swiftness);
+
+    void AfterApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* player = GetTarget()->ToPlayer())
+            if (uint8 rank = player->HasTalent(SPELL_DRUID_FERAL_SWIFTNESS_R1, player->GetActiveSpec()) ? 1 : (player->HasTalent(SPELL_DRUID_FERAL_SWIFTNESS_R2, player->GetActiveSpec()) ? 2 : 0))
+                player->CastSpell(player, rank == 1 ? SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_1 : SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_2);
+    }
+
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->RemoveAurasDueToSpell(SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_1);
+        GetTarget()->RemoveAurasDueToSpell(SPELL_DRUID_FERAL_SWIFTNESS_PASSIVE_2);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_dru_feral_swiftness::AfterApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_dru_feral_swiftness::AfterRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 
 // 50334 - Berserk
 class spell_dru_berserk : public AuraScript
@@ -730,7 +761,7 @@ class spell_dru_idol_lifebloom : public AuraScript
 class spell_dru_innervate : public AuraScript
 {
     PrepareAuraScript(spell_dru_innervate);
-
+    
     void CalculateAmount(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
     {
         if (!aurEff->GetTotalTicks())
@@ -747,7 +778,7 @@ class spell_dru_innervate : public AuraScript
 
     void Register() override
     {
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_innervate::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE);
+        //DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_innervate::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE);
     }
 };
 
@@ -1927,11 +1958,36 @@ class spell_dru_wild_growth_aura : public AuraScript
     float _baseReduction = 2.f;
 };
 
+//claw 1082
+class spell_dru_claw : public SpellScript
+{
+    PrepareSpellScript(spell_dru_claw);
+
+    void HandleAfterHit()
+    {
+        if (GetCaster()->IsPlayer())
+        {
+            Player* p = GetCaster()->ToPlayer();
+            if (p->HasAura(SPELL_DRUID_PRIMAL_PRECISION))
+            {
+                p->AddAura(SPELL_DRUID_MANGLE, GetHitUnit());
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_dru_claw::HandleAfterHit);
+    }
+};
+
+
 void AddSC_druid_spell_scripts()
 {
     RegisterSpellScript(spell_dru_barkskin);
     RegisterSpellScript(spell_dru_bear_form_passive);
     RegisterSpellScript(spell_dru_berserk);
+    RegisterSpellScript(spell_dru_feral_swiftness);
     RegisterSpellScript(spell_dru_dash);
     RegisterSpellScript(spell_dru_eclipse);
     RegisterSpellScript(spell_dru_enrage);
@@ -1979,4 +2035,5 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus);
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus_dummy);
     RegisterSpellAndAuraScriptPair(spell_dru_wild_growth, spell_dru_wild_growth_aura);
+    RegisterSpellScript(spell_dru_claw);
 }

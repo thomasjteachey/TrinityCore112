@@ -33,6 +33,7 @@
 #include "SpellScript.h"
 #include "Item.h"
 #include "Spell.h"
+#include "Log.h"
 
 enum PaladinSpells
 {
@@ -129,7 +130,13 @@ enum PaladinSpells
     SPELL_PALADIN_ENDURING_JUDGEMENT             = 40472,
 
     SPELL_PALADIN_GLYPH_OF_HOLY_LIGHT_HEAL       = 54968,
-    SPELL_PALADIN_HOLY_MENDING                   = 64891
+    SPELL_PALADIN_HOLY_MENDING                   = 64891,
+
+    SPELL_PALADIN_HAND_OF_FREEDOM = 1044,
+    SPELL_PALADIN_LESSER_HAND_OF_FREEDOM = 81277,
+    SPELL_PALADIN_IMP_HAND_OF_FREEDOM = 81278,
+
+    SPELL_PALADIN_SANCTIFIED_SEALS = 81279
 };
 
 enum PaladinSpellIcons
@@ -1195,7 +1202,6 @@ private:
     void HandleScriptEffect(SpellEffIndex /*effIndex*/)
     {
         uint32 spellId2 = SPELL_PALADIN_JUDGEMENT_DAMAGE;
-
         // some seals have SPELL_AURA_DUMMY in EFFECT_2
         Unit::AuraEffectList const& auras = GetCaster()->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
@@ -1207,8 +1213,23 @@ private:
                     if (sSpellMgr->GetSpellInfo((*i)->GetAmount()))
                     {
                         spellId2 = (*i)->GetAmount();
+                        Aura* sanctifiedSeals = GetCaster()->GetAuraOfRankedSpell(SPELL_PALADIN_SANCTIFIED_SEALS);
+                        if (sanctifiedSeals && sanctifiedSeals->GetSpellInfo())
+                        {
+                            if (true)
+                            {
+                                //refund mana of original seal
+                                const SpellInfo* originalSpell = (*i)->GetSpellInfo();
+                                uint32 mana = originalSpell->ManaCost;
+                                uint32 bp = (uint32)(mana * 0.8);
+                                CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                                args.AddSpellBP0(bp);
+                                GetCaster()->CastSpell(GetCaster(), SPELL_PALADIN_ILLUMINATION_ENERGIZE, args);
+                            }
+                        }
                         //found seal remove and break
                         GetCaster()->RemoveAurasDueToSpell((*i)->GetSpellInfo()->Id);
+
                         break;
                     }
                 }
@@ -2113,6 +2134,41 @@ class spell_pal_t8_2p_bonus : public AuraScript
     }
 };
 
+// 1044 - Hand of Freedom
+class spell_pal_hand_of_freedom : public AuraScript
+{
+    PrepareAuraScript(spell_pal_hand_of_freedom);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo(
+            {
+                SPELL_PALADIN_HAND_OF_FREEDOM,
+                SPELL_PALADIN_LESSER_HAND_OF_FREEDOM,
+                SPELL_PALADIN_IMP_HAND_OF_FREEDOM
+            });
+    }
+
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (caster->HasAura(SPELL_PALADIN_IMP_HAND_OF_FREEDOM))
+        {
+            if (caster->GetGUID() != target->GetGUID())
+            {
+                caster->CastSpell(caster, SPELL_PALADIN_LESSER_HAND_OF_FREEDOM);
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_pal_hand_of_freedom::HandleApply, EFFECT_0, SPELL_AURA_MECHANIC_IMMUNITY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+
 void AddSC_paladin_spell_scripts()
 {
     RegisterSpellScript(spell_pal_ardent_defender);
@@ -2171,4 +2227,5 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_pal_jud_wis_intermediate);
     RegisterSpellScript(spell_pal_jud_light_intermediate);
     RegisterSpellScript(spell_seal_crusader);
+    RegisterSpellScript(spell_pal_hand_of_freedom);
 }

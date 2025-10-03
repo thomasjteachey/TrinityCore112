@@ -1488,6 +1488,8 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
         Aura* judgeWisdomAura = victim->GetAuraOfRankedSpell(20186);
         Aura* judgeLightAura = victim->GetAuraOfRankedSpell(20185);
+        Aura* judgeCrusaderAura = victim->GetAuraOfRankedSpell(20188);
+        Aura* judgeJusticeAura = victim->GetAura(20184);
 
         //if paladin that cast judgement hits with auto attack, it refreshes duration
         if (judgeWisdomAura && judgeWisdomAura->GetCaster()->GetGUID() == attacker->GetGUID())
@@ -1498,6 +1500,16 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
         if (judgeLightAura && judgeLightAura->GetCaster()->GetGUID() == attacker->GetGUID())
         {
             judgeLightAura->RefreshDuration();
+        }
+
+        if (judgeCrusaderAura && judgeCrusaderAura->GetCaster()->GetGUID() == attacker->GetGUID())
+        {
+            judgeCrusaderAura->RefreshDuration();
+        }
+
+        if (judgeJusticeAura && judgeJusticeAura->GetCaster()->GetGUID() == attacker->GetGUID())
+        {
+            judgeJusticeAura->RefreshDuration();
         }
     }
 
@@ -3443,7 +3455,8 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
     {
         bool frostTrapStart = i == 0 && aurApp->GetBase()->m_spellInfo->Id == 13810;
-        if (frostTrapStart || (effMask & 1 << i && (!aurApp->GetRemoveMode())))
+        bool flareStart = i == 0 && aurApp->GetBase()->m_spellInfo->Id == 1543;
+        if (frostTrapStart || flareStart || (effMask & 1 << i && (!aurApp->GetRemoveMode())))
             aurApp->_HandleEffect(i, true);
     }
 
@@ -4513,7 +4526,8 @@ void Unit::GetDispellableAuraList(WorldObject const* caster, uint32 dispelMask, 
         if (aura->IsPassive())
             continue;
 
-        if (aura->GetSpellInfo()->GetDispelMask() & dispelMask)
+        uint32 dispel = aura->GetSpellInfo()->GetDispelMask();
+        if (dispel & dispelMask)
         {
             // do not remove positive auras if friendly target
             //               negative auras if non-friendly
@@ -5679,7 +5693,7 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
 
 bool Unit::AttackStop()
 {
-    if (!m_attacking)
+    if (!m_attacking && !HasAuraType(SPELL_AURA_MOD_TAUNT))
         return false;
 
     Unit* victim = m_attacking;
@@ -6887,7 +6901,7 @@ float Unit::SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, Damage
             if (spellProto->SpellFamilyFlags[0] & 0x100)
             {
                 // Brambles
-                if (AuraEffect* aurEff = GetAuraEffectOfRankedSpell(16836, 0))
+                if (AuraEffect* aurEff = GetAuraEffectOfRankedSpell(16918, 0))
                     AddPct(DoneTotalMod, aurEff->GetAmount());
             }
             break;
@@ -7035,9 +7049,11 @@ int32 Unit::SpellBaseDamageBonusDone(SpellSchoolMask schoolMask) const
                 DoneAdvertisedBenefit += static_cast<int32>(CalculatePct(GetStat(usedStat), aurEff->GetAmount()));
             }
         }
-
+        float meleeAttackPower = GetTotalAttackPowerValue(BASE_ATTACK);
+        float rangedAttackPower = GetTotalAttackPowerValue(RANGED_ATTACK);
+        float attackPower = meleeAttackPower > rangedAttackPower ? meleeAttackPower : rangedAttackPower;
         // ... and attack power
-        DoneAdvertisedBenefit += static_cast<int32>(CalculatePct(GetTotalAttackPowerValue(BASE_ATTACK), GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_SPELL_DAMAGE_OF_ATTACK_POWER, schoolMask)));
+        DoneAdvertisedBenefit += static_cast<int32>(CalculatePct(attackPower, GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_SPELL_DAMAGE_OF_ATTACK_POWER, schoolMask)));
     }
 
     return DoneAdvertisedBenefit;
@@ -8936,24 +8952,8 @@ bool Unit::ApplyDiminishingToDuration(SpellInfo const* auraSpellInfo, bool trigg
     }
 
     float mod = 1.0f;
-    if (group == DIMINISHING_TAUNT)
-    {
-        if (GetTypeId() == TYPEID_UNIT && (ToCreature()->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_OBEYS_TAUNT_DIMINISHING_RETURNS))
-        {
-            DiminishingLevels diminish = previousLevel;
-            switch (diminish)
-            {
-                case DIMINISHING_LEVEL_0: break;
-                case DIMINISHING_LEVEL_1: mod = 0.65f; break;
-                case DIMINISHING_LEVEL_2: mod = 0.4225f; break;
-                case DIMINISHING_LEVEL_3: mod = 0.274625f; break;
-                case DIMINISHING_LEVEL_TAUNT_IMMUNE: mod = 0.0f; break;
-                default: break;
-            }
-        }
-    }
     // Some diminishings applies to mobs too (for example, Stun)
-    else if (auraSpellInfo->GetDiminishingReturnsGroupType(triggered) == DRTYPE_ALL ||
+    if (auraSpellInfo->GetDiminishingReturnsGroupType(triggered) == DRTYPE_ALL ||
         (auraSpellInfo->GetDiminishingReturnsGroupType(triggered) == DRTYPE_PLAYER &&
         (targetOwner ? targetOwner->IsAffectedByDiminishingReturns() : IsAffectedByDiminishingReturns())))
     {
@@ -9401,7 +9401,7 @@ float Unit::GetWeaponDamageRange(WeaponAttackType attType, WeaponDamageRange typ
 bool Unit::CanFreeMove() const
 {
     return !HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING | UNIT_STATE_IN_FLIGHT |
-        UNIT_STATE_ROOT | UNIT_STATE_STUNNED | UNIT_STATE_DISTRACTED) && GetOwnerGUID().IsEmpty();
+        UNIT_STATE_ROOT | UNIT_STATE_STUNNED | UNIT_STATE_DISTRACTED | UNIT_STATE_TAUNTED) && GetOwnerGUID().IsEmpty();
 }
 
 void Unit::SetLevel(uint8 lvl, bool sendUpdate/* = true*/)
@@ -10171,6 +10171,12 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMa
                     {
                         ModifyAuraState(AURA_STATE_DEFENSE, true);
                         StartReactiveTimer(REACTIVE_DEFENSE);
+                    }
+                    // For Hunters only improved Counterattack
+                    if (GetClass() == CLASS_HUNTER && HasAura(81283))
+                    {
+                        ModifyAuraState(AURA_STATE_HUNTER_PARRY, true);
+                        StartReactiveTimer(REACTIVE_HUNTER_PARRY);
                     }
                 }
                 // if victim and parry attack
@@ -11307,7 +11313,10 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         }
     }
 }
-
+bool Unit::IsTaunted()
+{
+    return HasAuraType(SPELL_AURA_MOD_TAUNT);
+}
 void Unit::SetControlled(bool apply, UnitState state)
 {
     if (apply)
@@ -11318,7 +11327,9 @@ void Unit::SetControlled(bool apply, UnitState state)
         if (state & UNIT_STATE_CONTROLLED)
             CastStop();
 
-        AddUnitState(state);
+        if(state != UNIT_STATE_TAUNTED)
+            AddUnitState(state);
+
         switch (state)
         {
             case UNIT_STATE_STUNNED:
@@ -11346,6 +11357,12 @@ void Unit::SetControlled(bool apply, UnitState state)
                     SetFeared(true);
                 }
                 break;
+            case UNIT_STATE_TAUNTED:
+                if (!HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
+                {
+                    SetTaunted(true);
+                    break;
+                }
             default:
                 break;
         }
@@ -11382,6 +11399,13 @@ void Unit::SetControlled(bool apply, UnitState state)
                 ClearUnitState(state);
                 SetFeared(false);
                 break;
+
+            case UNIT_STATE_TAUNTED:
+                if (HasAuraType(SPELL_AURA_MOD_TAUNT))
+                    return;
+                ClearUnitState(state);
+                SetTaunted(false);
+                break;
             default:
                 return;
         }
@@ -11404,6 +11428,9 @@ void Unit::ApplyControlStatesIfNeeded()
 
     if (HasUnitState(UNIT_STATE_FLEEING) || HasAuraType(SPELL_AURA_MOD_FEAR))
         SetFeared(true);
+
+    if (HasUnitState(UNIT_STATE_TAUNTED) || HasAuraType(SPELL_AURA_MOD_TAUNT))
+        SetTaunted(true);
 }
 
 void Unit::SetStunned(bool apply)
@@ -11553,6 +11580,50 @@ void Unit::SetFeared(bool apply)
                 GetMotionMaster()->MoveTargetedHome();
         }
 
+        // allow control to real player in control (eg charmer)
+        if (GetCharmerOrSelfPlayer())
+            GetCharmerOrSelfPlayer()->SetClientControl(this, true);
+    }
+}
+
+void Unit::SetTaunted(bool apply)
+{
+    if (apply)
+    {
+        // block control to real player in control (eg charmer)
+        if (GetCharmerOrSelfPlayer())
+            GetCharmerOrSelfPlayer()->SetClientControl(this, false);
+
+        Unit* caster = nullptr;
+        Unit::AuraEffectList const& tauntAuras = GetAuraEffectsByType(SPELL_AURA_MOD_TAUNT);
+        if (!tauntAuras.empty())
+            caster = ObjectAccessor::GetUnit(*this, tauntAuras.front()->GetCasterGUID());
+        if (!caster)
+            caster = getAttackerForHelper();
+
+        SetTarget(ObjectGuid::Empty);
+        if (IsPlayer())
+        {
+            ToPlayer()->Dismount();
+            ToPlayer()->RemoveAurasByType(SPELL_AURA_MOUNTED);
+            ToPlayer()->SetFacingToObject(caster, true);
+        }
+        if (caster)
+        {
+            GetMotionMaster()->MoveChase(caster);
+            ToPlayer()->CastStop();
+            Attack(caster, true);
+        }
+    }
+    else
+    {
+        AttackStop();
+        if (IsAlive())
+        {
+            GetMotionMaster()->Remove(CHASE_MOTION_TYPE);
+            if (GetVictim())
+                SetTarget(EnsureVictim()->GetGUID());
+        }
         // allow control to real player in control (eg charmer)
         if (GetCharmerOrSelfPlayer())
             GetCharmerOrSelfPlayer()->SetClientControl(this, true);
@@ -13302,6 +13373,20 @@ void CharmInfo::SaveStayPosition()
     _stayX = stayPos.x;
     _stayY = stayPos.y;
     _stayZ = stayPos.z;
+}
+
+void CharmInfo::SetStayPosition(float x, float y, float z)
+{
+    //! At this point a new spline destination is enabled because of Unit::StopMoving()
+    G3D::Vector3 stayPos = _unit->movespline->FinalDestination();
+
+    if (_unit->movespline->onTransport)
+        if (TransportBase* transport = _unit->GetDirectTransport())
+            transport->CalculatePassengerPosition(x, y, z);
+
+    _stayX = x;
+    _stayY = y;
+    _stayZ = z;
 }
 
 void CharmInfo::GetStayPosition(float &x, float &y, float &z)

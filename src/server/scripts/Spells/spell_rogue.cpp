@@ -57,7 +57,9 @@ enum RogueSpells
     SPELL_ROGUE_MASTER_OF_SUBTLETY_BUFF         = 31665,
     SPELL_ROGUE_OVERKILL_BUFF                   = 58427,
     SPELL_ROGUE_STEALTH                         =  1784,
-    SPELL_ROGUE_IMPROVED_SAP                    = 14095
+    SPELL_ROGUE_IMPROVED_SAP                    = 14095,
+    SPELL_ROGUE_DEADLY_BREW                     = 81301,
+    SPELL_ROGUE_SEAL_FATE                       = 14186
 };
 
 // 13877, 33735, (check 51211, 65956) - Blade Flurry
@@ -174,6 +176,7 @@ class spell_rog_cut_to_the_chase : public AuraScript
     }
 };
 
+
 // -51625 - Deadly Brew
 class spell_rog_deadly_brew : public AuraScript
 {
@@ -181,19 +184,53 @@ class spell_rog_deadly_brew : public AuraScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_ROGUE_CRIPPLING_POISON });
+        return true;
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
-        eventInfo.GetActor()->CastSpell(eventInfo.GetProcTarget(), SPELL_ROGUE_CRIPPLING_POISON, aurEff);
+        eventInfo.GetActor()->CastSpell(eventInfo.GetProcTarget(), 11201, aurEff);
     }
 
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(spell_rog_deadly_brew::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
+};
+
+
+//2818 - deadly poison
+//5760 - mind numbing poison
+//8680 - instant poison
+//13218 - wound poison
+class spell_rog_poison : public SpellScript
+{
+    PrepareSpellScript(spell_rog_poison);
+
+    bool Load() override
+    {
+        // at this point CastItem must already be initialized
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER && GetCastItem();
+    }
+
+    void HandleAfterHit()
+    {
+        AuraApplication* sealFate = GetCaster()->GetAuraApplicationOfRankedSpell(SPELL_ROGUE_SEAL_FATE);
+        if (sealFate)
+        {
+            if (roll_chance_f(sealFate->GetBase()->GetSpellInfo()->ProcChance))
+            {
+                GetCaster()->AddAura(11201, GetHitUnit());
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_rog_poison::HandleAfterHit);
+    }
+
 };
 
 // -2818 - Deadly Poison
@@ -1013,7 +1050,6 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_blade_flurry);
     RegisterSpellScript(spell_rog_cheat_death);
     RegisterSpellScript(spell_rog_cut_to_the_chase);
-    RegisterSpellScript(spell_rog_deadly_brew);
     RegisterSpellScript(spell_rog_deadly_poison);
     new spell_rog_killing_spree();
     RegisterSpellScript(spell_rog_nerves_of_steel);
@@ -1034,4 +1070,5 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_turn_the_tables);
     RegisterSpellScript(spell_rog_vanish);
     RegisterSpellScript(spell_rog_imp_sap);
+    RegisterSpellScript(spell_rog_poison);
 }

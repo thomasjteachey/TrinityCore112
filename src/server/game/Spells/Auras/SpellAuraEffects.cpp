@@ -539,7 +539,7 @@ uint32 AuraEffect::GetTotalTicks() const
     uint32 totalTicks = 0;
     if (_amplitude && !GetBase()->IsPermanent())
     {
-        totalTicks = static_cast<uint32>(GetBase()->GetMaxDuration() / _amplitude);
+        totalTicks = static_cast<uint32>(GetBase()->GetMaxDuration() / abs(_amplitude));
         if (m_spellInfo->HasAttribute(SPELL_ATTR5_START_PERIODIC_AT_APPLY))
             ++totalTicks;
     }
@@ -1096,6 +1096,7 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
         case FORM_CAT:
             spellId = 3025;
             HotWSpellId = 24900;
+            spellId2 = 2598;
             break;
         case FORM_TREE:
             spellId = 34123;
@@ -1230,7 +1231,7 @@ void AuraEffect::HandleShapeshiftBoosts(Unit* target, bool apply) const
                     if (aurEff->GetSpellInfo()->SpellIconID == 240 && aurEff->GetMiscValue() == 3)
                     {
                         CastSpellExtraArgs args(this);
-                        args.AddSpellMod(SPELLVALUE_BASE_POINT0, aurEff->GetAmount() / 2); // For each 2% Intelligence, you get 1% stamina and 1% attack power.
+                        args.AddSpellMod(SPELLVALUE_BASE_POINT0, aurEff->GetAmount());
 
                         target->CastSpell(target, HotWSpellId, args);
                         break;
@@ -1474,6 +1475,25 @@ void AuraEffect::HandleModStealth(AuraApplication const* aurApp, uint8 mode, boo
         target->SetVisFlag(UNIT_VIS_FLAGS_CREEP);
         if (target->GetTypeId() == TYPEID_PLAYER)
             target->SetByteFlag(PLAYER_FIELD_BYTES2, PLAYER_FIELD_BYTES_2_OFFSET_AURA_VISION, PLAYER_FIELD_BYTE2_STEALTH);
+
+        UnitList targets;
+        Trinity::AnyUnfriendlyUnitInObjectRangeCheck u_check(target, target, target->GetMap()->GetVisibilityRange());
+        Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(target, targets, u_check);
+        Cell::VisitAllObjects(target, searcher, target->GetMap()->GetVisibilityRange());
+        for (UnitList::iterator iter = targets.begin(); iter != targets.end(); ++iter)
+        {
+            if (!(*iter)->HasUnitState(UNIT_STATE_CASTING))
+                continue;
+
+            for (uint32 i = CURRENT_FIRST_NON_MELEE_SPELL; i < CURRENT_MAX_SPELL; i++)
+            {
+                if ((*iter)->GetCurrentSpell(i)
+                    && (*iter)->GetCurrentSpell(i)->m_targets.GetUnitTargetGUID() == target->GetGUID())
+                {
+                    (*iter)->InterruptSpell(CurrentSpellTypes(i), false);
+                }
+            }
+        }
     }
     else
     {
@@ -1565,13 +1585,7 @@ void AuraEffect::HandleSpiritOfRedemption(AuraApplication const* aurApp, uint8 m
             if (!target->IsStandState())
                 target->SetStandState(UNIT_STAND_STATE_STAND);
         }
-
-        target->SetHealth(1);
     }
-    // die at aura end
-    else if (target->IsAlive())
-        // call functions which may have additional effects after changing state of unit
-        target->setDeathState(JUST_DIED);
 }
 
 void AuraEffect::HandleAuraGhost(AuraApplication const* aurApp, uint8 mode, bool apply) const
@@ -2787,12 +2801,28 @@ void AuraEffect::HandleAuraModTotalThreat(AuraApplication const* aurApp, uint8 m
         caster->GetThreatManager().UpdateMyTempModifiers();
 }
 
-void AuraEffect::HandleModTaunt(AuraApplication const* aurApp, uint8 mode, bool /*apply*/) const
+void AuraEffect::HandleModTaunt(AuraApplication const* aurApp, uint8 mode, bool apply) const
 {
     if (!(mode & AURA_EFFECT_HANDLE_REAL))
         return;
 
     Unit* target = aurApp->GetTarget();
+
+    if (target->IsPlayer() && target->IsAlive())
+    {
+        if (apply)
+        {
+            // call functions which may have additional effects after changing state of unit
+            // Stop cast only spells vs PreventionType == SPELL_PREVENTION_TYPE_SILENCE
+            for (uint32 i = CURRENT_MELEE_SPELL; i < CURRENT_MAX_SPELL; ++i)
+                if (Spell* spell = target->GetCurrentSpell(CurrentSpellTypes(i)))
+                    if (spell->m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE)
+                        // Stop spells on prepare or casting state
+                        target->InterruptSpell(CurrentSpellTypes(i), false);
+        }
+        target->SetControlled(apply, UNIT_STATE_TAUNTED);
+        return;
+    }
 
     if (!target->IsAlive() || !target->CanHaveThreatList())
         return;
@@ -2800,13 +2830,15 @@ void AuraEffect::HandleModTaunt(AuraApplication const* aurApp, uint8 mode, bool 
     target->GetThreatManager().TauntUpdate();
 }
 
-void AuraEffect::HandleModDetaunt(AuraApplication const* aurApp, uint8 mode, bool /*apply*/) const
+void AuraEffect::HandleModDetaunt(AuraApplication const* aurApp, uint8 mode, bool apply) const
 {
     if (!(mode & AURA_EFFECT_HANDLE_REAL))
         return;
 
     Unit* caster = GetCaster();
     Unit* target = aurApp->GetTarget();
+
+    target->SetControlled(!apply, UNIT_STATE_TAUNTED);
 
     if (!caster || !caster->IsAlive() || !target->IsAlive() || !caster->CanHaveThreatList())
         return;
@@ -5626,6 +5658,7 @@ void AuraEffect::HandleModAttackPowerOfArmorAuraTick(Unit* target, Unit* caster)
     target->UpdateAttackPowerAndDamage(true);
 }
 
+//ttopper: breakable roots/fears
 void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInfo& eventInfo)
 {
     Unit* caster = aurApp->GetBase()->GetCaster()->ToUnit();

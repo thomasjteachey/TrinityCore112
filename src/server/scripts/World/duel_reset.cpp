@@ -35,8 +35,8 @@ class DuelResetScript : public PlayerScript
             // Cooldowns reset
             if (sWorld->getBoolConfig(CONFIG_RESET_DUEL_COOLDOWNS))
             {
-                player1->GetSpellHistory()->ResetAllCooldowns();
-                player2->GetSpellHistory()->ResetAllCooldowns();
+                player1->RemoveArenaSpellCooldowns(true);
+                player2->RemoveArenaSpellCooldowns(true);
             }
 
             // Health and mana reset
@@ -44,6 +44,8 @@ class DuelResetScript : public PlayerScript
             {
                 player1->ResetAllPowers();
                 player2->ResetAllPowers();
+                player1->SetFullPower(POWER_MANA);
+                player2->SetFullPower(POWER_MANA);
             }
         }
 
@@ -53,8 +55,8 @@ class DuelResetScript : public PlayerScript
             // Cooldown restore
             if (sWorld->getBoolConfig(CONFIG_RESET_DUEL_COOLDOWNS))
             {
-                winner->GetSpellHistory()->ResetAllCooldowns();
-                loser->GetSpellHistory()->ResetAllCooldowns();
+                winner->RemoveArenaSpellCooldowns(true);
+                loser->RemoveArenaSpellCooldowns(true);
             }
 
             // Health and mana restore
@@ -62,6 +64,9 @@ class DuelResetScript : public PlayerScript
             {
                 winner->ResetAllPowers();
                 loser->ResetAllPowers();
+
+                winner->SetFullPower(POWER_MANA);
+                loser->SetFullPower(POWER_MANA);
 
                 // pet cooldowns
                 if (Pet* winpet = winner->GetPet())

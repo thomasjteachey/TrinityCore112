@@ -327,6 +327,11 @@ Player::Player(WorldSession* session): Unit(true)
         m_talents[i] = new PlayerTalentMap();
     }
 
+    for (uint8 i = 0; i < MAX_ATTACK; ++i)
+    {
+        m_enchantmentFlatMod[i] = 0;
+    }
+
     for (uint8 i = 0; i < BASEMOD_END; ++i)
     {
         m_auraBaseFlatMod[i] = 0.0f;
@@ -1987,10 +1992,12 @@ bool Player::IsImmunedToSpellEffect(SpellInfo const* spellInfo, SpellEffectInfo 
     bool requireImmunityPurgesEffectAttribute /*= false*/) const
 {
     // players are immune to taunt (the aura and the spell effect)
+    /*
     if (spellEffectInfo.IsAura(SPELL_AURA_MOD_TAUNT))
         return true;
     if (spellEffectInfo.IsEffect(SPELL_EFFECT_ATTACK_ME))
         return true;
+        */
 
     return Unit::IsImmunedToSpellEffect(spellInfo, spellEffectInfo, caster, requireImmunityPurgesEffectAttribute);
 }
@@ -2849,7 +2856,7 @@ void Player::InitStatsForLevel(bool reapplyMods)
         UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC  | UNIT_FLAG_LOOTING          |
         UNIT_FLAG_PET_IN_COMBAT  | UNIT_FLAG_SILENCED     | UNIT_FLAG_PACIFIED         |
         UNIT_FLAG_STUNNED        | UNIT_FLAG_IN_COMBAT    | UNIT_FLAG_DISARMED         |
-        UNIT_FLAG_CONFUSED       | UNIT_FLAG_FLEEING      | UNIT_FLAG_UNINTERACTIBLE   |
+        UNIT_FLAG_CONFUSED       | UNIT_FLAG_FLEEING      | UNIT_FLAG_UNINTERACTIBLE   | UNIT_FLAG_TAUNTED |
         UNIT_FLAG_SKINNABLE      | UNIT_FLAG_MOUNT        | UNIT_FLAG_ON_TAXI          );
     SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);   // must be set
 
@@ -3777,6 +3784,33 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank)
 
     if (spell_id == 674 && m_canDualWield)
         SetCanDualWield(false);
+
+    if (spell_id == 16269)
+    {
+        SetSkill(172, 0, 0, 0);
+        SetSkill(160, 0, 0, 0);
+        AutoUnequipMainhandIfNeed();
+    }
+
+    //spellstone
+    if (spell_id == 17728)
+    {
+        Item* stone = GetItemByEntry(13603);
+        if (stone)
+        {
+            DestroyItem(stone->GetBagSlot(), stone->GetSlot(), true); //remove old one
+        }
+    }
+
+    //firestone
+    if (spell_id == 17953)
+    {
+        Item* stone = GetItemByEntry(13701);
+        if (stone)
+        {
+            DestroyItem(stone->GetBagSlot(), stone->GetSlot(), true); //remove old one
+        }
+    }
 
     if (sWorld->getBoolConfig(CONFIG_OFFHAND_CHECK_AT_SPELL_UNLEARN))
         AutoUnequipOffhandIfNeed();
@@ -6727,17 +6761,6 @@ void Player::UpdateHonorFields()
 ///An exact honor value can also be given (overriding the calcs)
 bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvptoken)
 {
-    // do not reward honor in arenas, but enable onkill spellproc
-    if (InArena())
-    {
-        if (!victim || victim == this || victim->GetTypeId() != TYPEID_PLAYER)
-            return false;
-
-        if (GetBGTeam() == victim->ToPlayer()->GetBGTeam())
-            return false;
-
-        return true;
-    }
 
     // 'Inactive' this aura prevents the player from gaining honor points and battleground tokens
     if (HasAura(SPELL_AURA_PLAYER_INACTIVE))
@@ -6748,10 +6771,6 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
 
     // need call before fields update to have chance move yesterday data to appropriate fields before today data change.
     UpdateHonorFields();
-
-    // do not reward honor in arenas, but return true to enable onkill spellproc
-    if (InBattleground() && GetBattleground() && GetBattleground()->isArena())
-        return true;
 
     // Promote to float for calculations
     float honor_f = (float)honor;
@@ -7016,9 +7035,15 @@ void Player::UpdateArea(uint32 newArea)
         pvpInfo.IsInNoPvPArea = true;
         if (!duel && GetCombatManager().HasPvPCombat())
             CombatStopWithPets();
+        for (ControlList::iterator itr = m_Controlled.begin(); itr != m_Controlled.end(); ++itr)
+            (*itr)->SetPvpFlag(UNIT_BYTE2_FLAG_SANCTUARY);
     }
     else
+    {
         RemovePvpFlag(UNIT_BYTE2_FLAG_SANCTUARY);
+        for (ControlList::iterator itr = m_Controlled.begin(); itr != m_Controlled.end(); ++itr)
+            (*itr)->RemovePvpFlag(UNIT_BYTE2_FLAG_SANCTUARY);
+    }
 
     uint32 const areaRestFlag = (GetTeam() == ALLIANCE) ? AREA_FLAG_REST_ZONE_ALLIANCE : AREA_FLAG_REST_ZONE_HORDE;
     if (area && area->Flags & areaRestFlag)
@@ -7143,7 +7168,7 @@ void Player::CheckDuelDistance(time_t currTime)
     }
     else
     {
-        if (IsWithinDistInMap(obj, 40))
+        if (IsWithinDistInMap(obj, 50))
         {
             duel->OutOfBoundsTime = 0;
 
@@ -13761,10 +13786,27 @@ void Player::ApplyEnchantment(Item* item, EnchantmentSlot slot, bool apply, bool
                 case ITEM_ENCHANTMENT_TYPE_NONE:
                     break;
                 case ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL:
+                    if (!apply) // clear modifier set by some spells
+                        item->SetEnchantmentModifier(0);
                     // processed in Player::CastItemCombatSpell
                     break;
                 case ITEM_ENCHANTMENT_TYPE_DAMAGE:
                 {
+                    if (item->GetSlot() == EQUIPMENT_SLOT_MAINHAND)
+                    {
+                        SetEnchantmentModifier(enchant_amount, BASE_ATTACK, apply);
+                        UpdateDamagePhysical(BASE_ATTACK);
+                    }
+                    else if (item->GetSlot() == EQUIPMENT_SLOT_OFFHAND)
+                    {
+                        SetEnchantmentModifier(enchant_amount, OFF_ATTACK, apply);
+                        UpdateDamagePhysical(OFF_ATTACK);
+                    }
+                    else if (item->GetSlot() == EQUIPMENT_SLOT_RANGED)
+                    {
+                        SetEnchantmentModifier(enchant_amount, RANGED_ATTACK, apply);
+                        UpdateDamagePhysical(RANGED_ATTACK);
+                    }
                     WeaponAttackType const attackType = Player::GetAttackBySlot(item->GetSlot());
                     if (attackType != MAX_ATTACK)
                         UpdateDamageDoneMods(attackType, apply ? -1 : slot);
@@ -23737,6 +23779,35 @@ void Player::AddItemDurations(Item* item)
     }
 }
 
+void Player::AutoUnequipMainhandIfNeed(bool force)
+{
+    Item* mainItem = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    if (!mainItem)
+        return;
+
+    ItemPosCountVec main_dest;
+    if (GetSkillValue(172) <= 0 && IsTwoHandUsed())
+    {
+        if (CanStoreItem(NULL_BAG, NULL_SLOT, main_dest, mainItem, false) == EQUIP_ERR_OK)
+        {
+            RemoveItem(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND, true);
+            StoreItem(main_dest, mainItem, true);
+        }
+        else
+        {
+            MoveItemFromInventory(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND, true);
+            CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+            mainItem->DeleteFromInventoryDB(trans);                   // deletes item from character's inventory
+            mainItem->SaveToDB(trans);                                // recursive and not have transaction guard into self, item not in inventory and can be save standalone
+
+            std::string subject = GetSession()->GetTrinityString(LANG_NOT_EQUIPPED_ITEM);
+            MailDraft(subject, "There were problems with equipping one or several items").AddItem(mainItem).SendMailTo(trans, this, MailSender(this, MAIL_STATIONERY_GM), MAIL_CHECK_MASK_COPIED);
+
+            CharacterDatabase.CommitTransaction(trans);
+        }
+    }
+}
+
 void Player::AutoUnequipOffhandIfNeed(bool force /*= false*/)
 {
     Item* offItem = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
@@ -24106,7 +24177,7 @@ void Player::SetClientControl(Unit* target, bool allowMove)
     }
 
     // still affected by some aura that shouldn't allow control, only allow on last such aura to be removed
-    if (target->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED))
+    if (target->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_CONFUSED | UNIT_STATE_TAUNTED))
         allowMove = false;
 
     WorldPacket data(SMSG_CLIENT_CONTROL_UPDATE, target->GetPackGUID().size()+1);

@@ -246,6 +246,7 @@ enum UnitState : uint32
     UNIT_STATE_FOLLOW_MOVE           = 0x08000000,
     UNIT_STATE_IGNORE_PATHFINDING    = 0x10000000, // do not use pathfinding in any MovementGenerator
     UNIT_STATE_FOLLOW_FORMATION_MOVE = 0x20000000,
+    UNIT_STATE_TAUNTED               = 0x40000000,
 
     UNIT_STATE_ALL_STATE_SUPPORTED = UNIT_STATE_DIED | UNIT_STATE_MELEE_ATTACKING | UNIT_STATE_CHARMED | UNIT_STATE_STUNNED | UNIT_STATE_ROAMING | UNIT_STATE_CHASE
                                    | UNIT_STATE_FOCUSING | UNIT_STATE_FLEEING | UNIT_STATE_IN_FLIGHT | UNIT_STATE_FOLLOW | UNIT_STATE_ROOT | UNIT_STATE_CONFUSED
@@ -715,6 +716,7 @@ struct TC_GAME_API CharmInfo
         void SetIsReturning(bool val);
         bool IsReturning();
         void SaveStayPosition();
+        void SetStayPosition(float x, float y, float z);
         void GetStayPosition(float &x, float &y, float &z);
 
     private:
@@ -844,7 +846,7 @@ class TC_GAME_API Unit : public WorldObject
         bool IsWithinMeleeRangeAt(Position const& pos, Unit const* obj) const;
         float GetMeleeRange(Unit const* target) const;
         virtual SpellSchoolMask GetMeleeDamageSchoolMask(WeaponAttackType attackType = BASE_ATTACK, uint8 damageIndex = 0) const = 0;
-        bool m_canDualWield;
+        bool m_canDualWield, m_canTwoHanded;
 
         void _addAttacker(Unit* pAttacker);                  // must be called only from Unit::Attack(Unit*)
         void _removeAttacker(Unit* pAttacker);               // must be called only from Unit::AttackStop()
@@ -1285,6 +1287,7 @@ class TC_GAME_API Unit : public WorldObject
         bool IsCharmed() const { return !GetCharmerGUID().IsEmpty(); }
         bool IsCharming() const { return !GetCharmedGUID().IsEmpty(); }
         bool isPossessed() const { return HasUnitState(UNIT_STATE_POSSESSED); }
+        bool IsTaunted();
         bool isPossessedByPlayer() const;
         bool isPossessing() const;
         bool isPossessing(Unit* u) const;
@@ -1934,6 +1937,7 @@ class TC_GAME_API Unit : public WorldObject
 
     protected:
         void SetFeared(bool apply);
+        void SetTaunted(bool apply);
         void SetConfused(bool apply);
         void SetStunned(bool apply);
         void SetRooted(bool apply);

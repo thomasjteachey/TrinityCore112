@@ -458,6 +458,7 @@ void Spell::EffectSchoolDMG()
                     // found Immolate or Shadowflame
                     if (aura)
                     {
+                        /*
                         // Calculate damage of Immolate/Shadowflame tick
                         int32 pdamage = aura->GetAmount();
 
@@ -473,6 +474,7 @@ void Spell::EffectSchoolDMG()
                         ASSERT(m_spellInfo->GetMaxTicks() > 0);
                         m_spellValue->EffectBasePoints[EFFECT_1] = dotBasePoints / m_spellInfo->GetMaxTicks();
 
+                        */
                         // Glyph of Conflagrate
                         if (!unitCaster->HasAura(56235))
                             unitTarget->RemoveAurasDueToSpell(aura->GetId(), unitCaster->GetGUID());
@@ -789,7 +791,7 @@ void Spell::MangosDummyPort()
                             }
 
                         if (roll_chance_f(chance))
-                            m_caster->CastSpell(unitTarget, 19185);
+                            m_caster->CastSpell(unitTarget, 19185, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
                         break;
                     }
 
@@ -1332,12 +1334,12 @@ void Spell::EffectJumpDest()
         return;
 
     float speedXY, speedZ;
+    CalculateJumpSpeeds(*effectInfo, unitCaster->GetExactDist2d(destTarget), speedXY, speedZ);
     if (m_spellInfo->Id == 81271)
     {
         speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
         speedXY = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_XY_SPEED);
     }
-    CalculateJumpSpeeds(*effectInfo, unitCaster->GetExactDist2d(destTarget), speedXY, speedZ);
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
 
@@ -2425,10 +2427,6 @@ void Spell::EffectSummonType()
                     if (!summon || !summon->IsTotem())
                         return;
 
-                    // Mana Tide Totem
-                    if (m_spellInfo->Id == 16190)
-                        damage = unitCaster->CountPctFromMaxHealth(10);
-
                     if (damage)                                            // if not spell info, DB values used
                     {
                         summon->SetMaxHealth(damage);
@@ -2689,7 +2687,7 @@ void Spell::EffectDistract()
         return;
 
     // target must be OK to do this
-    if (unitTarget->HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED | UNIT_STATE_FLEEING))
+    if (unitTarget->HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED | UNIT_STATE_FLEEING | UNIT_STATE_TAUNTED))
         return;
 
     unitTarget->GetMotionMaster()->MoveDistract(damage * IN_MILLISECONDS, unitTarget->GetAbsoluteAngle(destTarget));
@@ -3652,7 +3650,7 @@ void Spell::EffectInterruptCast()
             {
                 if (Unit* unitCaster = GetUnitCasterForEffectHandlers())
                 {
-                    int32 duration = m_spellInfo->GetDuration();
+                    int32 duration = Aura::CalcMaxDuration(m_spellInfo, unitCaster);
                     unitTarget->GetSpellHistory()->LockSpellSchool(curSpellInfo->GetSchoolMask(), unitTarget->ModSpellDuration(m_spellInfo, unitTarget, duration, false, 1 << effectInfo->EffectIndex));
                     if (m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC)
                         Unit::ProcSkillsAndAuras(unitCaster, unitTarget, PROC_FLAG_DONE_SPELL_MAGIC_DMG_CLASS_NEG, PROC_FLAG_TAKEN_SPELL_MAGIC_DMG_CLASS_NEG,
@@ -4168,6 +4166,17 @@ void Spell::EffectEnchantHeldItem()
         // Apply the temporary enchantment
         item->SetEnchantment(slot, enchant_id, duration, 0, m_caster->GetGUID());
         item_owner->ApplyEnchantment(item, slot, true);
+
+        //improved weapon totems
+        AuraApplication* improvedWeaponTotems = m_caster->GetOwner()->GetAuraApplicationOfRankedSpell(29192);
+        if (improvedWeaponTotems)
+        {
+            SpellEffIndex dummyAuraIndex = m_spellInfo->SpellIconID == 1397 ? EFFECT_0 : EFFECT_1; // 0 - Windfury 1 - Flametongue
+            if (dummyAuraIndex == EFFECT_0)
+            {
+                item->SetEnchantmentModifier(improvedWeaponTotems->GetBase()->GetEffect(EFFECT_0)->GetBaseAmount());
+            }
+        }
     }
 }
 

@@ -1883,11 +1883,18 @@ void Spell::SearchChainTargets(std::list<WorldObject*>& targets, uint32 chainTar
                 jumpRadius = 10.0f;
             break;
     }
+    bool avengersShield = m_spellInfo->SpellIconID == 2172;
+    if (avengersShield)
+    {
+        jumpRadius = 10;
+    }
 
     // chain lightning/heal spells and similar - allow to jump at larger distance and go out of los
     bool isBouncingFar = (m_spellInfo->HasAttribute(SPELL_ATTR4_AREA_TARGET_CHAIN)
         || m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_NONE
-        || m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC);
+        || m_spellInfo->DmgClass == SPELL_DAMAGE_CLASS_MAGIC
+        || avengersShield
+        );
 
     // max dist which spell can reach
     float searchRadius = jumpRadius;
@@ -4841,6 +4848,7 @@ void Spell::TakePower()
 void Spell::TakeAmmo()
 {
     // Only players use ammo
+    return;
     Player* player = m_caster->ToPlayer();
     if (!player)
         return;
@@ -5274,7 +5282,8 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 return SPELL_FAILED_MOVING;
         }
 
-        if (unitCaster->IsCharmed() && m_spellInfo->HasAttribute(SPELL_ATTR5_NOT_USABLE_WHILE_CHARMED))
+        bool taunted = unitCaster->IsTaunted();
+        if ((unitCaster->IsCharmed() || taunted) && m_spellInfo->HasAttribute(SPELL_ATTR5_NOT_USABLE_WHILE_CHARMED))
             return SPELL_FAILED_CHARMED;
 
         // Check vehicle flags
@@ -5332,8 +5341,23 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         if (target != m_caster)
         {
             // Must be behind the target
-            if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) && target->HasInArc(static_cast<float>(M_PI), m_caster))
-                return SPELL_FAILED_NOT_BEHIND;
+            if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET)
+                && target->HasInArc(static_cast<float>(M_PI), m_caster))
+            {
+                //pounce
+                bool pounceOk = false;
+                if (m_spellInfo->SpellIconID == 495)
+                {
+                    if (m_caster->IsPlayer() && m_caster->ToPlayer()->HasAura(48410))//primal precision
+                    {
+                        pounceOk = true;
+                    }
+                }
+                if (!pounceOk)
+                {
+                    return SPELL_FAILED_NOT_BEHIND;
+                }
+            }
 
             // Target must be facing you
             if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER) && !target->HasInArc(static_cast<float>(M_PI), m_caster))
@@ -6011,7 +6035,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 if (!unitCaster)
                     return SPELL_FAILED_BAD_TARGETS;
 
-                if (unitCaster->GetCharmerGUID())
+                if (unitCaster->GetCharmerGUID() || unitCaster->IsTaunted())
                     return SPELL_FAILED_CHARMED;
 
                 if (spellEffectInfo.ApplyAuraName == SPELL_AURA_MOD_CHARM
@@ -6224,6 +6248,10 @@ SpellCastResult Spell::CheckPetCast(Unit* target)
 SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
 {
     Unit* unitCaster = (m_originalCaster ? m_originalCaster : m_caster->ToUnit());
+    if (m_spellInfo->Id == 81354)
+    {
+        return SPELL_CAST_OK;
+    }
     if (!unitCaster)
         return SPELL_CAST_OK;
 
@@ -6253,7 +6281,6 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
 
     // Get unit state
     uint32 const unitflag = unitCaster->GetUnitFlags();
-
     if (m_fromClient && unitCaster->IsCharmed() && unitCaster->IsPlayer() && !CheckSpellCancelsCharm(param1))
         result = SPELL_FAILED_CHARMED;
 
@@ -6291,6 +6318,8 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
                     return SPELL_FAILED_FLEEING;
                 case SPELL_AURA_MOD_CONFUSE:
                     return SPELL_FAILED_CONFUSED;
+                case SPELL_AURA_MOD_TAUNT:
+                    return SPELL_FAILED_CONFUSED;
                 default:
                     ABORT();
                     return SPELL_FAILED_NOT_KNOWN;
@@ -6313,6 +6342,8 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
         else if ((m_spellInfo->Mechanic & MECHANIC_IMMUNE_SHIELD) && m_caster->ToUnit() && m_caster->ToUnit()->HasAuraWithMechanic(1 << MECHANIC_BANISH))
             result = SPELL_FAILED_STUNNED;
     }
+    else if (unitCaster->HasAuraType(SPELL_AURA_MOD_TAUNT) && !CheckSpellCancelsTaunt(param1))
+        result = SPELL_FAILED_CHARMED;
     else if (unitflag & UNIT_FLAG_SILENCED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && !CheckSpellCancelsSilence(param1))
         result = SPELL_FAILED_SILENCED;
     else if (unitflag & UNIT_FLAG_PACIFIED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_PACIFY && !CheckSpellCancelsPacify(param1))
@@ -6328,7 +6359,7 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
         else if (!CheckSpellCancelsFear(param1))
             result = SPELL_FAILED_FLEEING;
     }
-    else if (unitflag & UNIT_FLAG_CONFUSED)
+    else if ((unitflag & UNIT_FLAG_CONFUSED))
     {
         if (usableWhileConfused)
         {
@@ -6382,6 +6413,11 @@ bool Spell::CheckSpellCancelsCharm(uint32* param1) const
     return CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_CHARM, param1) &&
         CheckSpellCancelsAuraEffect(SPELL_AURA_AOE_CHARM, param1) &&
         CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_POSSESS, param1);
+}
+
+bool Spell::CheckSpellCancelsTaunt(uint32* param1) const
+{
+    return CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_TAUNT, param1);
 }
 
 bool Spell::CheckSpellCancelsStun(uint32* param1) const
@@ -6509,6 +6545,14 @@ SpellCastResult Spell::CheckRange(bool strict) const
     maxRange *= maxRange;
 
     Unit* target = m_targets.GetUnitTarget();
+    if (!target && GetSpellInfo()->GetEffect(EFFECT_0).TargetA.GetTarget() == TARGET_UNIT_PET)
+    {
+        Player* p = m_caster->ToPlayer();
+        if (p && p->GetPet())
+        {
+            target = p->GetPet();
+        }
+    }
     if (target && target != m_caster)
     {
         if (m_caster->GetExactDistSq(target) > maxRange)

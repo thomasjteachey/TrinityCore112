@@ -77,7 +77,11 @@ enum PriestSpells
     SPELL_PRIEST_TWIN_DISCIPLINE_R1                 = 47586,
     SPELL_PRIEST_SPIRITUAL_HEALING_R1               = 14898,
     SPELL_PRIEST_DIVINE_PROVIDENCE_R1               = 47562,
-    SPELL_PRIEST_SHADOW_GUARD_DAMAGE_R1             = 28377
+    SPELL_PRIEST_SHADOW_GUARD_DAMAGE_R1             = 28377,
+    SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R1        = 81322,
+    SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R2        = 81323,
+    SPELL_PRIEST_SPIRIT_OF_REDEMPTION               = 27827,
+    SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356
 };
 
 enum PriestSpellIcons
@@ -1113,11 +1117,18 @@ class spell_pri_vampiric_embrace : public AuraScript
             return;
 
         int32 selfHeal = CalculatePct(static_cast<int32>(damageInfo->GetDamage()), aurEff->GetAmount());
-        int32 partyHeal = selfHeal / 5;
+        int32 partyHeal = selfHeal;
         CastSpellExtraArgs args(aurEff);
         args.AddSpellBP0(partyHeal);
         args.AddSpellMod(SPELLVALUE_BASE_POINT1, selfHeal);
         eventInfo.GetActor()->CastSpell(nullptr, SPELL_PRIEST_VAMPIRIC_EMBRACE_HEAL, args);
+
+        CastSpellExtraArgs args2(aurEff);
+        int32 manaRegen = int32(partyHeal / 10.0f);
+        args2.AddSpellBP0(manaRegen);
+        args2.AddSpellMod(SPELLVALUE_BASE_POINT1, 0);
+        eventInfo.GetActor()->CastSpell(nullptr, SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA, args2);
+
     }
 
     void Register() override
@@ -1328,6 +1339,95 @@ class spell_pri_shadow_guard : public AuraScript
     }
 };
 
+class spell_pri_spirit_duration_increase: public SpellScript
+{
+    PrepareSpellScript(spell_pri_spirit_duration_increase);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        if (GetCaster()->HasAura(SPELL_PRIEST_SPIRIT_OF_REDEMPTION))
+        {
+            Aura* spiritOfRedemption = GetCaster()->GetAura(SPELL_PRIEST_SPIRIT_OF_REDEMPTION);
+            spiritOfRedemption->SetDuration(spiritOfRedemption->GetDuration() + GetEffectValue());
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pri_spirit_duration_increase::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+class spell_pri_smite : public SpellScript
+{
+    PrepareSpellScript(spell_pri_smite);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R1);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pri_smite::HandleDummy, EFFECT_2, SPELL_EFFECT_DUMMY);
+    }
+};
+
+class spell_pri_holy_fire : public SpellScript
+{
+    PrepareSpellScript(spell_pri_holy_fire);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        GetCaster()->CastSpell(GetCaster(), SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R2);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pri_holy_fire::HandleDummy, EFFECT_2, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 81352 - wisp form
+class spell_pri_wisp_form : public AuraScript
+{
+    PrepareAuraScript(spell_pri_wisp_form);
+
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        player->RestoreDisplayId();
+    }
+
+    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        player->SetDisplayId(10045);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_pri_wisp_form::OnApply, EFFECT_0, SPELL_AURA_MECHANIC_IMMUNITY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_pri_wisp_form::OnRemove, EFFECT_0, SPELL_AURA_MECHANIC_IMMUNITY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+
 
 void AddSC_priest_spell_scripts()
 {
@@ -1363,4 +1463,8 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_pri_t10_heal_2p_bonus);
     RegisterSpellScript(spell_pri_power_infusion);
     RegisterSpellScript(spell_pri_shadow_guard);
+    RegisterSpellScript(spell_pri_spirit_duration_increase);
+    RegisterSpellScript(spell_pri_smite);
+    RegisterSpellScript(spell_pri_holy_fire);
+    RegisterSpellScript(spell_pri_wisp_form);
 }

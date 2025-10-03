@@ -70,6 +70,11 @@ void Unit::UpdateDamagePhysical(WeaponAttackType attType)
         CalculateMinMaxDamage(attType, false, true, tmpMin, tmpMax, i);
         totalMin += tmpMin;
         totalMax += tmpMax;
+        if (IsPlayer())
+        {
+            totalMin += ToPlayer()->GetEnchantmentModifier(attType);
+            totalMax += ToPlayer()->GetEnchantmentModifier(attType);
+        }
     }
 
     switch (attType)
@@ -401,6 +406,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                         levelBonus = CalculatePct(1.0f, levelMod->GetAmount());
 
                     // = 0 if removing the weapon, do not calculate bonus (uses template)
+                    /*
                     if (m_baseFeralAP)
                     {
                         if (Item const* weapon = m_items[EQUIPMENT_SLOT_MAINHAND])
@@ -413,6 +419,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                             }
                         }
                     }
+                    */
                 }
 
                 switch (GetShapeshiftForm())
@@ -515,6 +522,20 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             guardian->UpdateAttackPowerAndDamage();
     }
 }
+
+void Player::SetEnchantmentModifier(uint32 value, WeaponAttackType attType, bool apply)
+{
+    if (apply)
+        m_enchantmentFlatMod[attType] += value;
+    else
+        m_enchantmentFlatMod[attType] -= value;
+}
+
+uint32 Player::GetEnchantmentModifier(WeaponAttackType attType)
+{
+    return m_enchantmentFlatMod[attType];
+}
+
 
 void Player::UpdateShieldBlockValue()
 {

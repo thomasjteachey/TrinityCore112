@@ -8,7 +8,16 @@
 #include "BattlegroundMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
+#include "WorldSocket.h"
+#include "Log.h"
+#include "Map.h"
+#include "ObjectDefines.h"
+#include "ObjectMgr.h"
+#include "GameTime.h"
+#include "Random.h"
+#include <boost/asio.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
 #include "ScriptMgr.h"
@@ -18,6 +27,7 @@
 #include "Player.h"
 #include "WorldSession.h"
 #include <DBCStores.h>
+#include <zlib.h>
 
 
 std::vector<Opcodes> watchList = {
@@ -73,9 +83,230 @@ std::vector<Opcodes> watchList = {
 
 
 struct PacketRecord { uint32 timestamp; WorldPacket packet; };
-struct MatchRecord { BattlegroundTypeId typeId; uint8 arenaTypeId; uint32 mapId; std::deque<PacketRecord> packets; };
+struct MatchRecord {
+    BattlegroundTypeId typeId;
+    uint8 arenaTypeId;
+    uint32 mapId;
+    uint32 startTime = 0;
+    ObjectGuid allianceRecorder;
+    ObjectGuid hordeRecorder;
+    std::deque<PacketRecord> packets;
+};
+
+namespace
+{
+    ObjectGuid GenerateAlternateGuid(ObjectGuid guid)
+    {
+        uint64 raw = guid.GetRawValue();
+        uint64 newRaw = raw;
+        for (int i = 0; i < 6; ++i)
+        {
+            uint8 oldByte = (raw >> (i * 8)) & 0xFF;
+            if (oldByte)
+            {
+                uint8 newByte = oldByte;
+                while (newByte == oldByte)
+                    newByte = uint8(urand(1, 255));
+                newRaw &= ~(uint64(0xFF) << (i * 8));
+                newRaw |= uint64(newByte) << (i * 8);
+            }
+        }
+        return ObjectGuid(newRaw);
+    }
+
+    void ReplaceGuid(WorldPacket& packet, ObjectGuid const& oldGuid, ObjectGuid const& newGuid)
+    {
+        if (oldGuid == newGuid || oldGuid.IsEmpty())
+            return;
+
+        bool compressed = packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT;
+        ByteBuffer buffer;
+
+        if (compressed)
+        {
+            if (packet.size() < sizeof(uint32))
+                return;
+
+            uint32 size = packet.read<uint32>(0);
+            if (!size)
+                return;
+
+            buffer.resize(size);
+            uLongf realSize = size;
+            if (uncompress(buffer.contents(), &realSize, packet.contents() + sizeof(uint32), packet.size() - sizeof(uint32)) != Z_OK)
+                return;
+            buffer.resize(realSize);
+            TC_LOG_DEBUG("bg.replay", "Decompressed packet opcode {} from {} to {} bytes", GetOpcodeNameForLogging(static_cast<Opcodes>(packet.GetOpcode())), packet.size(), realSize);
+
+        }
+        else
+        {
+            buffer.resize(packet.size());
+            if (packet.size() > 0)
+                memcpy(buffer.contents(), packet.contents(), packet.size());
+        }
+
+        uint64 oldRaw = oldGuid.GetRawValue();
+        uint64 newRaw = newGuid.GetRawValue();
+
+        size_t len = buffer.size();
+        uint8* data = buffer.contents();
+        size_t replaced = 0;
+        for (size_t i = 0; i + sizeof(uint64) <= len; ++i)
+        {
+            uint64 val;
+            memcpy(&val, data + i, sizeof(uint64));
+            if (val == oldRaw)
+            {
+                memcpy(data + i, &newRaw, sizeof(uint64));
+                ++replaced;
+            }
+        }
+
+        ByteBuffer oldPack; oldPack << oldGuid.WriteAsPacked();
+        ByteBuffer newPack; newPack << newGuid.WriteAsPacked();
+        auto oldVec = oldPack.contentsAsVector();
+        auto newVec = newPack.contentsAsVector();
+
+        if (!oldVec.empty())
+        {
+            if (oldVec.size() == newVec.size())
+            {
+                for (size_t i = 0; i + oldVec.size() <= len; ++i)
+                    if (memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
+                        memcpy(data + i, newVec.data(), newVec.size());
+            }
+            else
+            {
+                std::vector<uint8> newData;
+                newData.reserve(len); // approximate
+                for (size_t i = 0; i < len;)
+                {
+                    if (i + oldVec.size() <= len && memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
+                    {
+                        newData.insert(newData.end(), newVec.begin(), newVec.end());
+                        i += oldVec.size();
+                    }
+                    else
+                    {
+                        newData.push_back(data[i]);
+                        ++i;
+                    }
+                }
+                buffer.clear();
+                buffer.append(newData.data(), newData.size());
+                len = buffer.size();
+                data = buffer.contents();
+            }
+        }
+
+        TC_LOG_DEBUG("bg.replay", "ReplaceGuid {} -> {} replaced {} raw occurrences", oldGuid.ToString(), newGuid.ToString(), replaced);
+
+        packet.clear();
+        if (compressed)
+        {
+            uLongf destSize = compressBound(len);
+            packet.resize(destSize + sizeof(uint32));
+            packet.put<uint32>(0, len);
+            if (compress(packet.contents() + sizeof(uint32), &destSize, buffer.contents(), len) != Z_OK)
+                return;
+            packet.resize(destSize + sizeof(uint32));
+            packet.SetOpcode(SMSG_COMPRESSED_UPDATE_OBJECT);
+        }
+        else
+        {
+            packet.append(buffer.contents(), len);
+        }
+    }
+}
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
+// Headless spectators used for recording packets per battleground instance
+std::unordered_map<uint32, Player*> replayBots;
+// Helper container to avoid recursive bot creation
+std::unordered_set<uint32> creatingReplayBots;
+
+namespace
+{
+    // Dummy socket used so the headless spectator can receive packets
+    class ReplaySocket : public WorldSocket
+    {
+    public:
+        ReplaySocket() : WorldSocket(Create()) {}
+
+        static tcp::socket Create()
+        {
+            static boost::asio::io_context io;
+            tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), 0));
+            tcp::socket server(io);
+            tcp::socket client(io);
+            client.connect(tcp::endpoint(boost::asio::ip::address_v4::loopback(),
+                                         acceptor.local_endpoint().port()));
+            acceptor.accept(server);
+            io.poll();
+            acceptor.close();
+            server.close();
+            return client;
+        }
+
+        void Start() override {}
+        bool Update() override { return true; }
+    };
+
+    Player* CreateReplayBot(Battleground* bg)
+    {
+        if (!bg->FindBgMap())
+            return nullptr;
+        WorldSession* botSession = new WorldSession(0, "ReplayBot", std::make_shared<ReplaySocket>(), SEC_ADMINISTRATOR,
+            2, 0, Minutes(0), LOCALE_enUS, 0, false);
+        Player* bot = new Player(botSession);
+
+        struct ReplayBotCreateInfo : CharacterCreateInfo
+        {
+            ReplayBotCreateInfo()
+            {
+                Name = "ReplayBot";
+                Race = RACE_HUMAN;
+                Class = CLASS_MAGE;
+                Gender = GENDER_MALE;
+            }
+        } createInfo;
+
+        bot->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo);
+        botSession->SetPlayer(bot);
+        bot->GetMotionMaster()->Initialize();
+
+        bot->SetGameMaster(true);
+        bot->SetGMVisible(false);
+        bot->SetIsSpectator(true);
+
+        Position const* pos = bg->GetTeamStartPosition(TEAM_ALLIANCE);
+        bot->Relocate(*pos);
+        bot->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), PLAYER_MAX_BATTLEGROUND_QUEUES, false, false, TEAM_NEUTRAL);
+        bot->ResetMap();
+        bot->SetMap(bg->GetBgMap());
+        bg->GetBgMap()->AddPlayerToMap(bot);
+        bg->AddSpectator(bot);
+        TC_LOG_DEBUG("bg.replay", "Created replay bot for instance {}", bg->GetInstanceID());
+        return bot;
+    }
+
+    void DestroyReplayBot(Battleground* bg)
+    {
+        auto itr = replayBots.find(bg->GetInstanceID());
+        if (itr == replayBots.end())
+            return;
+        Player* bot = itr->second;
+        WorldSession* session = bot->GetSession();
+        bot->CleanupsBeforeDelete();
+        if (bot->GetMap())
+            bot->GetMap()->RemovePlayerFromMap(bot, true);
+        if (session)
+            session->SetPlayer(nullptr);
+        delete session;
+        replayBots.erase(itr);
+    }
+}
 
 class BGReplayServerScript : public ServerScript {
 public:
@@ -88,27 +319,65 @@ public:
 
         //ignore packet when no bg or casual games
         if (bg == nullptr || bg->IsReplay()) return;
-        //ignore packets until arena started
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
-        //record packets from 1 player of each team
-        //iterate just in case a player leaves and used as reference
-        for (auto it : bg->GetPlayers()) {
-            if (it.second.Team == session->GetPlayer()->GetBGTeam()) {
-                if (it.first.GetRawValue() != session->GetPlayer()->GetGUID())
-                    return; else break;
-            }
-        }
-        //ignore packets not in watch list
-        if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
-        {
-            return;
-        }
+        // ignore packets before players have entered the battleground
+        if (bg->GetStatus() <= BattlegroundStatus::STATUS_WAIT_QUEUE) return;
 
+
+        // ensure the record container exists for this battleground instance
         if (records.find(bg->GetInstanceID()) == records.end())
-            records[bg->GetInstanceID()].packets.clear();
+            records[bg->GetInstanceID()] = MatchRecord();
+
+
         MatchRecord& record = records[bg->GetInstanceID()];
 
-        uint32 timestamp = bg->GetStartTime();
+        BattlegroundMap* map = bg->FindBgMap();
+        if (!map)
+            return; // map hasn't been created yet
+
+        // player hasn't teleported into the battleground instance
+        if (session->GetPlayer()->GetMap() != map)
+            return;
+
+        uint32 instanceId = bg->GetInstanceID();
+        if (!replayBots[instanceId])
+        {
+            if (creatingReplayBots.count(instanceId))
+                return;
+
+            creatingReplayBots.insert(instanceId);
+            replayBots[instanceId] = CreateReplayBot(bg);
+            creatingReplayBots.erase(instanceId);
+            return;
+        }
+        if (session->GetPlayer() != replayBots[instanceId])
+            return;
+        //ignore packets not in watch list
+        if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
+            return;
+
+        TC_LOG_TRACE("bg.replay", "Recording opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(packet.GetOpcode())), packet.size());
+
+        if (record.startTime == 0)
+        {
+            record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
+            for (auto const& itr : bg->GetPlayers())
+            {
+                ObjectGuid guid = itr.first;
+                if (Player* plr = ObjectAccessor::FindPlayer(guid))
+                {
+                    uint32 team = plr->GetBGTeam();
+                    if (team == ALLIANCE && record.allianceRecorder.IsEmpty())
+                        record.allianceRecorder = plr->GetGUID();
+                    else if (team == HORDE && record.hordeRecorder.IsEmpty())
+                        record.hordeRecorder = plr->GetGUID();
+
+                    if (!record.allianceRecorder.IsEmpty() && !record.hordeRecorder.IsEmpty())
+                        break;
+                }
+            }
+        }
+
+        uint32 timestamp = GameTime::GetGameTimeMS() - record.startTime;
         record.typeId = bg->GetTypeID(false);
         if (record.typeId == BATTLEGROUND_AA)
         {
@@ -132,8 +401,9 @@ public:
         //save replay when a bg ends
         if (!bg->IsReplay()) {
             saveReplay(bg);
-            return;
         }
+        DestroyReplayBot(bg);
+        return;
     }
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 diff) override {
@@ -145,37 +415,39 @@ public:
             bg->SetStartDelayTime(5000);
             bg->SetStartTime(bg->GetStartTime() + (startDelayTime - 5000));
         }
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
+        if (bg->GetStatus() < BattlegroundStatus::STATUS_WAIT_JOIN) return;
 
         //retrieve replay data
         auto it = loadedReplays.find(bg->GetReplayId());
         if (it == loadedReplays.end()) return;
         MatchRecord& match = it->second;
 
-        //if replay ends or spectator left > free replay data and/or kick player
-        if (match.packets.empty() || bg->GetPlayers().empty()) {
-            loadedReplays.erase(it);
+        // ensure spectator has finished loading into the battleground
+        Player* spectator = ObjectAccessor::FindPlayerByLowGUID(bg->GetReplayId());
+        if (!spectator || spectator->GetMapId() != bg->GetMapId())
+            return;
 
-            if (!bg->GetPlayers().empty())
+        // free data once all spectators have left or the replay is finished
+        if (match.packets.empty() || !bg->HaveSpectators()) {
+            loadedReplays.erase(it);
+            if (bg->HaveSpectators())
             {
                 uint32 playerGUID = bg->GetReplayId();
                 bg->EndNow();
                 bg->toggleReplay(0);
-                Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-                player->LeaveBattleground(bg);
+                if (Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID))
+                    player->LeaveBattleground(bg);
             }
             return;
         }
 
         //send replay data to spectator
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
-            if (bg->GetPlayers().empty())
+            if (!bg->HaveSpectators())
                 break;
-            uint32 playerGUID = bg->GetReplayId();
-            Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-            if (!player)
-                break;
-            player->GetSession()->SendPacket(&match.packets.front().packet);
+
+            TC_LOG_TRACE("bg.replay", "Sending opcode {} size {}", GetOpcodeNameForLogging(static_cast<Opcodes>(match.packets.front().packet.GetOpcode())), match.packets.front().packet.size());
+            spectator->GetSession()->SendPacket(&match.packets.front().packet);
             match.packets.pop_front();
         }
     }
@@ -186,22 +458,47 @@ public:
         if (it == records.end()) return;
         MatchRecord& match = it->second;
 
-        //serialize arena replay data
+        if (match.typeId == BATTLEGROUND_TYPE_NONE)
+        {
+            match.typeId = bg->GetTypeID(false);
+            if (match.typeId == BATTLEGROUND_AA)
+                match.typeId = bg->GetTypeID(true);
+        }
+        if (!match.arenaTypeId)
+            match.arenaTypeId = bg->GetArenaType();
+        if (!match.mapId)
+            match.mapId = bg->GetMapId();
+
+
+        if (match.packets.empty())
+        {
+            TC_LOG_DEBUG("bg.replay", "Replay for instance {} contains no packets and will not be saved", bg->GetInstanceID());
+            records.erase(it);
+            return;
+        }
+
+        TC_LOG_INFO("bg.replay", "Saving replay for instance {} with {} packets", bg->GetInstanceID(), match.packets.size());
+
+        // serialize arena replay data
         ByteBuffer buffer;
+        buffer << match.startTime;
+        buffer << match.allianceRecorder;
+        buffer << match.hordeRecorder;
         uint32 headerSize;
         uint32 timestamp;
-        for (auto it : match.packets) {
-            headerSize = it.packet.size(); //header 4Bytes packet size
+        for (auto it : match.packets)
+        {
+            headerSize = it.packet.size(); // header 4 Bytes packet size
             timestamp = it.timestamp;
 
-            buffer << headerSize; //4 bytes
-            buffer << timestamp; //4 bytes
+            buffer << headerSize; // 4 bytes
+            buffer << timestamp; // 4 bytes
             buffer << it.packet.GetOpcode(); // 2 bytes
             if (headerSize > 0)
                 buffer.append(it.packet.contents(), it.packet.size()); // headerSize bytes
         }
+
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ARENA_REPLAYS);
-        //stmt->setUInt32(0, id);
         stmt->setUInt32(0, uint32(match.arenaTypeId));
         stmt->setUInt32(1, uint32(match.typeId));
         stmt->setUInt32(2, buffer.size());
@@ -243,6 +540,13 @@ public:
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
 
+            if (loadedReplays[player->GetGUID()].packets.empty())
+            {
+                handler.PSendSysMessage("Replay data not found.");
+                handler.SetSentErrorMessage(true);
+                return false;
+            }
+
             MatchRecord record = loadedReplays[player->GetGUID()];
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
             if (!bg) {
@@ -271,6 +575,7 @@ public:
         }
 
         bool loadReplayDataForPlayer(Player* p, uint32 matchId) {
+            TC_LOG_INFO("bg.replay", "Loading replay {} for player {} ({})", matchId, p->GetName(), p->GetGUID().ToString());
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ARENA_REPLAYS);
             stmt->setUInt32(0, matchId);
 
@@ -287,8 +592,24 @@ public:
             }
             MatchRecord record;
             deserializeMatchData(record, fields);
+            TC_LOG_INFO("bg.replay", "Deserialized replay: start {} map {} packets {}", record.startTime, record.mapId, record.packets.size());
+
+            ObjectGuid spectator = p->GetGUID();
+            if (record.allianceRecorder == spectator || record.hordeRecorder == spectator)
+            {
+                ObjectGuid newGuid = ObjectGuid::Create<HighGuid::Player>(sObjectMgr->GetGenerator<HighGuid::Player>().Generate());
+                TC_LOG_INFO("bg.replay", "Replacing spectator GUID {} with {}", spectator.ToString(), newGuid.ToString());
+                for (PacketRecord& r : record.packets)
+                    ReplaceGuid(r.packet, spectator, newGuid);
+
+                if (record.allianceRecorder == spectator)
+                    record.allianceRecorder = newGuid;
+                if (record.hordeRecorder == spectator)
+                    record.hordeRecorder = newGuid;
+            }
 
             loadedReplays[p->GetGUID()] = std::move(record);
+            TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[p->GetGUID()].packets.size(), p->GetGUID().ToString());
             return true;
         }
 
@@ -320,6 +641,10 @@ public:
             ByteBuffer buffer;
             buffer.append(&data[0], data.size());
 
+            buffer >> record.startTime;
+            buffer >> record.allianceRecorder;
+            buffer >> record.hordeRecorder;
+
             /** deserialize replay binary data **/
             uint32 packetSize;
             uint32 packetTimestamp;
@@ -347,8 +672,23 @@ public:
     }
 };
 
+class BGReplayPlayerScript : public PlayerScript
+{
+public:
+    BGReplayPlayerScript() : PlayerScript("BGReplayPlayerScript") { }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (Battleground* bg = player->GetBattleground())
+            if (bg->IsReplay())
+                if (BattlegroundMap* map = bg->FindBgMap())
+                    map->SetVisibilityRange(MAX_VISIBILITY_DISTANCE);
+    }
+};
+
 void AddBGReplayScripts() {
     new BGReplayServerScript();
     new BGReplayBGScript();
     new ReplayGossip();
+    new BGReplayPlayerScript();
 }

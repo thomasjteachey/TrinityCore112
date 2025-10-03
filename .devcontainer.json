@@ -1,0 +1,14 @@
+{
+  "name": "TrinityCore Task Container",
+  "features": {
+    // keep your Python runtime in place...
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    // ...and your Node runtime, but disable Yarn/Corepack
+    "ghcr.io/devcontainers/features/node:2": {
+      "version": "20",
+      "installYarn": false
+    }
+  }
+}

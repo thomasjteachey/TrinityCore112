@@ -2193,7 +2193,7 @@ void SpellInfo::_LoadSpellSpecific()
                     )
                     return SPELL_SPECIFIC_SEAL;
 
-                if (SpellFamilyFlags[0] & 0x00002190)
+                if (Id == 1044 || Id == 1022 || Id == 5599 || Id == 10278 || Id == 6940 || Id == 20729 || Id == 81277)
                     return SPELL_SPECIFIC_HAND;
 
                 // Judgement of Wisdom, Judgement of Light, Judgement of Justice, Judgement of Righteousness
@@ -2329,6 +2329,8 @@ void SpellInfo::_LoadSpellDiminishInfo()
             }
             case SPELLFAMILY_WARRIOR:
             {
+                if (Id == 355)
+                    return DIMINISHING_FEAR;
                 // Hamstring - limit duration to 10s in PvP
                 if (SpellFamilyFlags[0] & 0x2)
                     return DIMINISHING_LIMITONLY;
@@ -2717,6 +2719,8 @@ void SpellInfo::_LoadImmunityInfo()
                     case 19574: // Bestial Wrath
                     case 53490: // Bullheaded
                     case 81272: //death wish: unstoppable
+                    case 81296: //unstoppable
+                    case 81300: //bestial wrath (new)
                         mechanicImmunityMask |= IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK;
                         break;
                     case 54508: // Demonic Empowerment

@@ -44,6 +44,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Vehicle.h"
+#include "PetAI.h"
 
 class spell_gen_absorb0_hitlimit1 : public AuraScript
 {
@@ -66,6 +67,101 @@ class spell_gen_absorb0_hitlimit1 : public AuraScript
     void Register() override
     {
         OnEffectAbsorb += AuraEffectAbsorbFn(spell_gen_absorb0_hitlimit1::Absorb, EFFECT_0);
+    }
+};
+
+class spell_shadowmeld : public SpellScript
+{
+    PrepareSpellScript(spell_shadowmeld);
+
+    void HandleShadowmeld()
+    {
+        Unit* target = GetCaster();
+
+        target->CombatStop(false, false);
+
+        UnitList targets;
+        Trinity::AnyUnfriendlyUnitInObjectRangeCheck u_check(target, target, target->GetMap()->GetVisibilityRange());
+        Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(target, targets, u_check);
+        Cell::VisitAllObjects(target, searcher, target->GetMap()->GetVisibilityRange());
+        for (auto& pair : target->GetThreatManager().GetThreatenedByMeList())
+            pair.second->ScaleThreat(0.0f);
+
+        target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
+
+        // prevent interrupt message
+        if (GetCaster()->GetGUID() == target->GetGUID() && target->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            target->FinishSpell(CURRENT_GENERIC_SPELL, false);
+        target->InterruptNonMeleeSpells(true);
+        //target->InterruptSpell(75);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_shadowmeld::HandleShadowmeld);
+    }
+};
+
+//pet move to - 81354
+class spell_pet_moveto : public SpellScript
+{
+    PrepareSpellScript(spell_pet_moveto);
+
+    SpellCastResult DoCheckCast()
+    {
+        Guardian* pet = GetCaster()->ToPlayer()->GetGuardianPet();
+        if(!pet)
+            return SPELL_FAILED_NO_PET;
+
+        if (!pet->IsPet() || !pet->IsAlive())
+            return SPELL_FAILED_NO_PET;
+        // The client shows an area as unreachable once the target destination is 4 yards above your position
+        if (!GetExplTargetDest() || GetExplTargetDest()->GetPositionZ() - GetCaster()->GetPositionZ() > 8.f)
+            return SPELL_FAILED_NOPATH;
+        // Do a mini Spell::CheckCasterAuras on the pet, no other way of doing this
+        SpellCastResult result = SPELL_CAST_OK;
+        uint32 const unitflag = pet->GetUnitFlags();
+        if (pet->GetCharmerGUID())
+            result = SPELL_FAILED_CHARMED;
+        else if (unitflag & UNIT_FLAG_STUNNED)
+            result = SPELL_FAILED_STUNNED;
+        else if (unitflag & UNIT_FLAG_FLEEING)
+            result = SPELL_FAILED_FLEEING;
+        else if (unitflag & UNIT_FLAG_CONFUSED)
+            result = SPELL_FAILED_CONFUSED;
+
+        if (result != SPELL_CAST_OK)
+            return result;
+
+        return SPELL_CAST_OK;
+    }
+
+    void CommandMove()
+    {
+        Guardian* pet = GetCaster()->ToPlayer()->GetGuardianPet();
+        if (!pet)
+            return;
+        pet->GetMotionMaster()->Clear(MOTION_PRIORITY_NORMAL);
+        pet->GetMotionMaster()->MoveIdle();
+        CharmInfo* charmInfo = pet->GetCharmInfo();
+        charmInfo->SetCommandState(COMMAND_STAY);
+        charmInfo->SetIsCommandAttack(false);
+        charmInfo->SetIsAtStay(false);
+        charmInfo->SetIsCommandFollow(false);
+        charmInfo->SetIsFollowing(false);
+        charmInfo->SetIsReturning(false);
+        const WorldLocation* stayPos = GetExplTargetDest();
+        charmInfo->SetStayPosition(stayPos->GetPositionX(), stayPos->GetPositionY(), stayPos->GetPositionZ());
+        //pet->GetMotionMaster()->MoveChase();
+        CreatureAI* AI = pet->ToCreature()->AI();
+        if (PetAI* petAI = dynamic_cast<PetAI*>(AI))
+            petAI->HandleReturnMovement();
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_pet_moveto::DoCheckCast);
+        AfterCast += SpellCastFn(spell_pet_moveto::CommandMove);
     }
 };
 
@@ -3503,7 +3599,7 @@ class spell_pvp_trinket_wotf_shared_cd : public SpellScript
 
     void Register() override
     {
-        AfterCast += SpellCastFn(spell_pvp_trinket_wotf_shared_cd::HandleScript);
+        //AfterCast += SpellCastFn(spell_pvp_trinket_wotf_shared_cd::HandleScript);
     }
 };
 
@@ -4711,4 +4807,6 @@ void AddSC_generic_spell_scripts()
     RegisterSpellScript(spell_gen_charmed_unit_spell_cooldown);
     RegisterSpellScript(spell_gen_cannon_blast);
     RegisterSpellScript(spell_gen_submerged);
+    RegisterSpellScript(spell_pet_moveto);
+    RegisterSpellScript(spell_shadowmeld);
 }

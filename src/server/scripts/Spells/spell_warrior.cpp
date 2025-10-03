@@ -34,7 +34,7 @@
 enum WarriorSpells
 {
     SPELL_WARRIOR_BLADESTORM_PERIODIC_WHIRLWIND     = 50622,
-    SPELL_WARRIOR_BLOODTHIRST                       = 23885,
+    SPELL_WARRIOR_BLOODTHIRST                       = 23888,
     SPELL_WARRIOR_BLOODTHIRST_DAMAGE                = 23881,
     SPELL_WARRIOR_BLOODSURGE_R1                     = 46913,
     SPELL_WARRIOR_CHARGE                            = 34846,
@@ -88,6 +88,29 @@ enum MiscSpells
     SPELL_CATEGORY_SHIELD_SLAM                      = 1209
 };
 
+// 81271 - Leap
+class spell_warr_leap : public SpellScript
+{
+    PrepareSpellScript(spell_warr_leap);
+
+    SpellCastResult CheckCast()
+    {
+        Unit* caster = GetCaster();
+        if (caster->GetTypeId() == TYPEID_PLAYER && !caster->IsInCombat())
+            return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW;
+        // The client shows an area as unreachable once the target destination is 4 yards above your position
+        if (!GetExplTargetDest() || GetExplTargetDest()->GetPositionZ() - GetCaster()->GetPositionZ() > 8.f)
+            return SPELL_FAILED_NOPATH;
+
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_warr_leap::CheckCast);
+    }
+};
+
 // 23881 - Bloodthirst
 class spell_warr_bloodthirst : public SpellScript
 {
@@ -111,6 +134,31 @@ class spell_warr_bloodthirst : public SpellScript
     {
         OnEffectLaunchTarget += SpellEffectFn(spell_warr_bloodthirst::HandleDamage, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
         OnEffectHit += SpellEffectFn(spell_warr_bloodthirst::HandleDummy, EFFECT_1, SPELL_EFFECT_DUMMY);
+    }
+};
+
+//29131 - bloodrage
+class spell_warr_bloodrage : public AuraScript
+{
+    PrepareAuraScript(spell_warr_bloodrage);
+
+    bool Load() override
+    {
+        return GetOwner()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void UpdateCombat(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+
+        Player* player = GetTarget()->ToPlayer();
+        player->GetCombatManager().UpdateOwnerCombatState();
+
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_warr_bloodrage::UpdateCombat, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_warr_bloodrage::UpdateCombat, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -531,7 +579,7 @@ class spell_warr_last_stand : public SpellScript
     {
         Unit* caster = GetCaster();
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        args.AddSpellBP0(caster->CountPctFromMaxHealth(GetEffectValue()));
+        args.AddSpellBP0(caster->CountPctFromMaxHealth(30));
         caster->CastSpell(caster, SPELL_WARRIOR_LAST_STAND_TRIGGERED, args);
     }
 
@@ -943,4 +991,6 @@ void AddSC_warrior_spell_scripts()
     RegisterSpellScript(spell_warr_vigilance);
     RegisterSpellScript(spell_warr_vigilance_redirect_threat);
     RegisterSpellScript(spell_warr_vigilance_trigger);
+    RegisterSpellScript(spell_warr_bloodrage);
+    RegisterSpellScript(spell_warr_leap);
 }
