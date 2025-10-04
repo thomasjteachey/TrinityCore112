@@ -1787,6 +1787,41 @@ namespace
 
         return virtualItems;
     }
+
+    uint32 FindPlayerDisplayId(uint8 race, uint8 gender, uint8 skin, uint8 face, uint8 hairStyle, uint8 hairColor, uint8 facialHair)
+    {
+        ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(race);
+        if (!raceEntry)
+            return 0;
+
+        uint32 const baseDisplayId = gender == GENDER_FEMALE ? raceEntry->FemaleDisplayID : raceEntry->MaleDisplayID;
+        CreatureDisplayInfoEntry const* baseDisplay = sCreatureDisplayInfoStore.LookupEntry(baseDisplayId);
+        uint32 const expectedModelId = baseDisplay ? baseDisplay->ModelID : 0;
+
+        for (CreatureDisplayInfoEntry const* displayInfo : sCreatureDisplayInfoStore)
+        {
+            if (expectedModelId && displayInfo->ModelID != expectedModelId)
+                continue;
+
+            if (!displayInfo->ExtendedDisplayInfoID)
+                continue;
+
+            CreatureDisplayInfoExtraEntry const* extra = sCreatureDisplayInfoExtraStore.LookupEntry(displayInfo->ExtendedDisplayInfoID);
+            if (!extra)
+                continue;
+
+            if (extra->DisplayRaceID != race || extra->DisplaySexID != gender)
+                continue;
+
+            if (extra->SkinID != skin || extra->FaceID != face || extra->HairStyleID != hairStyle ||
+                extra->HairColorID != hairColor || extra->FacialHairID != facialHair)
+                continue;
+
+            return displayInfo->ID;
+        }
+
+        return 0;
+    }
 }
 
 bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, bool copyEquipment, bool persist)
@@ -1846,7 +1881,14 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
     uint8 const race = fields[1].GetUInt8();
     uint8 const playerClass = fields[2].GetUInt8();
     uint8 const gender = fields[3].GetUInt8();
-    std::string const equipmentCache = fields[4].GetString();
+    uint8 const skin = fields[4].GetUInt8();
+    uint8 const face = fields[5].GetUInt8();
+    uint8 const hairStyle = fields[6].GetUInt8();
+    uint8 const hairColor = fields[7].GetUInt8();
+    uint8 const facialStyle = fields[8].GetUInt8();
+    uint32 const playerFlags = fields[9].GetUInt32();
+    (void)playerFlags;
+    std::string const equipmentCache = fields[10].GetString();
 
     if (copyName)
         SetName(name);
@@ -1863,6 +1905,8 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
     //SetGender(gender);
 
     uint32 displayId = gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
+    if (uint32 customizedDisplayId = FindPlayerDisplayId(race, gender, skin, face, hairStyle, hairColor, facialStyle))
+        displayId = customizedDisplayId;
     SetDisplayId(displayId);
     SetNativeDisplayId(displayId);
 
