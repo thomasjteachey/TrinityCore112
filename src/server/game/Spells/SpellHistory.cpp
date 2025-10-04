@@ -454,6 +454,39 @@ void SpellHistory::ResetCooldown(CooldownStorageType::iterator& itr, bool update
     itr = EraseCooldown(itr);
 }
 
+uint32 SpellHistory::ResetCategoryCooldown(uint32 categoryId, bool update /*= false*/)
+{
+    auto categoryItr = _categoryCooldowns.find(categoryId);
+    if (categoryItr == _categoryCooldowns.end())
+        return 0;
+
+    uint32 removedSpellId = categoryItr->second->SpellId;
+
+    std::vector<int32> resetCooldowns;
+    resetCooldowns.reserve(_spellCooldowns.size());
+
+    for (auto itr = _spellCooldowns.begin(); itr != _spellCooldowns.end();)
+    {
+        if (itr->second.CategoryId != categoryId)
+        {
+            ++itr;
+            continue;
+        }
+
+        if (update)
+            resetCooldowns.push_back(itr->first);
+
+        itr = EraseCooldown(itr);
+    }
+
+    _categoryCooldowns.erase(categoryId);
+
+    if (update && !resetCooldowns.empty())
+        SendClearCooldowns(resetCooldowns);
+
+    return removedSpellId;
+}
+
 void SpellHistory::ResetAllCooldowns()
 {
     if (GetPlayerOwner())
