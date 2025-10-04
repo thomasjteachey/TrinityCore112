@@ -1955,6 +1955,9 @@ class npc_frostsworn_general : public CreatureScript
                 {
                     if (Creature* reflection = me->SummonCreature(NPC_REFLECTION, *target, TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, 3s))
                     {
+                        if (Player* player = target->ToPlayer())
+                            reflection->CopyAppearanceFromPlayer(player);
+
                         reflection->SetImmuneToPC(false);
                         target->CastSpell(reflection, SPELL_CLONE, true);
                         target->CastSpell(reflection, SPELL_GHOST_VISUAL, true);

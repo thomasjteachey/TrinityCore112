@@ -24,6 +24,12 @@
 #include "CreatureAISelector.h"
 #include "CreatureGroups.h"
 #include "DatabaseEnv.h"
+#include "CharacterCache.h"
+#include "DBCStores.h"
+#include "StringConvert.h"
+#include <array>
+#include <string_view>
+#include <vector>
 #include "Formulas.h"
 #include "GameEventMgr.h"
 #include "GameTime.h"
@@ -1749,6 +1755,160 @@ void Creature::LoadTemplateRoot()
 {
     if (GetMovementTemplate().IsRooted())
         SetControlled(true, UNIT_STATE_ROOT);
+}
+
+namespace
+{
+    std::array<uint32, MAX_EQUIPMENT_ITEMS> ExtractVirtualItemsFromEquipmentCache(std::string_view equipmentCache)
+    {
+        std::array<uint32, MAX_EQUIPMENT_ITEMS> virtualItems{};
+        virtualItems.fill(0);
+
+        if (equipmentCache.empty())
+            return virtualItems;
+
+        std::vector<std::string_view> tokens = Trinity::Tokenize(equipmentCache, ' ', false);
+        static constexpr std::array<uint8, MAX_EQUIPMENT_ITEMS> equipmentSlots =
+        {
+            EQUIPMENT_SLOT_MAINHAND,
+            EQUIPMENT_SLOT_OFFHAND,
+            EQUIPMENT_SLOT_RANGED
+        };
+
+        for (uint8 index = 0; index < MAX_EQUIPMENT_ITEMS; ++index)
+        {
+            size_t tokenIndex = size_t(equipmentSlots[index]) * 2u;
+            if (tokenIndex >= tokens.size())
+                continue;
+
+            if (auto itemId = Trinity::StringTo<uint32>(tokens[tokenIndex]))
+                virtualItems[index] = *itemId;
+        }
+
+        return virtualItems;
+    }
+}
+
+bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, bool copyEquipment, bool persist)
+{
+    if (!player)
+        return false;
+
+    if (copyName)
+        SetName(player->GetName());
+
+    SetDisplayId(player->GetDisplayId());
+    SetNativeDisplayId(player->GetNativeDisplayId());
+    SetObjectScale(player->GetFloatValue(OBJECT_FIELD_SCALE_X));
+    SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
+    SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
+
+    SetRace(player->getRace());
+    SetClass(player->getClass());
+    SetGender(player->GetGender());
+    SetPowerType(player->GetPowerType(), false);
+
+    SetStandState(player->GetStandState());
+    SetSheath(player->GetSheath());
+    SetAnimTier(player->GetAnimTier());
+    SetShapeshiftForm(player->GetShapeshiftForm());
+
+    if (copyEquipment)
+        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+            SetVirtualItem(slot, player->GetVirtualItemId(slot));
+
+    UpdateDisplayPower();
+
+    if (persist)
+        SaveToDB();
+
+    return true;
+}
+
+bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName, bool copyEquipment, bool persist)
+{
+    if (!playerGuid || !playerGuid.IsPlayer())
+        return false;
+
+    if (Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid))
+        return CopyAppearanceFromPlayer(player, copyName, copyEquipment, persist);
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_APPEARANCE_BY_GUID);
+    stmt->setUInt32(0, playerGuid.GetCounter());
+
+    PreparedQueryResult result = CharacterDatabase.Query(stmt);
+    if (!result)
+        return false;
+
+    Field* fields = result->Fetch();
+
+    std::string const& name = fields[0].GetString();
+    uint8 const race = fields[1].GetUInt8();
+    uint8 const playerClass = fields[2].GetUInt8();
+    uint8 const gender = fields[3].GetUInt8();
+    std::string const equipmentCache = fields[4].GetString();
+
+    if (copyName)
+        SetName(name);
+
+    PlayerInfo const* info = sObjectMgr->GetPlayerInfo(race, playerClass);
+    if (!info)
+        return false;
+
+    if (!Player::IsValidGender(gender))
+        return false;
+
+    SetRace(race);
+    SetClass(playerClass);
+    SetGender(gender);
+
+    uint32 displayId = gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
+    SetDisplayId(displayId);
+    SetNativeDisplayId(displayId);
+
+    SetObjectScale(1.0f);
+
+    if (CreatureModelInfo const* modelInfo = sObjectMgr->GetCreatureModelInfo(displayId))
+    {
+        SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, modelInfo->bounding_radius);
+        SetFloatValue(UNIT_FIELD_COMBATREACH, modelInfo->combat_reach);
+    }
+
+    if (ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(playerClass))
+        SetPowerType(Powers(classEntry->PowerType), false);
+
+    SetStandState(UNIT_STAND_STATE_STAND);
+    SetSheath(SHEATH_STATE_MELEE);
+    SetAnimTier(AnimTier::Ground);
+    SetShapeshiftForm(FORM_NONE);
+
+    if (copyEquipment)
+    {
+        std::array<uint32, MAX_EQUIPMENT_ITEMS> virtualItems = ExtractVirtualItemsFromEquipmentCache(equipmentCache);
+        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+            SetVirtualItem(slot, virtualItems[slot]);
+    }
+
+    UpdateDisplayPower();
+
+    if (persist)
+        SaveToDB();
+
+    return true;
+}
+
+bool Creature::CopyAppearanceFromPlayerName(std::string const& playerName, bool copyName, bool copyEquipment, bool persist)
+{
+    if (playerName.empty())
+        return false;
+
+    if (Player* player = ObjectAccessor::FindPlayerByName(playerName))
+        return CopyAppearanceFromPlayer(player, copyName, copyEquipment, persist);
+
+    if (CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByName(playerName))
+        return CopyAppearanceFromPlayerGuid(characterInfo->Guid, copyName, copyEquipment, persist);
+
+    return false;
 }
 
 bool Creature::hasQuest(uint32 quest_id) const

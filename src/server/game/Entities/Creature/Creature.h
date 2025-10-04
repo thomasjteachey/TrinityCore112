@@ -80,6 +80,10 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         void SetSpawnHealth();
         void LoadTemplateRoot();
 
+        bool CopyAppearanceFromPlayer(Player const* player, bool copyName = true, bool copyEquipment = true, bool persist = false);
+        bool CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName = true, bool copyEquipment = true, bool persist = false);
+        bool CopyAppearanceFromPlayerName(std::string const& playerName, bool copyName = true, bool copyEquipment = true, bool persist = false);
+
         ObjectGuid::LowType GetSpawnId() const { return m_spawnId; }
 
         void Update(uint32 time) override;                         // overwrited Unit::Update
