@@ -198,6 +198,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         CreatureTemplate const* GetCreatureTemplate() const { return m_creatureInfo; }
         CreatureData const* GetCreatureData() const { return m_creatureData; }
         CreatureAddon const* GetCreatureAddon() const;
+        CreaturePlayerBytes const* GetCreaturePlayerBytes() const;
 
         std::string const& GetAIName() const;
         std::string GetScriptName() const;

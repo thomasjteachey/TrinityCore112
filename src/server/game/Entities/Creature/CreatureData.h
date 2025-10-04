@@ -489,6 +489,12 @@ struct CreatureAddon
     VisibilityDistanceType visibilityDistanceType;
 };
 
+struct CreaturePlayerBytes
+{
+    uint32 playerBytes = 0;
+    uint32 playerBytes2 = 0;
+};
+
 // Vendors
 struct VendorItem
 {
