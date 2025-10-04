@@ -1692,7 +1692,7 @@ class spell_hun_trap_cd_reduce : public SpellScript
         return GetCaster()->GetTypeId() == TYPEID_PLAYER;
     }
 
-    void HandleDummy(SpellEffIndex /*effIndex*/)
+    void HandleDummy()
     {
         Player* caster = GetCaster()->ToPlayer();
         if (!caster)
@@ -1748,7 +1748,7 @@ class spell_hun_trap_cd_reduce : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_hun_trap_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        AfterCast += SpellCastFn(spell_hun_trap_cd_reduce::HandleDummy);
     }
 };
 

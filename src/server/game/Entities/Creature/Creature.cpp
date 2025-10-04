@@ -2022,7 +2022,7 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
 
     SetRace(race);
     SetClass(playerClass);
-    //SetGender(gender);
+    SetGender(Gender(gender));
 
     uint32 displayId = gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
     if (uint32 customizedDisplayId = FindPlayerDisplayId(race, gender, skin, face, hairStyle, hairColor, facialStyle))
