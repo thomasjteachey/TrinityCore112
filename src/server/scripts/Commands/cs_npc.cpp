@@ -78,6 +78,7 @@ public:
             { "level",          HandleNpcSetLevelCommand,          rbac::RBAC_PERM_COMMAND_NPC_SET_LEVEL,      Console::No },
             { "link",           HandleNpcSetLinkCommand,           rbac::RBAC_PERM_COMMAND_NPC_SET_LINK,       Console::No },
             { "model",          HandleNpcSetModelCommand,          rbac::RBAC_PERM_COMMAND_NPC_SET_MODEL,      Console::No },
+            { "copyplayer",     HandleNpcCopyPlayerCommand,        rbac::RBAC_PERM_COMMAND_NPC_SET_MODEL,      Console::No },
             { "movetype",       HandleNpcSetMoveTypeCommand,       rbac::RBAC_PERM_COMMAND_NPC_SET_MOVETYPE,   Console::No },
             { "phase",          HandleNpcSetPhaseCommand,          rbac::RBAC_PERM_COMMAND_NPC_SET_PHASE,      Console::No },
             { "wanderdistance", HandleNpcSetWanderDistanceCommand, rbac::RBAC_PERM_COMMAND_NPC_SET_SPAWNDIST,  Console::No },
@@ -663,6 +664,28 @@ public:
 
         creature->SaveToDB();
 
+        return true;
+    }
+
+    static bool HandleNpcCopyPlayerCommand(ChatHandler* handler, PlayerIdentifier const& player)
+    {
+        Creature* creature = handler->getSelectedCreature();
+
+        if (!creature || creature->IsPet())
+        {
+            handler->SendSysMessage(LANG_SELECT_CREATURE);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (!creature->CopyAppearanceFromPlayerGuid(player.GetGUID(), true, true, true))
+        {
+            handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        handler->PSendSysMessage("Copied appearance of %s onto the selected creature and saved it.", player.GetName().c_str());
         return true;
     }
 
