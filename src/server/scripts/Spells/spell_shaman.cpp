@@ -1988,6 +1988,24 @@ class spell_sha_focused_insight : public AuraScript
     }
 };
 
+class spell_sha_fire_nova_trig : public SpellScript
+{
+    PrepareSpellScript(spell_sha_fire_nova_trig);
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        Unit* caster = GetCaster();
+        Unit* originalCaster = GetOriginalCaster();
+        if (!target)
+            return;
+    }
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_sha_fire_nova_trig::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
 class spell_sha_purge : public SpellScript
 {
     PrepareSpellScript(spell_sha_purge);
@@ -2096,6 +2114,7 @@ class spell_sha_old_purge : public SpellScript
     }
 };
 
+
 void AddSC_shaman_spell_scripts()
 {
     RegisterSpellScript(spell_sha_ancestral_awakening);
@@ -2154,4 +2173,5 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_focused_insight);
     RegisterSpellScript(spell_sha_purge);
     RegisterSpellScript(spell_sha_old_purge);
+    RegisterSpellScript(spell_sha_fire_nova_trig);
 }
