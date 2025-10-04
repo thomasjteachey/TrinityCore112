@@ -454,6 +454,31 @@ void SpellHistory::ResetCooldown(CooldownStorageType::iterator& itr, bool update
     itr = EraseCooldown(itr);
 }
 
+uint32 SpellHistory::ResetCategoryCooldown(uint32 categoryId, bool update /*= false*/)
+{
+    auto categoryItr = _categoryCooldowns.find(categoryId);
+    if (categoryItr == _categoryCooldowns.end())
+        return 0;
+
+    CooldownEntry* categoryEntry = categoryItr->second;
+    if (!categoryEntry)
+    {
+        _categoryCooldowns.erase(categoryItr);
+        return 0;
+    }
+
+    auto spellItr = _spellCooldowns.find(categoryEntry->SpellId);
+    if (spellItr == _spellCooldowns.end())
+    {
+        _categoryCooldowns.erase(categoryItr);
+        return 0;
+    }
+
+    uint32 spellId = spellItr->first;
+    ResetCooldown(spellItr, update);
+    return spellId;
+}
+
 void SpellHistory::ResetAllCooldowns()
 {
     if (GetPlayerOwner())
