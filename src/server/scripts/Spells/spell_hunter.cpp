@@ -1704,46 +1704,35 @@ class spell_hun_trap_cd_reduce : public SpellScript
 
         static constexpr uint32 ImmolationTrapSpellIds[] = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
 
-        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds[0]);
-        uint32 trapCategory = categorySource->GetCategory();
-        if (!trapCategory)
-            return;
-
-        uint32 trapSpellId = spellHistory->ResetCategoryCooldown(trapCategory, true);
-        if (!trapSpellId)
+        uint32 trapSpellId = 0;
+        SpellInfo const* trapInfo = nullptr;
+        for (uint32 trapSpellCandidate : ImmolationTrapSpellIds)
         {
-            for (uint32 trapSpellCandidate : ImmolationTrapSpellIds)
-            {
-                if (!caster->HasSpell(trapSpellCandidate))
-                    continue;
+            if (!caster->HasSpell(trapSpellCandidate))
+                continue;
 
-                trapSpellId = trapSpellCandidate;
-                break;
-            }
+            trapInfo = sSpellMgr->GetSpellInfo(trapSpellCandidate);
+            if (!trapInfo)
+                continue;
+
+            trapSpellId = trapSpellCandidate;
+            break;
         }
 
-        if (!trapSpellId)
-            return;
-
-        SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapSpellId);
         if (!trapInfo)
             return;
 
-        uint32 const baseCooldown = trapInfo->GetRecoveryTime();
         uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
-        if (baseCooldown <= cooldownReduction)
+        if (!cooldownReduction)
             return;
 
-        uint32 const newCooldown = baseCooldown - cooldownReduction;
+        uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(trapInfo);
+        if (!remainingCooldown)
+            return;
 
-        SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
-        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
+        uint32 const effectiveReduction = std::min(remainingCooldown, cooldownReduction);
 
-        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
-
-        WorldPacket data;
-        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
-        caster->SendDirectMessage(&data);
+        spellHistory->ModifyCooldown(trapSpellId, -int32(effectiveReduction));
     }
 
     void Register() override
