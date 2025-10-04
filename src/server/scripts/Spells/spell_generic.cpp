@@ -37,6 +37,7 @@
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Pet.h"
+#include "PathGenerator.h"
 #include "ReputationMgr.h"
 #include "SkillDiscovery.h"
 #include "SpellAuraEffects.h"
@@ -116,7 +117,17 @@ class spell_pet_moveto : public SpellScript
         if (!pet->IsPet() || !pet->IsAlive())
             return SPELL_FAILED_NO_PET;
         // The client shows an area as unreachable once the target destination is 4 yards above your position
-        if (!GetExplTargetDest() || GetExplTargetDest()->GetPositionZ() - GetCaster()->GetPositionZ() > 8.f)
+        WorldLocation const* destination = GetExplTargetDest();
+        if (!destination || destination->GetPositionZ() - GetCaster()->GetPositionZ() > 8.f)
+            return SPELL_FAILED_NOPATH;
+
+        PathGenerator path(pet);
+        if (!path.CalculatePath(destination->GetPositionX(), destination->GetPositionY(), destination->GetPositionZ()))
+            return SPELL_FAILED_NOPATH;
+
+        PathType const pathType = path.GetPathType();
+        if ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
+            (path.HasNavigationData() && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))
             return SPELL_FAILED_NOPATH;
         // Do a mini Spell::CheckCasterAuras on the pet, no other way of doing this
         SpellCastResult result = SPELL_CAST_OK;
