@@ -1692,16 +1692,15 @@ class spell_hun_trap_cd_reduce : public SpellScript
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         uint32 cdreduce = GetEffectValue();
-        GetCaster()->GetSpellHistory()->ModifyCooldown(13813, cdreduce);
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14316, cdreduce);
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14317, cdreduce);
+        GetCaster()->GetSpellHistory()->ResetAllCooldowns();
+        //GetCaster()->GetSpellHistory()->ModifyCooldown(13813, cdreduce);
+        //GetCaster()->GetSpellHistory()->ModifyCooldown(14316, cdreduce);
+        //GetCaster()->GetSpellHistory()->ModifyCooldown(14317, cdreduce);
 
-        GetCaster()->GetSpellHistory()->ModifyCooldown(1499, cdreduce);
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14310, cdreduce);
+        //GetCaster()->GetSpellHistory()->ModifyCooldown(1499, cdreduce);
+        //GetCaster()->GetSpellHistory()->ModifyCooldown(14310, cdreduce);
 
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14809, cdreduce);
-
-
+        //GetCaster()->GetSpellHistory()->ModifyCooldown(14809, cdreduce);
     }
 
     void Register() override
