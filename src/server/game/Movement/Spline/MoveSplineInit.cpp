@@ -256,14 +256,21 @@ namespace Movement
             if (result)
             {
                 PathType const pathType = path.GetPathType();
+                bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+                bool const navmeshAvailable = path.HasNavigationData();
+
                 if (!(pathType & PATHFIND_NOPATH))
                 {
-                    MovebyPath(path.GetPath());
-                    return;
+                    if (!(playerControlled && ((pathType & PATHFIND_INCOMPLETE) ||
+                        (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))))
+                    {
+                        MovebyPath(path.GetPath());
+                        return;
+                    }
                 }
 
-                bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
-                if (playerControlled && (pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)))
+                if (playerControlled && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
+                    (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT)))))
                 {
                     args.path_Idx_offset = 0;
                     args.path.resize(2);

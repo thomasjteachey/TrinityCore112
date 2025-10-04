@@ -1030,6 +1030,11 @@ bool PathGenerator::IsInvalidDestinationZ(Unit const* target) const
     return (target->GetPositionZ() - GetActualEndPosition().z) > 5.0f;
 }
 
+bool PathGenerator::HasNavigationData() const
+{
+    return _navMesh != nullptr && _navMeshQuery != nullptr;
+}
+
 void PathGenerator::AddFarFromPolyFlags(bool startFarFromPoly, bool endFarFromPoly)
 {
     if (startFarFromPoly)
