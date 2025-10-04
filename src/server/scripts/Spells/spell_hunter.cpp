@@ -29,6 +29,9 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "GameTime.h"
+#include "WorldPacket.h"
+#include <algorithm>
 
 enum HunterSpells
 {
@@ -1706,27 +1709,41 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!trapCategory)
             return;
 
-        if (!spellHistory->ResetCategoryCooldown(trapCategory, true))
-            return;
-
-        uint32 immolationTrapSpellId = 0;
-        for (uint32 trapSpellId : ImmolationTrapSpellIds)
+        uint32 trapSpellId = spellHistory->ResetCategoryCooldown(trapCategory, true);
+        if (!trapSpellId)
         {
-            if (!caster->HasSpell(trapSpellId))
-                continue;
+            for (uint32 trapSpellCandidate : ImmolationTrapSpellIds)
+            {
+                if (!caster->HasSpell(trapSpellCandidate))
+                    continue;
 
-            immolationTrapSpellId = trapSpellId;
-            break;
+                trapSpellId = trapSpellCandidate;
+                break;
+            }
         }
 
-        if (!immolationTrapSpellId)
+        if (!trapSpellId)
             return;
 
-        if (SpellInfo const* immolationTrapInfo = sSpellMgr->GetSpellInfo(immolationTrapSpellId))
-        {
-            if (uint32 cooldown = immolationTrapInfo->GetRecoveryTime())
-                spellHistory->AddCooldown(immolationTrapSpellId, 0, std::chrono::milliseconds(cooldown));
-        }
+        SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapSpellId);
+        if (!trapInfo)
+            return;
+
+        uint32 const baseCooldown = trapInfo->GetRecoveryTime();
+        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
+        if (baseCooldown <= cooldownReduction)
+            return;
+
+        uint32 const newCooldown = baseCooldown - cooldownReduction;
+
+        SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
+
+        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
+
+        WorldPacket data;
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
+        caster->SendDirectMessage(&data);
     }
 
     void Register() override
