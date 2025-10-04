@@ -140,8 +140,36 @@ private:
     void SendClearCooldowns(std::vector<int32> const& cooldowns) const;
     CooldownStorageType::iterator EraseCooldown(CooldownStorageType::iterator itr)
     {
-        _categoryCooldowns.erase(itr->second.CategoryId);
-        return _spellCooldowns.erase(itr);
+        uint32 const categoryId = itr->second.CategoryId;
+        bool categoryNeedsUpdate = false;
+        if (categoryId)
+        {
+            auto categoryItr = _categoryCooldowns.find(categoryId);
+            if (categoryItr != _categoryCooldowns.end() && categoryItr->second == &itr->second)
+                categoryNeedsUpdate = true;
+        }
+
+        CooldownStorageType::iterator next = _spellCooldowns.erase(itr);
+
+        if (categoryNeedsUpdate)
+        {
+            CooldownEntry* replacement = nullptr;
+            for (auto& cooldownPair : _spellCooldowns)
+            {
+                if (cooldownPair.second.CategoryId == categoryId)
+                {
+                    replacement = &cooldownPair.second;
+                    break;
+                }
+            }
+
+            if (replacement)
+                _categoryCooldowns[categoryId] = replacement;
+            else
+                _categoryCooldowns.erase(categoryId);
+        }
+
+        return next;
     }
 
     typedef std::unordered_map<uint32, uint32> PacketCooldowns;
