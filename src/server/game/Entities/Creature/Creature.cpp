@@ -640,6 +640,13 @@ bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/,
     InitializeMovementFlags();
 
     LoadCreaturesAddon();
+
+    if (CreaturePlayerBytes const* customization = GetCreaturePlayerBytes())
+    {
+        SetUInt32Value(PLAYER_BYTES, customization->playerBytes);
+        SetUInt32Value(PLAYER_BYTES_2, customization->playerBytes2);
+    }
+
     LoadTemplateImmunities();
 
     GetThreatManager().EvaluateSuppressed();
@@ -1335,6 +1342,8 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     uint32 npcflag = GetNpcFlags();
     uint32 unit_flags = GetUnitFlags();
     uint32 dynamicflags = GetDynamicFlags();
+    uint32 const playerBytes = GetUInt32Value(PLAYER_BYTES);
+    uint32 const playerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
 
     // check if it's a custom model and if not, use 0 for displayId
     CreatureTemplate const* cinfo = GetCreatureTemplate();
@@ -1420,7 +1429,22 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     stmt->setUInt32(index++, dynamicflags);
     trans->Append(stmt);
 
+    stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
+    stmt->setUInt32(0, m_spawnId);
+    trans->Append(stmt);
+
+    if (playerBytes || playerBytes2)
+    {
+        stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_CREATURE_PLAYERBYTES);
+        stmt->setUInt32(0, m_spawnId);
+        stmt->setUInt32(1, playerBytes);
+        stmt->setUInt32(2, playerBytes2);
+        trans->Append(stmt);
+    }
+
     WorldDatabase.CommitTransaction(trans);
+
+    sObjectMgr->SetCreaturePlayerBytes(m_spawnId, playerBytes, playerBytes2);
 }
 
 void Creature::SelectLevel()
@@ -1961,6 +1985,12 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     SetRace(player->GetRace());
     SetClass(player->GetClass());
     SetGender(player->GetGender());
+
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_SKIN_ID, player->GetSkinId());
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_FACE_ID, player->GetFaceId());
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_STYLE_ID, player->GetHairStyleId());
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_COLOR_ID, player->GetHairColorId());
+    SetByteValue(PLAYER_BYTES_2, PLAYER_BYTES_2_OFFSET_FACIAL_STYLE, player->GetFacialStyle());
     SetPowerType(player->GetPowerType(), false);
 
     SetStandState(player->GetStandState());
@@ -2022,13 +2052,19 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
 
     SetRace(race);
     SetClass(playerClass);
-    //SetGender(gender);
+    SetGender(Gender(gender));
 
     uint32 displayId = gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
     if (uint32 customizedDisplayId = FindPlayerDisplayId(race, gender, skin, face, hairStyle, hairColor, facialStyle))
         displayId = customizedDisplayId;
     SetDisplayId(displayId);
     SetNativeDisplayId(displayId);
+
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_SKIN_ID, skin);
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_FACE_ID, face);
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_STYLE_ID, hairStyle);
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_COLOR_ID, hairColor);
+    SetByteValue(PLAYER_BYTES_2, PLAYER_BYTES_2_OFFSET_FACIAL_STYLE, facialStyle);
 
     SetObjectScale(1.0f);
 
@@ -2124,6 +2160,10 @@ bool Creature::hasInvolvedQuest(uint32 quest_id) const
     trans->Append(stmt);
 
     stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_ADDON);
+    stmt->setUInt32(0, spawnId);
+    trans->Append(stmt);
+
+    stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
     stmt->setUInt32(0, spawnId);
     trans->Append(stmt);
 
@@ -2832,6 +2872,14 @@ CreatureAddon const* Creature::GetCreatureAddon() const
 
     // dependent from difficulty mode entry
     return sObjectMgr->GetCreatureTemplateAddon(GetCreatureTemplate()->Entry);
+}
+
+CreaturePlayerBytes const* Creature::GetCreaturePlayerBytes() const
+{
+    if (m_spawnId)
+        return sObjectMgr->GetCreaturePlayerBytes(m_spawnId);
+
+    return nullptr;
 }
 
 //creature_addon table
