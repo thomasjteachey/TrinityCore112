@@ -1408,7 +1408,7 @@ void ObjectMgr::LoadCreaturePlayerBytes()
 
     _creaturePlayerBytesStore.clear();
 
-    QueryResult result = WorldDatabase.Query("SELECT guid, playerBytes, playerBytes2 FROM creature_playerbytes");
+    QueryResult result = WorldDatabase.Query("SELECT guid, race, class, gender, playerBytes, playerBytes2 FROM creature_playerbytes");
 
     if (!result)
     {
@@ -1432,8 +1432,11 @@ void ObjectMgr::LoadCreaturePlayerBytes()
         }
 
         CreaturePlayerBytes& customization = _creaturePlayerBytesStore[guid];
-        customization.playerBytes = fields[1].GetUInt32();
-        customization.playerBytes2 = fields[2].GetUInt32();
+        customization.race = fields[1].GetUInt8();
+        customization.playerClass = fields[2].GetUInt8();
+        customization.gender = fields[3].GetUInt8();
+        customization.playerBytes = fields[4].GetUInt32();
+        customization.playerBytes2 = fields[5].GetUInt32();
 
         ++count;
     }
@@ -8568,7 +8571,7 @@ void ObjectMgr::DeleteCreatureData(ObjectGuid::LowType guid)
     _creaturePlayerBytesStore.erase(guid);
 }
 
-void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint32 playerBytes, uint32 playerBytes2)
+void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2)
 {
     if (!guid)
         return;
@@ -8580,6 +8583,9 @@ void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint32 playerBy
     }
 
     CreaturePlayerBytes& customization = _creaturePlayerBytesStore[guid];
+    customization.race = race;
+    customization.playerClass = playerClass;
+    customization.gender = gender;
     customization.playerBytes = playerBytes;
     customization.playerBytes2 = playerBytes2;
 }

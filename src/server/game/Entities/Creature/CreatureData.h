@@ -491,6 +491,9 @@ struct CreatureAddon
 
 struct CreaturePlayerBytes
 {
+    uint8 race = RACE_NONE;
+    uint8 playerClass = CLASS_NONE;
+    uint8 gender = GENDER_NONE;
     uint32 playerBytes = 0;
     uint32 playerBytes2 = 0;
 };
