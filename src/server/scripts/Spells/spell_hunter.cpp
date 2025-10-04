@@ -1682,7 +1682,64 @@ class spell_hun_weaving : public AuraScript
 // 81382 - trap cd remove
 class spell_hun_trap_cd_reduce : public SpellScript
 {
-    PrepareSpellScript(spell_hun_mongoose_bite_cd_reduce);
+    PrepareSpellScript(spell_hun_trap_cd_reduce);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
+
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        static constexpr uint32 ImmolationTrapSpellIds[] = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
+
+        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds[0]);
+        uint32 trapCategory = categorySource->GetCategory();
+        if (!trapCategory)
+            return;
+
+        uint32 removedSpellId = spellHistory->ResetCategoryCooldown(trapCategory);
+        if (!removedSpellId)
+            return;
+
+        bool isImmolationTrap = false;
+        for (uint32 trapSpellId : ImmolationTrapSpellIds)
+        {
+            if (trapSpellId == removedSpellId)
+            {
+                isImmolationTrap = true;
+                break;
+            }
+        }
+
+        if (!isImmolationTrap)
+            return;
+
+        if (SpellInfo const* removedSpellInfo = sSpellMgr->GetSpellInfo(removedSpellId))
+        {
+            if (uint32 cooldown = removedSpellInfo->GetRecoveryTime())
+                spellHistory->AddCooldown(removedSpellId, 0, std::chrono::milliseconds(cooldown));
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_hun_trap_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 81386 - Intimidate CD Reduce
+class spell_int_cd_reduce : public SpellScript
+{
+    PrepareSpellScript(spell_int_cd_reduce);
 
     bool Load() override
     {
@@ -1692,21 +1749,12 @@ class spell_hun_trap_cd_reduce : public SpellScript
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         uint32 cdreduce = GetEffectValue();
-        GetCaster()->GetSpellHistory()->ModifyCooldown(13813, cdreduce);
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14316, cdreduce);
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14317, cdreduce);
-
-        GetCaster()->GetSpellHistory()->ModifyCooldown(1499, cdreduce);
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14310, cdreduce);
-
-        GetCaster()->GetSpellHistory()->ModifyCooldown(14809, cdreduce);
-
-
+        GetCaster()->GetSpellHistory()->ModifyCooldown(19577, cdreduce);
     }
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_hun_mongoose_bite_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+        OnEffectHitTarget += SpellEffectFn(spell_int_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -1755,4 +1803,5 @@ void AddSC_hunter_spell_scripts()
     RegisterSpellScript(spell_hun_outmaneuver);
     RegisterSpellScript(spell_hun_weaving);
     RegisterSpellScript(spell_hun_trap_cd_reduce);
+    RegisterSpellScript(spell_int_cd_reduce);
 }
