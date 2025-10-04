@@ -1691,16 +1691,43 @@ class spell_hun_trap_cd_reduce : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        uint32 cdreduce = GetEffectValue();
-        GetCaster()->GetSpellHistory()->ResetAllCooldowns();
-        //GetCaster()->GetSpellHistory()->ModifyCooldown(13813, cdreduce);
-        //GetCaster()->GetSpellHistory()->ModifyCooldown(14316, cdreduce);
-        //GetCaster()->GetSpellHistory()->ModifyCooldown(14317, cdreduce);
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
 
-        //GetCaster()->GetSpellHistory()->ModifyCooldown(1499, cdreduce);
-        //GetCaster()->GetSpellHistory()->ModifyCooldown(14310, cdreduce);
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
+            return;
 
-        //GetCaster()->GetSpellHistory()->ModifyCooldown(14809, cdreduce);
+        static constexpr uint32 ImmolationTrapSpellIds[] = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
+
+        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds[0]);
+        uint32 trapCategory = categorySource->GetCategory();
+        if (!trapCategory)
+            return;
+
+        uint32 removedSpellId = spellHistory->ResetCategoryCooldown(trapCategory);
+        if (!removedSpellId)
+            return;
+
+        bool isImmolationTrap = false;
+        for (uint32 trapSpellId : ImmolationTrapSpellIds)
+        {
+            if (trapSpellId == removedSpellId)
+            {
+                isImmolationTrap = true;
+                break;
+            }
+        }
+
+        if (!isImmolationTrap)
+            return;
+
+        if (SpellInfo const* removedSpellInfo = sSpellMgr->GetSpellInfo(removedSpellId))
+        {
+            if (uint32 cooldown = removedSpellInfo->GetRecoveryTime())
+                spellHistory->AddCooldown(removedSpellId, 0, std::chrono::milliseconds(cooldown));
+        }
     }
 
     void Register() override
