@@ -27,8 +27,14 @@
 #include "CharacterCache.h"
 #include "DBCStores.h"
 #include "StringConvert.h"
+#include "World.h"
+#include "Log.h"
+#include "DBCFileLoader.h"
 #include <array>
+#include <mutex>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 #include "Formulas.h"
 #include "GameEventMgr.h"
@@ -1788,39 +1794,153 @@ namespace
         return virtualItems;
     }
 
-    uint32 FindPlayerDisplayId(uint8 race, uint8 gender, uint8 skin, uint8 face, uint8 hairStyle, uint8 hairColor, uint8 facialHair)
+    struct PlayerAppearanceKey
     {
-        ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(race);
-        if (!raceEntry)
-            return 0;
+        uint8 Race;
+        uint8 Gender;
+        uint8 Skin;
+        uint8 Face;
+        uint8 HairStyle;
+        uint8 HairColor;
+        uint8 FacialHair;
 
-        uint32 const baseDisplayId = gender == GENDER_FEMALE ? raceEntry->FemaleDisplayID : raceEntry->MaleDisplayID;
-        CreatureDisplayInfoEntry const* baseDisplay = sCreatureDisplayInfoStore.LookupEntry(baseDisplayId);
-        uint32 const expectedModelId = baseDisplay ? baseDisplay->ModelID : 0;
-
-        for (CreatureDisplayInfoEntry const* displayInfo : sCreatureDisplayInfoStore)
+        bool operator==(PlayerAppearanceKey const& other) const
         {
-            if (expectedModelId && displayInfo->ModelID != expectedModelId)
-                continue;
+            return Race == other.Race && Gender == other.Gender && Skin == other.Skin && Face == other.Face &&
+                HairStyle == other.HairStyle && HairColor == other.HairColor && FacialHair == other.FacialHair;
+        }
+    };
 
-            if (!displayInfo->ExtendedDisplayInfoID)
-                continue;
+    struct PlayerAppearanceKeyHash
+    {
+        std::size_t operator()(PlayerAppearanceKey const& key) const
+        {
+            std::size_t hash = key.Race;
+            hash = hash * 31 + key.Gender;
+            hash = hash * 31 + key.Skin;
+            hash = hash * 31 + key.Face;
+            hash = hash * 31 + key.HairStyle;
+            hash = hash * 31 + key.HairColor;
+            hash = hash * 31 + key.FacialHair;
+            return hash;
+        }
+    };
 
-            CreatureDisplayInfoExtraEntry const* extra = sCreatureDisplayInfoExtraStore.LookupEntry(displayInfo->ExtendedDisplayInfoID);
-            if (!extra)
-                continue;
+    class PlayerDisplayLookup
+    {
+    public:
+        uint32 GetDisplayId(PlayerAppearanceKey const& key)
+        {
+            Initialize();
 
-            if (extra->DisplayRaceID != race || extra->DisplaySexID != gender)
-                continue;
+            auto const itr = _displayByAppearance.find(key);
+            if (itr == _displayByAppearance.end())
+                return 0;
 
-            if (extra->SkinID != skin || extra->FaceID != face || extra->HairStyleID != hairStyle ||
-                extra->HairColorID != hairColor || extra->FacialHairID != facialHair)
-                continue;
-
-            return displayInfo->ID;
+            return itr->second;
         }
 
-        return 0;
+    private:
+        void Initialize()
+        {
+            std::call_once(_onceFlag, [this]()
+            {
+                LoadDisplayMap();
+            });
+        }
+
+        void LoadDisplayMap()
+        {
+            if (!sWorld)
+                return;
+
+            std::string const dbcPath = sWorld->GetDataPath() + "dbc/CreatureDisplayInfoExtra.dbc";
+            DBCFileLoader loader;
+            if (!loader.Load(dbcPath.c_str(), "niiiiiiiixxxxxxxxxxxx"))
+            {
+                TC_LOG_INFO("entities.creature", "Creature display customization data not available ({}). Offline player clones will use base appearances.", dbcPath);
+                return;
+            }
+
+            std::unordered_map<uint32, std::vector<uint32>> displaysByExtraId;
+            for (CreatureDisplayInfoEntry const* display : sCreatureDisplayInfoStore)
+            {
+                if (!display || !display->ExtendedDisplayInfoID)
+                    continue;
+
+                displaysByExtraId[display->ExtendedDisplayInfoID].push_back(display->ID);
+            }
+
+            auto const findDisplayForKey = [&displaysByExtraId](PlayerAppearanceKey const& key, uint32 extraId) -> uint32
+            {
+                ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(key.Race);
+                if (!raceEntry)
+                    return 0;
+
+                uint32 const baseDisplayId = key.Gender == GENDER_FEMALE ? raceEntry->FemaleDisplayID : raceEntry->MaleDisplayID;
+                CreatureDisplayInfoEntry const* baseDisplay = sCreatureDisplayInfoStore.LookupEntry(baseDisplayId);
+                uint32 const expectedModel = baseDisplay ? baseDisplay->ModelID : 0;
+
+                auto const displayItr = displaysByExtraId.find(extraId);
+                if (displayItr == displaysByExtraId.end())
+                    return 0;
+
+                for (uint32 displayId : displayItr->second)
+                {
+                    CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(displayId);
+                    if (!display)
+                        continue;
+
+                    if (expectedModel && display->ModelID != expectedModel)
+                        continue;
+
+                    return displayId;
+                }
+
+                return 0;
+            };
+
+            for (uint32 row = 0; row < loader.GetNumRows(); ++row)
+            {
+                DBCFileLoader::Record record = loader.getRecord(row);
+
+                PlayerAppearanceKey key
+                {
+                    static_cast<uint8>(record.getUInt(1)),
+                    static_cast<uint8>(record.getUInt(2)),
+                    static_cast<uint8>(record.getUInt(3)),
+                    static_cast<uint8>(record.getUInt(4)),
+                    static_cast<uint8>(record.getUInt(5)),
+                    static_cast<uint8>(record.getUInt(6)),
+                    static_cast<uint8>(record.getUInt(7))
+                };
+
+                uint32 const extraId = record.getUInt(0);
+                if (!extraId)
+                    continue;
+
+                if (_displayByAppearance.find(key) != _displayByAppearance.end())
+                    continue;
+
+                if (uint32 const displayId = findDisplayForKey(key, extraId))
+                    _displayByAppearance.emplace(key, displayId);
+            }
+        }
+
+        std::unordered_map<PlayerAppearanceKey, uint32, PlayerAppearanceKeyHash> _displayByAppearance;
+        std::once_flag _onceFlag;
+    };
+
+    PlayerDisplayLookup& GetPlayerDisplayLookup()
+    {
+        static PlayerDisplayLookup instance;
+        return instance;
+    }
+
+    uint32 FindPlayerDisplayId(uint8 race, uint8 gender, uint8 skin, uint8 face, uint8 hairStyle, uint8 hairColor, uint8 facialHair)
+    {
+        PlayerAppearanceKey const key{ race, gender, skin, face, hairStyle, hairColor, facialHair };
+        return GetPlayerDisplayLookup().GetDisplayId(key);
     }
 }
 
