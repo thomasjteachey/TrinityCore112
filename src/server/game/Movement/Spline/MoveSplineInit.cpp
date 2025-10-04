@@ -253,10 +253,25 @@ namespace Movement
         {
             PathGenerator path(unit);
             bool result = path.CalculatePath(dest.x, dest.y, dest.z, forceDestination);
-            if (result && !(path.GetPathType() & PATHFIND_NOPATH))
+            if (result)
             {
-                MovebyPath(path.GetPath());
-                return;
+                PathType const pathType = path.GetPathType();
+                if (!(pathType & PATHFIND_NOPATH))
+                {
+                    MovebyPath(path.GetPath());
+                    return;
+                }
+
+                bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+                if (playerControlled && (pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)))
+                {
+                    args.path_Idx_offset = 0;
+                    args.path.resize(2);
+                    TransportPathTransform transform(unit, args.TransformForTransport);
+                    Vector3 stay(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
+                    args.path[1] = transform(stay);
+                    return;
+                }
             }
         }
 
