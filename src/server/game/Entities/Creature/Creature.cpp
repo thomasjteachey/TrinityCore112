@@ -1803,8 +1803,8 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
     SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
 
-    SetRace(player->getRace());
-    SetClass(player->getClass());
+    SetRace(player->GetRace());
+    SetClass(player->GetClass());
     SetGender(player->GetGender());
     SetPowerType(player->GetPowerType(), false);
 
@@ -1860,7 +1860,7 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
 
     SetRace(race);
     SetClass(playerClass);
-    SetGender(gender);
+    //SetGender(gender);
 
     uint32 displayId = gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
     SetDisplayId(displayId);
@@ -1875,7 +1875,7 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
     }
 
     if (ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(playerClass))
-        SetPowerType(Powers(classEntry->PowerType), false);
+        SetPowerType(Powers(classEntry->DisplayPower), false);
 
     SetStandState(UNIT_STAND_STATE_STAND);
     SetSheath(SHEATH_STATE_MELEE);
