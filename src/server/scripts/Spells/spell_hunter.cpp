@@ -1752,11 +1752,28 @@ class spell_hun_trap_cd_reduce : public SpellScript
             if (!trapInfo)
                 return;
 
-            uint32 const remainingCooldown = history->GetRemainingCooldown(trapInfo);
-            if (!remainingCooldown)
+            uint32 effectiveCooldown = history->GetRemainingCooldown(trapInfo);
+
+            if (!effectiveCooldown)
+            {
+                int32 baseCooldown = 0;
+                int32 categoryCooldown = 0;
+                SpellHistory::GetCooldownDurations(trapInfo, 0, &baseCooldown, nullptr, &categoryCooldown);
+
+                if (baseCooldown > 0)
+                    effectiveCooldown = uint32(baseCooldown);
+                else if (categoryCooldown > 0)
+                    effectiveCooldown = uint32(categoryCooldown);
+                else if (trapInfo->GetRecoveryTime() > 0)
+                    effectiveCooldown = trapInfo->GetRecoveryTime();
+                else if (trapInfo->GetCategoryRecoveryTime() > 0)
+                    effectiveCooldown = trapInfo->GetCategoryRecoveryTime();
+            }
+
+            if (!effectiveCooldown)
                 return;
 
-            uint32 const newCooldown = cooldownReduction >= remainingCooldown ? 0 : remainingCooldown - cooldownReduction;
+            uint32 const newCooldown = cooldownReduction >= effectiveCooldown ? 0 : effectiveCooldown - cooldownReduction;
 
             SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
 
