@@ -1,5 +1,6 @@
 CREATE TABLE IF NOT EXISTS `creature_playerbytes` (
   `guid` int unsigned NOT NULL,
+
   `race` tinyint unsigned NOT NULL DEFAULT 0,
   `class` tinyint unsigned NOT NULL DEFAULT 0,
   `gender` tinyint unsigned NOT NULL DEFAULT 0,
@@ -13,3 +14,4 @@ ALTER TABLE `creature_playerbytes`
   ADD COLUMN IF NOT EXISTS `race` tinyint unsigned NOT NULL DEFAULT 0 AFTER `guid`,
   ADD COLUMN IF NOT EXISTS `class` tinyint unsigned NOT NULL DEFAULT 0 AFTER `race`,
   ADD COLUMN IF NOT EXISTS `gender` tinyint unsigned NOT NULL DEFAULT 0 AFTER `class`;
+

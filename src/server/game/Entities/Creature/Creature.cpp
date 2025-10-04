@@ -1348,6 +1348,8 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     uint32 npcflag = GetNpcFlags();
     uint32 unit_flags = GetUnitFlags();
     uint32 dynamicflags = GetDynamicFlags();
+    uint32 const playerBytes = GetUInt32Value(PLAYER_BYTES);
+    uint32 const playerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
 
     uint8 playerRace = RACE_NONE;
     uint8 playerClass = CLASS_NONE;
@@ -1452,6 +1454,7 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     stmt->setUInt32(0, m_spawnId);
     trans->Append(stmt);
 
+
     if (_hasPlayerAppearance)
     {
         stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_CREATURE_PLAYERBYTES);
@@ -1465,7 +1468,6 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     }
 
     WorldDatabase.CommitTransaction(trans);
-
     sObjectMgr->SetCreaturePlayerBytes(m_spawnId, playerRace, playerClass, playerGender, playerBytes, playerBytes2);
 }
 
@@ -2148,6 +2150,12 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
 
     if (!_hasPlayerAppearance)
         return false;
+
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_SKIN_ID, skin);
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_FACE_ID, face);
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_STYLE_ID, hairStyle);
+    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_COLOR_ID, hairColor);
+    SetByteValue(PLAYER_BYTES_2, PLAYER_BYTES_2_OFFSET_FACIAL_STYLE, facialStyle);
 
     SetObjectScale(1.0f);
 
@@ -2955,7 +2963,6 @@ CreaturePlayerBytes const* Creature::GetCreaturePlayerBytes() const
 {
     if (_hasPlayerAppearance)
         return &_playerAppearance;
-
     if (m_spawnId)
         return sObjectMgr->GetCreaturePlayerBytes(m_spawnId);
 
