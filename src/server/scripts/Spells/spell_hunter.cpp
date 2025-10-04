@@ -1706,27 +1706,26 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!trapCategory)
             return;
 
-        uint32 removedSpellId = spellHistory->ResetCategoryCooldown(trapCategory);
-        if (!removedSpellId)
+        if (!spellHistory->ResetCategoryCooldown(trapCategory, true))
             return;
 
-        bool isImmolationTrap = false;
+        uint32 immolationTrapSpellId = 0;
         for (uint32 trapSpellId : ImmolationTrapSpellIds)
         {
-            if (trapSpellId == removedSpellId)
-            {
-                isImmolationTrap = true;
-                break;
-            }
+            if (!caster->HasSpell(trapSpellId))
+                continue;
+
+            immolationTrapSpellId = trapSpellId;
+            break;
         }
 
-        if (!isImmolationTrap)
+        if (!immolationTrapSpellId)
             return;
 
-        if (SpellInfo const* removedSpellInfo = sSpellMgr->GetSpellInfo(removedSpellId))
+        if (SpellInfo const* immolationTrapInfo = sSpellMgr->GetSpellInfo(immolationTrapSpellId))
         {
-            if (uint32 cooldown = removedSpellInfo->GetRecoveryTime())
-                spellHistory->AddCooldown(removedSpellId, 0, std::chrono::milliseconds(cooldown));
+            if (uint32 cooldown = immolationTrapInfo->GetRecoveryTime())
+                spellHistory->AddCooldown(immolationTrapSpellId, 0, std::chrono::milliseconds(cooldown));
         }
     }
 
