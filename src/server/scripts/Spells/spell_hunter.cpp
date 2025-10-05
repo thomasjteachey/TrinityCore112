@@ -32,6 +32,7 @@
 #include "GameTime.h"
 #include "WorldPacket.h"
 #include <algorithm>
+#include <array>
 
 enum HunterSpells
 {
@@ -1692,7 +1693,69 @@ class spell_hun_trap_cd_reduce : public SpellScript
         return GetCaster()->GetTypeId() == TYPEID_PLAYER;
     }
 
-    static void ApplyTrapCooldownReduction(Player* caster, uint32 cooldownReduction)
+    static constexpr std::array<uint32, 8> ImmolationTrapSpellIds = {
+        49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795
+    };
+
+    static constexpr std::array<uint32, 14> NonImmolationTrapSpellIds = {
+        49067, 49066, 27025, 14317, 14316, 13813,                       // Explosive Trap
+        14311, 14310, 1499,                                             // Freezing Trap
+        60192, 60194,                                                   // Freezing Arrow (trap launcher variants)
+        13809,                                                          // Frost Trap
+        34600, 57846                                                    // Snake Trap and its triggered spell
+    };
+
+    static bool IsImmolationTrap(uint32 spellId)
+    {
+        return std::find(ImmolationTrapSpellIds.begin(), ImmolationTrapSpellIds.end(), spellId) != ImmolationTrapSpellIds.end();
+    }
+
+    static bool TryResolveTrapData(Player* caster, SpellHistory* spellHistory, uint32 triggeringSpellId, uint32& trapCategory, uint32& trapSpellId)
+    {
+        trapCategory = 0;
+        trapSpellId = 0;
+
+        if (triggeringSpellId)
+        {
+            if (SpellInfo const* triggeringInfo = sSpellMgr->GetSpellInfo(triggeringSpellId))
+            {
+                trapCategory = triggeringInfo->GetCategory();
+                if (trapCategory && !IsImmolationTrap(triggeringInfo->Id))
+                    trapSpellId = triggeringInfo->Id;
+            }
+        }
+
+        if (trapCategory && trapSpellId)
+            return true;
+
+        if (spellHistory)
+        {
+            for (uint32 trapCandidate : NonImmolationTrapSpellIds)
+            {
+                if (!caster->HasSpell(trapCandidate))
+                    continue;
+
+                SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapCandidate);
+                if (!trapInfo)
+                    continue;
+
+                uint32 const category = trapInfo->GetCategory();
+                if (!category)
+                    continue;
+
+                if (!spellHistory->HasCooldown(trapCandidate, 0, true))
+                    continue;
+
+                trapCategory = category;
+                trapSpellId = trapCandidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static void ApplyTrapCooldownReduction(Player* caster, uint32 cooldownReduction, uint32 triggeringSpellId)
     {
         if (!caster || !cooldownReduction)
             return;
@@ -1701,25 +1764,10 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!spellHistory)
             return;
 
-        static constexpr uint32 ImmolationTrapSpellIds[] = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
-
-        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds[0]);
-        uint32 trapCategory = categorySource->GetCategory();
-        if (!trapCategory)
+        uint32 trapCategory;
+        uint32 trapSpellId;
+        if (!TryResolveTrapData(caster, spellHistory, triggeringSpellId, trapCategory, trapSpellId))
             return;
-
-        uint32 trapSpellId = spellHistory->ResetCategoryCooldown(trapCategory, true);
-        if (!trapSpellId)
-        {
-            for (uint32 trapSpellCandidate : ImmolationTrapSpellIds)
-            {
-                if (!caster->HasSpell(trapSpellCandidate))
-                    continue;
-
-                trapSpellId = trapSpellCandidate;
-                break;
-            }
-        }
 
         if (!trapSpellId)
             return;
@@ -1728,19 +1776,28 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!trapInfo)
             return;
 
-        uint32 const baseCooldown = trapInfo->GetRecoveryTime();
-        if (baseCooldown <= cooldownReduction)
+        uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(trapInfo);
+        if (!remainingCooldown)
             return;
 
-        uint32 const newCooldown = baseCooldown - cooldownReduction;
+        uint32 const newRemainingCooldown = remainingCooldown > cooldownReduction ? remainingCooldown - cooldownReduction : 0;
+        if (newRemainingCooldown == remainingCooldown)
+            return;
 
         SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
-        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
+
+        if (!newRemainingCooldown)
+        {
+            spellHistory->ResetCooldown(trapSpellId, true);
+            return;
+        }
+
+        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newRemainingCooldown);
 
         spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
 
         WorldPacket data;
-        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newRemainingCooldown);
         caster->SendDirectMessage(&data);
     }
 
@@ -1750,14 +1807,18 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!caster)
             return;
 
-        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
+        uint32 const cooldownReduction = 15000;
         if (!cooldownReduction)
             return;
 
-        caster->m_Events.AddEvent([caster, cooldownReduction]()
+        uint32 const triggeringSpellId = GetTriggeringSpell() ? GetTriggeringSpell()->Id : 0;
+        if (IsImmolationTrap(triggeringSpellId))
+            return;
+
+        caster->m_Events.AddEventAtOffset([caster, cooldownReduction, triggeringSpellId]()
         {
-            ApplyTrapCooldownReduction(caster, cooldownReduction);
-        }, caster->m_Events.CalculateTime(1ms));
+            ApplyTrapCooldownReduction(caster, cooldownReduction, triggeringSpellId);
+        }, 1ms);
     }
 
     void Register() override
