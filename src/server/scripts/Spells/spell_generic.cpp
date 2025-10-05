@@ -118,8 +118,6 @@ class spell_pet_moveto : public SpellScript
             return SPELL_FAILED_NO_PET;
         // The client shows an area as unreachable once the target destination is 4 yards above your position
         WorldLocation const* destination = GetExplTargetDest();
-        if (!destination || destination->GetPositionZ() - GetCaster()->GetPositionZ() > 8.f)
-            return SPELL_FAILED_NOPATH;
 
         PathGenerator path(pet);
         if (!path.CalculatePath(destination->GetPositionX(), destination->GetPositionY(), destination->GetPositionZ()))

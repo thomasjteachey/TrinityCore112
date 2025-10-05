@@ -101,8 +101,6 @@ class spell_warr_leap : public SpellScript
             return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW;
         // The client shows an area as unreachable once the target destination is 4 yards above your position
         WorldLocation const* destination = GetExplTargetDest();
-        if (!destination || destination->GetPositionZ() - caster->GetPositionZ() > 8.f)
-            return SPELL_FAILED_NOPATH;
 
         PathGenerator path(caster);
         if (!path.CalculatePath(destination->GetPositionX(), destination->GetPositionY(), destination->GetPositionZ()))
