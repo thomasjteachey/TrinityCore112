@@ -1697,151 +1697,56 @@ class spell_hun_trap_cd_reduce : public SpellScript
         49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795
     };
 
-    static constexpr std::array<uint32, 14> NonImmolationTrapSpellIds = {
-        49067, 49066, 27025, 14317, 14316, 13813,                       // Explosive Trap
-        14311, 14310, 1499,                                             // Freezing Trap
-        60192, 60194,                                                   // Freezing Arrow (trap launcher variants)
-        13809,                                                          // Frost Trap
-        34600, 57846                                                    // Snake Trap and its triggered spell
-    };
-
-    static bool IsImmolationTrap(uint32 spellId)
+    static uint32 GetKnownImmolationTrap(Player* caster)
     {
-        return std::find(ImmolationTrapSpellIds.begin(), ImmolationTrapSpellIds.end(), spellId) != ImmolationTrapSpellIds.end();
-    }
-
-    static bool TryResolveTrapData(Player* caster, SpellHistory* spellHistory, uint32 triggeringSpellId, uint32& trapCategory, uint32& trapSpellId)
-    {
-        trapCategory = 0;
-        trapSpellId = 0;
-
-        if (triggeringSpellId)
-        {
-            if (SpellInfo const* triggeringInfo = sSpellMgr->GetSpellInfo(triggeringSpellId))
-            {
-                trapCategory = triggeringInfo->GetCategory();
-                if (trapCategory && !IsImmolationTrap(triggeringInfo->Id))
-                    trapSpellId = triggeringInfo->Id;
-            }
-        }
-
-        if (trapCategory && trapSpellId)
-            return true;
-
-        if (spellHistory)
-        {
-            for (uint32 trapCandidate : NonImmolationTrapSpellIds)
-            {
-                if (!caster->HasSpell(trapCandidate))
-                    continue;
-
-                SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapCandidate);
-                if (!trapInfo)
-                    continue;
-
-                uint32 const category = trapInfo->GetCategory();
-                if (!category)
-                    continue;
-
-                if (!spellHistory->HasCooldown(trapCandidate, 0, true))
-                    continue;
-
-                trapCategory = category;
-                trapSpellId = trapCandidate;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    static bool TryGetImmolationCooldown(Player* caster, SpellHistory* spellHistory, uint32& immolationSpellId, uint32& immolationCooldown)
-    {
-        immolationSpellId = 0;
-        immolationCooldown = 0;
-
-        if (!caster || !spellHistory)
-            return false;
+        if (!caster)
+            return 0;
 
         for (uint32 spellId : ImmolationTrapSpellIds)
-        {
-            if (!caster->HasSpell(spellId))
-                continue;
+            if (caster->HasSpell(spellId))
+                return spellId;
 
-            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-            if (!spellInfo)
-                continue;
-
-            if (!spellHistory->HasCooldown(spellInfo, 0, true))
-                continue;
-
-            uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(spellInfo);
-            if (!remainingCooldown)
-                continue;
-
-            immolationSpellId = spellId;
-            immolationCooldown = remainingCooldown;
-            return true;
-        }
-
-        return false;
+        return 0;
     }
 
-    static void ApplyTrapCooldownReduction(Player* caster, uint32 cooldownReduction, uint32 triggeringSpellId)
+    static void ApplyTrapCooldownTransfer(Player* caster)
     {
-        if (!caster || !cooldownReduction)
+        if (!caster)
             return;
 
         SpellHistory* spellHistory = caster->GetSpellHistory();
         if (!spellHistory)
             return;
 
-        uint32 trapCategory;
-        uint32 trapSpellId;
-        if (!TryResolveTrapData(caster, spellHistory, triggeringSpellId, trapCategory, trapSpellId))
+        uint32 const immolationTrapSpellId = GetKnownImmolationTrap(caster);
+        if (!immolationTrapSpellId)
             return;
 
-        if (!trapSpellId)
+        SpellInfo const* immolationTrapInfo = sSpellMgr->GetSpellInfo(immolationTrapSpellId);
+        if (!immolationTrapInfo)
             return;
 
-        SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapSpellId);
-        if (!trapInfo)
+        uint32 const trapCategoryId = immolationTrapInfo->GetCategory();
+        if (!trapCategoryId)
             return;
 
-        uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(trapInfo);
-        uint32 const newRemainingCooldown = remainingCooldown > cooldownReduction ? remainingCooldown - cooldownReduction : 0;
+        uint32 const recordedCategoryCooldown = spellHistory->GetRemainingCooldown(immolationTrapInfo);
 
-        uint32 immolationSpellId;
-        uint32 immolationRemaining;
-        bool const hadImmolationCooldown = TryGetImmolationCooldown(caster, spellHistory, immolationSpellId, immolationRemaining);
+        spellHistory->ResetCategoryCooldown(trapCategoryId, true);
+
+        if (!recordedCategoryCooldown)
+        {
+            spellHistory->ResetCooldown(immolationTrapSpellId, true);
+            return;
+        }
 
         SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(recordedCategoryCooldown);
 
-        if (trapCategory)
-            spellHistory->ResetCategoryCooldown(trapCategory, true);
-
-        if (hadImmolationCooldown)
-        {
-            SpellHistory::Clock::time_point const immolationEnd = now + std::chrono::milliseconds(immolationRemaining);
-            spellHistory->AddCooldown(immolationSpellId, 0, immolationEnd, 0, immolationEnd);
-
-            WorldPacket immolationData;
-            spellHistory->BuildCooldownPacket(immolationData, SPELL_COOLDOWN_FLAG_NONE, immolationSpellId, immolationRemaining);
-            caster->SendDirectMessage(&immolationData);
-        }
-
-        if (!newRemainingCooldown)
-        {
-            spellHistory->ResetCooldown(trapSpellId, true);
-            return;
-        }
-
-        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newRemainingCooldown);
-
-        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, 0, cooldownEnd);
+        spellHistory->AddCooldown(immolationTrapSpellId, 0, cooldownEnd, 0, cooldownEnd);
 
         WorldPacket data;
-        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newRemainingCooldown);
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, immolationTrapSpellId, recordedCategoryCooldown);
         caster->SendDirectMessage(&data);
     }
 
@@ -1851,17 +1756,9 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!caster)
             return;
 
-        uint32 const cooldownReduction = 15000;
-        if (!cooldownReduction)
-            return;
-
-        uint32 const triggeringSpellId = GetTriggeringSpell() ? GetTriggeringSpell()->Id : 0;
-        if (IsImmolationTrap(triggeringSpellId))
-            return;
-
-        caster->m_Events.AddEventAtOffset([caster, cooldownReduction, triggeringSpellId]()
+        caster->m_Events.AddEventAtOffset([caster]()
         {
-            ApplyTrapCooldownReduction(caster, cooldownReduction, triggeringSpellId);
+            ApplyTrapCooldownTransfer(caster);
         }, 1ms);
     }
 
