@@ -80,6 +80,7 @@ public:
             { "flag",           HandleNpcSetFlagCommand,           rbac::RBAC_PERM_COMMAND_NPC_SET_FLAG,       Console::No },
             { "level",          HandleNpcSetLevelCommand,          rbac::RBAC_PERM_COMMAND_NPC_SET_LEVEL,      Console::No },
             { "link",           HandleNpcSetLinkCommand,           rbac::RBAC_PERM_COMMAND_NPC_SET_LINK,       Console::No },
+            { "copy",           HandleNpcSetCopyCommand,           rbac::RBAC_PERM_COMMAND_NPC_SET_MODEL,      Console::No },
             { "model",          HandleNpcSetModelCommand,          rbac::RBAC_PERM_COMMAND_NPC_SET_MODEL,      Console::No },
             { "movetype",       HandleNpcSetMoveTypeCommand,       rbac::RBAC_PERM_COMMAND_NPC_SET_MOVETYPE,   Console::No },
             { "phase",          HandleNpcSetPhaseCommand,          rbac::RBAC_PERM_COMMAND_NPC_SET_PHASE,      Console::No },
@@ -1307,6 +1308,126 @@ public:
         }
 
         handler->PSendSysMessage("LinkGUID '" UI64FMTD "' added to creature with DBTableGUID: '" UI64FMTD "'", linkguid, creature->GetSpawnId());
+        return true;
+    }
+
+    static bool HandleNpcSetCopyCommand(ChatHandler* handler, Tail arguments)
+    {
+        Creature* creature = handler->getSelectedCreature();
+        if (!creature || creature->IsPet())
+        {
+            handler->SendSysMessage(LANG_SELECT_CREATURE);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        auto isOptionToken = [](std::string_view token)
+        {
+            return token == "noname" || token == "noequip" || token == "save" || token == "persist";
+        };
+
+        std::string_view optionArguments = arguments;
+        std::string_view preview = optionArguments;
+        std::string_view firstToken;
+
+        while (!preview.empty())
+        {
+            Trinity::Impl::ChatCommands::TokenizeResult tokenized = Trinity::Impl::ChatCommands::tokenize(preview);
+            if (tokenized.token.empty())
+            {
+                preview = tokenized.tail;
+                continue;
+            }
+
+            firstToken = tokenized.token;
+            break;
+        }
+
+        Optional<PlayerIdentifier> sourceIdentifier;
+        if (!firstToken.empty() && !isOptionToken(firstToken))
+        {
+            PlayerIdentifier candidate;
+            Trinity::Impl::ChatCommands::ChatCommandResult parseResult = candidate.TryConsume(handler, optionArguments);
+            if (!parseResult)
+            {
+                if (parseResult.HasErrorMessage())
+                    Trinity::Impl::ChatCommands::SendErrorMessageToHandler(handler, parseResult.GetErrorMessage());
+
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+
+            sourceIdentifier = candidate;
+            optionArguments = *parseResult;
+        }
+
+        bool copyName = true;
+        bool copyEquipment = true;
+        bool persist = false;
+
+        std::string_view remaining = optionArguments;
+        while (!remaining.empty())
+        {
+            Trinity::Impl::ChatCommands::TokenizeResult tokenized = Trinity::Impl::ChatCommands::tokenize(remaining);
+            std::string_view token = tokenized.token;
+
+            if (token.empty())
+            {
+                remaining = tokenized.tail;
+                continue;
+            }
+
+            if (token == "noname")
+                copyName = false;
+            else if (token == "noequip")
+                copyEquipment = false;
+            else if (token == "save" || token == "persist")
+                persist = true;
+            else
+            {
+                std::string tokenString(token);
+                handler->PSendSysMessage(LANG_COMMAND_INVALID_PARAM, tokenString.c_str());
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+
+            remaining = tokenized.tail;
+        }
+
+        if (!sourceIdentifier)
+        {
+            sourceIdentifier = PlayerIdentifier::FromTargetOrSelf(handler);
+
+            if (!sourceIdentifier)
+            {
+                handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+        }
+
+        Player* sourcePlayer = sourceIdentifier->GetConnectedPlayer();
+        if (!sourcePlayer)
+        {
+            handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        bool persistAppearance = persist;
+        if (persist && !creature->GetSpawnId())
+        {
+            handler->SendSysMessage("Selected creature must exist in the world database to persist appearance changes.");
+            persistAppearance = false;
+        }
+
+        if (!creature->CopyAppearanceFromPlayerGuid(sourcePlayer->GetGUID(), copyName, copyEquipment, persistAppearance))
+        {
+            handler->SendSysMessage(LANG_ERROR);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
         return true;
     }
 

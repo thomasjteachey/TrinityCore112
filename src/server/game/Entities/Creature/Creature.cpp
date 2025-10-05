@@ -1566,6 +1566,41 @@ void Creature::SaveToDB(uint32 mapid, std::vector<Difficulty> const& spawnDiffic
     WorldDatabase.CommitTransaction(trans);
 }
 
+bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName, bool copyEquipment, bool persist)
+{
+    Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid);
+    if (!player)
+        return false;
+
+    if (copyName)
+        SetName(player->GetName());
+
+    SetRace(player->GetRace());
+    SetClass(player->GetClass());
+    SetGender(player->GetGender());
+    SetPowerType(player->GetPowerType());
+    SetLevel(player->GetLevel());
+    SetSheath(player->GetSheath());
+
+    SetDisplayId(player->GetDisplayId(), true);
+    SetObjectScale(player->GetObjectScale());
+
+    if (copyEquipment)
+    {
+        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+        {
+            UF::VisibleItem const& visibleItem = player->m_unitData->VirtualItems[slot];
+            SetVirtualItem(slot, *visibleItem.ItemID, *visibleItem.ItemAppearanceModID, *visibleItem.ItemVisual,
+                *visibleItem.SecondaryItemModifiedAppearanceID, *visibleItem.ConditionalItemAppearanceID);
+        }
+    }
+
+    if (persist)
+        SaveToDB();
+
+    return true;
+}
+
 void Creature::SelectLevel()
 {
     // Level
