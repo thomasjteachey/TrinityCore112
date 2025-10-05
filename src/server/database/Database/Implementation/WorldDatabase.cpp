@@ -67,7 +67,12 @@ void WorldDatabaseConnection::DoPrepareStatements()
     PrepareStatement(WORLD_UPD_CREATURE_ADDON_PATH, "UPDATE creature_addon SET path_id = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(WORLD_DEL_CREATURE_ADDON, "DELETE FROM creature_addon WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(WORLD_DEL_CREATURE_PLAYERBYTES, "DELETE FROM creature_playerbytes WHERE guid = ?", CONNECTION_ASYNC);
-    PrepareStatement(WORLD_INS_CREATURE_PLAYERBYTES, "INSERT INTO creature_playerbytes (guid, race, class, gender, playerBytes, playerBytes2) VALUES (?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
+    PrepareStatement(WORLD_INS_CREATURE_PLAYERBYTES,
+        "INSERT INTO creature_playerbytes (guid, race, class, gender, playerBytes, playerBytes2, guildId, "
+        "visibleItem0, visibleItem1, visibleItem2, visibleItem3, visibleItem4, visibleItem5, visibleItem6, visibleItem7, "
+        "visibleItem8, visibleItem9, visibleItem10, visibleItem11, visibleItem12, visibleItem13, visibleItem14, visibleItem15, "
+        "visibleItem16, visibleItem17, visibleItem18, virtualItem0, virtualItem1, virtualItem2) VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", CONNECTION_ASYNC);
     PrepareStatement(WORLD_SEL_CREATURE_ADDON_BY_GUID, "SELECT guid FROM creature_addon WHERE guid = ?", CONNECTION_SYNCH);
     PrepareStatement(WORLD_INS_WAYPOINT_SCRIPT, "INSERT INTO waypoint_scripts (guid) VALUES (?)", CONNECTION_ASYNC);
     PrepareStatement(WORLD_DEL_WAYPOINT_SCRIPT, "DELETE FROM waypoint_scripts WHERE guid = ?", CONNECTION_ASYNC);

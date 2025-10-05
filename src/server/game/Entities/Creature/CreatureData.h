@@ -26,6 +26,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <array>
 #include <cmath>
 
 struct ItemTemplate;
@@ -496,6 +497,9 @@ struct CreaturePlayerBytes
     uint8 gender = GENDER_NONE;
     uint32 playerBytes = 0;
     uint32 playerBytes2 = 0;
+    uint32 guildId = 0;
+    std::array<uint32, EQUIPMENT_SLOT_END> visibleItemDisplayIds{};
+    std::array<uint32, MAX_EQUIPMENT_ITEMS> virtualItemIds{};
 };
 
 // Vendors
