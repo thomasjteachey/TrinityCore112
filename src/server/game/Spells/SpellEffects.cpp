@@ -4403,6 +4403,26 @@ void Spell::EffectLeap()
         return;
 
     Position pos = destTarget->GetPosition();
+
+    // Prevent Heroic Leap from reaching invalid terrain by requiring a valid
+    // path to the destination when mmaps data is available.
+    if (unitTarget->GetTypeId() == TYPEID_PLAYER && m_spellInfo->Id == 6544)
+    {
+        PathGenerator path(unitTarget);
+        if (path.HasNavigationData())
+        {
+            if (!path.CalculatePath(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ()))
+                return;
+
+            PathType const type = path.GetPathType();
+            if (!(type & PATHFIND_NORMAL) || (type & (PATHFIND_SHORTCUT | PATHFIND_INCOMPLETE | PATHFIND_NOPATH)))
+                return;
+
+            G3D::Vector3 const& actualEnd = path.GetActualEndPosition();
+            pos.Relocate(actualEnd.x, actualEnd.y, actualEnd.z);
+        }
+    }
+
     unitTarget->NearTeleportTo(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), unitTarget == m_caster);
 }
 
