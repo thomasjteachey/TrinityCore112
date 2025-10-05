@@ -1755,6 +1755,38 @@ class spell_hun_trap_cd_reduce : public SpellScript
         return false;
     }
 
+    static bool TryGetImmolationCooldown(Player* caster, SpellHistory* spellHistory, uint32& immolationSpellId, uint32& immolationCooldown)
+    {
+        immolationSpellId = 0;
+        immolationCooldown = 0;
+
+        if (!caster || !spellHistory)
+            return false;
+
+        for (uint32 spellId : ImmolationTrapSpellIds)
+        {
+            if (!caster->HasSpell(spellId))
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!spellInfo)
+                continue;
+
+            if (!spellHistory->HasCooldown(spellInfo, 0, true))
+                continue;
+
+            uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(spellInfo);
+            if (!remainingCooldown)
+                continue;
+
+            immolationSpellId = spellId;
+            immolationCooldown = remainingCooldown;
+            return true;
+        }
+
+        return false;
+    }
+
     static void ApplyTrapCooldownReduction(Player* caster, uint32 cooldownReduction, uint32 triggeringSpellId)
     {
         if (!caster || !cooldownReduction)
@@ -1777,14 +1809,26 @@ class spell_hun_trap_cd_reduce : public SpellScript
             return;
 
         uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(trapInfo);
-        if (!remainingCooldown)
-            return;
-
         uint32 const newRemainingCooldown = remainingCooldown > cooldownReduction ? remainingCooldown - cooldownReduction : 0;
-        if (newRemainingCooldown == remainingCooldown)
-            return;
+
+        uint32 immolationSpellId;
+        uint32 immolationRemaining;
+        bool const hadImmolationCooldown = TryGetImmolationCooldown(caster, spellHistory, immolationSpellId, immolationRemaining);
 
         SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+
+        if (trapCategory)
+            spellHistory->ResetCategoryCooldown(trapCategory, true);
+
+        if (hadImmolationCooldown)
+        {
+            SpellHistory::Clock::time_point const immolationEnd = now + std::chrono::milliseconds(immolationRemaining);
+            spellHistory->AddCooldown(immolationSpellId, 0, immolationEnd, 0, immolationEnd);
+
+            WorldPacket immolationData;
+            spellHistory->BuildCooldownPacket(immolationData, SPELL_COOLDOWN_FLAG_NONE, immolationSpellId, immolationRemaining);
+            caster->SendDirectMessage(&immolationData);
+        }
 
         if (!newRemainingCooldown)
         {
@@ -1794,7 +1838,7 @@ class spell_hun_trap_cd_reduce : public SpellScript
 
         SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newRemainingCooldown);
 
-        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
+        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, 0, cooldownEnd);
 
         WorldPacket data;
         spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newRemainingCooldown);
