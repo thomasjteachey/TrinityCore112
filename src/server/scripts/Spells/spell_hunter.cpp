@@ -1851,7 +1851,7 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!caster)
             return;
 
-        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
+        uint32 const cooldownReduction = 15000;
         if (!cooldownReduction)
             return;
 

@@ -97,7 +97,9 @@ enum ShamanSpells
     SPELL_SHAMAN_FOCUSED_INSIGHT                = 77800,
     SPELL_SHAMAN_EXPUNGE                        = 81326,
     SPELL_SHAMAN_BRAIN_DRAIN                    = 81327,
-    SPELL_SHAMAN_SHOCKING                       = 81328
+    SPELL_SHAMAN_SHOCKING                       = 81328,
+    SPELL_SHAMAN_SUMMERS_SWELTER                = 81389,
+    SPELL_SHAMAN_FIRE_STUN                      = 81390
 };
 
 enum ShamanSpellIcons
@@ -1995,10 +1997,41 @@ class spell_sha_fire_nova_trig : public SpellScript
     void HandleHit(SpellEffIndex /*effIndex*/)
     {
         Unit* target = GetHitUnit();
-        Unit* caster = GetCaster();
-        Unit* originalCaster = GetOriginalCaster();
         if (!target)
             return;
+
+        Unit* originalCaster = GetOriginalCaster();
+        Unit* caster = GetCaster();
+        Unit* shaman = nullptr;
+        Unit* effectCaster = nullptr;
+
+        if (originalCaster)
+        {
+            effectCaster = originalCaster;
+            if (Player* owner = originalCaster->GetCharmerOrOwnerPlayerOrPlayerItself())
+                shaman = owner;
+        }
+
+        if (!shaman && caster)
+        {
+            if (!effectCaster)
+                effectCaster = caster;
+
+            if (Player* owner = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+                shaman = owner;
+        }
+
+        if (!effectCaster)
+            effectCaster = shaman;
+
+        if (!shaman || !effectCaster)
+            return;
+
+        if (!shaman->HasAura(SPELL_SHAMAN_SUMMERS_SWELTER))
+            return;
+
+        if (!shaman->IsFriendlyTo(target))
+            effectCaster->CastSpell(target, SPELL_SHAMAN_FIRE_STUN, true);
     }
     void Register() override
     {
