@@ -29,6 +29,9 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include <algorithm>
+#include <string_view>
+#include <vector>
 
 enum HunterSpells
 {
@@ -68,6 +71,41 @@ enum MiscSpells
 {
     SPELL_DRAENEI_GIFT_OF_THE_NAARU                 = 59543,
 };
+
+namespace
+{
+bool IsHunterTrapSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo || spellInfo->SpellFamilyName != SPELLFAMILY_HUNTER || !spellInfo->SpellName)
+        return false;
+
+    char const* englishName = (*spellInfo->SpellName)[LOCALE_enUS];
+    if (!englishName || !*englishName)
+        return false;
+
+    std::string_view const name(englishName);
+    if (name.find("Trap") == std::string_view::npos)
+        return false;
+
+    for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+    {
+        if (!effect.IsEffect())
+            continue;
+
+        switch (effect.Effect)
+        {
+            case SPELL_EFFECT_SUMMON_OBJECT:
+            case SPELL_EFFECT_SUMMON_OBJECT_SLOT1:
+            case SPELL_EFFECT_SUMMON_OBJECT_WILD:
+                return true;
+            default:
+                break;
+        }
+    }
+
+    return !spellInfo->IsPassive();
+}
+}
 
 // 131894 - A Murder of Crows
 class spell_hun_a_murder_of_crows : public AuraScript
@@ -747,6 +785,59 @@ class spell_hun_tame_beast : public SpellScript
     }
 };
 
+// Trap cooldown reduction handler
+class spell_hun_trap_cd_reduce : public SpellScript
+{
+    void HandleCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        SpellInfo const* triggeringSpellInfo = GetTriggeringSpell();
+        uint32 const triggeringSpellId = triggeringSpellInfo ? triggeringSpellInfo->Id : 0;
+        uint32 const triggeringChargeCategory = triggeringSpellInfo ? triggeringSpellInfo->ChargeCategoryId : 0;
+
+        caster->m_Events.AddEventAtOffset([caster, triggeringSpellId, triggeringChargeCategory]
+        {
+            SpellHistory* spellHistory = caster->GetSpellHistory();
+            if (!spellHistory)
+                return;
+
+            std::vector<uint32> chargeCategoriesToReset;
+            spellHistory->ResetCooldowns([
+                &chargeCategoriesToReset,
+                triggeringSpellId,
+                triggeringChargeCategory
+            ](SpellHistory::CooldownStorageType::iterator itr) -> bool
+            {
+                SpellInfo const* cooldownSpellInfo = sSpellMgr->GetSpellInfo(itr->first);
+                if (!IsHunterTrapSpell(cooldownSpellInfo))
+                    return false;
+
+                if (cooldownSpellInfo->Id == triggeringSpellId)
+                    return false;
+
+                if (cooldownSpellInfo->ChargeCategoryId && cooldownSpellInfo->ChargeCategoryId != triggeringChargeCategory)
+                {
+                    if (std::find(chargeCategoriesToReset.begin(), chargeCategoriesToReset.end(), cooldownSpellInfo->ChargeCategoryId) == chargeCategoriesToReset.end())
+                        chargeCategoriesToReset.push_back(cooldownSpellInfo->ChargeCategoryId);
+                }
+
+                return true;
+            }, true);
+
+            for (uint32 categoryId : chargeCategoriesToReset)
+                spellHistory->ResetCharges(categoryId);
+        }, Milliseconds(0));
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_hun_trap_cd_reduce::HandleCast);
+    }
+};
+
 // 67151 - Item - Hunter T9 4P Bonus (Steady Shot)
 class spell_hun_t9_4p_bonus : public AuraScript
 {
@@ -831,6 +922,7 @@ void AddSC_hunter_spell_scripts()
     RegisterSpellScript(spell_hun_scatter_shot);
     RegisterSpellScript(spell_hun_steady_shot);
     RegisterSpellScript(spell_hun_tame_beast);
+    RegisterSpellScript(spell_hun_trap_cd_reduce);
     RegisterSpellScript(spell_hun_t9_4p_bonus);
     RegisterSpellScript(spell_hun_t29_2p_marksmanship_bonus);
 }
