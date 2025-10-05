@@ -16,6 +16,7 @@
  */
 
 #include "Spell.h"
+#include <algorithm>
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -5944,36 +5945,50 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                         if (!unitCaster)
                             return SPELL_FAILED_BAD_TARGETS;
 
-                        PathGenerator path(unitCaster);
-                        float pathLengthLimit = unitCaster->GetExactDist(m_targets.GetDstPos());
-                        if (pathLengthLimit > 0.0f)
-                            path.SetPathLengthLimit(pathLengthLimit);
-
                         WorldLocation const* dest = m_targets.GetDstPos();
-                        bool result = path.CalculatePath(dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ(), false);
-                        PathType type = path.GetPathType();
+                        if (!dest)
+                            return SPELL_FAILED_BAD_TARGETS;
 
-                        if (!result || (type & PATHFIND_NOPATH))
-                            return SPELL_FAILED_NOPATH;
-
-                        if (!(type & PATHFIND_NOT_USING_PATH))
+                        auto const canReachDestination = [](Unit* unit, Position const& destination) -> bool
                         {
-                            if (type & (PATHFIND_INCOMPLETE | PATHFIND_SHORT | PATHFIND_FARFROMPOLY_END))
-                                return SPELL_FAILED_NOPATH;
+                            PathGenerator path(unit);
+                            bool const calculated = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
 
-                            if (path.IsInvalidDestinationZ(unitCaster))
-                                return SPELL_FAILED_NOPATH;
+                            bool const hasNavigation = path.HasNavigationData();
+                            if (!calculated)
+                                return !hasNavigation;
 
-                            float allowedDiff = unitCaster->GetCombatReach();
-                            if (allowedDiff < 1.0f)
-                                allowedDiff = 1.0f;
+                            PathType const pathType = path.GetPathType();
 
-                            G3D::Vector3 desired = PositionToVector3(dest);
-                            G3D::Vector3 diff = path.GetActualEndPosition() - desired;
+                            if (pathType & PATHFIND_NOPATH)
+                                return false;
 
-                            if (diff.squaredLength() > allowedDiff * allowedDiff)
-                                return SPELL_FAILED_NOPATH;
-                        }
+                            bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+
+                            if (playerControlled && (pathType & PATHFIND_INCOMPLETE))
+                                return false;
+
+                            if (hasNavigation)
+                            {
+                                if (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT | PATHFIND_FARFROMPOLY_END))
+                                    return false;
+
+                                if (path.IsInvalidDestinationZ(unit))
+                                    return false;
+
+                                float const allowedDiff = std::max(unit->GetCombatReach(), 1.0f);
+                                G3D::Vector3 const desired = PositionToVector3(destination);
+                                G3D::Vector3 const diff = path.GetActualEndPosition() - desired;
+
+                                if (diff.squaredLength() > allowedDiff * allowedDiff)
+                                    return false;
+                            }
+
+                            return true;
+                        };
+
+                        if (!canReachDestination(unitCaster, *dest))
+                            return SPELL_FAILED_NOPATH;
                     }
                 }
                 break;
