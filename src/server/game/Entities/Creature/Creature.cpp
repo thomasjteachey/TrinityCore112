@@ -1348,14 +1348,14 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     uint32 npcflag = GetNpcFlags();
     uint32 unit_flags = GetUnitFlags();
     uint32 dynamicflags = GetDynamicFlags();
-    uint32 const playerBytes = GetUInt32Value(PLAYER_BYTES);
-    uint32 const playerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
+    uint32 const currentPlayerBytes = GetUInt32Value(PLAYER_BYTES);
+    uint32 const currentPlayerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
 
     uint8 playerRace = RACE_NONE;
     uint8 playerClass = CLASS_NONE;
     uint8 playerGender = GENDER_NONE;
-    uint32 playerBytes = 0;
-    uint32 playerBytes2 = 0;
+    uint32 playerBytes = currentPlayerBytes;
+    uint32 playerBytes2 = currentPlayerBytes2;
 
     if (_hasPlayerAppearance)
     {
