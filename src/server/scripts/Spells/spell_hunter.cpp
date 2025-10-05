@@ -1716,16 +1716,12 @@ class spell_hun_trap_cd_reduce : public SpellScript
         uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
         ObjectGuid const casterGuid = caster->GetGUID();
 
-        using namespace std::chrono_literals;
-        caster->m_Events.AddEventAtOffset([casterGuid, trapCategory, cooldownReduction]()
-        {
-            Player* player = ObjectAccessor::FindConnectedPlayer(casterGuid);
-            if (!player)
-                return;
 
+        auto const reduceCooldown = [trapCategory, cooldownReduction](Player* player, bool fromDelayedCall) -> bool
+        {
             SpellHistory* history = player->GetSpellHistory();
             if (!history)
-                return;
+                return true;
 
             SpellInfo const* trapInfo = nullptr;
             uint32 trapSpellId = 0;
@@ -1750,14 +1746,19 @@ class spell_hun_trap_cd_reduce : public SpellScript
             }
 
             if (!trapInfo)
-                return;
+                return true;
 
+            bool const hasActiveCooldown = history->HasCooldown(trapInfo);
             uint32 effectiveCooldown = history->GetRemainingCooldown(trapInfo);
 
             if (!effectiveCooldown)
             {
-                int32 const baseCooldown = int32(trapInfo->RecoveryTime);
-                int32 const categoryCooldown = int32(trapInfo->CategoryRecoveryTime);
+                if (!fromDelayedCall && !hasActiveCooldown)
+                    return false;
+
+                int32 baseCooldown = 0;
+                int32 categoryCooldown = 0;
+                SpellHistory::GetCooldownDurations(trapInfo, 0, &baseCooldown, nullptr, &categoryCooldown);
 
                 if (baseCooldown > 0)
                     effectiveCooldown = uint32(baseCooldown);
@@ -1765,28 +1766,41 @@ class spell_hun_trap_cd_reduce : public SpellScript
                     effectiveCooldown = uint32(categoryCooldown);
                 else if (trapInfo->GetRecoveryTime() > 0)
                     effectiveCooldown = trapInfo->GetRecoveryTime();
-                else if (trapInfo->CategoryRecoveryTime > 0)
-                    effectiveCooldown = trapInfo->CategoryRecoveryTime;
+                else if (trapInfo->GetCategoryRecoveryTime() > 0)
+                    effectiveCooldown = trapInfo->GetCategoryRecoveryTime();
             }
 
             if (!effectiveCooldown)
-                return;
+                return true;
 
             uint32 const newCooldown = cooldownReduction >= effectiveCooldown ? 0 : effectiveCooldown - cooldownReduction;
-
-            SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
 
             history->ResetCategoryCooldown(trapCategory, true);
 
             if (!newCooldown)
-                return;
+                return true;
 
+            SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
             SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
             history->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
 
             WorldPacket data;
             history->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
             player->SendDirectMessage(&data);
+            return true;
+        };
+
+        if (reduceCooldown(caster, false))
+            return;
+
+        using namespace std::chrono_literals;
+        caster->m_Events.AddEventAtOffset([casterGuid, reduceCooldown]()
+        {
+            Player* player = ObjectAccessor::FindConnectedPlayer(casterGuid);
+            if (!player)
+                return;
+
+            reduceCooldown(player, true);
         }, 1ms);
     }
 
