@@ -1692,10 +1692,9 @@ class spell_hun_trap_cd_reduce : public SpellScript
         return GetCaster()->GetTypeId() == TYPEID_PLAYER;
     }
 
-    void HandleDummy()
+    static void ApplyTrapCooldownReduction(Player* caster, uint32 cooldownReduction)
     {
-        Player* caster = GetCaster()->ToPlayer();
-        if (!caster)
+        if (!caster || !cooldownReduction)
             return;
 
         SpellHistory* spellHistory = caster->GetSpellHistory();
@@ -1730,7 +1729,6 @@ class spell_hun_trap_cd_reduce : public SpellScript
             return;
 
         uint32 const baseCooldown = trapInfo->GetRecoveryTime();
-        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
         if (baseCooldown <= cooldownReduction)
             return;
 
@@ -1744,6 +1742,22 @@ class spell_hun_trap_cd_reduce : public SpellScript
         WorldPacket data;
         spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
         caster->SendDirectMessage(&data);
+    }
+
+    void HandleDummy()
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
+
+        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
+        if (!cooldownReduction)
+            return;
+
+        caster->m_Events.AddEvent([caster, cooldownReduction]()
+        {
+            ApplyTrapCooldownReduction(caster, cooldownReduction);
+        }, caster->m_Events.CalculateTime(1ms));
     }
 
     void Register() override
