@@ -2034,6 +2034,12 @@ void Creature::ApplyPlayerAppearance(CreaturePlayerBytes const& appearance, bool
     _playerAppearance = appearance;
     _hasPlayerAppearance = true;
 
+    if (GetValuesCount() > PLAYER_BYTES)
+        SetUInt32Value(PLAYER_BYTES, appearance.playerBytes);
+
+    if (GetValuesCount() > PLAYER_BYTES_2)
+        SetUInt32Value(PLAYER_BYTES_2, appearance.playerBytes2);
+
     SetRace(appearance.race);
     SetClass(appearance.playerClass);
     SetGender(Gender(appearance.gender));
@@ -2150,12 +2156,6 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
 
     if (!_hasPlayerAppearance)
         return false;
-
-    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_SKIN_ID, skin);
-    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_FACE_ID, face);
-    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_STYLE_ID, hairStyle);
-    SetByteValue(PLAYER_BYTES, PLAYER_BYTES_OFFSET_HAIR_COLOR_ID, hairColor);
-    SetByteValue(PLAYER_BYTES_2, PLAYER_BYTES_2_OFFSET_FACIAL_STYLE, facialStyle);
 
     SetObjectScale(1.0f);
 
