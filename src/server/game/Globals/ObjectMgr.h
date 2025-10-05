@@ -1347,7 +1347,7 @@ class TC_GAME_API ObjectMgr
         }
         CreatureData& NewOrExistCreatureData(ObjectGuid::LowType spawnId) { return _creatureDataStore[spawnId]; }
         void DeleteCreatureData(ObjectGuid::LowType spawnId);
-        void SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2);
+        void SetCreaturePlayerBytes(ObjectGuid::LowType guid, CreaturePlayerBytes const* appearance);
         ObjectGuid GetLinkedRespawnGuid(ObjectGuid spawnId) const
         {
             LinkedRespawnContainer::const_iterator itr = _linkedRespawnStore.find(spawnId);

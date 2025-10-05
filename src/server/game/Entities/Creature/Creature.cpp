@@ -1367,6 +1367,10 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     uint32 playerBytes = currentPlayerBytes;
     uint32 playerBytes2 = currentPlayerBytes2;
 
+    uint32 guildId = 0;
+    std::array<uint32, CreaturePlayerBytes::VisibleItemSlotCount> visibleItems{};
+    std::array<uint32, MAX_EQUIPMENT_ITEMS> virtualItems{};
+
     if (_hasPlayerAppearance)
     {
         playerRace = _playerAppearance.race;
@@ -1374,6 +1378,9 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
         playerGender = _playerAppearance.gender;
         playerBytes = _playerAppearance.playerBytes;
         playerBytes2 = _playerAppearance.playerBytes2;
+        guildId = _playerAppearance.guildId;
+        visibleItems = _playerAppearance.visibleItemDisplayIds;
+        virtualItems = _playerAppearance.virtualItemIds;
     }
 
     // check if it's a custom model and if not, use 0 for displayId
@@ -1468,17 +1475,26 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     if (_hasPlayerAppearance)
     {
         stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_CREATURE_PLAYERBYTES);
-        stmt->setUInt32(0, m_spawnId);
-        stmt->setUInt8(1, playerRace);
-        stmt->setUInt8(2, playerClass);
-        stmt->setUInt8(3, playerGender);
-        stmt->setUInt32(4, playerBytes);
-        stmt->setUInt32(5, playerBytes2);
+        uint8 paramIndex = 0;
+        stmt->setUInt32(paramIndex++, m_spawnId);
+        stmt->setUInt8(paramIndex++, playerRace);
+        stmt->setUInt8(paramIndex++, playerClass);
+        stmt->setUInt8(paramIndex++, playerGender);
+        stmt->setUInt32(paramIndex++, playerBytes);
+        stmt->setUInt32(paramIndex++, playerBytes2);
+        stmt->setUInt32(paramIndex++, guildId);
+        for (uint8 slot = 0; slot < CreaturePlayerBytes::VisibleItemSlotCount; ++slot)
+            stmt->setUInt32(paramIndex++, visibleItems[slot]);
+        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+            stmt->setUInt32(paramIndex++, virtualItems[slot]);
         trans->Append(stmt);
     }
 
     WorldDatabase.CommitTransaction(trans);
-    sObjectMgr->SetCreaturePlayerBytes(m_spawnId, playerRace, playerClass, playerGender, playerBytes, playerBytes2);
+    if (_hasPlayerAppearance)
+        sObjectMgr->SetCreaturePlayerBytes(m_spawnId, &_playerAppearance);
+    else
+        sObjectMgr->SetCreaturePlayerBytes(m_spawnId, nullptr);
 }
 
 void Creature::SelectLevel()
@@ -2061,6 +2077,8 @@ void Creature::ClearPlayerAppearance()
     _playerAppearance = {};
     _playerVisibleItemDisplayIds.fill(0);
     _playerGuildId = 0;
+    for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+        SetVirtualItem(slot, 0);
     RemoveUnitFlag2(UNIT_FLAG2_MIRROR_IMAGE);
 }
 
@@ -2081,6 +2099,10 @@ void Creature::ApplyPlayerAppearance(CreaturePlayerBytes const& appearance, bool
 
     _playerAppearance = appearance;
     _hasPlayerAppearance = true;
+    _playerVisibleItemDisplayIds = _playerAppearance.visibleItemDisplayIds;
+    _playerGuildId = _playerAppearance.guildId;
+    for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+        SetVirtualItem(slot, _playerAppearance.virtualItemIds[slot]);
     SetUnitFlag2(UNIT_FLAG2_MIRROR_IMAGE);
 
     if (GetValuesCount() > PLAYER_BYTES)
@@ -2136,13 +2158,15 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     if (copyName)
         SetName(player->GetName());
 
-
     _playerVisibleItemDisplayIds.fill(0);
     _playerGuildId = 0;
+
     SetPlayerAppearance(player->GetRace(), player->GetClass(), player->GetGender(), player->GetUInt32Value(PLAYER_BYTES), player->GetUInt32Value(PLAYER_BYTES_2));
     if (!_hasPlayerAppearance)
         return false;
+
     _playerGuildId = player->GetGuildId();
+    _playerAppearance.guildId = _playerGuildId;
 
     if (copyEquipment)
     {
@@ -2158,35 +2182,43 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
                 displayId = 0;
 
             _playerVisibleItemDisplayIds[slot] = displayId;
+            _playerAppearance.visibleItemDisplayIds[slot] = displayId;
         }
-        // Ensure the creature uses the customized player model instead of relying on PLAYER_BYTES.
-        SetDisplayId(GetNativeDisplayId());
-
-        SetObjectScale(player->GetFloatValue(OBJECT_FIELD_SCALE_X));
-        SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
-        SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
-
-        if (player->GetDisplayId() != player->GetNativeDisplayId())
-            SetDisplayId(player->GetDisplayId());
-
-        SetPowerType(player->GetPowerType(), false);
-
-        SetStandState(player->GetStandState());
-        SetSheath(player->GetSheath());
-        SetAnimTier(player->GetAnimTier());
-        SetShapeshiftForm(player->GetShapeshiftForm());
-
-        if (copyEquipment)
-            for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
-                SetVirtualItem(slot, player->GetVirtualItemId(slot));
-
-        UpdateDisplayPower();
-
-        if (persist)
-            SaveToDB();
-
-        return true;
     }
+
+    // Ensure the creature uses the customized player model instead of relying on PLAYER_BYTES.
+    SetDisplayId(GetNativeDisplayId());
+
+    SetObjectScale(player->GetFloatValue(OBJECT_FIELD_SCALE_X));
+    SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
+    SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
+
+    if (player->GetDisplayId() != player->GetNativeDisplayId())
+        SetDisplayId(player->GetDisplayId());
+
+    SetPowerType(player->GetPowerType(), false);
+
+    SetStandState(player->GetStandState());
+    SetSheath(player->GetSheath());
+    SetAnimTier(player->GetAnimTier());
+    SetShapeshiftForm(player->GetShapeshiftForm());
+
+    if (copyEquipment)
+    {
+        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+        {
+            uint32 const itemId = player->GetVirtualItemId(slot);
+            SetVirtualItem(slot, itemId);
+            _playerAppearance.virtualItemIds[slot] = itemId;
+        }
+    }
+
+    UpdateDisplayPower();
+
+    if (persist)
+        SaveToDB();
+
+    return true;
 }
 
 bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName, bool copyEquipment, bool persist)
@@ -2235,6 +2267,9 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
     if (!_hasPlayerAppearance)
         return false;
 
+    _playerGuildId = sCharacterCache->GetCharacterGuildIdByGuid(playerGuid);
+    _playerAppearance.guildId = _playerGuildId;
+
     SetObjectScale(1.0f);
 
     if (ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(playerClass))
@@ -2262,11 +2297,16 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
                 displayId = 0;
 
             _playerVisibleItemDisplayIds[slot] = displayId;
+            _playerAppearance.visibleItemDisplayIds[slot] = displayId;
         }
 
         std::array<uint32, MAX_EQUIPMENT_ITEMS> virtualItems = ExtractVirtualItemsFromEquipmentCache(equipmentCacheValues);
         for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
-            SetVirtualItem(slot, virtualItems[slot]);
+        {
+            uint32 const itemId = virtualItems[slot];
+            SetVirtualItem(slot, itemId);
+            _playerAppearance.virtualItemIds[slot] = itemId;
+        }
     }
 
     UpdateDisplayPower();

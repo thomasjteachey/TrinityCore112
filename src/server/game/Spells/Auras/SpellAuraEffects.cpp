@@ -5665,7 +5665,7 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     int32 maxDamage = 1350;
     if (caster)
     {
-        maxDamage = (caster->GetLevel() * 25) - 150;
+        maxDamage = (caster->GetLevel() * 25) - 200;
     }
     int32 damage = eventInfo.GetDamageInfo()->GetDamage();
     if (damage > maxDamage)
