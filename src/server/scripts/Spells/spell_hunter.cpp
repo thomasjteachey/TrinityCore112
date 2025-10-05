@@ -24,6 +24,7 @@
 #include "ScriptMgr.h"
 #include "CellImpl.h"
 #include "GridNotifiersImpl.h"
+#include "ObjectAccessor.h"
 #include "Pet.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -32,6 +33,7 @@
 #include "GameTime.h"
 #include "WorldPacket.h"
 #include <algorithm>
+#include <array>
 
 enum HunterSpells
 {
@@ -1683,6 +1685,11 @@ class spell_hun_weaving : public AuraScript
 };
 
 // 81382 - trap cd remove
+namespace
+{
+    constexpr std::array<uint32, 8> ImmolationTrapSpellIds = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
+}
+
 class spell_hun_trap_cd_reduce : public SpellScript
 {
     PrepareSpellScript(spell_hun_trap_cd_reduce);
@@ -1698,52 +1705,102 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!caster)
             return;
 
-        SpellHistory* spellHistory = caster->GetSpellHistory();
-        if (!spellHistory)
+        if (!caster->GetSpellHistory())
             return;
 
-        static constexpr uint32 ImmolationTrapSpellIds[] = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
-
-        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds[0]);
+        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds.front());
         uint32 trapCategory = categorySource->GetCategory();
         if (!trapCategory)
             return;
 
-        uint32 trapSpellId = spellHistory->ResetCategoryCooldown(trapCategory, true);
-        if (!trapSpellId)
+        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
+        ObjectGuid const casterGuid = caster->GetGUID();
+
+        auto const reduceCooldown = [trapCategory, cooldownReduction](Player* player, bool fromDelayedCall) -> bool
         {
+            SpellHistory* history = player->GetSpellHistory();
+            if (!history)
+                return true;
+
+            SpellInfo const* trapInfo = nullptr;
+            uint32 trapSpellId = 0;
+
             for (uint32 trapSpellCandidate : ImmolationTrapSpellIds)
             {
-                if (!caster->HasSpell(trapSpellCandidate))
+                if (!player->HasSpell(trapSpellCandidate))
+                    continue;
+
+                SpellInfo const* candidateInfo = sSpellMgr->GetSpellInfo(trapSpellCandidate);
+                if (!candidateInfo)
+                    continue;
+
+                if (candidateInfo->GetCategory() != trapCategory)
                     continue;
 
                 trapSpellId = trapSpellCandidate;
-                break;
+                trapInfo = candidateInfo;
+
+                if (history->HasCooldown(candidateInfo))
+                    break;
             }
-        }
 
-        if (!trapSpellId)
+            if (!trapInfo)
+                return true;
+
+            bool const hasActiveCooldown = history->HasCooldown(trapInfo);
+            uint32 effectiveCooldown = history->GetRemainingCooldown(trapInfo);
+
+            if (!effectiveCooldown)
+            {
+                if (!fromDelayedCall && !hasActiveCooldown)
+                    return false;
+
+                int32 baseCooldown = 0;
+                int32 categoryCooldown = 0;
+                SpellHistory::GetCooldownDurations(trapInfo, 0, &baseCooldown, nullptr, &categoryCooldown);
+
+                if (baseCooldown > 0)
+                    effectiveCooldown = uint32(baseCooldown);
+                else if (categoryCooldown > 0)
+                    effectiveCooldown = uint32(categoryCooldown);
+                else if (trapInfo->GetRecoveryTime() > 0)
+                    effectiveCooldown = trapInfo->GetRecoveryTime();
+                else if (trapInfo->GetCategoryRecoveryTime() > 0)
+                    effectiveCooldown = trapInfo->GetCategoryRecoveryTime();
+            }
+
+            if (!effectiveCooldown)
+                return true;
+
+            uint32 const newCooldown = cooldownReduction >= effectiveCooldown ? 0 : effectiveCooldown - cooldownReduction;
+
+            history->ResetCategoryCooldown(trapCategory, true);
+
+            if (!newCooldown)
+                return true;
+
+            SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+            SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
+            history->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
+
+            WorldPacket data;
+            history->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
+            player->SendDirectMessage(&data);
+            return true;
+        };
+
+        if (reduceCooldown(caster, false))
             return;
 
-        SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapSpellId);
-        if (!trapInfo)
-            return;
+        using namespace std::chrono_literals;
+        caster->m_Events.AddEventAtOffset([casterGuid, reduceCooldown]()
+        {
+            Player* player = ObjectAccessor::FindConnectedPlayer(casterGuid);
+            if (!player)
+                return;
 
-        uint32 const baseCooldown = trapInfo->GetRecoveryTime();
-        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
-        if (baseCooldown <= cooldownReduction)
-            return;
-
-        uint32 const newCooldown = baseCooldown - cooldownReduction;
-
-        SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
-        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
-
-        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
-
-        WorldPacket data;
-        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
-        caster->SendDirectMessage(&data);
+            reduceCooldown(player, true);
+        }, 1ms);
     }
 
     void Register() override
