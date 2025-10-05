@@ -5933,9 +5933,49 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             {
                 //Do not allow to cast it before BG starts.
                 if (m_caster->GetTypeId() == TYPEID_PLAYER)
+                {
                     if (Battleground const* bg = m_caster->ToPlayer()->GetBattleground())
                         if (bg->GetStatus() != STATUS_IN_PROGRESS)
                             return SPELL_FAILED_TRY_AGAIN;
+
+                    if (spellEffectInfo.Effect == SPELL_EFFECT_LEAP && m_spellInfo->SpellFamilyName == SPELLFAMILY_WARRIOR && m_targets.HasDst())
+                    {
+                        Unit* unitCaster = m_caster->ToUnit();
+                        if (!unitCaster)
+                            return SPELL_FAILED_BAD_TARGETS;
+
+                        PathGenerator path(unitCaster);
+                        float pathLengthLimit = unitCaster->GetExactDist(m_targets.GetDstPos());
+                        if (pathLengthLimit > 0.0f)
+                            path.SetPathLengthLimit(pathLengthLimit);
+
+                        WorldLocation const* dest = m_targets.GetDstPos();
+                        bool result = path.CalculatePath(dest->GetPositionX(), dest->GetPositionY(), dest->GetPositionZ(), false);
+                        PathType type = path.GetPathType();
+
+                        if (!result || (type & PATHFIND_NOPATH))
+                            return SPELL_FAILED_NOPATH;
+
+                        if (!(type & PATHFIND_NOT_USING_PATH))
+                        {
+                            if (type & (PATHFIND_INCOMPLETE | PATHFIND_SHORT | PATHFIND_FARFROMPOLY_END))
+                                return SPELL_FAILED_NOPATH;
+
+                            if (path.IsInvalidDestinationZ(unitCaster))
+                                return SPELL_FAILED_NOPATH;
+
+                            float allowedDiff = unitCaster->GetCombatReach();
+                            if (allowedDiff < 1.0f)
+                                allowedDiff = 1.0f;
+
+                            G3D::Vector3 desired = PositionToVector3(dest);
+                            G3D::Vector3 diff = path.GetActualEndPosition() - desired;
+
+                            if (diff.squaredLength() > allowedDiff * allowedDiff)
+                                return SPELL_FAILED_NOPATH;
+                        }
+                    }
+                }
                 break;
             }
             case SPELL_EFFECT_STEAL_BENEFICIAL_BUFF:
