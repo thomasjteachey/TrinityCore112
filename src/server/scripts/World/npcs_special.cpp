@@ -1579,10 +1579,24 @@ struct npc_training_dummy : NullCreatureAI
             if (itr->second <= 0s)
             {
                 // The attacker has not dealt any damage to the dummy for over 5 seconds. End combat.
+                bool combatEnded = false;
+
                 auto const& pveRefs = me->GetCombatManager().GetPvECombatRefs();
-                auto it = pveRefs.find(itr->first);
-                if (it != pveRefs.end())
+                if (auto it = pveRefs.find(itr->first); it != pveRefs.end())
+                {
                     it->second->EndCombat();
+                    combatEnded = true;
+                }
+
+                if (!combatEnded)
+                {
+                    if (Unit* attacker = ObjectAccessor::GetUnit(*me, itr->first))
+                    {
+                        auto const& attackerRefs = attacker->GetCombatManager().GetPvECombatRefs();
+                        if (auto attackerIt = attackerRefs.find(me->GetGUID()); attackerIt != attackerRefs.end())
+                            attackerIt->second->EndCombat();
+                    }
+                }
 
                 itr = _combatTimer.erase(itr);
             }
