@@ -16,6 +16,7 @@
  */
 
 #include "Spell.h"
+#include <algorithm>
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -5933,9 +5934,63 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             {
                 //Do not allow to cast it before BG starts.
                 if (m_caster->GetTypeId() == TYPEID_PLAYER)
+                {
                     if (Battleground const* bg = m_caster->ToPlayer()->GetBattleground())
                         if (bg->GetStatus() != STATUS_IN_PROGRESS)
                             return SPELL_FAILED_TRY_AGAIN;
+
+                    if (spellEffectInfo.Effect == SPELL_EFFECT_LEAP && m_spellInfo->SpellFamilyName == SPELLFAMILY_WARRIOR && m_targets.HasDst())
+                    {
+                        Unit* unitCaster = m_caster->ToUnit();
+                        if (!unitCaster)
+                            return SPELL_FAILED_BAD_TARGETS;
+
+                        WorldLocation const* dest = m_targets.GetDstPos();
+                        if (!dest)
+                            return SPELL_FAILED_BAD_TARGETS;
+
+                        auto const canReachDestination = [](Unit* unit, Position const& destination) -> bool
+                        {
+                            PathGenerator path(unit);
+                            bool const calculated = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+
+                            bool const hasNavigation = path.HasNavigationData();
+                            if (!calculated)
+                                return !hasNavigation;
+
+                            PathType const pathType = path.GetPathType();
+
+                            if (pathType & PATHFIND_NOPATH)
+                                return false;
+
+                            bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+
+                            if (playerControlled && (pathType & PATHFIND_INCOMPLETE))
+                                return false;
+
+                            if (hasNavigation)
+                            {
+                                if (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT | PATHFIND_FARFROMPOLY_END))
+                                    return false;
+
+                                if (path.IsInvalidDestinationZ(unit))
+                                    return false;
+
+                                float const allowedDiff = std::max(unit->GetCombatReach(), 1.0f);
+                                G3D::Vector3 const desired = PositionToVector3(destination);
+                                G3D::Vector3 const diff = path.GetActualEndPosition() - desired;
+
+                                if (diff.squaredLength() > allowedDiff * allowedDiff)
+                                    return false;
+                            }
+
+                            return true;
+                        };
+
+                        if (!canReachDestination(unitCaster, *dest))
+                            return SPELL_FAILED_NOPATH;
+                    }
+                }
                 break;
             }
             case SPELL_EFFECT_STEAL_BENEFICIAL_BUFF:
