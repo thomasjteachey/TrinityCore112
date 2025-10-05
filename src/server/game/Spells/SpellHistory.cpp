@@ -415,7 +415,14 @@ void SpellHistory::ModifyCooldown(uint32 spellId, int32 cooldownModMs)
     Clock::time_point now = GameTime::GetSystemTime();
     Clock::duration offset = std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(cooldownModMs));
     if (itr->second.CooldownEnd + offset > now)
+    {
         itr->second.CooldownEnd += offset;
+        if (itr->second.CategoryId)
+        {
+            Clock::time_point newCategoryEnd = itr->second.CategoryEnd + offset;
+            itr->second.CategoryEnd = newCategoryEnd > now ? newCategoryEnd : now;
+        }
+    }
     else
         EraseCooldown(itr);
 
@@ -427,6 +434,15 @@ void SpellHistory::ModifyCooldown(uint32 spellId, int32 cooldownModMs)
         modifyCooldown << int32(cooldownModMs);
         playerOwner->SendDirectMessage(&modifyCooldown);
     }
+}
+
+uint32 SpellHistory::GetCategoryCooldownSpellId(uint32 categoryId) const
+{
+    auto itr = _categoryCooldowns.find(categoryId);
+    if (itr == _categoryCooldowns.end() || !itr->second)
+        return 0;
+
+    return itr->second->SpellId;
 }
 
 void SpellHistory::ResetCooldown(uint32 spellId, bool update /*= false*/)

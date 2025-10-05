@@ -95,6 +95,7 @@ public:
     void ResetCooldown(uint32 spellId, bool update = false);
     void ResetCooldown(CooldownStorageType::iterator& itr, bool update = false);
     uint32 ResetCategoryCooldown(uint32 categoryId, bool update = false);
+    uint32 GetCategoryCooldownSpellId(uint32 categoryId) const;
     template<typename Predicate>
     void ResetCooldowns(Predicate predicate, bool update = false)
     {
