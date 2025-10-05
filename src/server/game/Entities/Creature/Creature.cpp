@@ -1348,8 +1348,17 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     uint32 npcflag = GetNpcFlags();
     uint32 unit_flags = GetUnitFlags();
     uint32 dynamicflags = GetDynamicFlags();
-    uint32 const currentPlayerBytes = GetUInt32Value(PLAYER_BYTES);
-    uint32 const currentPlayerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
+
+    uint32 currentPlayerBytes = 0;
+    uint32 currentPlayerBytes2 = 0;
+    if (!_hasPlayerAppearance)
+    {
+        if (GetValuesCount() > PLAYER_BYTES)
+            currentPlayerBytes = GetUInt32Value(PLAYER_BYTES);
+
+        if (GetValuesCount() > PLAYER_BYTES_2)
+            currentPlayerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
+    }
 
     uint8 playerRace = RACE_NONE;
     uint8 playerClass = CLASS_NONE;
@@ -2087,13 +2096,20 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     if (copyName)
         SetName(player->GetName());
 
-    SetDisplayId(player->GetDisplayId());
-    SetNativeDisplayId(player->GetNativeDisplayId());
+    SetPlayerAppearance(player->GetRace(), player->GetClass(), player->GetGender(), player->GetUInt32Value(PLAYER_BYTES), player->GetUInt32Value(PLAYER_BYTES_2));
+    if (!_hasPlayerAppearance)
+        return false;
+
+    // Ensure the creature uses the customized player model instead of relying on PLAYER_BYTES.
+    SetDisplayId(GetNativeDisplayId());
+
     SetObjectScale(player->GetFloatValue(OBJECT_FIELD_SCALE_X));
     SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
     SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
 
-    SetPlayerAppearance(player->GetRace(), player->GetClass(), player->GetGender(), player->GetUInt32Value(PLAYER_BYTES), player->GetUInt32Value(PLAYER_BYTES_2), false);
+    if (player->GetDisplayId() != player->GetNativeDisplayId())
+        SetDisplayId(player->GetDisplayId());
+
     SetPowerType(player->GetPowerType(), false);
 
     SetStandState(player->GetStandState());
