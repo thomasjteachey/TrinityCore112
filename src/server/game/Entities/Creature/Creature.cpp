@@ -2136,13 +2136,12 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     if (copyName)
         SetName(player->GetName());
 
+
     _playerVisibleItemDisplayIds.fill(0);
     _playerGuildId = 0;
-
     SetPlayerAppearance(player->GetRace(), player->GetClass(), player->GetGender(), player->GetUInt32Value(PLAYER_BYTES), player->GetUInt32Value(PLAYER_BYTES_2));
     if (!_hasPlayerAppearance)
         return false;
-
     _playerGuildId = player->GetGuildId();
 
     if (copyEquipment)
@@ -2160,8 +2159,6 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
 
             _playerVisibleItemDisplayIds[slot] = displayId;
         }
-    }
-
     // Ensure the creature uses the customized player model instead of relying on PLAYER_BYTES.
     SetDisplayId(GetNativeDisplayId());
 
