@@ -2159,33 +2159,34 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
 
             _playerVisibleItemDisplayIds[slot] = displayId;
         }
-    // Ensure the creature uses the customized player model instead of relying on PLAYER_BYTES.
-    SetDisplayId(GetNativeDisplayId());
+        // Ensure the creature uses the customized player model instead of relying on PLAYER_BYTES.
+        SetDisplayId(GetNativeDisplayId());
 
-    SetObjectScale(player->GetFloatValue(OBJECT_FIELD_SCALE_X));
-    SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
-    SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
+        SetObjectScale(player->GetFloatValue(OBJECT_FIELD_SCALE_X));
+        SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
+        SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
 
-    if (player->GetDisplayId() != player->GetNativeDisplayId())
-        SetDisplayId(player->GetDisplayId());
+        if (player->GetDisplayId() != player->GetNativeDisplayId())
+            SetDisplayId(player->GetDisplayId());
 
-    SetPowerType(player->GetPowerType(), false);
+        SetPowerType(player->GetPowerType(), false);
 
-    SetStandState(player->GetStandState());
-    SetSheath(player->GetSheath());
-    SetAnimTier(player->GetAnimTier());
-    SetShapeshiftForm(player->GetShapeshiftForm());
+        SetStandState(player->GetStandState());
+        SetSheath(player->GetSheath());
+        SetAnimTier(player->GetAnimTier());
+        SetShapeshiftForm(player->GetShapeshiftForm());
 
-    if (copyEquipment)
-        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
-            SetVirtualItem(slot, player->GetVirtualItemId(slot));
+        if (copyEquipment)
+            for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+                SetVirtualItem(slot, player->GetVirtualItemId(slot));
 
-    UpdateDisplayPower();
+        UpdateDisplayPower();
 
-    if (persist)
-        SaveToDB();
+        if (persist)
+            SaveToDB();
 
-    return true;
+        return true;
+    }
 }
 
 bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName, bool copyEquipment, bool persist)
