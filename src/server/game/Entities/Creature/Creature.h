@@ -85,7 +85,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         bool CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName = true, bool copyEquipment = true, bool persist = false);
         bool CopyAppearanceFromPlayerName(std::string const& playerName, bool copyName = true, bool copyEquipment = true, bool persist = false);
 
-        std::array<uint32, 19> const& GetVisibleItemDisplayIds() const { return _playerVisibleItemDisplayIds; }
+        std::array<uint32, CreaturePlayerBytes::VisibleItemSlotCount> const& GetVisibleItemDisplayIds() const { return _playerVisibleItemDisplayIds; }
         uint32 GetCopiedPlayerGuildId() const { return _playerGuildId; }
 
         ObjectGuid::LowType GetSpawnId() const { return m_spawnId; }
@@ -473,7 +473,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
 
         bool _hasPlayerAppearance;
         CreaturePlayerBytes _playerAppearance;
-        std::array<uint32, 19> _playerVisibleItemDisplayIds{};
+        std::array<uint32, CreaturePlayerBytes::VisibleItemSlotCount> _playerVisibleItemDisplayIds{};
         uint32 _playerGuildId = 0;
 };
 

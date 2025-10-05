@@ -1444,7 +1444,7 @@ void ObjectMgr::LoadCreaturePlayerBytes()
         customization.guildId = fields[6].GetUInt32();
 
         uint32 column = 7;
-        for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+        for (uint8 slot = 0; slot < CreaturePlayerBytes::VisibleItemSlotCount; ++slot)
             customization.visibleItemDisplayIds[slot] = fields[column++].GetUInt32();
 
         for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
