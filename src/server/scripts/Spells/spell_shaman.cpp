@@ -2147,6 +2147,27 @@ class spell_sha_old_purge : public SpellScript
     }
 };
 
+class spell_totem_cd_reduce : public SpellScript
+{
+    PrepareSpellScript(spell_totem_cd_reduce);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        uint32 cdreduce = GetEffectValue();
+        GetCaster()->GetSpellHistory()->ModifyCooldown(19577, cdreduce);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_totem_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 
 void AddSC_shaman_spell_scripts()
 {
@@ -2207,4 +2228,5 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_purge);
     RegisterSpellScript(spell_sha_old_purge);
     RegisterSpellScript(spell_sha_fire_nova_trig);
+    RegisterSpellScript(spell_totem_cd_reduce);
 }
