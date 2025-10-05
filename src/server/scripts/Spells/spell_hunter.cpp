@@ -15,16 +15,15 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
- * Scripts for spells with SPELLFAMILY_HUNTER, SPELLFAMILY_PET and SPELLFAMILY_GENERIC spells used by hunter players.
- * Ordered alphabetically using scriptname.
- * Scriptnames of files in this file should be prefixed with "spell_hun_".
- */
+ /*
+  * Scripts for spells with SPELLFAMILY_HUNTER, SPELLFAMILY_PET and SPELLFAMILY_GENERIC spells used by hunter players.
+  * Ordered alphabetically using scriptname.
+  * Scriptnames of files in this file should be prefixed with "spell_hun_".
+  */
 
 #include "ScriptMgr.h"
 #include "CellImpl.h"
 #include "GridNotifiersImpl.h"
-#include "ObjectAccessor.h"
 #include "Pet.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -33,75 +32,74 @@
 #include "GameTime.h"
 #include "WorldPacket.h"
 #include <algorithm>
-#include <array>
 
 enum HunterSpells
 {
-    SPELL_HUNTER_ASPECT_OF_THE_BEAST                = 13161,
-    SPELL_HUNTER_ASPECT_OF_THE_BEAST_PET            = 61669,
-    SPELL_HUNTER_ASPECT_OF_THE_VIPER                = 34074,
-    SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE       = 34075,
-    SPELL_HUNTER_BESTIAL_WRATH                      = 19574,
-    SPELL_HUNTER_CHIMERA_SHOT_SERPENT               = 53353,
-    SPELL_HUNTER_CHIMERA_SHOT_VIPER                 = 53358,
-    SPELL_HUNTER_CHIMERA_SHOT_SCORPID               = 53359,
-    SPELL_HUNTER_GLYPH_OF_ARCANE_SHOT               = 61389,
-    SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER       = 56851,
-    SPELL_HUNTER_IMPROVED_MEND_PET                  = 24406,
-    SPELL_HUNTER_INVIGORATION_TRIGGERED             = 53398,
-    SPELL_HUNTER_MASTERS_CALL_TRIGGERED             = 62305,
-    SPELL_HUNTER_MISDIRECTION                       = 34477,
-    SPELL_HUNTER_MISDIRECTION_PROC                  = 35079,
-    SPELL_HUNTER_PET_LAST_STAND_TRIGGERED           = 53479,
-    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX           = 55709,
+    SPELL_HUNTER_ASPECT_OF_THE_BEAST = 13161,
+    SPELL_HUNTER_ASPECT_OF_THE_BEAST_PET = 61669,
+    SPELL_HUNTER_ASPECT_OF_THE_VIPER = 34074,
+    SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE = 34075,
+    SPELL_HUNTER_BESTIAL_WRATH = 19574,
+    SPELL_HUNTER_CHIMERA_SHOT_SERPENT = 53353,
+    SPELL_HUNTER_CHIMERA_SHOT_VIPER = 53358,
+    SPELL_HUNTER_CHIMERA_SHOT_SCORPID = 53359,
+    SPELL_HUNTER_GLYPH_OF_ARCANE_SHOT = 61389,
+    SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER = 56851,
+    SPELL_HUNTER_IMPROVED_MEND_PET = 24406,
+    SPELL_HUNTER_INVIGORATION_TRIGGERED = 53398,
+    SPELL_HUNTER_MASTERS_CALL_TRIGGERED = 62305,
+    SPELL_HUNTER_MISDIRECTION = 34477,
+    SPELL_HUNTER_MISDIRECTION_PROC = 35079,
+    SPELL_HUNTER_PET_LAST_STAND_TRIGGERED = 53479,
+    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX = 55709,
     SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_TRIGGERED = 54114,
-    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF    = 55711,
-    SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED       = 54045,
-    SPELL_HUNTER_PIERCING_SHOTS                     = 63468,
-    SPELL_HUNTER_READINESS                          = 23989,
-    SPELL_HUNTER_SNIPER_TRAINING_R1                 = 53302,
-    SPELL_HUNTER_SNIPER_TRAINING_BUFF_R1            = 64418,
-    SPELL_HUNTER_T9_4P_GREATNESS                    = 68130,
-    SPELL_HUNTER_VICIOUS_VIPER                      = 61609,
-    SPELL_HUNTER_VIPER_ATTACK_SPEED                 = 60144,
-    SPELL_DRAENEI_GIFT_OF_THE_NAARU                 = 59543,
-    SPELL_ROAR_OF_SACRIFICE_TRIGGERED               = 67481,
-    SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER              = 56453,
-    SPELL_HUNTER_LOCK_AND_LOAD_MARKER               = 67544,
-    SPELL_HUNTER_KILL_COMMAND_HUNTER                = 34027,
-    SPELL_HUNTER_THRILL_OF_THE_HUNT_MANA            = 34720,
-    SPELL_REPLENISHMENT                             = 57669,
-    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R1         = 56654,
-    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R2         = 58882,
-    SPELL_HUNTER_GLYPH_OF_MEND_PET_HAPPINESS        = 57894,
-    SPELL_HUNTER_EXPLOSIVE_SHOT_DAMAGE              = 53352,
-    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R1             = 60096,
-    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R2             = 60097,
-    SPELL_HUNTER_WYVERN_STING_DOT_R1                = 24131,
-    SPELL_HUNTER_WYVERN_STING_DOT_R2                = 24134,
-    SPELL_HUNTER_WYVERN_STING_DOT_R3                = 24135,
-    SPELL_HUNTER_WYVERN_STING_DOT_R4                = 27069,
-    SPELL_HUNTER_WYVERN_STING_DOT_R5                = 49009,
-    SPELL_HUNTER_WYVERN_STING_DOT_R6                = 49010,
-    SPELL_HUNTER_HUNTERS_MARK                       = 1130,
-    SPELL_HUNTER_IMPROVED_HUNTERS_MARK              = 19421,
-    SPELL_HUNTER_MONGOOSE_BITE                      = 81285,
-    SPELL_HUNTER_MONGOOSE_BITE_MAIN                 = 81286,
-    SPELL_HUNTER_MONGOOSE_BITE_OFF                  = 81287,
-    SPELL_HUNTER_MONGOOSE_CD_REDUCE                 = 81290,
-    SPELL_HUNTER_SCORPID_HEALING                    = 81291,
-    SPELL_HUNTER_ROUGH_PLAY_BUFF_R1                 = 81294,
-    SPELL_HUNTER_ROUGH_PLAY_BUFF_R2                 = 81295,
-    SPELL_HUNTER_OUTMANEUVER                        = 81297,
-    SPELL_HUNTER_WEAVING_R1                         = 81288,
-    SPELL_HUNTER_WEAVING_R2                         = 81289,
-    SPELL_HUNTER_WEAVING_AUTOSHOT_R1                = 81290,
-    SPELL_HUNTER_WEAVING_AUTOSHOT_R2                = 81291
+    SPELL_HUNTER_PET_HEART_OF_THE_PHOENIX_DEBUFF = 55711,
+    SPELL_HUNTER_PET_CARRION_FEEDER_TRIGGERED = 54045,
+    SPELL_HUNTER_PIERCING_SHOTS = 63468,
+    SPELL_HUNTER_READINESS = 23989,
+    SPELL_HUNTER_SNIPER_TRAINING_R1 = 53302,
+    SPELL_HUNTER_SNIPER_TRAINING_BUFF_R1 = 64418,
+    SPELL_HUNTER_T9_4P_GREATNESS = 68130,
+    SPELL_HUNTER_VICIOUS_VIPER = 61609,
+    SPELL_HUNTER_VIPER_ATTACK_SPEED = 60144,
+    SPELL_DRAENEI_GIFT_OF_THE_NAARU = 59543,
+    SPELL_ROAR_OF_SACRIFICE_TRIGGERED = 67481,
+    SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER = 56453,
+    SPELL_HUNTER_LOCK_AND_LOAD_MARKER = 67544,
+    SPELL_HUNTER_KILL_COMMAND_HUNTER = 34027,
+    SPELL_HUNTER_THRILL_OF_THE_HUNT_MANA = 34720,
+    SPELL_REPLENISHMENT = 57669,
+    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R1 = 56654,
+    SPELL_HUNTER_RAPID_RECUPERATION_MANA_R2 = 58882,
+    SPELL_HUNTER_GLYPH_OF_MEND_PET_HAPPINESS = 57894,
+    SPELL_HUNTER_EXPLOSIVE_SHOT_DAMAGE = 53352,
+    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R1 = 60096,
+    SPELL_HUNTER_FEEDING_FRENZY_BUFF_R2 = 60097,
+    SPELL_HUNTER_WYVERN_STING_DOT_R1 = 24131,
+    SPELL_HUNTER_WYVERN_STING_DOT_R2 = 24134,
+    SPELL_HUNTER_WYVERN_STING_DOT_R3 = 24135,
+    SPELL_HUNTER_WYVERN_STING_DOT_R4 = 27069,
+    SPELL_HUNTER_WYVERN_STING_DOT_R5 = 49009,
+    SPELL_HUNTER_WYVERN_STING_DOT_R6 = 49010,
+    SPELL_HUNTER_HUNTERS_MARK = 1130,
+    SPELL_HUNTER_IMPROVED_HUNTERS_MARK = 19421,
+    SPELL_HUNTER_MONGOOSE_BITE = 81285,
+    SPELL_HUNTER_MONGOOSE_BITE_MAIN = 81286,
+    SPELL_HUNTER_MONGOOSE_BITE_OFF = 81287,
+    SPELL_HUNTER_MONGOOSE_CD_REDUCE = 81290,
+    SPELL_HUNTER_SCORPID_HEALING = 81291,
+    SPELL_HUNTER_ROUGH_PLAY_BUFF_R1 = 81294,
+    SPELL_HUNTER_ROUGH_PLAY_BUFF_R2 = 81295,
+    SPELL_HUNTER_OUTMANEUVER = 81297,
+    SPELL_HUNTER_WEAVING_R1 = 81288,
+    SPELL_HUNTER_WEAVING_R2 = 81289,
+    SPELL_HUNTER_WEAVING_AUTOSHOT_R1 = 81290,
+    SPELL_HUNTER_WEAVING_AUTOSHOT_R2 = 81291
 };
 
 enum HunterSpellIcons
 {
-    SPELL_ICON_HUNTER_PET_IMPROVED_COWER            = 958
+    SPELL_ICON_HUNTER_PET_IMPROVED_COWER = 958
 };
 
 // 13161 - Aspect of the Beast
@@ -180,12 +178,12 @@ class spell_hun_ascpect_of_the_viper : public AuraScript
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
-        {
-            SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE,
-            SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER,
-            SPELL_HUNTER_VIPER_ATTACK_SPEED,
-            SPELL_HUNTER_VICIOUS_VIPER
-        });
+            {
+                SPELL_HUNTER_ASPECT_OF_THE_VIPER_ENERGIZE,
+                SPELL_HUNTER_GLYPH_OF_ASPECT_OF_THE_VIPER,
+                SPELL_HUNTER_VIPER_ATTACK_SPEED,
+                SPELL_HUNTER_VICIOUS_VIPER
+            });
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
@@ -630,10 +628,10 @@ class spell_hun_lock_and_load : public AuraScript
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
-        {
-            SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER,
-            SPELL_HUNTER_LOCK_AND_LOAD_MARKER
-        });
+            {
+                SPELL_HUNTER_LOCK_AND_LOAD_TRIGGER,
+                SPELL_HUNTER_LOCK_AND_LOAD_MARKER
+            });
     }
 
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -692,11 +690,11 @@ class spell_hun_masters_call : public SpellScript
     bool Validate(SpellInfo const* spellInfo) override
     {
         return ValidateSpellInfo(
-        {
-            SPELL_HUNTER_MASTERS_CALL_TRIGGERED,
-            static_cast<uint32>(spellInfo->GetEffect(EFFECT_0).CalcValue()),
-            static_cast<uint32>(spellInfo->GetEffect(EFFECT_1).CalcValue())
-        });
+            {
+                SPELL_HUNTER_MASTERS_CALL_TRIGGERED,
+                static_cast<uint32>(spellInfo->GetEffect(EFFECT_0).CalcValue()),
+                static_cast<uint32>(spellInfo->GetEffect(EFFECT_1).CalcValue())
+            });
     }
 
     bool Load() override
@@ -979,10 +977,10 @@ class spell_hun_rapid_recuperation_trigger : public AuraScript
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
-        {
-            SPELL_HUNTER_RAPID_RECUPERATION_MANA_R1,
-            SPELL_HUNTER_RAPID_RECUPERATION_MANA_R2
-        });
+            {
+                SPELL_HUNTER_RAPID_RECUPERATION_MANA_R1,
+                SPELL_HUNTER_RAPID_RECUPERATION_MANA_R2
+            });
     }
 
     void HandleRapidFireProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
@@ -1149,8 +1147,8 @@ class spell_hun_sniper_training : public AuraScript
         {
             int32 baseAmount = aurEff->GetBaseAmount();
             int32 amount = playerTarget->isMoving() ?
-            playerTarget->CalculateSpellDamage(aurEff->GetSpellEffectInfo(), &baseAmount) :
-            aurEff->GetAmount() - 1;
+                playerTarget->CalculateSpellDamage(aurEff->GetSpellEffectInfo(), &baseAmount) :
+                aurEff->GetAmount() - 1;
             aurEff->SetAmount(amount);
         }
     }
@@ -1329,10 +1327,10 @@ class spell_hun_viper_attack_speed : public AuraScript
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo(
-        {
-            SPELL_HUNTER_ASPECT_OF_THE_VIPER,
-            SPELL_HUNTER_VICIOUS_VIPER
-        });
+            {
+                SPELL_HUNTER_ASPECT_OF_THE_VIPER,
+                SPELL_HUNTER_VICIOUS_VIPER
+            });
     }
 
     void OnApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
@@ -1662,7 +1660,7 @@ class spell_hun_weaving : public AuraScript
     void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         uint8 rank = GetSpellInfo()->GetRank();
-        if(rank == 1)
+        if (rank == 1)
             GetCaster()->CastSpell(GetCaster(), SPELL_HUNTER_WEAVING_AUTOSHOT_R1);
         else
             GetCaster()->CastSpell(GetCaster(), SPELL_HUNTER_WEAVING_AUTOSHOT_R2);
@@ -1685,11 +1683,6 @@ class spell_hun_weaving : public AuraScript
 };
 
 // 81382 - trap cd remove
-namespace
-{
-    constexpr std::array<uint32, 8> ImmolationTrapSpellIds = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
-}
-
 class spell_hun_trap_cd_reduce : public SpellScript
 {
     PrepareSpellScript(spell_hun_trap_cd_reduce);
@@ -1705,103 +1698,52 @@ class spell_hun_trap_cd_reduce : public SpellScript
         if (!caster)
             return;
 
-        if (!caster->GetSpellHistory())
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
             return;
 
-        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds.front());
+        static constexpr uint32 ImmolationTrapSpellIds[] = { 49056, 49055, 27023, 14305, 14304, 14303, 14302, 13795 };
+
+        SpellInfo const* categorySource = sSpellMgr->AssertSpellInfo(ImmolationTrapSpellIds[0]);
         uint32 trapCategory = categorySource->GetCategory();
         if (!trapCategory)
             return;
 
-        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
-        ObjectGuid const casterGuid = caster->GetGUID();
-
-
-        auto const reduceCooldown = [trapCategory, cooldownReduction](Player* player, bool fromDelayedCall) -> bool
+        uint32 trapSpellId = spellHistory->ResetCategoryCooldown(trapCategory, true);
+        if (!trapSpellId)
         {
-            SpellHistory* history = player->GetSpellHistory();
-            if (!history)
-                return true;
-
-            SpellInfo const* trapInfo = nullptr;
-            uint32 trapSpellId = 0;
-
             for (uint32 trapSpellCandidate : ImmolationTrapSpellIds)
             {
-                if (!player->HasSpell(trapSpellCandidate))
-                    continue;
-
-                SpellInfo const* candidateInfo = sSpellMgr->GetSpellInfo(trapSpellCandidate);
-                if (!candidateInfo)
-                    continue;
-
-                if (candidateInfo->GetCategory() != trapCategory)
+                if (!caster->HasSpell(trapSpellCandidate))
                     continue;
 
                 trapSpellId = trapSpellCandidate;
-                trapInfo = candidateInfo;
-
-                if (history->HasCooldown(candidateInfo))
-                    break;
+                break;
             }
+        }
 
-            if (!trapInfo)
-                return true;
-
-            bool const hasActiveCooldown = history->HasCooldown(trapInfo);
-            uint32 effectiveCooldown = history->GetRemainingCooldown(trapInfo);
-
-            if (!effectiveCooldown)
-            {
-                if (!fromDelayedCall && !hasActiveCooldown)
-                    return false;
-
-                int32 baseCooldown = 0;
-                int32 categoryCooldown = 0;
-                SpellHistory::GetCooldownDurations(trapInfo, 0, &baseCooldown, nullptr, &categoryCooldown);
-
-                if (baseCooldown > 0)
-                    effectiveCooldown = uint32(baseCooldown);
-                else if (categoryCooldown > 0)
-                    effectiveCooldown = uint32(categoryCooldown);
-                else if (trapInfo->GetRecoveryTime() > 0)
-                    effectiveCooldown = trapInfo->GetRecoveryTime();
-                else if (trapInfo->GetCategoryRecoveryTime() > 0)
-                    effectiveCooldown = trapInfo->GetCategoryRecoveryTime();
-            }
-
-            if (!effectiveCooldown)
-                return true;
-
-            uint32 const newCooldown = cooldownReduction >= effectiveCooldown ? 0 : effectiveCooldown - cooldownReduction;
-
-            history->ResetCategoryCooldown(trapCategory, true);
-
-            if (!newCooldown)
-                return true;
-
-            SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
-            SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
-            history->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
-
-            WorldPacket data;
-            history->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
-            player->SendDirectMessage(&data);
-            return true;
-        };
-
-        if (reduceCooldown(caster, false))
+        if (!trapSpellId)
             return;
 
-        using namespace std::chrono_literals;
-        caster->m_Events.AddEventAtOffset([casterGuid, reduceCooldown]()
-        {
-            Player* player = ObjectAccessor::FindConnectedPlayer(casterGuid);
-            if (!player)
-                return;
+        SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(trapSpellId);
+        if (!trapInfo)
+            return;
 
-            reduceCooldown(player, true);
-        }, 1ms);
+        uint32 const baseCooldown = trapInfo->GetRecoveryTime();
+        uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
+        if (baseCooldown <= cooldownReduction)
+            return;
+
+        uint32 const newCooldown = baseCooldown - cooldownReduction;
+
+        SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+        SpellHistory::Clock::time_point const cooldownEnd = now + std::chrono::milliseconds(newCooldown);
+
+        spellHistory->AddCooldown(trapSpellId, 0, cooldownEnd, trapCategory, cooldownEnd);
+
+        WorldPacket data;
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, trapSpellId, newCooldown);
+        caster->SendDirectMessage(&data);
     }
 
     void Register() override
