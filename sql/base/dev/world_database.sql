@@ -374,6 +374,47 @@ CREATE TABLE `creature_addon` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `creature_playerbytes`
+--
+
+DROP TABLE IF EXISTS `creature_playerbytes`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `creature_playerbytes` (
+  `guid` int unsigned NOT NULL,
+  `race` tinyint unsigned NOT NULL DEFAULT '0',
+  `class` tinyint unsigned NOT NULL DEFAULT '0',
+  `gender` tinyint unsigned NOT NULL DEFAULT '0',
+  `playerBytes` int unsigned NOT NULL DEFAULT '0',
+  `playerBytes2` int unsigned NOT NULL DEFAULT '0',
+  `guildId` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem0` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem1` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem2` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem3` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem4` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem5` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem6` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem7` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem8` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem9` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem10` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem11` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem12` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem13` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem14` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem15` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem16` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem17` int unsigned NOT NULL DEFAULT '0',
+  `visibleItem18` int unsigned NOT NULL DEFAULT '0',
+  `virtualItem0` int unsigned NOT NULL DEFAULT '0',
+  `virtualItem1` int unsigned NOT NULL DEFAULT '0',
+  `virtualItem2` int unsigned NOT NULL DEFAULT '0',
+  PRIMARY KEY (`guid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `creature_classlevelstats`
 --
 

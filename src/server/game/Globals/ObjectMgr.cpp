@@ -1408,7 +1408,11 @@ void ObjectMgr::LoadCreaturePlayerBytes()
 
     _creaturePlayerBytesStore.clear();
 
-    QueryResult result = WorldDatabase.Query("SELECT guid, race, class, gender, playerBytes, playerBytes2 FROM creature_playerbytes");
+    QueryResult result = WorldDatabase.Query(
+        "SELECT guid, race, class, gender, playerBytes, playerBytes2, guildId, "
+        "visibleItem0, visibleItem1, visibleItem2, visibleItem3, visibleItem4, visibleItem5, visibleItem6, visibleItem7, "
+        "visibleItem8, visibleItem9, visibleItem10, visibleItem11, visibleItem12, visibleItem13, visibleItem14, visibleItem15, "
+        "visibleItem16, visibleItem17, visibleItem18, virtualItem0, virtualItem1, virtualItem2 FROM creature_playerbytes");
 
     if (!result)
     {
@@ -1437,6 +1441,14 @@ void ObjectMgr::LoadCreaturePlayerBytes()
         customization.gender = fields[3].GetUInt8();
         customization.playerBytes = fields[4].GetUInt32();
         customization.playerBytes2 = fields[5].GetUInt32();
+        customization.guildId = fields[6].GetUInt32();
+
+        uint32 column = 7;
+        for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+            customization.visibleItemDisplayIds[slot] = fields[column++].GetUInt32();
+
+        for (uint8 slot = 0; slot < MAX_EQUIPMENT_ITEMS; ++slot)
+            customization.virtualItemIds[slot] = fields[column++].GetUInt32();
 
         ++count;
     }
@@ -8571,23 +8583,18 @@ void ObjectMgr::DeleteCreatureData(ObjectGuid::LowType guid)
     _creaturePlayerBytesStore.erase(guid);
 }
 
-void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2)
+void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, CreaturePlayerBytes const* appearance)
 {
     if (!guid)
         return;
 
-    if (!playerBytes && !playerBytes2)
+    if (!appearance)
     {
         _creaturePlayerBytesStore.erase(guid);
         return;
     }
 
-    CreaturePlayerBytes& customization = _creaturePlayerBytesStore[guid];
-    customization.race = race;
-    customization.playerClass = playerClass;
-    customization.gender = gender;
-    customization.playerBytes = playerBytes;
-    customization.playerBytes2 = playerBytes2;
+    _creaturePlayerBytesStore[guid] = *appearance;
 }
 
 void ObjectMgr::DeleteGameObjectData(ObjectGuid::LowType guid)
