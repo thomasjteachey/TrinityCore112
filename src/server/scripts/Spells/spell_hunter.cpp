@@ -1756,9 +1756,8 @@ class spell_hun_trap_cd_reduce : public SpellScript
 
             if (!effectiveCooldown)
             {
-                int32 baseCooldown = 0;
-                int32 categoryCooldown = 0;
-                SpellHistory::GetCooldownDurations(trapInfo, 0, &baseCooldown, nullptr, &categoryCooldown);
+                int32 const baseCooldown = int32(trapInfo->RecoveryTime);
+                int32 const categoryCooldown = int32(trapInfo->CategoryRecoveryTime);
 
                 if (baseCooldown > 0)
                     effectiveCooldown = uint32(baseCooldown);
@@ -1766,8 +1765,8 @@ class spell_hun_trap_cd_reduce : public SpellScript
                     effectiveCooldown = uint32(categoryCooldown);
                 else if (trapInfo->GetRecoveryTime() > 0)
                     effectiveCooldown = trapInfo->GetRecoveryTime();
-                else if (trapInfo->GetCategoryRecoveryTime() > 0)
-                    effectiveCooldown = trapInfo->GetCategoryRecoveryTime();
+                else if (trapInfo->CategoryRecoveryTime > 0)
+                    effectiveCooldown = trapInfo->CategoryRecoveryTime;
             }
 
             if (!effectiveCooldown)
