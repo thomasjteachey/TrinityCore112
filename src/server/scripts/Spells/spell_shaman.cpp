@@ -2158,8 +2158,58 @@ class spell_totem_cd_reduce : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        uint32 cdreduce = GetEffectValue();
-        GetCaster()->GetSpellHistory()->ModifyCooldown(19577, cdreduce);
+        int32 const cooldownReduction = GetEffectValue();
+        if (!cooldownReduction)
+            return;
+
+        SpellHistory* spellHistory = GetCaster()->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        uint32 const candidateTotemSpellIds[] =
+        {
+            2484,  // Earthbind Totem
+            8177,  // Grounding Totem
+            1535,  // Fire Nova Totem (Rank 1)
+            8498,  // Fire Nova Totem (Rank 2)
+            8499,  // Fire Nova Totem (Rank 3)
+            11314, // Fire Nova Totem (Rank 4)
+            11315  // Fire Nova Totem (Rank 5)
+        };
+
+        SpellInfo const* bestSpellInfo = nullptr;
+        uint32 bestRemainingCooldown = 0;
+
+        for (uint32 spellId : candidateTotemSpellIds)
+        {
+            SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(spellId);
+            SpellInfo const* effectiveSpellInfo = spellInfo;
+
+            if (!spellHistory->HasCooldown(spellId, 0, true))
+            {
+                uint32 const categoryId = spellInfo->GetCategory();
+                if (!categoryId)
+                    continue;
+
+                uint32 const categorySpellId = spellHistory->GetCategoryCooldownSpellId(categoryId);
+                if (!categorySpellId)
+                    continue;
+
+                effectiveSpellInfo = sSpellMgr->AssertSpellInfo(categorySpellId);
+            }
+
+            uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(effectiveSpellInfo);
+            if (remainingCooldown > bestRemainingCooldown)
+            {
+                bestRemainingCooldown = remainingCooldown;
+                bestSpellInfo = effectiveSpellInfo;
+            }
+        }
+
+        if (!bestSpellInfo || !bestRemainingCooldown)
+            return;
+
+        spellHistory->ModifyCooldown(bestSpellInfo->Id, cooldownReduction);
     }
 
     void Register() override
