@@ -537,6 +537,7 @@ typedef std::unordered_map<uint32, CreatureTemplate> CreatureTemplateContainer;
 typedef std::unordered_map<uint32, CreatureAddon> CreatureTemplateAddonContainer;
 typedef std::unordered_map<ObjectGuid::LowType, CreatureData> CreatureDataContainer;
 typedef std::unordered_map<ObjectGuid::LowType, CreatureAddon> CreatureAddonContainer;
+typedef std::unordered_map<ObjectGuid::LowType, CreaturePlayerBytes> CreaturePlayerBytesContainer;
 typedef std::unordered_map<uint16, CreatureBaseStats> CreatureBaseStatsContainer;
 typedef std::unordered_map<uint8, EquipmentInfo> EquipmentInfoContainerInternal;
 typedef std::unordered_map<uint32, EquipmentInfoContainerInternal> EquipmentInfoContainer;
@@ -979,6 +980,7 @@ class TC_GAME_API ObjectMgr
         static void ChooseCreatureFlags(CreatureTemplate const* cinfo, uint32* npcflag, uint32* unit_flags, uint32* dynamicflags, CreatureData const* data = nullptr);
         EquipmentInfo const* GetEquipmentInfo(uint32 entry, int8& id) const;
         CreatureAddon const* GetCreatureAddon(ObjectGuid::LowType lowguid) const;
+        CreaturePlayerBytes const* GetCreaturePlayerBytes(ObjectGuid::LowType lowguid) const;
         GameObjectAddon const* GetGameObjectAddon(ObjectGuid::LowType lowguid) const;
         GameObjectTemplateAddon const* GetGameObjectTemplateAddon(uint32 entry) const;
         GameObjectOverride const* GetGameObjectOverride(ObjectGuid::LowType spawnId) const;
@@ -1161,6 +1163,7 @@ class TC_GAME_API ObjectMgr
         void LoadLinkedRespawn();
         bool SetCreatureLinkedRespawn(ObjectGuid::LowType guid, ObjectGuid::LowType linkedGuid);
         void LoadCreatureAddons();
+        void LoadCreaturePlayerBytes();
         void LoadGameObjectAddons();
         void LoadCreatureModelInfo();
         void LoadPlayerTotemModels();
@@ -1344,6 +1347,7 @@ class TC_GAME_API ObjectMgr
         }
         CreatureData& NewOrExistCreatureData(ObjectGuid::LowType spawnId) { return _creatureDataStore[spawnId]; }
         void DeleteCreatureData(ObjectGuid::LowType spawnId);
+        void SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2);
         ObjectGuid GetLinkedRespawnGuid(ObjectGuid spawnId) const
         {
             LinkedRespawnContainer::const_iterator itr = _linkedRespawnStore.find(spawnId);
@@ -1670,6 +1674,7 @@ class TC_GAME_API ObjectMgr
         CreatureTemplateContainer _creatureTemplateStore;
         CreatureModelContainer _creatureModelStore;
         CreatureAddonContainer _creatureAddonStore;
+        CreaturePlayerBytesContainer _creaturePlayerBytesStore;
         CreatureTemplateAddonContainer _creatureTemplateAddonStore;
         std::unordered_map<ObjectGuid::LowType, CreatureMovementData> _creatureMovementOverrides;
         GameObjectAddonContainer _gameObjectAddonStore;

@@ -198,6 +198,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         CreatureTemplate const* GetCreatureTemplate() const { return m_creatureInfo; }
         CreatureData const* GetCreatureData() const { return m_creatureData; }
         CreatureAddon const* GetCreatureAddon() const;
+        CreaturePlayerBytes const* GetCreaturePlayerBytes() const;
 
         std::string const& GetAIName() const;
         std::string GetScriptName() const;
@@ -446,6 +447,9 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
 
         /* Spell focus system */
         void ReacquireSpellFocusTarget();
+        void ApplyPlayerAppearance(CreaturePlayerBytes const& appearance, bool updateModel = true);
+        void SetPlayerAppearance(uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2, bool updateModel = true);
+        void ClearPlayerAppearance();
         struct
         {
             ::Spell const* Spell = nullptr;
@@ -462,6 +466,9 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         bool _regenerateHealthLock; // Dynamically set
 
         bool _isMissingCanSwimFlagOutOfCombat;
+
+        bool _hasPlayerAppearance;
+        CreaturePlayerBytes _playerAppearance;
 };
 
 class TC_GAME_API AssistDelayEvent : public BasicEvent

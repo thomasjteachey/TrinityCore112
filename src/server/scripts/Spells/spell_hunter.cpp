@@ -1716,6 +1716,7 @@ class spell_hun_trap_cd_reduce : public SpellScript
         uint32 const cooldownReduction = uint32(std::max<int32>(0, GetEffectValue())) * IN_MILLISECONDS;
         ObjectGuid const casterGuid = caster->GetGUID();
 
+
         auto const reduceCooldown = [trapCategory, cooldownReduction](Player* player, bool fromDelayedCall) -> bool
         {
             SpellHistory* history = player->GetSpellHistory();

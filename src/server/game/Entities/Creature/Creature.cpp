@@ -267,7 +267,8 @@ Creature::Creature(bool isWorldObject): Unit(isWorldObject), MapObject(), m_grou
     m_defaultMovementType(IDLE_MOTION_TYPE), m_spawnId(0), m_equipmentId(0), m_originalEquipmentId(0), m_AlreadyCallAssistance(false), m_AlreadySearchedAssistance(false), m_cannotReachTarget(false), m_cannotReachTimer(0),
     m_meleeDamageSchoolMask(SPELL_SCHOOL_MASK_NORMAL), m_originalEntry(0), m_homePosition(), m_transportHomePosition(), m_creatureInfo(nullptr), m_creatureData(nullptr), _waypointPathId(0), _currentWaypointNodeInfo(0, 0),
     m_formation(nullptr), m_triggerJustAppeared(true), m_respawnCompatibilityMode(false), _lastDamagedTime(0),
-    _regenerateHealth(true), _regenerateHealthLock(false), _isMissingCanSwimFlagOutOfCombat(false)
+    _regenerateHealth(true), _regenerateHealthLock(false), _isMissingCanSwimFlagOutOfCombat(false),
+    _hasPlayerAppearance(false)
 {
     m_regenTimer = CREATURE_REGEN_INTERVAL;
     m_valuesCount = UNIT_END;
@@ -640,6 +641,18 @@ bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/,
     InitializeMovementFlags();
 
     LoadCreaturesAddon();
+
+    if (CreaturePlayerBytes const* customization = GetCreaturePlayerBytes())
+    {
+        ApplyPlayerAppearance(*customization, false);
+
+        if (CreatureModelInfo const* modelInfo = sObjectMgr->GetCreatureModelInfo(GetDisplayId()))
+        {
+            SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, modelInfo->bounding_radius);
+            SetFloatValue(UNIT_FIELD_COMBATREACH, modelInfo->combat_reach);
+        }
+    }
+
     LoadTemplateImmunities();
 
     GetThreatManager().EvaluateSuppressed();
@@ -1335,6 +1348,23 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     uint32 npcflag = GetNpcFlags();
     uint32 unit_flags = GetUnitFlags();
     uint32 dynamicflags = GetDynamicFlags();
+    uint32 const currentPlayerBytes = GetUInt32Value(PLAYER_BYTES);
+    uint32 const currentPlayerBytes2 = GetUInt32Value(PLAYER_BYTES_2);
+
+    uint8 playerRace = RACE_NONE;
+    uint8 playerClass = CLASS_NONE;
+    uint8 playerGender = GENDER_NONE;
+    uint32 playerBytes = currentPlayerBytes;
+    uint32 playerBytes2 = currentPlayerBytes2;
+
+    if (_hasPlayerAppearance)
+    {
+        playerRace = _playerAppearance.race;
+        playerClass = _playerAppearance.playerClass;
+        playerGender = _playerAppearance.gender;
+        playerBytes = _playerAppearance.playerBytes;
+        playerBytes2 = _playerAppearance.playerBytes2;
+    }
 
     // check if it's a custom model and if not, use 0 for displayId
     CreatureTemplate const* cinfo = GetCreatureTemplate();
@@ -1420,7 +1450,25 @@ void Creature::SaveToDB(uint32 mapid, uint8 spawnMask, uint32 phaseMask)
     stmt->setUInt32(index++, dynamicflags);
     trans->Append(stmt);
 
+    stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
+    stmt->setUInt32(0, m_spawnId);
+    trans->Append(stmt);
+
+
+    if (_hasPlayerAppearance)
+    {
+        stmt = WorldDatabase.GetPreparedStatement(WORLD_INS_CREATURE_PLAYERBYTES);
+        stmt->setUInt32(0, m_spawnId);
+        stmt->setUInt8(1, playerRace);
+        stmt->setUInt8(2, playerClass);
+        stmt->setUInt8(3, playerGender);
+        stmt->setUInt32(4, playerBytes);
+        stmt->setUInt32(5, playerBytes2);
+        trans->Append(stmt);
+    }
+
     WorldDatabase.CommitTransaction(trans);
+    sObjectMgr->SetCreaturePlayerBytes(m_spawnId, playerRace, playerClass, playerGender, playerBytes, playerBytes2);
 }
 
 void Creature::SelectLevel()
@@ -1794,6 +1842,24 @@ namespace
         return virtualItems;
     }
 
+    uint8 ExtractCustomizationByte(uint32 value, uint8 offset)
+    {
+        return uint8((value >> (offset * 8)) & 0xFF);
+    }
+
+    uint32 PackPlayerBytes(uint8 skin, uint8 face, uint8 hairStyle, uint8 hairColor)
+    {
+        return uint32(skin) << (PLAYER_BYTES_OFFSET_SKIN_ID * 8)
+            | uint32(face) << (PLAYER_BYTES_OFFSET_FACE_ID * 8)
+            | uint32(hairStyle) << (PLAYER_BYTES_OFFSET_HAIR_STYLE_ID * 8)
+            | uint32(hairColor) << (PLAYER_BYTES_OFFSET_HAIR_COLOR_ID * 8);
+    }
+
+    uint32 PackPlayerBytes2(uint8 facialStyle)
+    {
+        return uint32(facialStyle) << (PLAYER_BYTES_2_OFFSET_FACIAL_STYLE * 8);
+    }
+
     struct PlayerAppearanceKey
     {
         uint8 Race;
@@ -1944,6 +2010,75 @@ namespace
     }
 }
 
+void Creature::ClearPlayerAppearance()
+{
+    _hasPlayerAppearance = false;
+    _playerAppearance = {};
+}
+
+void Creature::ApplyPlayerAppearance(CreaturePlayerBytes const& appearance, bool updateModel)
+{
+    if (!appearance.race || !Player::IsValidGender(appearance.gender))
+    {
+        ClearPlayerAppearance();
+        return;
+    }
+
+    PlayerInfo const* info = sObjectMgr->GetPlayerInfo(appearance.race, appearance.playerClass);
+    if (!info)
+    {
+        ClearPlayerAppearance();
+        return;
+    }
+
+    _playerAppearance = appearance;
+    _hasPlayerAppearance = true;
+
+    if (GetValuesCount() > PLAYER_BYTES)
+        SetUInt32Value(PLAYER_BYTES, appearance.playerBytes);
+
+    if (GetValuesCount() > PLAYER_BYTES_2)
+        SetUInt32Value(PLAYER_BYTES_2, appearance.playerBytes2);
+
+    SetRace(appearance.race);
+    SetClass(appearance.playerClass);
+    SetGender(Gender(appearance.gender));
+
+    if (!updateModel)
+        return;
+
+    uint8 const skin = ExtractCustomizationByte(appearance.playerBytes, PLAYER_BYTES_OFFSET_SKIN_ID);
+    uint8 const face = ExtractCustomizationByte(appearance.playerBytes, PLAYER_BYTES_OFFSET_FACE_ID);
+    uint8 const hairStyle = ExtractCustomizationByte(appearance.playerBytes, PLAYER_BYTES_OFFSET_HAIR_STYLE_ID);
+    uint8 const hairColor = ExtractCustomizationByte(appearance.playerBytes, PLAYER_BYTES_OFFSET_HAIR_COLOR_ID);
+    uint8 const facialStyle = ExtractCustomizationByte(appearance.playerBytes2, PLAYER_BYTES_2_OFFSET_FACIAL_STYLE);
+
+    uint32 displayId = appearance.gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
+    if (uint32 const customizedDisplayId = FindPlayerDisplayId(appearance.race, appearance.gender, skin, face, hairStyle, hairColor, facialStyle))
+        displayId = customizedDisplayId;
+
+    SetDisplayId(displayId);
+    SetNativeDisplayId(displayId);
+
+    if (CreatureModelInfo const* modelInfo = sObjectMgr->GetCreatureModelInfo(displayId))
+    {
+        SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, modelInfo->bounding_radius);
+        SetFloatValue(UNIT_FIELD_COMBATREACH, modelInfo->combat_reach);
+    }
+}
+
+void Creature::SetPlayerAppearance(uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2, bool updateModel)
+{
+    CreaturePlayerBytes appearance;
+    appearance.race = race;
+    appearance.playerClass = playerClass;
+    appearance.gender = gender;
+    appearance.playerBytes = playerBytes;
+    appearance.playerBytes2 = playerBytes2;
+
+    ApplyPlayerAppearance(appearance, updateModel);
+}
+
 bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, bool copyEquipment, bool persist)
 {
     if (!player)
@@ -1958,9 +2093,7 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, player->GetFloatValue(UNIT_FIELD_BOUNDINGRADIUS));
     SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
 
-    SetRace(player->GetRace());
-    SetClass(player->GetClass());
-    SetGender(player->GetGender());
+    SetPlayerAppearance(player->GetRace(), player->GetClass(), player->GetGender(), player->GetUInt32Value(PLAYER_BYTES), player->GetUInt32Value(PLAYER_BYTES_2), false);
     SetPowerType(player->GetPowerType(), false);
 
     SetStandState(player->GetStandState());
@@ -2013,30 +2146,18 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
     if (copyName)
         SetName(name);
 
-    PlayerInfo const* info = sObjectMgr->GetPlayerInfo(race, playerClass);
-    if (!info)
-        return false;
-
     if (!Player::IsValidGender(gender))
         return false;
 
-    SetRace(race);
-    SetClass(playerClass);
-    SetGender(Gender(gender));
+    if (!sObjectMgr->GetPlayerInfo(race, playerClass))
+        return false;
 
-    uint32 displayId = gender == GENDER_FEMALE ? info->displayId_f : info->displayId_m;
-    if (uint32 customizedDisplayId = FindPlayerDisplayId(race, gender, skin, face, hairStyle, hairColor, facialStyle))
-        displayId = customizedDisplayId;
-    SetDisplayId(displayId);
-    SetNativeDisplayId(displayId);
+    SetPlayerAppearance(race, playerClass, gender, PackPlayerBytes(skin, face, hairStyle, hairColor), PackPlayerBytes2(facialStyle));
+
+    if (!_hasPlayerAppearance)
+        return false;
 
     SetObjectScale(1.0f);
-
-    if (CreatureModelInfo const* modelInfo = sObjectMgr->GetCreatureModelInfo(displayId))
-    {
-        SetFloatValue(UNIT_FIELD_BOUNDINGRADIUS, modelInfo->bounding_radius);
-        SetFloatValue(UNIT_FIELD_COMBATREACH, modelInfo->combat_reach);
-    }
 
     if (ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(playerClass))
         SetPowerType(Powers(classEntry->DisplayPower), false);
@@ -2124,6 +2245,10 @@ bool Creature::hasInvolvedQuest(uint32 quest_id) const
     trans->Append(stmt);
 
     stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_ADDON);
+    stmt->setUInt32(0, spawnId);
+    trans->Append(stmt);
+
+    stmt = WorldDatabase.GetPreparedStatement(WORLD_DEL_CREATURE_PLAYERBYTES);
     stmt->setUInt32(0, spawnId);
     trans->Append(stmt);
 
@@ -2832,6 +2957,16 @@ CreatureAddon const* Creature::GetCreatureAddon() const
 
     // dependent from difficulty mode entry
     return sObjectMgr->GetCreatureTemplateAddon(GetCreatureTemplate()->Entry);
+}
+
+CreaturePlayerBytes const* Creature::GetCreaturePlayerBytes() const
+{
+    if (_hasPlayerAppearance)
+        return &_playerAppearance;
+    if (m_spawnId)
+        return sObjectMgr->GetCreaturePlayerBytes(m_spawnId);
+
+    return nullptr;
 }
 
 //creature_addon table

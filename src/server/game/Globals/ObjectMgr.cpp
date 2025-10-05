@@ -1402,6 +1402,49 @@ void ObjectMgr::LoadCreatureAddons()
     TC_LOG_INFO("server.loading", ">> Loaded {} creature addons in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+void ObjectMgr::LoadCreaturePlayerBytes()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _creaturePlayerBytesStore.clear();
+
+    QueryResult result = WorldDatabase.Query("SELECT guid, race, class, gender, playerBytes, playerBytes2 FROM creature_playerbytes");
+
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 creature player customization entries. DB table `creature_playerbytes` is empty.");
+        return;
+    }
+
+    uint32 count = 0;
+
+    do
+    {
+        Field* fields = result->Fetch();
+
+        ObjectGuid::LowType guid = fields[0].GetUInt32();
+
+        CreatureData const* creData = GetCreatureData(guid);
+        if (!creData)
+        {
+            TC_LOG_ERROR("sql.sql", "Creature (GUID: {}) does not exist but has a record in `creature_playerbytes`", guid);
+            continue;
+        }
+
+        CreaturePlayerBytes& customization = _creaturePlayerBytesStore[guid];
+        customization.race = fields[1].GetUInt8();
+        customization.playerClass = fields[2].GetUInt8();
+        customization.gender = fields[3].GetUInt8();
+        customization.playerBytes = fields[4].GetUInt32();
+        customization.playerBytes2 = fields[5].GetUInt32();
+
+        ++count;
+    }
+    while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} creature player customization entries in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+}
+
 void ObjectMgr::LoadGameObjectAddons()
 {
     uint32 oldMSTime = getMSTime();
@@ -1473,6 +1516,15 @@ CreatureAddon const* ObjectMgr::GetCreatureAddon(ObjectGuid::LowType lowguid) co
 {
     CreatureAddonContainer::const_iterator itr = _creatureAddonStore.find(lowguid);
     if (itr != _creatureAddonStore.end())
+        return &(itr->second);
+
+    return nullptr;
+}
+
+CreaturePlayerBytes const* ObjectMgr::GetCreaturePlayerBytes(ObjectGuid::LowType lowguid) const
+{
+    CreaturePlayerBytesContainer::const_iterator itr = _creaturePlayerBytesStore.find(lowguid);
+    if (itr != _creaturePlayerBytesStore.end())
         return &(itr->second);
 
     return nullptr;
@@ -8516,6 +8568,26 @@ void ObjectMgr::DeleteCreatureData(ObjectGuid::LowType guid)
     }
 
     _creatureDataStore.erase(guid);
+    _creaturePlayerBytesStore.erase(guid);
+}
+
+void ObjectMgr::SetCreaturePlayerBytes(ObjectGuid::LowType guid, uint8 race, uint8 playerClass, uint8 gender, uint32 playerBytes, uint32 playerBytes2)
+{
+    if (!guid)
+        return;
+
+    if (!playerBytes && !playerBytes2)
+    {
+        _creaturePlayerBytesStore.erase(guid);
+        return;
+    }
+
+    CreaturePlayerBytes& customization = _creaturePlayerBytesStore[guid];
+    customization.race = race;
+    customization.playerClass = playerClass;
+    customization.gender = gender;
+    customization.playerBytes = playerBytes;
+    customization.playerBytes2 = playerBytes2;
 }
 
 void ObjectMgr::DeleteGameObjectData(ObjectGuid::LowType guid)
