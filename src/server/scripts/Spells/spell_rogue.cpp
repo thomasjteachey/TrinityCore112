@@ -59,7 +59,11 @@ enum RogueSpells
     SPELL_ROGUE_STEALTH                         =  1784,
     SPELL_ROGUE_IMPROVED_SAP                    = 14095,
     SPELL_ROGUE_DEADLY_BREW                     = 81301,
-    SPELL_ROGUE_SEAL_FATE                       = 14186
+    SPELL_ROGUE_SEAL_FATE                       = 14186,
+    SPELL_ROGUE_RUTHLESSNESS_R1                 = 14156,
+    SPELL_ROGUE_RUTHLESSNESS_R2                 = 14160,
+    SPELL_ROGUE_RUTHLESSNESS_R3                 = 14161,
+    SPELL_ROGUE_RUTHLESSNESS_BONUS              = 81407
 };
 
 // 13877, 33735, (check 51211, 65956) - Blade Flurry
@@ -199,6 +203,64 @@ class spell_rog_deadly_brew : public AuraScript
     }
 };
 
+class spell_rog_ruthlessness_bonus : public AuraScript
+{
+    PrepareAuraScript(spell_rog_ruthlessness_bonus);
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        if (spellInfo->Id != SPELL_ROGUE_RUTHLESSNESS_BONUS)
+            return false;
+
+        return ValidateSpellInfo({ SPELL_ROGUE_RUTHLESSNESS_R1, SPELL_ROGUE_RUTHLESSNESS_R2, SPELL_ROGUE_RUTHLESSNESS_R3 });
+    }
+
+    bool Load() override
+    {
+        _ruthlessnessMask = flag96();
+        _hasRuthlessnessMask = false;
+
+        uint32 const ruthlessnessRanks[] = { SPELL_ROGUE_RUTHLESSNESS_R1, SPELL_ROGUE_RUTHLESSNESS_R2, SPELL_ROGUE_RUTHLESSNESS_R3 };
+        for (uint32 spellId : ruthlessnessRanks)
+        {
+            if (SpellInfo const* ruthlessness = sSpellMgr->GetSpellInfo(spellId))
+            {
+                if (!ruthlessness->SpellFamilyFlags.IsEqual())
+                {
+                    _ruthlessnessMask |= ruthlessness->SpellFamilyFlags;
+                    _hasRuthlessnessMask = true;
+                }
+            }
+        }
+
+        return _hasRuthlessnessMask;
+    }
+
+    void HandleEffectCalcSpellMod(AuraEffect const* aurEff, SpellModifier*& spellMod)
+    {
+        if (!_hasRuthlessnessMask)
+            return;
+
+        if (!spellMod)
+        {
+            spellMod = new SpellModifier(aurEff->GetBase());
+            spellMod->op = SPELLMOD_CHANCE_OF_SUCCESS;
+            spellMod->type = SPELLMOD_FLAT;
+            spellMod->spellId = SPELL_ROGUE_RUTHLESSNESS_R1;
+            spellMod->mask = _ruthlessnessMask;
+        }
+
+        spellMod->value = 40;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rog_ruthlessness_bonus::HandleEffectCalcSpellMod, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+
+    flag96 _ruthlessnessMask;
+    bool _hasRuthlessnessMask = false;
+};
 
 //2818 - deadly poison
 //5760 - mind numbing poison
@@ -1051,6 +1113,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_cheat_death);
     RegisterSpellScript(spell_rog_cut_to_the_chase);
     RegisterSpellScript(spell_rog_deadly_poison);
+    RegisterSpellScript(spell_rog_ruthlessness_bonus);
     new spell_rog_killing_spree();
     RegisterSpellScript(spell_rog_nerves_of_steel);
     RegisterSpellScriptWithArgs(spell_rog_overkill_mos<SPELL_ROGUE_OVERKILL_BUFF>, "spell_rog_overkill");
