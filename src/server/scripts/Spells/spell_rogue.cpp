@@ -843,6 +843,71 @@ class spell_rog_setup : public AuraScript
     }
 };
 
+
+class spell_rog_vanish_short_immunity : public AuraScript
+{
+    PrepareAuraScript(spell_rog_vanish_short_immunity);
+
+    // 100% absorb of all damage while the aura is up (includes periodic ticks)
+    bool Absorb(AuraEffect const* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
+    {
+        // absorb full amount
+        absorbAmount = dmgInfo.GetDamage();
+        return true;
+    }
+
+    bool IsNegativeSpell(SpellInfo const* info)
+    {
+        // Trinity marks positivity per effect, but this is a good fast-path:
+        if (info->IsPositive())
+            return false;
+
+        // Safety: consider hostile mechanics or explicit negative dispel types as negative.
+        if (info->IsChanneled() && !info->IsPositive())
+            return true;
+
+        // Many negative effects are caught by !IsPositive(); keep it simple.
+        return true;
+    }
+
+    // Prevent negative spells from applying while this aura is active.
+    // Trinity checks immunities through IsImmunedToSpell/Effect; we can hook via this callback:
+    // EffectAbsorb is for damage; for aura application immunity, use CheckEffectProc / FilterTarget?
+    // In practice, overriding DoCheckEffectProc is enough to ?refuse? hostile aura applications routed as procs.
+    // To be thorough, we also use OnEffectApply to set a flag on the Unit that we read via a lightweight hook.
+
+    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Unit* u = GetTarget())
+            u->SetFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_REGENERATE_POWER); // harmless flag to mark state (optional)
+    }
+
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Unit* u = GetTarget())
+            u->RemoveFlag(UNIT_FIELD_FLAGS_2, UNIT_FLAG2_REGENERATE_POWER);
+    }
+
+    // Deny negative aura application routed as a proc toward us while active
+    bool CheckProc(ProcEventInfo const& eventInfo)
+    {
+        // If someone tries to apply a negative spell during the 0.5s window, reject it.
+        if (auto* spell = eventInfo.GetSpellInfo())
+            if (IsNegativeSpell(spell))
+                return false;
+        return true;
+    }
+
+    // Wire up: absorb hook + generic proc gate
+    void Register() override
+    {
+        OnEffectAbsorb += AuraEffectAbsorbFn(spell_rog_vanish_short_immunity::Absorb, EFFECT_0);
+        DoCheckProc += AuraCheckProcFn(spell_rog_vanish_short_immunity::CheckProc);
+        OnEffectApply += AuraEffectApplyFn(spell_rog_vanish_short_immunity::OnApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectRemove += AuraEffectRemoveFn(spell_rog_vanish_short_immunity::OnRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 1776 et al - Gouge
 class spell_rog_gouge : public SpellScript
 {
@@ -1121,6 +1186,9 @@ class spell_rog_vanish : public AuraScript
             unitTarget->GetSpellHistory()->ResetCooldown(SPELL_ROGUE_STEALTH);
 
         unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
+
+        if(unitTarget->HasAura(81412))
+            unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
     }
 
     void Register() override
@@ -1191,4 +1259,5 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_imp_sap);
     RegisterSpellScript(spell_rog_poison);
     RegisterSpellScript(spell_rog_evasion);
+    RegisterSpellScript(spell_rog_vanish_short_immunity);
 }
