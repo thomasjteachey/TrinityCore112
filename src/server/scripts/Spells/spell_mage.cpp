@@ -77,7 +77,7 @@ enum MageSpells
     SPELL_MAGE_BROKEN_MANA_SHIELD                = 81331,
     SPELL_MAGE_IMPLOSION                         = 81332,
     SPELL_MAGE_RECALIBRATING                     = 81333,
-    SPELL_MAGE_IGNITE_SPREAD_AURA                = 81412
+    SPELL_MAGE_IGNITE_SPREAD_AURA                = 81411
 };
 
 enum MageSpellIcons
@@ -972,7 +972,13 @@ class spell_mage_ignite : public AuraScript
             if (spreadTarget->HasAura(SPELL_MAGE_IGNITE))
                 continue;
 
-            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_INCAPACITATE))
+            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_DISORIENTED))
+                continue;
+
+            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_POLYMORPH))
+                continue;
+
+            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_SAPPED))
                 continue;
 
             CastSpellExtraArgs args(aurEff);
