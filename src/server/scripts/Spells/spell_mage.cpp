@@ -29,6 +29,9 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "CellImpl.h"
+#include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
 
 enum MageSpells
 {
@@ -73,7 +76,8 @@ enum MageSpells
     SPELL_MAGE_ARCANE_MISSILES_R1                = 5143,
     SPELL_MAGE_BROKEN_MANA_SHIELD                = 81331,
     SPELL_MAGE_IMPLOSION                         = 81332,
-    SPELL_MAGE_RECALIBRATING                     = 81333
+    SPELL_MAGE_RECALIBRATING                     = 81333,
+    SPELL_MAGE_IGNITE_SPREAD_AURA                = 81412
 };
 
 enum MageSpellIcons
@@ -884,16 +888,22 @@ class spell_mage_ignite : public AuraScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_MAGE_IGNITE });
+        return ValidateSpellInfo({ SPELL_MAGE_IGNITE, SPELL_MAGE_IGNITE_SPREAD_AURA });
     }
 
     bool CheckProc(ProcEventInfo& eventInfo)
     {
+        if (GetSpellInfo()->Id == SPELL_MAGE_IGNITE)
+            return false;
+
         return eventInfo.GetDamageInfo() && eventInfo.GetProcTarget();
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
+        if (GetSpellInfo()->Id == SPELL_MAGE_IGNITE)
+            return;
+
         PreventDefaultAction();
 
         SpellInfo const* igniteDot = sSpellMgr->AssertSpellInfo(SPELL_MAGE_IGNITE);
@@ -907,11 +917,80 @@ class spell_mage_ignite : public AuraScript
         GetTarget()->CastSpell(eventInfo.GetProcTarget(), SPELL_MAGE_IGNITE, args);
     }
 
+    void HandlePeriodic(AuraEffect const* aurEff)
+    {
+        if (GetSpellInfo()->Id != SPELL_MAGE_IGNITE)
+            return;
+
+        int32 amount = aurEff->GetAmount();
+        _lastTickDamage = amount > 0 ? uint32(amount) : 0;
+    }
+
+    void HandleRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetSpellInfo()->Id != SPELL_MAGE_IGNITE)
+            return;
+
+        AuraApplication const* targetApp = GetTargetApplication();
+        if (!targetApp)
+            return;
+
+        AuraRemoveMode removeMode = targetApp->GetRemoveMode();
+        if (removeMode != AURA_REMOVE_BY_EXPIRE && removeMode != AURA_REMOVE_BY_DEATH)
+            return;
+
+        if (_lastTickDamage < 100)
+            return;
+
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target)
+            return;
+
+        if (!caster->HasAura(SPELL_MAGE_IGNITE_SPREAD_AURA))
+            return;
+
+        UnitList spreadTargets;
+        Trinity::AnyUnfriendlyUnitInObjectRangeCheck uCheck(target, caster, 12.0f);
+        Trinity::UnitListSearcher<Trinity::AnyUnfriendlyUnitInObjectRangeCheck> searcher(target, spreadTargets, uCheck);
+        Cell::VisitAllObjects(target, searcher, 12.0f);
+
+        for (Unit* spreadTarget : spreadTargets)
+        {
+            if (!spreadTarget || spreadTarget == target)
+                continue;
+
+            if (!spreadTarget->IsAlive())
+                continue;
+
+            if (!caster->IsValidAttackTarget(spreadTarget))
+                continue;
+
+            if (spreadTarget->GetTypeId() != TYPEID_PLAYER && spreadTarget->GetCreatureType() != CREATURE_TYPE_HUMANOID)
+                continue;
+
+            if (spreadTarget->HasAura(SPELL_MAGE_IGNITE))
+                continue;
+
+            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_INCAPACITATE))
+                continue;
+
+            CastSpellExtraArgs args(aurEff);
+            args.AddSpellBP0(int32(_lastTickDamage));
+            caster->CastSpell(spreadTarget, SPELL_MAGE_IGNITE, args);
+        }
+    }
+
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_mage_ignite::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_mage_ignite::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_mage_ignite::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_mage_ignite::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
     }
+
+private:
+    uint32 _lastTickDamage = 0;
 };
 
 // -44457 - Living Bomb
