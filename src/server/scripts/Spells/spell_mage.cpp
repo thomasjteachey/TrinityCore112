@@ -881,42 +881,13 @@ class spell_mage_ice_block : public SpellScript
     }
 };
 
-// -11119 - Ignite
-class spell_mage_ignite : public AuraScript
+class spell_mage_ignite_tick : public AuraScript
 {
-    PrepareAuraScript(spell_mage_ignite);
-
+    PrepareAuraScript(spell_mage_ignite_tick);
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_MAGE_IGNITE, SPELL_MAGE_IGNITE_SPREAD_AURA });
+        return ValidateSpellInfo({ SPELL_MAGE_IGNITE });
     }
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        if (GetSpellInfo()->Id == SPELL_MAGE_IGNITE)
-            return false;
-
-        return eventInfo.GetDamageInfo() && eventInfo.GetProcTarget();
-    }
-
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        if (GetSpellInfo()->Id == SPELL_MAGE_IGNITE)
-            return;
-
-        PreventDefaultAction();
-
-        SpellInfo const* igniteDot = sSpellMgr->AssertSpellInfo(SPELL_MAGE_IGNITE);
-        int32 pct = 8 * GetSpellInfo()->GetRank();
-
-        ASSERT(igniteDot->GetMaxTicks() > 0);
-        int32 amount = int32(CalculatePct(eventInfo.GetDamageInfo()->GetDamage(), pct) / igniteDot->GetMaxTicks());
-
-        CastSpellExtraArgs args(aurEff);
-        args.AddSpellBP0(amount);
-        GetTarget()->CastSpell(eventInfo.GetProcTarget(), SPELL_MAGE_IGNITE, args);
-    }
-
     void HandlePeriodic(AuraEffect const* aurEff)
     {
         if (GetSpellInfo()->Id != SPELL_MAGE_IGNITE)
@@ -982,21 +953,63 @@ class spell_mage_ignite : public AuraScript
                 continue;
 
             CastSpellExtraArgs args(aurEff);
-            args.AddSpellBP0(int32(_lastTickDamage));
+            args.AddSpellBP0(int32(_lastTickDamage * 0.5f));
             caster->CastSpell(spreadTarget, SPELL_MAGE_IGNITE, args);
         }
+    }
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_mage_ignite_tick::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_mage_ignite_tick::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+
+
+private:
+    uint32 _lastTickDamage = 0;
+};
+
+// -11119 - Ignite
+class spell_mage_ignite : public AuraScript
+{
+    PrepareAuraScript(spell_mage_ignite);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_MAGE_IGNITE, SPELL_MAGE_IGNITE_SPREAD_AURA });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (GetSpellInfo()->Id == SPELL_MAGE_IGNITE)
+            return false;
+
+        return eventInfo.GetDamageInfo() && eventInfo.GetProcTarget();
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        if (GetSpellInfo()->Id == SPELL_MAGE_IGNITE)
+            return;
+
+        PreventDefaultAction();
+
+        SpellInfo const* igniteDot = sSpellMgr->AssertSpellInfo(SPELL_MAGE_IGNITE);
+        int32 pct = 8 * GetSpellInfo()->GetRank();
+
+        ASSERT(igniteDot->GetMaxTicks() > 0);
+        int32 amount = int32(CalculatePct(eventInfo.GetDamageInfo()->GetDamage(), pct) / igniteDot->GetMaxTicks());
+
+        CastSpellExtraArgs args(aurEff);
+        args.AddSpellBP0(amount);
+        GetTarget()->CastSpell(eventInfo.GetProcTarget(), SPELL_MAGE_IGNITE, args);
     }
 
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_mage_ignite::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_mage_ignite::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
-        OnEffectPeriodic += AuraEffectPeriodicFn(spell_mage_ignite::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_mage_ignite::HandleRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
     }
 
-private:
-    uint32 _lastTickDamage = 0;
 };
 
 // -44457 - Living Bomb
@@ -1355,4 +1368,5 @@ void AddSC_mage_spell_scripts()
     RegisterSpellScript(spell_mage_missile_barrage_proc);
     new spell_mage_polymorph_cast_visual();
     RegisterSpellScript(spell_mage_summon_water_elemental);
+    RegisterSpellScript(spell_mage_ignite_tick);
 }

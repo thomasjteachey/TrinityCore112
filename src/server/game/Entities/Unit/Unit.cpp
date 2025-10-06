@@ -10208,11 +10208,25 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMa
                 {
                     AddComboPoints(procTarget, 1);
                     StartReactiveTimer(REACTIVE_OVERPOWER);
+                    if (HasAura(81413))
+                    {
+                        m_reactiveTimer[REACTIVE_OVERPOWER] += 1000;
+                    }
                 }
                 else if ((hitMask & PROC_HIT_CRITICAL) && IsHunterPet())
                 {
                     AddComboPoints(procTarget, 1);
                     StartReactiveTimer(REACTIVE_WOLVERINE_BITE);
+                }
+                else if (hitMask & PROC_HIT_BLOCK)
+                {
+                    // For Warriors only Odin's Power
+                    if (GetClass() == CLASS_WARRIOR && HasAura(81413))
+                    {
+                        AddComboPoints(procTarget, 1);
+                        StartReactiveTimer(REACTIVE_OVERPOWER);
+                        m_reactiveTimer[REACTIVE_OVERPOWER] += 1000;
+                    }
                 }
             }
         }

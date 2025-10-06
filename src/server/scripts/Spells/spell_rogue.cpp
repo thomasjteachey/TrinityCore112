@@ -848,7 +848,7 @@ class spell_rog_vanish_short_immunity : public AuraScript
 {
     PrepareAuraScript(spell_rog_vanish_short_immunity);
 
-    void Absorb(AuraEffect const* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
+    void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
     {
         absorbAmount = dmgInfo.GetDamage();
     }
@@ -1156,7 +1156,7 @@ class spell_rog_vanish : public AuraScript
         unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
 
         if(unitTarget->HasAura(81412))
-            unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
+            unitTarget->CastSpell(nullptr, 81410, true);
     }
 
     void Register() override
