@@ -806,12 +806,7 @@ class spell_dru_innervate : public AuraScript
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_pal_hand_of_freedom::HandleApply, EFFECT_0, SPELL_AURA_MECHANIC_IMMUNITY, AURA_EFFECT_HANDLE_REAL);
-    }
-
-    void Register() override
-    {
-        //DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_innervate::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE);
+        AfterEffectApply += AuraEffectApplyFn(spell_dru_innervate::HandleApply, EFFECT_0, SPELL_AURA_MOD_MANA_REGEN_INTERRUPT);
     }
 };
 
