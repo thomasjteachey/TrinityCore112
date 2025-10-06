@@ -844,6 +844,7 @@ class spell_rog_setup : public AuraScript
 };
 
 
+
 class spell_rog_vanish_short_immunity : public AuraScript
 {
     PrepareAuraScript(spell_rog_vanish_short_immunity);
@@ -853,20 +854,13 @@ class spell_rog_vanish_short_immunity : public AuraScript
         absorbAmount = dmgInfo.GetDamage();
     }
 
-    static bool IsNegativeSpell(SpellInfo const* info)
-    {
-        if (!info)
-            return false;
-
-        return !info->IsPositive();
-    }
-
     bool CheckProc(ProcEventInfo& eventInfo)
     {
-        if (IsNegativeSpell(eventInfo.GetSpellInfo()))
-            return false;
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo)
+            return true;
 
-        return true;
+        return !spellInfo->IsPositive();
     }
 
     void Register() override
@@ -875,6 +869,7 @@ class spell_rog_vanish_short_immunity : public AuraScript
         DoCheckProc += AuraCheckProcFn(spell_rog_vanish_short_immunity::CheckProc);
     }
 };
+
 
 // 1776 et al - Gouge
 class spell_rog_gouge : public SpellScript
