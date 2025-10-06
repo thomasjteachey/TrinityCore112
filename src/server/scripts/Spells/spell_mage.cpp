@@ -306,6 +306,12 @@ class spell_mage_cold_snap : public SpellScript
             return spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_FROST) &&
                 spellInfo->Id != SPELL_MAGE_COLD_SNAP && spellInfo->GetRecoveryTime() > 0;
         }, true);
+
+        if (GetCaster()->HasAura(81399))
+        {
+            GetCaster()->AddAura(81397, GetCaster());
+            //reset cooldown on fireball, evocate, and blink.
+        }
     }
 
     void Register() override
