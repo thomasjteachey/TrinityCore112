@@ -255,7 +255,7 @@ class spell_rog_ruthlessness_bonus : public AuraScript
 
     void Register() override
     {
-        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rog_ruthlessness_bonus::HandleEffectCalcSpellMod, EFFECT_0, SPELL_AURA_DUMMY);
+        DoEffectCalcSpellMod += AuraEffectCalcSpellModFn(spell_rog_ruthlessness_bonus::HandleEffectCalcSpellMod, EFFECT_1, SPELL_AURA_DUMMY);
     }
 
     flag96 _ruthlessnessMask;
