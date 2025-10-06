@@ -73,7 +73,16 @@ enum MageSpells
     SPELL_MAGE_ARCANE_MISSILES_R1                = 5143,
     SPELL_MAGE_BROKEN_MANA_SHIELD                = 81331,
     SPELL_MAGE_IMPLOSION                         = 81332,
-    SPELL_MAGE_RECALIBRATING                     = 81333
+    SPELL_MAGE_RECALIBRATING                     = 81333,
+    SPELL_MAGE_FIRE_BLAST_RANK_1                 = 2136,
+    SPELL_MAGE_FIRE_BLAST_RANK_2                 = 2137,
+    SPELL_MAGE_FIRE_BLAST_RANK_3                 = 2138,
+    SPELL_MAGE_FIRE_BLAST_RANK_4                 = 8412,
+    SPELL_MAGE_FIRE_BLAST_RANK_5                 = 8413,
+    SPELL_MAGE_FIRE_BLAST_RANK_6                 = 10197,
+    SPELL_MAGE_FIRE_BLAST_RANK_7                 = 10199,
+    SPELL_MAGE_BLINK                             = 1953,
+    SPELL_MAGE_EVOCATION                         = 12051
 };
 
 enum MageSpellIcons
@@ -310,7 +319,29 @@ class spell_mage_cold_snap : public SpellScript
         if (GetCaster()->HasAura(81399))
         {
             GetCaster()->AddAura(81397, GetCaster());
-            //reset cooldown on fireball, evocate, and blink.
+            if (Player* playerCaster = GetCaster()->ToPlayer())
+            {
+                SpellHistory* spellHistory = playerCaster->GetSpellHistory();
+                if (spellHistory)
+                {
+                    uint32 const fireBlastSpells[] =
+                    {
+                        SPELL_MAGE_FIRE_BLAST_RANK_1,
+                        SPELL_MAGE_FIRE_BLAST_RANK_2,
+                        SPELL_MAGE_FIRE_BLAST_RANK_3,
+                        SPELL_MAGE_FIRE_BLAST_RANK_4,
+                        SPELL_MAGE_FIRE_BLAST_RANK_5,
+                        SPELL_MAGE_FIRE_BLAST_RANK_6,
+                        SPELL_MAGE_FIRE_BLAST_RANK_7
+                    };
+
+                    for (uint32 const spellId : fireBlastSpells)
+                        spellHistory->ResetCooldown(spellId, true);
+
+                    spellHistory->ResetCooldown(SPELL_MAGE_BLINK, true);
+                    spellHistory->ResetCooldown(SPELL_MAGE_EVOCATION, true);
+                }
+            }
         }
     }
 
