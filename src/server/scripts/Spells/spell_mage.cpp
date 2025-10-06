@@ -310,7 +310,14 @@ class spell_mage_cold_snap : public SpellScript
         if (GetCaster()->HasAura(81399))
         {
             GetCaster()->AddAura(81397, GetCaster());
-            //reset cooldown on fireball, evocate, and blink.
+            static constexpr uint32 const spellsToReset[] = {
+                2136, 2137, 2138, 8412, 8413, 10197, 10199, // Fire Blast (ranks 1-7)
+                1953,                                       // Blink
+                12051                                       // Evocation
+            };
+
+            for (uint32 spellId : spellsToReset)
+                GetCaster()->GetSpellHistory()->ResetCooldown(spellId, true);
         }
     }
 
