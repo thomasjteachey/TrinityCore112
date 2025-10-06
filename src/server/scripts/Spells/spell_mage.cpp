@@ -300,24 +300,26 @@ class spell_mage_cold_snap : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        GetCaster()->GetSpellHistory()->ResetCooldowns([](SpellHistory::CooldownStorageType::iterator itr) -> bool
+        Unit* caster = GetCaster();
+        caster->GetSpellHistory()->ResetCooldowns([](SpellHistory::CooldownStorageType::iterator itr) -> bool
         {
             SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(itr->first);
             return spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_FROST) &&
                 spellInfo->Id != SPELL_MAGE_COLD_SNAP && spellInfo->GetRecoveryTime() > 0;
         }, true);
 
-        if (GetCaster()->HasAura(81399))
+        if (caster->HasAura(81405))
         {
-            GetCaster()->AddAura(81397, GetCaster());
+            caster->AddAura(81397, GetCaster());
             static constexpr uint32 const spellsToReset[] = {
                 2136, 2137, 2138, 8412, 8413, 10197, 10199, // Fire Blast (ranks 1-7)
                 1953,                                       // Blink
-                12051                                       // Evocation
+                12051,                                       // Evocation
+                2139
             };
 
             for (uint32 spellId : spellsToReset)
-                GetCaster()->GetSpellHistory()->ResetCooldown(spellId, true);
+                caster->GetSpellHistory()->ResetCooldown(spellId, true);
         }
     }
 

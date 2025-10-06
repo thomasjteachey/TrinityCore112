@@ -33,6 +33,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "TemporarySummon.h"
+#include "SpellHistory.h"
 
 enum PriestSpells
 {
@@ -1427,6 +1428,27 @@ class spell_pri_wisp_form : public AuraScript
     }
 };
 
+// 81398 - Psychic Scream CD Reduce
+class spell_ps_cd_reduce : public SpellScript
+{
+    PrepareSpellScript(spell_ps_cd_reduce);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        uint32 cdreduce = GetEffectValue();
+        GetCaster()->GetSpellHistory()->ModifyCooldown(19577, cdreduce);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_ps_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
 
 
 void AddSC_priest_spell_scripts()
@@ -1467,4 +1489,5 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_pri_smite);
     RegisterSpellScript(spell_pri_holy_fire);
     RegisterSpellScript(spell_pri_wisp_form);
+    RegisterSpellScript(spell_ps_cd_reduce);
 }
