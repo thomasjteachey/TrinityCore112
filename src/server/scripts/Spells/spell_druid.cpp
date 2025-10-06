@@ -851,13 +851,15 @@ class spell_dru_leader_of_the_pack : public AuraScript
     void CalculateMovement(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
     {
         Unit* target = GetUnitOwner();
-        if (!target || target->GetCreatureType() != CREATURE_TYPE_HUMANOID)
+        amount = 0;
+        if (GetCaster()->HasAura(81415))
         {
-            amount = 0;
-            return;
+            if (!target || target->GetCreatureType() != CREATURE_TYPE_HUMANOID)
+            {
+                return;
+            }
+            amount = 15;
         }
-
-        amount = 15;
     }
 
     void Register() override

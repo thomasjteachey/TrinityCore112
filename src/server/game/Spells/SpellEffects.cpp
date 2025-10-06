@@ -1597,9 +1597,17 @@ void Spell::EffectHeal()
 
         addhealth += tickheal * tickcount;
 
-        // Glyph of Swiftmend
-        if (!unitCaster->HasAura(54824))
-            unitTarget->RemoveAura(targetAura->GetId(), targetAura->GetCasterGUID());
+        if (!unitCaster->HasAura(81416))
+        {
+            // Glyph of Swiftmend
+            if (!unitCaster->HasAura(54824))
+                unitTarget->RemoveAura(targetAura->GetId(), targetAura->GetCasterGUID());
+        }
+        else
+        {
+            //81416 - Swiftmend does not consume your healing over time effects, but instead reduces the duration of the chosen effect by 3 sec.
+            targetAura->GetBase()->SetDuration(targetAura->GetBase()->GetDuration() - 3000);
+        }
     }
     // Death Pact - return pct of max health to caster
     else if (m_spellInfo->SpellFamilyName == SPELLFAMILY_DEATHKNIGHT && m_spellInfo->SpellFamilyFlags[0] & 0x00080000)
