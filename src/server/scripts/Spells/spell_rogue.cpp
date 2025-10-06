@@ -59,7 +59,9 @@ enum RogueSpells
     SPELL_ROGUE_STEALTH                         =  1784,
     SPELL_ROGUE_IMPROVED_SAP                    = 14095,
     SPELL_ROGUE_DEADLY_BREW                     = 81301,
-    SPELL_ROGUE_SEAL_FATE                       = 14186
+    SPELL_ROGUE_SEAL_FATE                       = 14186,
+    SPELL_ROGUE_IMPROVED_EVASION_TRIGGER        = 81403,
+    SPELL_ROGUE_IMPROVED_EVASION_AURA           = 81404
 };
 
 // 13877, 33735, (check 51211, 65956) - Blade Flurry
@@ -196,6 +198,32 @@ class spell_rog_deadly_brew : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(spell_rog_deadly_brew::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 5277 - Evasion
+class spell_rog_evasion : public SpellScript
+{
+    PrepareSpellScript(spell_rog_evasion);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_ROGUE_IMPROVED_EVASION_TRIGGER });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        if (caster->HasAura(SPELL_ROGUE_IMPROVED_EVASION_AURA))
+            caster->CastSpell(caster, SPELL_ROGUE_IMPROVED_EVASION_TRIGGER, true);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_rog_evasion::HandleAfterCast);
     }
 };
 
@@ -1051,6 +1079,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_cheat_death);
     RegisterSpellScript(spell_rog_cut_to_the_chase);
     RegisterSpellScript(spell_rog_deadly_poison);
+    RegisterSpellScript(spell_rog_evasion);
     new spell_rog_killing_spree();
     RegisterSpellScript(spell_rog_nerves_of_steel);
     RegisterSpellScriptWithArgs(spell_rog_overkill_mos<SPELL_ROGUE_OVERKILL_BUFF>, "spell_rog_overkill");
