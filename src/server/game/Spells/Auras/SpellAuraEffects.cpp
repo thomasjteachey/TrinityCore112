@@ -5662,11 +5662,16 @@ void AuraEffect::HandleModAttackPowerOfArmorAuraTick(Unit* target, Unit* caster)
 void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInfo& eventInfo)
 {
     Unit* caster = aurApp->GetBase()->GetCaster()->ToUnit();
-    int32 maxDamage = 1350;
+    int32 maxDamage = 1300;
     if (caster)
     {
         maxDamage = (caster->GetLevel() * 25) - 200;
+        if (caster->HasAura(81399) || caster->HasAura(81340))
+        {
+            maxDamage *= 1.2f;
+        }
     }
+
     int32 damage = eventInfo.GetDamageInfo()->GetDamage();
     if (damage > maxDamage)
     {
