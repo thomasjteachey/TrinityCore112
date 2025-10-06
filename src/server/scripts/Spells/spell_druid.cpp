@@ -53,6 +53,7 @@ enum DruidSpells
     SPELL_DRUID_IDOL_OF_FERAL_SHADOWS       = 34241,
     SPELL_DRUID_IDOL_OF_WORSHIP             = 60774,
     SPELL_DRUID_INCREASED_MOONFIRE_DURATION = 38414,
+    SPELL_DRUID_INNERVATE                   = 29166,
     SPELL_DRUID_ITEM_T8_BALANCE_RELIC       = 64950,
     SPELL_DRUID_ITEM_T10_FERAL_4P_BONUS     = 70726,
     SPELL_DRUID_KING_OF_THE_JUNGLE          = 48492,
@@ -761,7 +762,7 @@ class spell_dru_idol_lifebloom : public AuraScript
 class spell_dru_innervate : public AuraScript
 {
     PrepareAuraScript(spell_dru_innervate);
-    
+
     void CalculateAmount(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
     {
         if (!aurEff->GetTotalTicks())
@@ -779,6 +780,63 @@ class spell_dru_innervate : public AuraScript
     void Register() override
     {
         //DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_innervate::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE);
+    }
+};
+
+// Custom aura - Innervate self share
+class spell_dru_innervate_self_share : public AuraScript
+{
+    PrepareAuraScript(spell_dru_innervate_self_share);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DRUID_INNERVATE });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo || spellInfo->Id != SPELL_DRUID_INNERVATE)
+            return false;
+
+        Unit* caster = eventInfo.GetActor();
+        Unit* target = eventInfo.GetProcTarget();
+        if (!caster || !target)
+            return false;
+
+        return caster != target;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        Unit* caster = eventInfo.GetActor();
+        if (!caster)
+            return;
+
+        CastSpellExtraArgs args(aurEff);
+        caster->CastSpell(caster, SPELL_DRUID_INNERVATE, args);
+
+        if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE, caster->GetGUID()))
+        {
+            int32 newDuration = innervate->GetDuration() / 2;
+            int32 newMaxDuration = innervate->GetMaxDuration() / 2;
+
+            if (newDuration <= 0)
+                newDuration = 1;
+            if (newMaxDuration < newDuration)
+                newMaxDuration = newDuration;
+
+            innervate->SetMaxDuration(newMaxDuration);
+            innervate->SetDuration(newDuration);
+        }
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_dru_innervate_self_share::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_dru_innervate_self_share::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
 
@@ -2003,6 +2061,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_glyph_of_starfire_dummy);
     RegisterSpellScript(spell_dru_idol_lifebloom);
     RegisterSpellScript(spell_dru_innervate);
+    RegisterSpellScript(spell_dru_innervate_self_share);
     RegisterSpellScript(spell_dru_insect_swarm);
     RegisterSpellScript(spell_dru_leader_of_the_pack);
     RegisterSpellScript(spell_dru_lifebloom);
