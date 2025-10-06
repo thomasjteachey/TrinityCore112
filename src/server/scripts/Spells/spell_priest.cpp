@@ -1441,7 +1441,11 @@ class spell_ps_cd_reduce : public SpellScript
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
         uint32 cdreduce = GetEffectValue();
-        GetCaster()->GetSpellHistory()->ModifyCooldown(19577, cdreduce);
+        static constexpr uint32 PsychicScreamSpellIds[] = { 8122, 8124, 10888, 10890 };
+
+        SpellHistory* spellHistory = GetCaster()->GetSpellHistory();
+        for (uint32 spellId : PsychicScreamSpellIds)
+            spellHistory->ModifyCooldown(spellId, cdreduce);
     }
 
     void Register() override
