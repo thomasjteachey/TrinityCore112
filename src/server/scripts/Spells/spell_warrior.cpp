@@ -96,6 +96,11 @@ class spell_warr_leap : public SpellScript
 {
     PrepareSpellScript(spell_warr_leap);
 
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARRIOR_HEROIC_LEAP_KNOCKUP });
+    }
+
     SpellCastResult CheckCast()
     {
         Unit* caster = GetCaster();
@@ -116,47 +121,16 @@ class spell_warr_leap : public SpellScript
         return SPELL_CAST_OK;
     }
 
+    void HandleLanding(SpellEffIndex /*effIndex*/)
+    {
+        if (Unit* caster = GetCaster())
+            caster->CastSpell(caster, SPELL_WARRIOR_HEROIC_LEAP_KNOCKUP, true);
+    }
+
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_warr_leap::CheckCast);
-    }
-};
-
-// Custom - Heroic Leap Knockup Aura
-class spell_warr_heroic_leap_knockup : public AuraScript
-{
-    PrepareAuraScript(spell_warr_heroic_leap_knockup);
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_WARRIOR_HEROIC_LEAP, SPELL_WARRIOR_HEROIC_LEAP_KNOCKUP });
-    }
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        SpellInfo const* procSpell = eventInfo.GetSpellInfo();
-        return procSpell && procSpell->Id == SPELL_WARRIOR_HEROIC_LEAP;
-    }
-
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        PreventDefaultAction();
-
-        Unit* caster = GetTarget();
-        if (!caster)
-            return;
-
-        Unit* target = eventInfo.GetProcTarget();
-        if (!target || !caster->IsValidAttackTarget(target))
-            return;
-
-        caster->CastSpell(target, SPELL_WARRIOR_HEROIC_LEAP_KNOCKUP, aurEff);
-    }
-
-    void Register() override
-    {
-        DoCheckProc += AuraCheckProcFn(spell_warr_heroic_leap_knockup::CheckProc);
-        OnEffectProc += AuraEffectProcFn(spell_warr_heroic_leap_knockup::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectHit += SpellEffectFn(spell_warr_leap::HandleLanding, EFFECT_0, SPELL_EFFECT_JUMP_DEST);
     }
 };
 
@@ -1023,7 +997,6 @@ void AddSC_warrior_spell_scripts()
     RegisterSpellScript(spell_warr_extra_proc);
     RegisterSpellScript(spell_warr_glyph_of_blocking);
     RegisterSpellScript(spell_warr_glyph_of_sunder_armor);
-    RegisterSpellScript(spell_warr_heroic_leap_knockup);
     RegisterSpellScript(spell_warr_improved_spell_reflection);
     RegisterSpellScript(spell_warr_intervene);
     RegisterSpellScript(spell_warr_intimidating_shout);
