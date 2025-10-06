@@ -777,68 +777,44 @@ class spell_dru_innervate : public AuraScript
             amount = 0;
     }
 
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (caster->HasAura(81418))
+        {
+            if (caster->GetGUID() != target->GetGUID())
+            {
+                CastSpellExtraArgs args(aurEff);
+                caster->CastSpell(caster, SPELL_DRUID_INNERVATE, args);
+                if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE, caster->GetGUID()))
+                {
+                    int32 newDuration = innervate->GetDuration() / 2;
+                    int32 newMaxDuration = innervate->GetMaxDuration() / 2;
+
+                    if (newDuration <= 0)
+                        newDuration = 1;
+                    if (newMaxDuration < newDuration)
+                        newMaxDuration = newDuration;
+
+                    innervate->SetMaxDuration(newMaxDuration);
+                    innervate->SetDuration(newDuration);
+                }
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_pal_hand_of_freedom::HandleApply, EFFECT_0, SPELL_AURA_MECHANIC_IMMUNITY, AURA_EFFECT_HANDLE_REAL);
+    }
+
     void Register() override
     {
         //DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_innervate::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE);
     }
 };
 
-// Custom aura - Innervate self share
-class spell_dru_innervate_self_share : public AuraScript
-{
-    PrepareAuraScript(spell_dru_innervate_self_share);
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_DRUID_INNERVATE });
-    }
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
-        if (!spellInfo || spellInfo->Id != SPELL_DRUID_INNERVATE)
-            return false;
-
-        Unit* caster = eventInfo.GetActor();
-        Unit* target = eventInfo.GetProcTarget();
-        if (!caster || !target)
-            return false;
-
-        return caster != target;
-    }
-
-    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        PreventDefaultAction();
-
-        Unit* caster = eventInfo.GetActor();
-        if (!caster)
-            return;
-
-        CastSpellExtraArgs args(aurEff);
-        caster->CastSpell(caster, SPELL_DRUID_INNERVATE, args);
-
-        if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE, caster->GetGUID()))
-        {
-            int32 newDuration = innervate->GetDuration() / 2;
-            int32 newMaxDuration = innervate->GetMaxDuration() / 2;
-
-            if (newDuration <= 0)
-                newDuration = 1;
-            if (newMaxDuration < newDuration)
-                newMaxDuration = newDuration;
-
-            innervate->SetMaxDuration(newMaxDuration);
-            innervate->SetDuration(newDuration);
-        }
-    }
-
-    void Register() override
-    {
-        DoCheckProc += AuraCheckProcFn(spell_dru_innervate_self_share::CheckProc);
-        OnEffectProc += AuraEffectProcFn(spell_dru_innervate_self_share::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
-    }
-};
 
 // -5570 - Insect Swarm
 class spell_dru_insect_swarm : public AuraScript
