@@ -65,7 +65,8 @@ enum RogueSpells
     SPELL_ROGUE_RUTHLESSNESS_R3                 = 14161,
     SPELL_ROGUE_RUTHLESSNESS_BONUS              = 81407,
     SPELL_ROGUE_IMPROVED_EVASION_TRIGGER        = 81403,
-    SPELL_ROGUE_IMPROVED_EVASION_AURA           = 81404
+    SPELL_ROGUE_IMPROVED_EVASION_AURA           = 81404,
+    SPELL_ROGUE_GOUGE_DOT_REMOVAL_AURA          = 81410
 };
 
 // 13877, 33735, (check 51211, 65956) - Blade Flurry
@@ -842,6 +843,32 @@ class spell_rog_setup : public AuraScript
     }
 };
 
+// 1776 et al - Gouge
+class spell_rog_gouge : public SpellScript
+{
+    PrepareSpellScript(spell_rog_gouge);
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        if (!caster->HasAura(SPELL_ROGUE_GOUGE_DOT_REMOVAL_AURA))
+            return;
+
+        target->RemoveAurasByType(SPELL_AURA_PERIODIC_DAMAGE, ObjectGuid::Empty, nullptr, true, false);
+        target->RemoveAurasByType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT, ObjectGuid::Empty, nullptr, true, false);
+        target->RemoveAurasByType(SPELL_AURA_PERIODIC_LEECH, ObjectGuid::Empty, nullptr, true, false);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_rog_gouge::HandleAfterHit);
+    }
+};
+
 // 5938 - Shiv
 class spell_rog_shiv : public SpellScript
 {
@@ -1153,6 +1180,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_glyph_of_backstab);
     new spell_rog_glyph_of_backstab_triggered();
     RegisterSpellScript(spell_rog_setup);
+    RegisterSpellScript(spell_rog_gouge);
     RegisterSpellScript(spell_rog_shiv);
     RegisterSpellAndAuraScriptPair(spell_rog_tricks_of_the_trade, spell_rog_tricks_of_the_trade_aura);
     RegisterSpellScript(spell_rog_tricks_of_the_trade_proc);
