@@ -803,7 +803,7 @@ class spell_dru_insect_swarm : public AuraScript
     }
 };
 
-// 24932 - Leader of the Pack
+// 17007 - Leader of the Pack
 class spell_dru_leader_of_the_pack : public AuraScript
 {
     PrepareAuraScript(spell_dru_leader_of_the_pack);
@@ -848,9 +848,22 @@ class spell_dru_leader_of_the_pack : public AuraScript
         caster->CastSpell(nullptr, SPELL_DRUID_IMP_LEADER_OF_THE_PACK_MANA, args2);
     }
 
+    void CalculateMovement(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
+    {
+        Unit* target = GetUnitOwner();
+        if (!target || target->GetCreatureType() != CREATURE_TYPE_HUMANOID)
+        {
+            amount = 0;
+            return;
+        }
+
+        amount = 15;
+    }
+
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(spell_dru_leader_of_the_pack::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_leader_of_the_pack::CalculateMovement, EFFECT_2, SPELL_AURA_MOD_SPEED_NOT_STACK);
     }
 };
 
