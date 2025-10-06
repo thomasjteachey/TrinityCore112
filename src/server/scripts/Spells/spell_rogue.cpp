@@ -63,7 +63,9 @@ enum RogueSpells
     SPELL_ROGUE_RUTHLESSNESS_R1                 = 14156,
     SPELL_ROGUE_RUTHLESSNESS_R2                 = 14160,
     SPELL_ROGUE_RUTHLESSNESS_R3                 = 14161,
-    SPELL_ROGUE_RUTHLESSNESS_BONUS              = 81407
+    SPELL_ROGUE_RUTHLESSNESS_BONUS              = 81407,
+    SPELL_ROGUE_IMPROVED_EVASION_TRIGGER        = 81403,
+    SPELL_ROGUE_IMPROVED_EVASION_AURA           = 81404
 };
 
 // 13877, 33735, (check 51211, 65956) - Blade Flurry
@@ -101,6 +103,32 @@ class spell_rog_blade_flurry : public AuraScript
 
     Unit* _procTarget = nullptr;
 };
+
+class spell_rog_evasion : public SpellScript
+{
+    PrepareSpellScript(spell_rog_evasion);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_ROGUE_IMPROVED_EVASION_TRIGGER });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        if (caster->HasAura(SPELL_ROGUE_IMPROVED_EVASION_AURA))
+            caster->CastSpell(caster, SPELL_ROGUE_IMPROVED_EVASION_TRIGGER, true);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_rog_evasion::HandleAfterCast);
+    }
+};
+
 
 // -31228 - Cheat Death
 class spell_rog_cheat_death : public AuraScript
@@ -1134,4 +1162,5 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_vanish);
     RegisterSpellScript(spell_rog_imp_sap);
     RegisterSpellScript(spell_rog_poison);
+    RegisterSpellScript(spell_rog_evasion);
 }
