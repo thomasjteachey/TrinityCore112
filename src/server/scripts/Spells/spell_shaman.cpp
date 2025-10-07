@@ -85,6 +85,14 @@ enum ShamanSpells
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD          = 23552,
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD_DAMAGE   = 27635,
     SPELL_SHAMAN_ITEM_MANA_SURGE                = 23571,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1     = 26364,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2     = 26365,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3     = 26366,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4     = 26367,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5     = 26369,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6     = 26370,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7     = 26371,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8     = 26372,
     SPELL_SHAMAN_LAVA_BEAM                      = 114074,
     SPELL_SHAMAN_LAVA_BEAM_OVERLOAD             = 114738,
     SPELL_SHAMAN_LAVA_BURST                     = 51505,
@@ -1602,6 +1610,74 @@ class spell_sha_t3_8p_bonus : public AuraScript
     }
 };
 
+// Custom aura - Restore mana when Lightning Shield deals damage
+class spell_sha_lightning_shield_mana_restore : public AuraScript
+{
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8
+        });
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* procSpell = eventInfo.GetSpellInfo();
+        if (!procSpell || eventInfo.GetActor() != GetTarget())
+            return false;
+
+        switch (procSpell->Id)
+        {
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7:
+            case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8:
+                return true;
+            default:
+                break;
+        }
+
+        return false;
+    }
+
+    void HandleProc(AuraEffect* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo)
+            return;
+
+        uint32 damage = damageInfo->GetDamage();
+        if (!damage)
+            return;
+
+        int32 mana = CalculatePct(static_cast<int32>(damage), 50);
+        if (mana <= 0)
+            return;
+
+        if (Unit* shaman = GetTarget())
+            shaman->EnergizeBySpell(shaman, GetSpellInfo()->Id, mana, POWER_MANA);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_sha_lightning_shield_mana_restore::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_sha_lightning_shield_mana_restore::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 64928 - Item - Shaman T8 Elemental 4P Bonus
 class spell_sha_t8_elemental_4p_bonus : public AuraScript
 {
@@ -1958,6 +2034,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_tidal_waves);
     RegisterSpellScript(spell_sha_t3_6p_bonus);
     RegisterSpellScript(spell_sha_t3_8p_bonus);
+    RegisterSpellScript(spell_sha_lightning_shield_mana_restore);
     RegisterSpellScript(spell_sha_t8_elemental_4p_bonus);
     RegisterSpellScript(spell_sha_t9_elemental_4p_bonus);
     RegisterSpellScript(spell_sha_t10_elemental_4p_bonus);
