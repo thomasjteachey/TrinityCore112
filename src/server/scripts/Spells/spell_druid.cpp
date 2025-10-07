@@ -786,8 +786,8 @@ class spell_dru_innervate : public AuraScript
             if (caster->GetGUID() != target->GetGUID())
             {
                 CastSpellExtraArgs args(aurEff);
-                caster->CastSpell(caster, SPELL_DRUID_INNERVATE, args);
-                if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE, caster->GetGUID()))
+                caster->AddAura(SPELL_DRUID_INNERVATE, caster);
+                if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE))
                 {
                     int32 newDuration = innervate->GetDuration() / 2;
                     int32 newMaxDuration = innervate->GetMaxDuration() / 2;
@@ -806,7 +806,7 @@ class spell_dru_innervate : public AuraScript
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_dru_innervate::HandleApply, EFFECT_0, SPELL_AURA_MOD_MANA_REGEN_INTERRUPT);
+        AfterEffectApply += AuraEffectApplyFn(spell_dru_innervate::HandleApply, EFFECT_0, SPELL_AURA_MOD_MANA_REGEN_INTERRUPT, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -831,6 +831,34 @@ class spell_dru_insect_swarm : public AuraScript
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_insect_swarm::CalculateAmount, EFFECT_0,SPELL_AURA_PERIODIC_DAMAGE);
     }
 };
+
+class spell_humanoid_speed_pack : public AuraScript
+{
+    PrepareAuraScript(spell_humanoid_speed_pack);
+
+    // --- 1) Suppress the actual speed effect on noneligible targets ---
+    void HandleSpeedApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget(); // the unit receiving THIS effect instance
+        if (!caster || !target)
+            return;
+
+        if (target->GetCreatureType() != CREATURE_TYPE_HUMANOID || target->IsMounted())
+            PreventDefaultAction();
+    }
+
+    void Register() override
+    {
+        OnEffectApply += AuraEffectApplyFn(
+            spell_humanoid_speed_pack::HandleSpeedApply,
+            EFFECT_0,                       // adjust if your speed aura is effect 1/2
+            SPELL_AURA_MOD_SPEED_NOT_STACK,  // the speed aura on recipients
+            AURA_EFFECT_HANDLE_REAL
+        );
+    }
+};
+
 
 // 17007 - Leader of the Pack
 class spell_dru_leader_of_the_pack : public AuraScript
@@ -877,24 +905,31 @@ class spell_dru_leader_of_the_pack : public AuraScript
         caster->CastSpell(nullptr, SPELL_DRUID_IMP_LEADER_OF_THE_PACK_MANA, args2);
     }
 
-    void CalculateMovement(AuraEffect const* /*aurEff*/, int32& amount, bool& /*canBeRecalculated*/)
+    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        Unit* target = GetUnitOwner();
-        amount = 0;
-        if (GetCaster()->HasAura(81415))
+        Unit* caster = GetUnitOwner();
+        if (!caster || !caster->IsPlayer())
+            return;
+
+        // Cast friendly area aura from the druid (triggered = true)
+        if (caster->HasAura(81415))
         {
-            if (!target || target->GetCreatureType() != CREATURE_TYPE_HUMANOID)
-            {
-                return;
-            }
-            amount = 15;
+            caster->AddAura(81417, caster);
         }
     }
+
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetUnitOwner()->RemoveAura(81417);
+    }
+
 
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(spell_dru_leader_of_the_pack::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_leader_of_the_pack::CalculateMovement, EFFECT_2, SPELL_AURA_MOD_SPEED_NOT_STACK);
+        OnEffectApply += AuraEffectApplyFn(spell_dru_leader_of_the_pack::OnApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectRemove += AuraEffectRemoveFn(spell_dru_leader_of_the_pack::OnRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_DEFAULT);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_dru_leader_of_the_pack::OnRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_DEFAULT);
     }
 };
 
@@ -2047,7 +2082,6 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_glyph_of_starfire_dummy);
     RegisterSpellScript(spell_dru_idol_lifebloom);
     RegisterSpellScript(spell_dru_innervate);
-    RegisterSpellScript(spell_dru_innervate_self_share);
     RegisterSpellScript(spell_dru_insect_swarm);
     RegisterSpellScript(spell_dru_leader_of_the_pack);
     RegisterSpellScript(spell_dru_lifebloom);
@@ -2081,4 +2115,5 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus_dummy);
     RegisterSpellAndAuraScriptPair(spell_dru_wild_growth, spell_dru_wild_growth_aura);
     RegisterSpellScript(spell_dru_claw);
+    RegisterSpellScript(spell_humanoid_speed_pack);
 }

@@ -1454,6 +1454,87 @@ class spell_ps_cd_reduce : public SpellScript
     }
 };
 
+// 15487 - Silence
+class spell_pri_silence : public SpellScript
+{
+    PrepareSpellScript(spell_pri_silence);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 15487 });
+    }
+
+    void HandleEffectHit(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        if (caster->HasAura(81431))
+        {
+            caster->CastSpell(target, 81430, true);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pri_silence::HandleEffectHit, EFFECT_0, SPELL_AURA_MOD_SILENCE);
+    }
+};
+
+class spell_pre_renew_bonus : public AuraScript
+{
+    PrepareAuraScript(spell_pre_renew_bonus);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo(
+            {
+                81433,
+                81434,
+                81435
+            });
+    }
+
+    bool CheckProc(ProcEventInfo& /*eventInfo*/)
+    {
+        return true;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+        Unit* target = eventInfo.GetProcTarget();
+        uint32 spellId;
+
+        switch (target->GetPowerType())
+        {
+        case POWER_MANA:
+            spellId = 81433;
+            break;
+        case POWER_RAGE:
+            spellId = 81434;
+            break;
+        case POWER_ENERGY:
+            spellId = 81435;
+            break;
+        default:
+            return;
+        }
+
+        eventInfo.GetActor()->CastSpell(target, spellId, aurEff);
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_pre_renew_bonus::CheckProc);
+        OnEffectProc += AuraEffectProcFn(spell_pre_renew_bonus::HandleProc, EFFECT_0, SPELL_AURA_OVERRIDE_CLASS_SCRIPTS);
+    }
+};
+
+
 
 void AddSC_priest_spell_scripts()
 {
@@ -1494,4 +1575,5 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_pri_holy_fire);
     RegisterSpellScript(spell_pri_wisp_form);
     RegisterSpellScript(spell_ps_cd_reduce);
+    RegisterSpellScript(spell_pre_renew_bonus);
 }
