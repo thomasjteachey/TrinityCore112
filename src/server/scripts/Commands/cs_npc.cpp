@@ -685,6 +685,9 @@ public:
             return false;
         }
 
+        creature->SetName(player.GetName());
+        creature->SetPetNameTimestamp(uint32(GameTime::GetGameTime()));
+
         handler->PSendSysMessage("Copied appearance of %s onto the selected creature and saved it.", player.GetName().c_str());
         return true;
     }
