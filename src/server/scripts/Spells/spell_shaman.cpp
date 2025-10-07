@@ -2095,65 +2095,36 @@ class spell_sha_purge : public SpellScript
 
 
 
-// Custom aura - Restore mana when Lightning Shield deals damage
-class spell_sha_lightning_shield_mana_restore : public AuraScript
+// Custom spell - Restore mana when Lightning Shield deals damage
+class spell_sha_lightning_shield_mana_restore : public SpellScript
 {
-    PrepareAuraScript(spell_sha_lightning_shield_mana_restore);
+    PrepareSpellScript(spell_sha_lightning_shield_mana_restore);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7,
-            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8
-            });
+        return ValidateSpellInfo({ SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1 });
     }
 
-    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    void HandleAfterHit()
     {
-        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
-        if (!damageInfo)
+        Unit* caster = GetCaster();
+        if (!caster)
             return;
 
-        uint32 damage = damageInfo->GetDamage();
-        if (!damage)
+        int32 damage = GetHitDamage();
+        if (damage <= 0)
             return;
 
-        SpellInfo const* procSpell = eventInfo.GetSpellInfo();
-        if (!procSpell)
-            return;
-
-        switch (procSpell->Id)
-        {
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7:
-        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8:
-            break;
-        default:
-            return;
-        }
-
-        int32 mana = CalculatePct(static_cast<int32>(damage), 50);
+        int32 mana = CalculatePct(damage, 50);
         if (mana <= 0)
             return;
 
-        if (Unit* shaman = GetTarget())
-            shaman->EnergizeBySpell(shaman, GetSpellInfo()->Id, mana, POWER_MANA);
+        caster->EnergizeBySpell(caster, GetSpellInfo()->Id, mana, POWER_MANA);
     }
 
     void Register() override
     {
-        OnEffectProc += AuraEffectProcFn(spell_sha_lightning_shield_mana_restore::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        AfterHit += SpellHitFn(spell_sha_lightning_shield_mana_restore::HandleAfterHit);
     }
 };
 
