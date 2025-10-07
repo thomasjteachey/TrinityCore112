@@ -32,6 +32,8 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include <algorithm>
+#include <unordered_map>
 
 enum ShamanSpells
 {
@@ -52,8 +54,10 @@ enum ShamanSpells
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD          = 23552,
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD_DAMAGE   = 27635,
     SPELL_SHAMAN_ITEM_MANA_SURGE                = 23571,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DEFENSIVE_AURA = 81459,
     SPELL_SHAMAN_LAVA_FLOWS_R1                  = 51480,
     SPELL_SHAMAN_LAVA_FLOWS_TRIGGERED_R1        = 64694,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1       = 324,
     SPELL_SHAMAN_LIGHTNING_SHIELD_R1            = 26364,
     SPELL_SHAMAN_MANA_SPRING_TOTEM_ENERGIZE     = 52032,
     SPELL_SHAMAN_MANA_TIDE_TOTEM                = 39609,
@@ -1170,9 +1174,18 @@ class spell_sha_lightning_shield : public AuraScript
 {
     PrepareAuraScript(spell_sha_lightning_shield);
 
+public:
+    static void UpdateSnareState(Unit* target, uint8 charges)
+    {
+        ApplySnareReduction(target, charges, target);
+    }
+
+private:
+    using SnareDurationMap = std::unordered_map<Aura const*, int32>;
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_SHAMAN_LIGHTNING_SHIELD_R1 });
+        return ValidateSpellInfo({ SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1, SPELL_SHAMAN_LIGHTNING_SHIELD_R1 });
     }
 
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -1182,20 +1195,181 @@ class spell_sha_lightning_shield : public AuraScript
         return false;
     }
 
+    static void CleanupStoredSnares(Unit* target, std::unordered_map<Aura const*, int32>& storedDurations)
+    {
+        if (!target)
+            return;
+
+        for (auto itr = storedDurations.begin(); itr != storedDurations.end();)
+        {
+            Aura const* aura = itr->first;
+            if (!aura || aura->IsRemoved() || aura->GetOwner() != target)
+                itr = storedDurations.erase(itr);
+            else
+                ++itr;
+        }
+    }
+
+    static void RestoreSnareDurations(Unit* target)
+    {
+        if (!target)
+            return;
+
+        auto storage = _snareBaseDurations.find(target->GetGUID());
+        if (storage == _snareBaseDurations.end())
+            return;
+
+        CleanupStoredSnares(target, storage->second);
+
+        for (auto const& [auraPtr, baseMaxDuration] : storage->second)
+        {
+            Aura* aura = const_cast<Aura*>(auraPtr);
+            if (!aura || aura->IsRemoved() || aura->GetOwner() != target)
+                continue;
+
+            aura->SetMaxDuration(baseMaxDuration);
+            if (aura->GetDuration() > baseMaxDuration)
+                aura->SetDuration(baseMaxDuration);
+        }
+
+        _snareBaseDurations.erase(storage);
+    }
+
+    static bool HasLightningShieldDefensiveAura(Unit* unit)
+    {
+        return unit && unit->HasAura(SPELL_SHAMAN_LIGHTNING_SHIELD_DEFENSIVE_AURA);
+    }
+
+    static void ApplySnareReduction(Unit* target, uint8 charges, Unit* auraOwner = nullptr)
+    {
+        if (!target)
+            return;
+
+        Unit* defensiveAuraOwner = auraOwner ? auraOwner : target;
+
+        if (!HasLightningShieldDefensiveAura(defensiveAuraOwner))
+        {
+            RestoreSnareDurations(target);
+            return;
+        }
+
+        if (!charges)
+        {
+            RestoreSnareDurations(target);
+            return;
+        }
+
+        SnareDurationMap& storedDurations = _snareBaseDurations[target->GetGUID()];
+        CleanupStoredSnares(target, storedDurations);
+
+        int32 modifier = std::max(0, 100 - static_cast<int32>(charges) * 15);
+
+        auto const& snareEffects = target->GetAuraEffectsByType(SPELL_AURA_MOD_DECREASE_SPEED);
+        for (AuraEffect* snareEffect : snareEffects)
+        {
+            if (!snareEffect)
+                continue;
+
+            if (snareEffect->GetAmount() >= 0)
+                continue;
+
+            Aura* aura = snareEffect->GetBase();
+            if (!aura)
+                continue;
+
+            auto [itr, inserted] = storedDurations.try_emplace(aura, aura->GetMaxDuration());
+            int32 baseMaxDuration = itr->second;
+
+            int32 newMaxDuration = CalculatePct(baseMaxDuration, modifier);
+            aura->SetMaxDuration(newMaxDuration);
+            if (aura->GetDuration() > newMaxDuration)
+                aura->SetDuration(newMaxDuration);
+        }
+
+        if (storedDurations.empty())
+            _snareBaseDurations.erase(target->GetGUID());
+    }
+
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
+
+        Aura* lightningShieldAura = aurEff->GetBase();
+        uint8 chargesForReduction = lightningShieldAura ? lightningShieldAura->GetCharges() : 0;
+        if (!chargesForReduction)
+            chargesForReduction = 1;
+
+        Unit* auraOwner = aurEff->GetCaster();
+        if (!auraOwner)
+            auraOwner = GetTarget();
+
+        bool hasDefensiveAura = HasLightningShieldDefensiveAura(auraOwner);
+
+        if (hasDefensiveAura)
+            ApplySnareReduction(GetTarget(), chargesForReduction, auraOwner);
+        else
+            RestoreSnareDurations(GetTarget());
+
+        if (DamageInfo* damageInfo = eventInfo.GetDamageInfo())
+        {
+            if (damageInfo->GetDamage() && hasDefensiveAura)
+            {
+                int32 damageReductionPct = static_cast<int32>(chargesForReduction) * 2;
+                if (damageReductionPct > 0)
+                {
+                    int32 damageReduction = CalculatePct(static_cast<int32>(damageInfo->GetDamage()), damageReductionPct);
+                    damageInfo->ModifyDamage(-damageReduction);
+                }
+            }
+        }
+
         uint32 triggerSpell = sSpellMgr->GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, aurEff->GetSpellInfo()->GetRank());
 
         eventInfo.GetActionTarget()->CastSpell(eventInfo.GetActor(), triggerSpell, aurEff);
+    }
+
+    void HandleAfterProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
+    {
+        Unit* auraOwner = aurEff->GetCaster();
+        if (!auraOwner)
+            auraOwner = GetTarget();
+
+        if (HasLightningShieldDefensiveAura(auraOwner))
+            ApplySnareReduction(GetTarget(), aurEff->GetBase()->GetCharges(), auraOwner);
+        else
+            RestoreSnareDurations(GetTarget());
+    }
+
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* auraOwner = aurEff->GetCaster();
+        if (!auraOwner)
+            auraOwner = GetTarget();
+
+        if (HasLightningShieldDefensiveAura(auraOwner))
+            ApplySnareReduction(GetTarget(), aurEff->GetBase()->GetCharges(), auraOwner);
+        else
+            RestoreSnareDurations(GetTarget());
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        RestoreSnareDurations(GetTarget());
     }
 
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_sha_lightning_shield::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_sha_lightning_shield::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        AfterEffectProc += AuraEffectProcFn(spell_sha_lightning_shield::HandleAfterProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        AfterEffectApply += AuraEffectApplyFn(spell_sha_lightning_shield::HandleApply, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_sha_lightning_shield::HandleRemove, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
     }
+
+    static std::unordered_map<ObjectGuid, SnareDurationMap> _snareBaseDurations;
 };
+
+std::unordered_map<ObjectGuid, spell_sha_lightning_shield::SnareDurationMap> spell_sha_lightning_shield::_snareBaseDurations;
 
 // 53817 - Maelstrom Weapon
 class spell_sha_maelstrom_weapon : public AuraScript
@@ -1525,6 +1699,7 @@ class spell_sha_static_shock : public AuraScript
         uint32 spellId = sSpellMgr->GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1, lightningShield->GetSpellInfo()->GetRank());
         eventInfo.GetActor()->CastSpell(eventInfo.GetProcTarget(), spellId, aurEff);
         lightningShield->GetBase()->DropCharge();
+        spell_sha_lightning_shield::UpdateSnareState(caster, lightningShield->GetBase()->GetCharges());
     }
 
     void Register() override
