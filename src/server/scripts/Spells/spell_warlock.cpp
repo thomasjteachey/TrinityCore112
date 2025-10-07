@@ -85,6 +85,21 @@ enum WarlockSpells
     SPELL_REPLENISHMENT                             = 57669,
     SPELL_WARLOCK_SHADOWFLAME                       = 37378,
     SPELL_WARLOCK_FLAMESHADOW                       = 37379,
+    SPELL_WARLOCK_SHADOWBURN_R1                     = 17877,
+    SPELL_WARLOCK_SHADOWBURN_R2                     = 17919,
+    SPELL_WARLOCK_SHADOWBURN_R3                     = 17920,
+    SPELL_WARLOCK_SHADOWBURN_R4                     = 17921,
+    SPELL_WARLOCK_SHADOWBURN_R5                     = 17922,
+    SPELL_WARLOCK_SHADOWBURN_R6                     = 17923,
+    SPELL_WARLOCK_FEAR_R1                           = 5782,
+    SPELL_WARLOCK_FEAR_R2                           = 6213,
+    SPELL_WARLOCK_FEAR_R3                           = 6215,
+    SPELL_WARLOCK_HOWL_OF_TERROR_R1                 = 5484,
+    SPELL_WARLOCK_HOWL_OF_TERROR_R2                 = 17928,
+    SPELL_WARLOCK_DEATH_COIL_R1                     = 6789,
+    SPELL_WARLOCK_DEATH_COIL_R2                     = 17925,
+    SPELL_WARLOCK_DEATH_COIL_R3                     = 17926,
+    SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA       = 81454,
     SPELL_WARLOCK_GLYPH_OF_SUCCUBUS                 = 56250,
     SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1            = 18213,
     SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC          = 18371,
@@ -1059,6 +1074,67 @@ class spell_warl_seed_of_corruption_generic : public AuraScript
     }
 };
 
+// -17877 - Shadowburn (all ranks)
+class spell_warl_shadowburn : public SpellScript
+{
+    PrepareSpellScript(spell_warl_shadowburn);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo(
+        {
+            SPELL_WARLOCK_SHADOWBURN_R1,
+            SPELL_WARLOCK_SHADOWBURN_R2,
+            SPELL_WARLOCK_SHADOWBURN_R3,
+            SPELL_WARLOCK_SHADOWBURN_R4,
+            SPELL_WARLOCK_SHADOWBURN_R5,
+            SPELL_WARLOCK_SHADOWBURN_R6,
+            SPELL_WARLOCK_FEAR_R1,
+            SPELL_WARLOCK_FEAR_R2,
+            SPELL_WARLOCK_FEAR_R3,
+            SPELL_WARLOCK_HOWL_OF_TERROR_R1,
+            SPELL_WARLOCK_HOWL_OF_TERROR_R2,
+            SPELL_WARLOCK_DEATH_COIL_R1,
+            SPELL_WARLOCK_DEATH_COIL_R2,
+            SPELL_WARLOCK_DEATH_COIL_R3,
+            SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA
+        });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        if (Unit* target = GetHitUnit())
+        {
+            static uint32 const fearAndHorrorSpells[] =
+            {
+                SPELL_WARLOCK_FEAR_R1,
+                SPELL_WARLOCK_FEAR_R2,
+                SPELL_WARLOCK_FEAR_R3,
+                SPELL_WARLOCK_HOWL_OF_TERROR_R1,
+                SPELL_WARLOCK_HOWL_OF_TERROR_R2,
+                SPELL_WARLOCK_DEATH_COIL_R1,
+                SPELL_WARLOCK_DEATH_COIL_R2,
+                SPELL_WARLOCK_DEATH_COIL_R3
+            };
+
+            for (uint32 spellId : fearAndHorrorSpells)
+                if (Aura* aura = target->GetAura(spellId, caster->GetGUID()))
+                    aura->Remove();
+        }
+
+        caster->CastSpell(caster, SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, true);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_warl_shadowburn::HandleAfterHit);
+    }
+};
+
 // -6229 - Shadow Ward
 class spell_warl_shadow_ward : public AuraScript
 {
@@ -1426,6 +1502,7 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_seed_of_corruption);
     RegisterSpellScript(spell_warl_seed_of_corruption_dummy);
     RegisterSpellScript(spell_warl_seed_of_corruption_generic);
+    RegisterSpellScript(spell_warl_shadowburn);
     RegisterSpellScript(spell_warl_shadow_ward);
     RegisterSpellScript(spell_warl_siphon_life);
     RegisterSpellScript(spell_warl_soul_leech);
