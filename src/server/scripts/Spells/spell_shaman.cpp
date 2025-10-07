@@ -2119,7 +2119,8 @@ class spell_sha_lightning_shield_mana_restore : public SpellScript
         if (mana <= 0)
             return;
 
-        caster->EnergizeBySpell(caster, GetSpellInfo()->Id, mana, POWER_MANA);
+        if(caster->HasAura(81455))
+            caster->EnergizeBySpell(caster, GetSpellInfo()->Id, mana, POWER_MANA);
     }
 
     void Register() override
