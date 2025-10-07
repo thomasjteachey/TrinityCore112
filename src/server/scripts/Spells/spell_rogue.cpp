@@ -844,33 +844,6 @@ class spell_rog_setup : public AuraScript
 };
 
 
-
-class spell_rog_vanish_short_immunity : public AuraScript
-{
-    PrepareAuraScript(spell_rog_vanish_short_immunity);
-
-    void Absorb(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& absorbAmount)
-    {
-        absorbAmount = dmgInfo.GetDamage();
-    }
-
-    bool CheckProc(ProcEventInfo& eventInfo)
-    {
-        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
-        if (!spellInfo)
-            return true;
-
-        return !spellInfo->IsPositive();
-    }
-
-    void Register() override
-    {
-        OnEffectAbsorb += AuraEffectAbsorbFn(spell_rog_vanish_short_immunity::Absorb, EFFECT_0);
-        DoCheckProc += AuraCheckProcFn(spell_rog_vanish_short_immunity::CheckProc);
-    }
-};
-
-
 // 1776 et al - Gouge
 class spell_rog_gouge : public SpellScript
 {
@@ -1151,7 +1124,7 @@ class spell_rog_vanish : public AuraScript
         unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
 
         if(unitTarget->HasAura(81412))
-            unitTarget->CastSpell(nullptr, 81410, true);
+            unitTarget->CastSpell(nullptr, 81439, true);
     }
 
     void Register() override
@@ -1222,5 +1195,4 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_imp_sap);
     RegisterSpellScript(spell_rog_poison);
     RegisterSpellScript(spell_rog_evasion);
-    RegisterSpellScript(spell_rog_vanish_short_immunity);
 }

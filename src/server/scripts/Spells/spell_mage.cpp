@@ -1332,6 +1332,28 @@ class spell_mage_summon_water_elemental : public SpellScript
     }
 };
 
+//81452
+class spell_mage_remove_recalibrating : public AuraScript
+{
+    PrepareAuraScript(spell_mage_remove_recalibrating);
+
+    bool Validate(SpellInfo const* spell) override
+    {
+        return true;
+    }
+
+    void AfterApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        if (Unit* caster = GetCaster())
+            caster->RemoveAura(81333);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_mage_remove_recalibrating::AfterApply, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 void AddSC_mage_spell_scripts()
 {
     RegisterSpellScript(spell_mage_arcane_potency);
@@ -1369,4 +1391,5 @@ void AddSC_mage_spell_scripts()
     new spell_mage_polymorph_cast_visual();
     RegisterSpellScript(spell_mage_summon_water_elemental);
     RegisterSpellScript(spell_mage_ignite_tick);
+    RegisterSpellScript(spell_mage_remove_recalibrating);
 }

@@ -33,6 +33,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Pet.h"
+#include "SpellHistory.h"
 
 enum WarlockSpells
 {
@@ -1400,6 +1401,56 @@ class spell_warl_pyroclasm : public SpellScript
     }
 };
 
+//6789 death coil
+class spell_warl_death_coil : public SpellScript
+{
+    PrepareSpellScript(spell_warl_death_coil);
+
+    static constexpr uint32 kWarlockDeathCoilIds[] = {
+        6789,   // Rank 1
+        17925,  // Rank 2
+        17926  // Rank 3
+    };
+
+    static constexpr uint32 GCD_REDUCE_MS = 750;    // subtract 0.75s from applied GCD
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(81375))
+            return;
+
+        SpellInfo const* si = GetSpellInfo();
+        if (!si)
+            return;
+
+        // Only act for our exact registered Death Coil ranks
+        bool isDc = false;
+        for (uint32 id : kWarlockDeathCoilIds)
+            if (id == si->Id) { isDc = true; break; }
+        if (!isDc)
+            return;
+
+        // Cancel the GCD that was just applied, and re-add a shorter one.
+        caster->GetSpellHistory()->CancelGlobalCooldown(si);
+        //auto& gcdMgr = caster->GetGlobalCooldownMgr();
+
+        // If you want "set to fixed 750ms" instead, just use AddGlobalCooldown(si, 750) and return.
+        // Since 3.3.5 doesn't expose the currently computed GCD duration directly,
+        // we emulate "reduce by 750ms" by assuming a 1500ms base and letting haste floor on client feel.
+        // If you have a helper that computes current GCD, swap it in for `baseMs`.
+        uint32 baseMs = 1500; // typical base GCD for most spells in WotLK
+        uint32 newMs = (baseMs > GCD_REDUCE_MS) ? (baseMs - GCD_REDUCE_MS) : 0;
+        caster->GetSpellHistory()->AddGlobalCooldown(si, newMs);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_death_coil::HandleAfterCast);
+    }
+};
+
+
 void AddSC_warlock_spell_scripts()
 {
     RegisterSpellScript(spell_warl_curse_of_agony);
@@ -1436,4 +1487,5 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_demon_conceal);
     RegisterSpellScript(spell_pet_firebolt);
     RegisterSpellScript(spell_warl_pyroclasm);
+    RegisterSpellScript(spell_warl_death_coil);
 }

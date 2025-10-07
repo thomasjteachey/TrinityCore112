@@ -32,6 +32,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include "SharedDefines.h"
 
 enum ShamanSpells
 {
@@ -86,7 +87,6 @@ enum ShamanSpells
     SPELL_SHAMAN_FLAMETONGUE_ATTACK             = 10444,
     SPELL_SHAMAN_LIGHTNING_BOLT_OVERLOAD_R1     = 45284,
     SPELL_SHAMAN_CHAIN_LIGHTNING_OVERLOAD_R1    = 45297,
-    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1     = 26364,
     SPELL_SHAMAN_SHAMANISTIC_RAGE_PROC          = 30824,
     SPELL_SHAMAN_STONECLAW_TOTEM                = 55277,
     SPELL_SHAMAN_GLYPH_OF_STONECLAW_TOTEM       = 63298,
@@ -95,6 +95,14 @@ enum ShamanSpells
     SPELL_SHAMAN_BLESSING_OF_THE_ETERNALS_R1    = 51554,
     SPELL_SHAMAN_IMPROVED_WEAPON_TOTEMS         = 29192,
     SPELL_SHAMAN_FOCUSED_INSIGHT                = 77800,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1 = 26364,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2 = 26365,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3 = 26366,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4 = 26367,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5 = 26369,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6 = 26370,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7 = 26371,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8 = 26372,
     SPELL_SHAMAN_EXPUNGE                        = 81326,
     SPELL_SHAMAN_BRAIN_DRAIN                    = 81327,
     SPELL_SHAMAN_SHOCKING                       = 81328,
@@ -2085,6 +2093,70 @@ class spell_sha_purge : public SpellScript
     }
 };
 
+
+
+// Custom aura - Restore mana when Lightning Shield deals damage
+class spell_sha_lightning_shield_mana_restore : public AuraScript
+{
+    PrepareAuraScript(spell_sha_lightning_shield_mana_restore);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7,
+            SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8
+            });
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+        if (!damageInfo)
+            return;
+
+        uint32 damage = damageInfo->GetDamage();
+        if (!damage)
+            return;
+
+        SpellInfo const* procSpell = eventInfo.GetSpellInfo();
+        if (!procSpell)
+            return;
+
+        switch (procSpell->Id)
+        {
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7:
+        case SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8:
+            break;
+        default:
+            return;
+        }
+
+        int32 mana = CalculatePct(static_cast<int32>(damage), 50);
+        if (mana <= 0)
+            return;
+
+        if (Unit* shaman = GetTarget())
+            shaman->EnergizeBySpell(shaman, GetSpellInfo()->Id, mana, POWER_MANA);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_sha_lightning_shield_mana_restore::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 class spell_sha_old_purge : public SpellScript
 {
     PrepareSpellScript(spell_sha_old_purge);
@@ -2279,4 +2351,5 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_old_purge);
     RegisterSpellScript(spell_sha_fire_nova_trig);
     RegisterSpellScript(spell_totem_cd_reduce);
+    RegisterSpellScript(spell_sha_lightning_shield_mana_restore);
 }

@@ -5349,7 +5349,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 bool pounceOk = false;
                 if (m_spellInfo->SpellIconID == 495)
                 {
-                    if (m_caster->IsPlayer() && m_caster->ToPlayer()->HasAura(48410))//primal precision
+                    if (m_caster->IsPlayer() && m_caster->ToPlayer()->HasAura(81451))//bastet's pounce
                     {
                         pounceOk = true;
                     }

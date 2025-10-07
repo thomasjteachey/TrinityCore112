@@ -34,7 +34,6 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "SpellHistory.h"
-#include "SharedDefines.h"
 
 enum PriestSpells
 {
@@ -1456,19 +1455,19 @@ class spell_ps_cd_reduce : public SpellScript
 };
 
 // 15487 - Silence
-class spell_pri_silence : public SpellScript
+class spell_pri_silence : public AuraScript
 {
-    PrepareSpellScript(spell_pri_silence);
+    PrepareAuraScript(spell_pri_silence);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ 15487 });
+        return true;
     }
 
-    void HandleEffectHit(SpellEffIndex /*effIndex*/)
+    void HandleEffectHit(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
     {
         Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
+        Unit* target = GetTarget();
 
         if (!caster || !target)
             return;
@@ -1481,13 +1480,15 @@ class spell_pri_silence : public SpellScript
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_pri_silence::HandleEffectHit, EFFECT_0, SPELL_AURA_MOD_SILENCE);
+        AfterEffectApply += AuraEffectApplyFn(spell_pri_silence::HandleEffectHit, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
 // 528 - Dispel Magic
 class spell_pri_dispel_magic : public SpellScript
 {
+    PrepareSpellScript(spell_pri_dispel_magic);
+
     bool Validate(SpellInfo const* spellInfo) override
     {
         return ValidateSpellInfo({ 81436 });
@@ -1507,8 +1508,11 @@ class spell_pri_dispel_magic : public SpellScript
         if (GetEffectInfo(effIndex).MiscValue != DISPEL_MAGIC)
             return;
 
-        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        caster->CastSpell(caster, 81436, args);
+        if (caster->HasAura(81440))
+        {
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            caster->CastSpell(caster, 81436, args);
+        }
     }
 
     void Register() override
@@ -1611,4 +1615,5 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_ps_cd_reduce);
     RegisterSpellScript(spell_pre_renew_bonus);
     RegisterSpellScript(spell_pri_dispel_magic);
+    RegisterSpellScript(spell_pri_silence);
 }
