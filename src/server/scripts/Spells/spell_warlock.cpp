@@ -33,6 +33,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Pet.h"
+#include "SpellHistory.h"
 
 enum WarlockSpells
 {
@@ -85,6 +86,21 @@ enum WarlockSpells
     SPELL_REPLENISHMENT                             = 57669,
     SPELL_WARLOCK_SHADOWFLAME                       = 37378,
     SPELL_WARLOCK_FLAMESHADOW                       = 37379,
+    SPELL_WARLOCK_SHADOWBURN_R1                     = 17877,
+    SPELL_WARLOCK_SHADOWBURN_R2                     = 17919,
+    SPELL_WARLOCK_SHADOWBURN_R3                     = 17920,
+    SPELL_WARLOCK_SHADOWBURN_R4                     = 17921,
+    SPELL_WARLOCK_SHADOWBURN_R5                     = 17922,
+    SPELL_WARLOCK_SHADOWBURN_R6                     = 17923,
+    SPELL_WARLOCK_FEAR_R1                           = 5782,
+    SPELL_WARLOCK_FEAR_R2                           = 6213,
+    SPELL_WARLOCK_FEAR_R3                           = 6215,
+    SPELL_WARLOCK_HOWL_OF_TERROR_R1                 = 5484,
+    SPELL_WARLOCK_HOWL_OF_TERROR_R2                 = 17928,
+    SPELL_WARLOCK_DEATH_COIL_R1                     = 6789,
+    SPELL_WARLOCK_DEATH_COIL_R2                     = 17925,
+    SPELL_WARLOCK_DEATH_COIL_R3                     = 17926,
+    SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA       = 81457,
     SPELL_WARLOCK_GLYPH_OF_SUCCUBUS                 = 56250,
     SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1            = 18213,
     SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC          = 18371,
@@ -1059,6 +1075,69 @@ class spell_warl_seed_of_corruption_generic : public AuraScript
     }
 };
 
+// -17877 - Shadowburn (all ranks)
+class spell_warl_shadowburn : public SpellScript
+{
+    PrepareSpellScript(spell_warl_shadowburn);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo(
+        {
+            SPELL_WARLOCK_SHADOWBURN_R1,
+            SPELL_WARLOCK_SHADOWBURN_R2,
+            SPELL_WARLOCK_SHADOWBURN_R3,
+            SPELL_WARLOCK_SHADOWBURN_R4,
+            SPELL_WARLOCK_SHADOWBURN_R5,
+            SPELL_WARLOCK_SHADOWBURN_R6,
+            SPELL_WARLOCK_FEAR_R1,
+            SPELL_WARLOCK_FEAR_R2,
+            SPELL_WARLOCK_FEAR_R3,
+            SPELL_WARLOCK_HOWL_OF_TERROR_R1,
+            SPELL_WARLOCK_HOWL_OF_TERROR_R2,
+            SPELL_WARLOCK_DEATH_COIL_R1,
+            SPELL_WARLOCK_DEATH_COIL_R2,
+            SPELL_WARLOCK_DEATH_COIL_R3,
+            SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA
+        });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        if (Unit* target = GetHitUnit())
+        {
+            static uint32 const fearAndHorrorSpells[] =
+            {
+                SPELL_WARLOCK_FEAR_R1,
+                SPELL_WARLOCK_FEAR_R2,
+                SPELL_WARLOCK_FEAR_R3,
+                SPELL_WARLOCK_HOWL_OF_TERROR_R1,
+                SPELL_WARLOCK_HOWL_OF_TERROR_R2,
+                SPELL_WARLOCK_DEATH_COIL_R1,
+                SPELL_WARLOCK_DEATH_COIL_R2,
+                SPELL_WARLOCK_DEATH_COIL_R3
+            };
+            if (caster->HasAura(81456) && !caster->HasAura(81458))
+            {
+                caster->AddAura(SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, caster);
+                caster->AddAura(81458, caster);
+                for (uint32 spellId : fearAndHorrorSpells)
+                    if (Aura* aura = target->GetAura(spellId, caster->GetGUID()))
+                        aura->Remove();
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_warl_shadowburn::HandleAfterHit);
+    }
+};
+
 // -6229 - Shadow Ward
 class spell_warl_shadow_ward : public AuraScript
 {
@@ -1400,6 +1479,56 @@ class spell_warl_pyroclasm : public SpellScript
     }
 };
 
+//6789 death coil
+class spell_warl_death_coil : public SpellScript
+{
+    PrepareSpellScript(spell_warl_death_coil);
+
+    static constexpr uint32 kWarlockDeathCoilIds[] = {
+        6789,   // Rank 1
+        17925,  // Rank 2
+        17926  // Rank 3
+    };
+
+    static constexpr uint32 GCD_REDUCE_MS = 750;    // subtract 0.75s from applied GCD
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(81375))
+            return;
+
+        SpellInfo const* si = GetSpellInfo();
+        if (!si)
+            return;
+
+        // Only act for our exact registered Death Coil ranks
+        bool isDc = false;
+        for (uint32 id : kWarlockDeathCoilIds)
+            if (id == si->Id) { isDc = true; break; }
+        if (!isDc)
+            return;
+
+        // Cancel the GCD that was just applied, and re-add a shorter one.
+        caster->GetSpellHistory()->CancelGlobalCooldown(si);
+        //auto& gcdMgr = caster->GetGlobalCooldownMgr();
+
+        // If you want "set to fixed 750ms" instead, just use AddGlobalCooldown(si, 750) and return.
+        // Since 3.3.5 doesn't expose the currently computed GCD duration directly,
+        // we emulate "reduce by 750ms" by assuming a 1500ms base and letting haste floor on client feel.
+        // If you have a helper that computes current GCD, swap it in for `baseMs`.
+        uint32 baseMs = 1500; // typical base GCD for most spells in WotLK
+        uint32 newMs = (baseMs > GCD_REDUCE_MS) ? (baseMs - GCD_REDUCE_MS) : 0;
+        caster->GetSpellHistory()->AddGlobalCooldown(si, newMs);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_death_coil::HandleAfterCast);
+    }
+};
+
+
 void AddSC_warlock_spell_scripts()
 {
     RegisterSpellScript(spell_warl_curse_of_agony);
@@ -1426,6 +1555,7 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_seed_of_corruption);
     RegisterSpellScript(spell_warl_seed_of_corruption_dummy);
     RegisterSpellScript(spell_warl_seed_of_corruption_generic);
+    RegisterSpellScript(spell_warl_shadowburn);
     RegisterSpellScript(spell_warl_shadow_ward);
     RegisterSpellScript(spell_warl_siphon_life);
     RegisterSpellScript(spell_warl_soul_leech);
@@ -1436,4 +1566,5 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_demon_conceal);
     RegisterSpellScript(spell_pet_firebolt);
     RegisterSpellScript(spell_warl_pyroclasm);
+    RegisterSpellScript(spell_warl_death_coil);
 }

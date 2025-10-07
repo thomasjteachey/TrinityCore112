@@ -34,6 +34,7 @@
 #include "Unit.h"
 #include <algorithm>
 #include <unordered_map>
+#include "SharedDefines.h"
 
 enum ShamanSpells
 {
@@ -90,7 +91,6 @@ enum ShamanSpells
     SPELL_SHAMAN_FLAMETONGUE_ATTACK             = 10444,
     SPELL_SHAMAN_LIGHTNING_BOLT_OVERLOAD_R1     = 45284,
     SPELL_SHAMAN_CHAIN_LIGHTNING_OVERLOAD_R1    = 45297,
-    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1     = 26364,
     SPELL_SHAMAN_SHAMANISTIC_RAGE_PROC          = 30824,
     SPELL_SHAMAN_STONECLAW_TOTEM                = 55277,
     SPELL_SHAMAN_GLYPH_OF_STONECLAW_TOTEM       = 63298,
@@ -99,6 +99,14 @@ enum ShamanSpells
     SPELL_SHAMAN_BLESSING_OF_THE_ETERNALS_R1    = 51554,
     SPELL_SHAMAN_IMPROVED_WEAPON_TOTEMS         = 29192,
     SPELL_SHAMAN_FOCUSED_INSIGHT                = 77800,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1 = 26364,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R2 = 26365,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R3 = 26366,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R4 = 26367,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R5 = 26369,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6 = 26370,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7 = 26371,
+    SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8 = 26372,
     SPELL_SHAMAN_EXPUNGE                        = 81326,
     SPELL_SHAMAN_BRAIN_DRAIN                    = 81327,
     SPELL_SHAMAN_SHOCKING                       = 81328,
@@ -2260,6 +2268,41 @@ class spell_sha_purge : public SpellScript
     }
 };
 
+
+
+// Custom spell - Restore mana when Lightning Shield deals damage
+class spell_sha_lightning_shield_mana_restore : public SpellScript
+{
+    PrepareSpellScript(spell_sha_lightning_shield_mana_restore);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1 });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        int32 damage = GetHitDamage();
+        if (damage <= 0)
+            return;
+
+        int32 mana = CalculatePct(damage, 50);
+        if (mana <= 0)
+            return;
+
+        caster->EnergizeBySpell(caster, GetSpellInfo()->Id, mana, POWER_MANA);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_sha_lightning_shield_mana_restore::HandleAfterHit);
+    }
+};
+
 class spell_sha_old_purge : public SpellScript
 {
     PrepareSpellScript(spell_sha_old_purge);
@@ -2454,4 +2497,5 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_old_purge);
     RegisterSpellScript(spell_sha_fire_nova_trig);
     RegisterSpellScript(spell_totem_cd_reduce);
+    RegisterSpellScript(spell_sha_lightning_shield_mana_restore);
 }
