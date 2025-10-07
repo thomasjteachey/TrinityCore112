@@ -100,7 +100,7 @@ enum WarlockSpells
     SPELL_WARLOCK_DEATH_COIL_R1                     = 6789,
     SPELL_WARLOCK_DEATH_COIL_R2                     = 17925,
     SPELL_WARLOCK_DEATH_COIL_R3                     = 17926,
-    SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA       = 81454,
+    SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA       = 81457,
     SPELL_WARLOCK_GLYPH_OF_SUCCUBUS                 = 56250,
     SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_R1            = 18213,
     SPELL_WARLOCK_IMPROVED_DRAIN_SOUL_PROC          = 18371,
@@ -1121,13 +1121,15 @@ class spell_warl_shadowburn : public SpellScript
                 SPELL_WARLOCK_DEATH_COIL_R2,
                 SPELL_WARLOCK_DEATH_COIL_R3
             };
-
-            for (uint32 spellId : fearAndHorrorSpells)
-                if (Aura* aura = target->GetAura(spellId, caster->GetGUID()))
-                    aura->Remove();
+            if (caster->HasAura(81456) && !caster->HasAura(81458))
+            {
+                caster->AddAura(SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, caster);
+                caster->AddAura(81458, caster);
+                for (uint32 spellId : fearAndHorrorSpells)
+                    if (Aura* aura = target->GetAura(spellId, caster->GetGUID()))
+                        aura->Remove();
+            }
         }
-
-        caster->CastSpell(caster, SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, true);
     }
 
     void Register() override
