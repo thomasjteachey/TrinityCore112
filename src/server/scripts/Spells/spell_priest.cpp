@@ -34,6 +34,7 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "SpellHistory.h"
+#include "SharedDefines.h"
 
 enum PriestSpells
 {
@@ -1484,6 +1485,39 @@ class spell_pri_silence : public SpellScript
     }
 };
 
+// 528 - Dispel Magic
+class spell_pri_dispel_magic : public SpellScript
+{
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return ValidateSpellInfo({ 81436 });
+    }
+
+    void HandleSuccessfulDispel(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        if (caster->IsFriendlyTo(target))
+            return;
+
+        if (GetEffectInfo(effIndex).MiscValue != DISPEL_MAGIC)
+            return;
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        caster->CastSpell(caster, 81436, args);
+    }
+
+    void Register() override
+    {
+        OnEffectSuccessfulDispel += SpellEffectFn(spell_pri_dispel_magic::HandleSuccessfulDispel, EFFECT_0, SPELL_EFFECT_DISPEL);
+    }
+};
+
+
 class spell_pre_renew_bonus : public AuraScript
 {
     PrepareAuraScript(spell_pre_renew_bonus);
@@ -1576,4 +1610,5 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_pri_wisp_form);
     RegisterSpellScript(spell_ps_cd_reduce);
     RegisterSpellScript(spell_pre_renew_bonus);
+    RegisterSpellScript(spell_pri_dispel_magic);
 }
