@@ -2657,6 +2657,8 @@ void Spell::EffectDispel()
     }
     m_caster->SendMessageToSet(&dataSuccess, true);
 
+    CallScriptSuccessfulDispel(effectInfo->EffectIndex);
+
     // On success dispel
     // Devour Magic
     if (m_spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK && m_spellInfo->GetCategory() == SPELLCATEGORY_DEVOUR_MAGIC)
@@ -4819,8 +4821,13 @@ void Spell::EffectDispelMechanic()
                 dispel_list.emplace_back(aura->GetId(), aura->GetCasterGUID());
     }
 
+    if (dispel_list.empty())
+        return;
+
     for (auto itr = dispel_list.begin(); itr != dispel_list.end(); ++itr)
         unitTarget->RemoveAura(itr->first, itr->second, 0, AURA_REMOVE_BY_ENEMY_SPELL);
+
+    CallScriptSuccessfulDispel(effectInfo->EffectIndex);
 }
 
 void Spell::EffectResurrectPet()
