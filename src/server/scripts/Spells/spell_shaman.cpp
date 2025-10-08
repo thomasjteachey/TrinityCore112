@@ -1177,6 +1177,64 @@ class spell_sha_lava_lash : public SpellScript
 
 };
 
+// 81459 - Lightning Shield Defense
+class spell_sha_lightning_shield_defense : public AuraScript
+{
+    PrepareAuraScript(spell_sha_lightning_shield_defense);
+
+public:
+    static void UpdateEffectAmounts(Unit* owner)
+    {
+        if (!owner)
+            return;
+
+        if (Aura* aura = owner->GetAura(SPELL_SHAMAN_LIGHTNING_SHIELD_DEFENSIVE_AURA))
+        {
+            if (AuraEffect* snareMod = aura->GetEffect(EFFECT_1))
+                snareMod->RecalculateAmount();
+
+            if (AuraEffect* damageMod = aura->GetEffect(EFFECT_2))
+                damageMod->RecalculateAmount();
+        }
+    }
+
+private:
+    static AuraEffect const* GetLightningShieldEffect(Unit* owner)
+    {
+        if (!owner)
+            return nullptr;
+
+        return owner->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x00000400, 0x00000000, 0x00000000, owner->GetGUID());
+    }
+
+    static uint8 GetLightningShieldCharges(Unit* owner)
+    {
+        if (AuraEffect const* lightningShield = GetLightningShieldEffect(owner))
+            if (Aura* lightningShieldAura = lightningShield->GetBase())
+                return lightningShieldAura->GetCharges();
+
+        return 0;
+    }
+
+    void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = true;
+        amount = -static_cast<int32>(GetLightningShieldCharges(GetTarget())) * 15;
+    }
+
+    void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
+    {
+        canBeRecalculated = true;
+        amount = -static_cast<int32>(GetLightningShieldCharges(GetTarget())) * 2;
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateSnareReduction, EFFECT_1, SPELL_AURA_MECHANIC_MOD);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateDamageReduction, EFFECT_2, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKE);
+    }
+};
+
 // -324 - Lightning Shield
 class spell_sha_lightning_shield : public AuraScript
 {
@@ -2300,6 +2358,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_item_t6_trinket);
     RegisterSpellScript(spell_sha_item_t10_elemental_2p_bonus);
     RegisterSpellScript(spell_sha_lava_lash);
+    RegisterSpellScript(spell_sha_lightning_shield_defense);
     RegisterSpellScript(spell_sha_lightning_shield);
     RegisterSpellScript(spell_sha_maelstrom_weapon);
     RegisterSpellScript(spell_sha_mana_spring_totem);
