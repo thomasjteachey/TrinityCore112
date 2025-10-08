@@ -1199,19 +1199,18 @@ public:
     }
 
 private:
-    static AuraEffect const* GetLightningShieldEffect(Unit* owner)
+    static Aura const* GetLightningShieldAura(Unit* owner)
     {
         if (!owner)
             return nullptr;
 
-        return owner->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x00000400, 0x00000000, 0x00000000, owner->GetGUID());
+        return owner->GetAuraOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1);
     }
 
     static uint8 GetLightningShieldCharges(Unit* owner)
     {
-        if (AuraEffect const* lightningShield = GetLightningShieldEffect(owner))
-            if (Aura* lightningShieldAura = lightningShield->GetBase())
-                return lightningShieldAura->GetCharges();
+        if (Aura const* lightningShield = GetLightningShieldAura(owner))
+            return lightningShield->GetCharges();
 
         return 0;
     }
