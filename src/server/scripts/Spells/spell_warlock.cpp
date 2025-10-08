@@ -842,7 +842,7 @@ class aura_warl_immolate_tick_leech : public AuraScript
     PrepareAuraScript(aura_warl_immolate_tick_leech);
 
     // This fires on each DoT tick for EFFECT_X with SPELL_AURA_PERIODIC_DAMAGE
-    void OnPeriodic(AuraEffect const* /*aurEff*/)
+    void OnPeriodic(AuraEffect const* aurEff)
     {
         Unit* caster = GetCaster();
         Unit* victim = GetTarget();   // the unit taking the Immolate tick
@@ -853,21 +853,16 @@ class aura_warl_immolate_tick_leech : public AuraScript
         if (!caster->HasAura(81486))
             return;
 
-        // Get the final damage that just landed (post absorbs/resists)
-        // TrinityCore exposes it via GetRecentDamage() on the aura effect holder?s context
-        // but the clean way is to read the amount from the periodic tick context:
-        int32 dealt = GetEffectInfo().CalcValue(caster); // fallback if your core lacks recent damage
-        if (AuraEffect const* eff = GetEffect(EFFECT_0))
-            if (int32 recent = eff->GetAmount())         // some cores store the last tick amount in Amount during tick
-                dealt = recent;
+        int32 dealt = aurEff->GetAmount();
 
         if (dealt <= 0)
             return;
 
         int32 heal = dealt * 20 / 100;
 
-        // Use a custom heal spell so it shows as a heal and respects overheal etc.
-        caster->CastCustomSpell(caster, 81487, &heal, nullptr, nullptr, true);
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        args.AddSpellBP0(heal);
+        caster->CastSpell(caster, 81487, args);
     }
 
     void Register() override
@@ -1464,7 +1459,6 @@ class spell_warl_demon_conceal : public SpellScript
 
         // Do a mini Spell::CheckCasterAuras on the pet, no other way of doing this
         SpellCastResult result = SPELL_CAST_OK;
-        uint32 const unitflag = pet->GetUnitFlags();
         if (pet->GetCharmerGUID())
             result = SPELL_FAILED_CHARMED;
 
@@ -1483,7 +1477,9 @@ class spell_warl_demon_conceal : public SpellScript
         Player* player = GetCaster()->ToPlayer();
         Pet* pet = player->GetPet();
         pet->UnSummon();
-        player->CastSpell(player, SPELL_WARLOCK_SUMMON_IMP, new CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        player->CastSpell(player, SPELL_WARLOCK_SUMMON_IMP, args);
         player->AddAura(SPELL_WARLOCK_INVIS, player);
     }
 
@@ -1555,8 +1551,8 @@ class spell_warl_pyroclasm : public SpellScript
             procChance /= tick;
             if (roll_chance_f(procChance))
             {
-                uint32 triggerSpell = SPELL_WARLOCK_PYROCLASM;
-                GetCaster()->CastSpell(GetHitUnit(), SPELL_WARLOCK_PYROCLASM, new CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+                CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                GetCaster()->CastSpell(GetHitUnit(), SPELL_WARLOCK_PYROCLASM, args);
             }
         }
     }
