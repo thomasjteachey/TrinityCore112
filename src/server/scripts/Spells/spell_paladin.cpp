@@ -1206,7 +1206,7 @@ private:
         Unit::AuraEffectList const& auras = GetCaster()->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
         {
-            if ((*i)->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_SEAL)
+            if ((*i)->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || (*i)->GetSpellInfo()->Id == 20164)
             {
                 if ((*i)->GetEffIndex() == EFFECT_2)
                 {
@@ -1228,15 +1228,26 @@ private:
                             }
                         }
                         //found seal remove and break
-                        GetCaster()->RemoveAurasDueToSpell((*i)->GetSpellInfo()->Id);
-
-                        break;
+                        //GetCaster()->RemoveAurasDueToSpell((*i)->GetSpellInfo()->Id);
+                        GetCaster()->CastSpell(GetHitUnit(), spellId2, true);
                     }
                 }
             }
         }
-        //GetCaster()->CastSpell(GetHitUnit(), _spellId, true);
-        GetCaster()->CastSpell(GetHitUnit(), spellId2, true);
+        //remove all seal spells.
+        GetCaster()->RemoveAurasDueToSpell(20164);
+        GetCaster()->RemoveAurasDueToSpell(20375);
+        AuraApplication* sealOfRighteousness = GetCaster()->GetAuraApplicationOfRankedSpell(20154);
+        if(sealOfRighteousness)
+            GetCaster()->RemoveAurasDueToSpell(sealOfRighteousness->GetBase()->GetId());
+
+        AuraApplication* sealOfWisdom = GetCaster()->GetAuraApplicationOfRankedSpell(20166);
+        if (sealOfWisdom)
+            GetCaster()->RemoveAurasDueToSpell(sealOfWisdom->GetBase()->GetId());
+
+        AuraApplication* sealOfCrusader = GetCaster()->GetAuraApplicationOfRankedSpell(21082);
+        if (sealOfCrusader)
+            GetCaster()->RemoveAurasDueToSpell(sealOfCrusader->GetBase()->GetId());
     }
 
     void Register() override
@@ -2168,6 +2179,34 @@ class spell_pal_hand_of_freedom : public AuraScript
     }
 };
 
+// 81472 - Seal of Justice Wrapper
+class spell_pal_seal_of_justice_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_pal_seal_of_justice_wrapper);
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        AuraApplication* aa = GetCaster()->GetAuraApplication(81474);
+        if (aa)
+        {
+            GetCaster()->CastSpell(GetCaster(), 81473);
+        }
+        else
+        {
+            GetCaster()->CastSpell(GetCaster(), 20164);
+        }
+    }
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pal_seal_of_justice_wrapper::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+
 
 void AddSC_paladin_spell_scripts()
 {
@@ -2228,4 +2267,5 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_pal_jud_light_intermediate);
     RegisterSpellScript(spell_seal_crusader);
     RegisterSpellScript(spell_pal_hand_of_freedom);
+    RegisterSpellScript(spell_pal_seal_of_justice_wrapper);
 }

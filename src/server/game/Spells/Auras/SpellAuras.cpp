@@ -1891,10 +1891,16 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     if (m_spellInfo->HasAura(SPELL_AURA_TRACK_RESOURCES) && existingSpellInfo->HasAura(SPELL_AURA_TRACK_RESOURCES))
         return sWorld->getBoolConfig(CONFIG_ALLOW_TRACK_BOTH_RESOURCES);
 
+    bool ignoreJustice = (m_spellInfo->Id == 20164 || existingSpellInfo->Id == 20164) && GetCaster()->HasAura(81474); // lancelot's justice
+    bool ignoreJudgementJustice = (m_spellInfo->Id == 20184 || existingSpellInfo->Id == 20184) && GetCaster()->HasAura(81474); // lancelot's justice
+
     // check spell specific stack rules
     if (m_spellInfo->IsAuraExclusiveBySpecificWith(existingSpellInfo)
         || (sameCaster && m_spellInfo->IsAuraExclusiveBySpecificPerCasterWith(existingSpellInfo)))
-        return false;
+    {
+        if(!ignoreJustice && !ignoreJudgementJustice)
+            return false;
+    }
 
     // check spell group stack rules
     switch (sSpellMgr->CheckSpellGroupStackRules(m_spellInfo, existingSpellInfo))

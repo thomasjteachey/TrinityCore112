@@ -2193,7 +2193,9 @@ void SpellInfo::_LoadSpellSpecific()
                     || SpellFamilyFlags[0] & 0x0A000000
                     || Id == 20308 || Id == 21082 || Id == 20162 || Id == 20305 || Id == 20306 || Id == 20307
                     )
+                {
                     return SPELL_SPECIFIC_SEAL;
+                }
 
                 if (Id == 1044 || Id == 1022 || Id == 5599 || Id == 10278 || Id == 6940 || Id == 20729 || Id == 81277)
                     return SPELL_SPECIFIC_HAND;
