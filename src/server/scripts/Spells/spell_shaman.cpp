@@ -119,6 +119,10 @@ enum ShamanSpells
     SPELL_SHAMAN_ANCESTRAL_AWAKENING_PROC       = 52752,
     SPELL_SHAMAN_BIND_SIGHT                     = 6277,
     SPELL_SHAMAN_CLEANSING_TOTEM_EFFECT         = 52025,
+    SPELL_SHAMAN_TREMOR_TOTEM_PULSE             = 8146,
+    SPELL_SHAMAN_POISON_CLEANSING_TOTEM_PULSE   = 8168,
+    SPELL_SHAMAN_GROUNDING_TOTEM_EFFECT         = 8178,
+    SPELL_SHAMAN_POISON_CLEANSING_TOTEM_PULSE_R2 = 10538,
     SPELL_SHAMAN_EARTH_SHIELD_HEAL              = 379,
     SPELL_SHAMAN_ELEMENTAL_MASTERY              = 16166,
     SPELL_SHAMAN_ELEMENTAL_OATH                 = 51466,
@@ -520,6 +524,41 @@ class spell_sha_tremor_totem_pulse : public SpellScript
     void Register() override
     {
         AfterCast += SpellCastFn(spell_sha_tremor_totem_pulse::HandleAfterCast);
+    }
+};
+
+namespace
+{
+    static constexpr std::array<uint32, 4> HastedTotemPulseSpellIds =
+    {
+        SPELL_SHAMAN_TREMOR_TOTEM_PULSE,
+        SPELL_SHAMAN_POISON_CLEANSING_TOTEM_PULSE,
+        SPELL_SHAMAN_POISON_CLEANSING_TOTEM_PULSE_R2,
+        SPELL_SHAMAN_GROUNDING_TOTEM_EFFECT
+    };
+}
+
+// 8146, 8168, 10538, 8178 - Tremor Totem, Poison Cleansing Totem, Poison Cleansing Totem (Rank 2), Grounding Totem
+class spell_sha_hastened_totem_tick : public AuraScript
+{
+    PrepareAuraScript(spell_sha_hastened_totem_tick);
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        return std::find(HastedTotemPulseSpellIds.begin(), HastedTotemPulseSpellIds.end(), spellInfo->Id) != HastedTotemPulseSpellIds.end();
+    }
+
+    void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& isPeriodic, int32& amplitude)
+    {
+        if (!isPeriodic)
+            return;
+
+        amplitude = std::max<int32>(int32(IN_MILLISECONDS), amplitude - 2 * IN_MILLISECONDS);
+    }
+
+    void Register() override
+    {
+        DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(spell_sha_hastened_totem_tick::CalcPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
     }
 };
 
@@ -1360,19 +1399,21 @@ public:
     }
 
 private:
-    static AuraEffect const* GetLightningShieldEffect(Unit* owner)
+    static Aura const* GetLightningShieldAura(Unit* owner)
     {
         if (!owner)
             return nullptr;
 
-        return owner->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x00000400, 0x00000000, 0x00000000, owner->GetGUID());
+        if (AuraApplication const* auraApp = owner->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1))
+            return auraApp->GetBase();
+
+        return nullptr;
     }
 
     static uint8 GetLightningShieldCharges(Unit* owner)
     {
-        if (AuraEffect const* lightningShield = GetLightningShieldEffect(owner))
-            if (Aura* lightningShieldAura = lightningShield->GetBase())
-                return lightningShieldAura->GetCharges();
+        if (Aura const* lightningShieldAura = GetLightningShieldAura(owner))
+            return lightningShieldAura->GetCharges();
 
         return 0;
     }
