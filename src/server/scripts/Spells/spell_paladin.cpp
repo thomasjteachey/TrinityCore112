@@ -34,6 +34,8 @@
 #include "Item.h"
 #include "Spell.h"
 #include "Log.h"
+#include "WorldPacket.h"
+#include <algorithm>
 
 enum PaladinSpells
 {
@@ -900,7 +902,46 @@ class spell_pal_hs_cd_reduce : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        uint32 cdreduce = GetEffectValue();
+        int32 const cooldownReduction = GetEffectValue();
+        if (cooldownReduction <= 0)
+            return;
+
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
+
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        SpellInfo const* firstRankSpellInfo = sSpellMgr->GetSpellInfo(SPELL_PALADIN_HOLY_SHOCK_R1);
+        if (!firstRankSpellInfo)
+            return;
+
+        uint32 const categoryId = firstRankSpellInfo->GetCategory();
+        if (!categoryId)
+            return;
+
+        uint32 const categorySpellId = spellHistory->GetCategoryCooldownSpellId(categoryId);
+        if (!categorySpellId)
+            return;
+
+        SpellInfo const* categorySpellInfo = sSpellMgr->GetSpellInfo(categorySpellId);
+        if (!categorySpellInfo)
+            return;
+
+        uint32 const remainingCooldown = spellHistory->GetRemainingCooldown(categorySpellInfo);
+        if (!remainingCooldown)
+            return;
+
+        uint32 const reduction = std::min<uint32>(uint32(cooldownReduction), remainingCooldown);
+        uint32 const newCooldown = remainingCooldown - reduction;
+
+        spellHistory->ModifyCooldown(categorySpellId, -cooldownReduction);
+
+        WorldPacket data;
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, categorySpellId, newCooldown);
+        caster->SendDirectMessage(&data);
     }
 
     void Register() override
