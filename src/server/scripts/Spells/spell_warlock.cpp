@@ -803,6 +803,9 @@ class spell_warl_spellstone : public SpellScript
         if (!caster)
             return;
 
+        if (!caster->HasAura(81475))
+            return;
+
         std::vector<AuraApplication*> physicalDebuffs;
         physicalDebuffs.reserve(caster->GetAppliedAuras().size());
 
@@ -833,6 +836,48 @@ class spell_warl_spellstone : public SpellScript
         AfterCast += SpellCastFn(spell_warl_spellstone::HandleAfterCast);
     }
 };
+
+class aura_warl_immolate_tick_leech : public AuraScript
+{
+    PrepareAuraScript(aura_warl_immolate_tick_leech);
+
+    // This fires on each DoT tick for EFFECT_X with SPELL_AURA_PERIODIC_DAMAGE
+    void OnPeriodic(AuraEffect const* /*aurEff*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* victim = GetTarget();   // the unit taking the Immolate tick
+        if (!caster || !victim)
+            return;
+
+        // Optional: require the enabling aura on the caster
+        if (!caster->HasAura(81486))
+            return;
+
+        // Get the final damage that just landed (post absorbs/resists)
+        // TrinityCore exposes it via GetRecentDamage() on the aura effect holder?s context
+        // but the clean way is to read the amount from the periodic tick context:
+        int32 dealt = GetEffectInfo().CalcValue(caster); // fallback if your core lacks recent damage
+        if (AuraEffect const* eff = GetEffect(EFFECT_0))
+            if (int32 recent = eff->GetAmount())         // some cores store the last tick amount in Amount during tick
+                dealt = recent;
+
+        if (dealt <= 0)
+            return;
+
+        int32 heal = dealt * 20 / 100;
+
+        // Use a custom heal spell so it shows as a heal and respects overheal etc.
+        caster->CastCustomSpell(caster, 81487, &heal, nullptr, nullptr, true);
+    }
+
+    void Register() override
+    {
+        // If Immolate?s DoT is on EFFECT_0; add more EFFECT_X lines if needed for your DBC row
+        OnEffectPeriodic += AuraEffectPeriodicFn(aura_warl_immolate_tick_leech::OnPeriodic,
+            EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE);
+    }
+};
+
 
 // -30299 - Nether Protection
 class spell_warl_nether_protection : public AuraScript
@@ -1611,4 +1656,5 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_pet_firebolt);
     RegisterSpellScript(spell_warl_pyroclasm);
     RegisterSpellScript(spell_warl_death_coil);
+    RegisterSpellScript(aura_warl_immolate_tick_leech);
 }

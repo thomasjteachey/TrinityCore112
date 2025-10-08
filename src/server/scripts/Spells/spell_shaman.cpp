@@ -2365,6 +2365,76 @@ class spell_totem_cd_reduce : public SpellScript
     }
 };
 
+//81477 poison cleansing totem wrapper
+class spell_sha_poison_cleaning_totem_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_sha_poison_cleaning_totem_wrapper);
+
+    void HandleDummy()
+    {
+        AuraApplication* aa = GetCaster()->GetAuraApplication(81469);
+        if (aa)
+        {
+            GetCaster()->CastSpell(GetCaster(), 81480);
+        }
+        else
+        {
+            GetCaster()->CastSpell(GetCaster(), 8166);
+        }
+    }
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_sha_poison_cleaning_totem_wrapper::HandleDummy);
+    }
+};
+
+//81476 tremor totem wrapper
+class spell_sha_tremor_totem_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_sha_tremor_totem_wrapper);
+
+    void HandleDummy()
+    {
+        AuraApplication* aa = GetCaster()->GetAuraApplication(81469);
+        if (aa)
+        {
+            GetCaster()->CastSpell(GetCaster(), 81479);
+        }
+        else
+        {
+            GetCaster()->CastSpell(GetCaster(), 8143);
+        }
+    }
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_sha_tremor_totem_wrapper::HandleDummy);
+    }
+};
+
+//81478 grounding totem wrapper
+class spell_sha_grounding_totem_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_sha_grounding_totem_wrapper);
+
+    void HandleDummy()
+    {
+        AuraApplication* aa = GetCaster()->GetAuraApplication(81469);
+        if (aa)
+        {
+            GetCaster()->CastSpell(GetCaster(), 81481);
+        }
+        else
+        {
+            GetCaster()->CastSpell(GetCaster(), 8177);
+        }
+    }
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_sha_grounding_totem_wrapper::HandleDummy);
+    }
+};
+
+
 
 void AddSC_shaman_spell_scripts()
 {
@@ -2428,4 +2498,8 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_fire_nova_trig);
     RegisterSpellScript(spell_totem_cd_reduce);
     RegisterSpellScript(spell_sha_lightning_shield_mana_restore);
+
+    RegisterSpellScript(spell_sha_poison_cleaning_totem_wrapper);
+    RegisterSpellScript(spell_sha_tremor_totem_wrapper);
+    RegisterSpellScript(spell_sha_grounding_totem_wrapper);
 }
