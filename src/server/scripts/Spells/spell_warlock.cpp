@@ -34,6 +34,7 @@
 #include "SpellScript.h"
 #include "Pet.h"
 #include "SpellHistory.h"
+#include <vector>
 
 enum WarlockSpells
 {
@@ -788,6 +789,48 @@ class spell_warl_life_tap : public SpellScript
     {
         OnEffectHitTarget += SpellEffectFn(spell_warl_life_tap::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
         OnCheckCast += SpellCheckCastFn(spell_warl_life_tap::CheckCast);
+    }
+};
+
+// -17730 - Spellstone
+class spell_warl_spellstone : public SpellScript
+{
+    PrepareSpellScript(spell_warl_spellstone);
+
+    void HandleAfterCast()
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
+
+        std::vector<AuraApplication*> physicalDebuffs;
+        physicalDebuffs.reserve(caster->GetAppliedAuras().size());
+
+        for (auto const& auraPair : caster->GetAppliedAuras())
+        {
+            AuraApplication* aurApp = auraPair.second;
+            if (!aurApp || aurApp->IsPositive())
+                continue;
+
+            Aura const* aura = aurApp->GetBase();
+            if (!aura)
+                continue;
+
+            SpellInfo const* auraInfo = aura->GetSpellInfo();
+            if (!auraInfo)
+                continue;
+
+            if (auraInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_NORMAL)
+                physicalDebuffs.push_back(aurApp);
+        }
+
+        for (AuraApplication* aurApp : physicalDebuffs)
+            caster->RemoveAura(aurApp);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_spellstone::HandleAfterCast);
     }
 };
 
@@ -1549,6 +1592,7 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_health_funnel);
     RegisterSpellScript(spell_warl_glyph_of_corruption_nightfall);
     RegisterSpellScript(spell_warl_life_tap);
+    RegisterSpellScript(spell_warl_spellstone);
     RegisterSpellScript(spell_warl_nether_protection);
     RegisterSpellScript(spell_warl_ritual_of_doom_effect);
     RegisterSpellScript(spell_warl_seduction);
