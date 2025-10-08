@@ -1252,18 +1252,37 @@ class spell_sha_lightning_shield : public AuraScript
         return false;
     }
 
+    void AfterApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes mode)
+    {
+        if (!(mode & AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK))
+            return;
+
+        spell_sha_lightning_shield_defense::UpdateEffectAmounts(GetTarget());
+    }
+
+    void AfterRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes mode)
+    {
+        if (!(mode & AURA_EFFECT_HANDLE_REAL))
+            return;
+
+        spell_sha_lightning_shield_defense::UpdateEffectAmounts(GetTarget());
+    }
+
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
         uint32 triggerSpell = sSpellMgr->GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, aurEff->GetSpellInfo()->GetRank());
 
         eventInfo.GetActionTarget()->CastSpell(eventInfo.GetActor(), triggerSpell, aurEff);
+        spell_sha_lightning_shield_defense::UpdateEffectAmounts(eventInfo.GetActionTarget());
     }
 
     void Register() override
     {
         DoCheckProc += AuraCheckProcFn(spell_sha_lightning_shield::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_sha_lightning_shield::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+        AfterEffectApply += AuraEffectApplyFn(spell_sha_lightning_shield::AfterApply, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_sha_lightning_shield::AfterRemove, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -1596,6 +1615,7 @@ class spell_sha_static_shock : public AuraScript
         uint32 spellId = sSpellMgr->GetSpellWithRank(SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R1, lightningShield->GetSpellInfo()->GetRank());
         eventInfo.GetActor()->CastSpell(eventInfo.GetProcTarget(), spellId, aurEff);
         lightningShield->GetBase()->DropCharge();
+        spell_sha_lightning_shield_defense::UpdateEffectAmounts(caster);
     }
 
     void Register() override
