@@ -33,85 +33,8 @@
 #include "SpellScript.h"
 #include "Unit.h"
 #include <algorithm>
-#include <array>
 #include <unordered_map>
-#include <unordered_set>
 #include "SharedDefines.h"
-
-namespace
-{
-    constexpr uint32 TotemTickAccelerationMs = 2000;
-
-    GuidUnorderedSet& GetTotemTickAccelerators()
-    {
-        static GuidUnorderedSet accelerators;
-        return accelerators;
-    }
-
-    void AddTotemTickAccelerator(Unit const* unit)
-    {
-        if (!unit)
-            return;
-
-        GetTotemTickAccelerators().insert(unit->GetGUID());
-    }
-
-    void RemoveTotemTickAccelerator(Unit const* unit)
-    {
-        if (!unit)
-            return;
-
-        GetTotemTickAccelerators().erase(unit->GetGUID());
-    }
-
-    bool HasTotemTickAccelerator(Unit const* unit)
-    {
-        if (!unit)
-            return false;
-
-        return GetTotemTickAccelerators().find(unit->GetGUID()) != GetTotemTickAccelerators().end();
-    }
-
-    Unit* GetTotemOwner(Unit* totem, Unit* originalCaster)
-    {
-        if (originalCaster)
-            return originalCaster;
-
-        if (!totem)
-            return nullptr;
-
-        return totem->GetOwner();
-    }
-
-    void AccelerateTotemTick(Unit* totem, uint32 triggerSpellId)
-    {
-        if (!totem)
-            return;
-
-        static constexpr std::array<AuraType, 2> periodicAuraTypes =
-        {
-            SPELL_AURA_PERIODIC_TRIGGER_SPELL,
-            SPELL_AURA_PERIODIC_TRIGGER_SPELL_WITH_VALUE
-        };
-
-        for (AuraType auraType : periodicAuraTypes)
-        {
-            AuraEffectList const& periodicAuras = totem->GetAuraEffectsByType(auraType);
-            for (AuraEffect* aurEff : periodicAuras)
-            {
-                if (aurEff->GetSpellEffectInfo().TriggerSpell != triggerSpellId)
-                    continue;
-
-                int32 const amplitude = aurEff->GetAmplitude();
-                if (amplitude <= 0)
-                    continue;
-
-                aurEff->SetPeriodicTimer(std::max(0, amplitude - int32(TotemTickAccelerationMs)));
-                return;
-            }
-        }
-    }
-}
 
 enum ShamanSpells
 {
@@ -200,28 +123,6 @@ enum ShamanSpellIcons
     SHAMAN_ICON_ID_RESTORATIVE_TOTEMS           = 338,
     SHAMAN_ICON_ID_SHAMAN_LAVA_FLOW             = 3087,
     SHAMAN_ICON_ID_TOTEM_OF_WRATH               = 2019
-};
-
-// Custom aura that accelerates the periodic pulses of specific totems
-class spell_sha_totem_tick_acceleration : public AuraScript
-{
-    PrepareAuraScript(spell_sha_totem_tick_acceleration);
-
-    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        AddTotemTickAccelerator(GetTarget());
-    }
-
-    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        RemoveTotemTickAccelerator(GetTarget());
-    }
-
-    void Register() override
-    {
-        AfterEffectApply += AuraEffectApplyFn(spell_sha_totem_tick_acceleration::HandleApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_sha_totem_tick_acceleration::HandleRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
-    }
 };
 
 // -51556 - Ancestral Awakening
@@ -459,71 +360,9 @@ class spell_sha_cleansing_totem_pulse : public SpellScript
         }
     }
 
-    void HandleAfterCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster)
-            return;
-
-        Unit* owner = GetTotemOwner(caster, GetOriginalCaster());
-        if (!HasTotemTickAccelerator(owner))
-            return;
-
-        AccelerateTotemTick(caster, GetSpellInfo()->Id);
-    }
-
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(spell_sha_cleansing_totem_pulse::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
-        AfterCast += SpellCastFn(spell_sha_cleansing_totem_pulse::HandleAfterCast);
-    }
-};
-
-// 8178 - Grounding Totem Effect
-class spell_sha_grounding_totem_effect : public SpellScript
-{
-    PrepareSpellScript(spell_sha_grounding_totem_effect);
-
-    void HandleAfterCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster)
-            return;
-
-        Unit* owner = GetTotemOwner(caster, GetOriginalCaster());
-        if (!HasTotemTickAccelerator(owner))
-            return;
-
-        AccelerateTotemTick(caster, GetSpellInfo()->Id);
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_sha_grounding_totem_effect::HandleAfterCast);
-    }
-};
-
-// 8145 - Tremor Totem (Pulse)
-class spell_sha_tremor_totem_pulse : public SpellScript
-{
-    PrepareSpellScript(spell_sha_tremor_totem_pulse);
-
-    void HandleAfterCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster)
-            return;
-
-        Unit* owner = GetTotemOwner(caster, GetOriginalCaster());
-        if (!HasTotemTickAccelerator(owner))
-            return;
-
-        AccelerateTotemTick(caster, GetSpellInfo()->Id);
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_sha_tremor_totem_pulse::HandleAfterCast);
     }
 };
 
@@ -2537,7 +2376,6 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_bloodlust);
     RegisterSpellScript(spell_sha_chain_heal);
     RegisterSpellScript(spell_sha_cleansing_totem_pulse);
-    RegisterSpellScript(spell_sha_grounding_totem_effect);
     RegisterSpellScript(spell_sha_clearcasting);
     RegisterSpellScript(spell_sha_earth_shield);
     RegisterSpellScript(spell_sha_earthbind_totem);
@@ -2574,9 +2412,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_static_shock);
     RegisterSpellScript(spell_sha_tidal_force_dummy);
     RegisterSpellScript(spell_sha_thunderstorm);
-    RegisterSpellScript(spell_sha_tremor_totem_pulse);
     RegisterSpellScript(spell_sha_totemic_mastery);
-    RegisterSpellScript(spell_sha_totem_tick_acceleration);
     RegisterSpellScript(spell_sha_t3_6p_bonus);
     RegisterSpellScript(spell_sha_t3_8p_bonus);
     RegisterSpellScript(spell_sha_t8_elemental_4p_bonus);
