@@ -970,6 +970,29 @@ class spell_warr_vigilance_trigger : public SpellScript
     }
 };
 
+//81492 disarm wrapper
+class spell_warr_disarm_wrapper : public SpellScript
+{
+    PrepareSpellScript(spell_warr_disarm_wrapper);
+
+    void HandleDummy()
+    {
+        AuraApplication* aa = GetCaster()->GetAuraApplication(81491);
+        if (aa)
+        {
+            GetCaster()->CastSpell(GetExplTargetUnit(), 81493, true);
+        }
+        else
+        {
+            GetCaster()->CastSpell(GetExplTargetUnit(), 676, true);
+        }
+    }
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warr_disarm_wrapper::HandleDummy);
+    }
+};
+
 void AddSC_warrior_spell_scripts()
 {
     RegisterSpellScript(spell_warr_bloodthirst);
@@ -1002,4 +1025,5 @@ void AddSC_warrior_spell_scripts()
     RegisterSpellScript(spell_warr_vigilance_trigger);
     RegisterSpellScript(spell_warr_bloodrage);
     RegisterSpellScript(spell_warr_leap);
+    RegisterSpellScript(spell_warr_disarm_wrapper);
 }

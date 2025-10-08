@@ -1484,14 +1484,14 @@ class spell_pri_silence : public AuraScript
     }
 };
 
-// 528 - Dispel Magic
+// 527 - Dispel Magic
 class spell_pri_dispel_magic : public SpellScript
 {
     PrepareSpellScript(spell_pri_dispel_magic);
 
     bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellInfo({ 81436 });
+        return true;
     }
 
     void HandleSuccessfulDispel(SpellEffIndex effIndex)
@@ -1521,7 +1521,7 @@ class spell_pri_dispel_magic : public SpellScript
     }
 };
 
-
+//81432
 class spell_pre_renew_bonus : public AuraScript
 {
     PrepareAuraScript(spell_pre_renew_bonus);

@@ -2375,11 +2375,11 @@ class spell_sha_poison_cleaning_totem_wrapper : public SpellScript
         AuraApplication* aa = GetCaster()->GetAuraApplication(81469);
         if (aa)
         {
-            GetCaster()->CastSpell(GetCaster(), 81480);
+            GetCaster()->CastSpell(GetCaster(), 81480, true);
         }
         else
         {
-            GetCaster()->CastSpell(GetCaster(), 8166);
+            GetCaster()->CastSpell(GetCaster(), 8166, true);
         }
     }
     void Register() override
@@ -2398,11 +2398,11 @@ class spell_sha_tremor_totem_wrapper : public SpellScript
         AuraApplication* aa = GetCaster()->GetAuraApplication(81469);
         if (aa)
         {
-            GetCaster()->CastSpell(GetCaster(), 81479);
+            GetCaster()->CastSpell(GetCaster(), 81479, true);
         }
         else
         {
-            GetCaster()->CastSpell(GetCaster(), 8143);
+            GetCaster()->CastSpell(GetCaster(), 8143, true);
         }
     }
     void Register() override
@@ -2421,11 +2421,11 @@ class spell_sha_grounding_totem_wrapper : public SpellScript
         AuraApplication* aa = GetCaster()->GetAuraApplication(81469);
         if (aa)
         {
-            GetCaster()->CastSpell(GetCaster(), 81481);
+            GetCaster()->CastSpell(GetCaster(), 81481, true);
         }
         else
         {
-            GetCaster()->CastSpell(GetCaster(), 8177);
+            GetCaster()->CastSpell(GetCaster(), 8177, true);
         }
     }
     void Register() override

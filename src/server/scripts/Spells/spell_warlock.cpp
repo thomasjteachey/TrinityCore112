@@ -850,7 +850,7 @@ class aura_warl_immolate_tick_leech : public AuraScript
             return;
 
         // Optional: require the enabling aura on the caster
-        if (!caster->HasAura(81486))
+        if (!(caster->HasAura(81486)))
             return;
 
         int32 dealt = aurEff->GetAmount();

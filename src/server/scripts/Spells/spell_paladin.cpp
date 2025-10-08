@@ -852,13 +852,19 @@ class spell_pal_holy_shock : public SpellScript
         {
             uint8 rank = GetSpellInfo()->GetRank();
             if (caster->IsFriendlyTo(unitTarget))
+            {
                 caster->CastSpell(unitTarget, sSpellMgr->GetSpellWithRank(SPELL_PALADIN_HOLY_SHOCK_R1_HEALING, rank), true);
+                if (caster->HasAura(81489))
+                {
+                    caster->CastSpell(unitTarget, 81488, true);
+                }
+            }
             else
             {
                 caster->CastSpell(unitTarget, sSpellMgr->GetSpellWithRank(SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE, rank), true);
                 if (caster->HasAura(81489))
                 {
-                    caster->CastSpell(caster, 81490);
+                    caster->CastSpell(caster, 81490, true);
                 }
             }
         }
@@ -902,7 +908,7 @@ class spell_pal_hs_cd_reduce : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        int32 const cooldownReduction = GetEffectValue();
+        int32 const cooldownReduction = -1 * GetEffectValue();
         if (cooldownReduction <= 0)
             return;
 
