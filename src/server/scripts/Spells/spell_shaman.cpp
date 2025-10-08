@@ -378,30 +378,6 @@ namespace
     };
 }
 
-// 8146, 8168, 10538, 8178 - Tremor Totem, Poison Cleansing Totem, Poison Cleansing Totem (Rank 2), Grounding Totem
-class spell_sha_hastened_totem_tick : public AuraScript
-{
-    PrepareAuraScript(spell_sha_hastened_totem_tick);
-
-    bool Validate(SpellInfo const* spellInfo) override
-    {
-        return std::find(HastedTotemPulseSpellIds.begin(), HastedTotemPulseSpellIds.end(), spellInfo->Id) != HastedTotemPulseSpellIds.end();
-    }
-
-    void CalcPeriodic(AuraEffect const* /*aurEff*/, bool& isPeriodic, int32& amplitude)
-    {
-        if (!isPeriodic)
-            return;
-
-        amplitude = std::max<int32>(int32(IN_MILLISECONDS), amplitude - 2 * IN_MILLISECONDS);
-    }
-
-    void Register() override
-    {
-        DoEffectCalcPeriodic += AuraEffectCalcPeriodicFn(spell_sha_hastened_totem_tick::CalcPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
-    }
-};
-
 // 16246 - Clearcasting
 class spell_sha_clearcasting : public AuraScript
 {
@@ -1244,6 +1220,7 @@ private:
         if (!owner)
             return nullptr;
 
+        owner->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1);
         if (AuraApplication const* auraApp = owner->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1))
             return auraApp->GetBase();
 
@@ -1261,19 +1238,21 @@ private:
     void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        amount = -static_cast<int32>(GetLightningShieldCharges(GetTarget())) * 15;
+        uint8 lightningCharges = GetLightningShieldCharges(GetUnitOwner());
+        amount = -static_cast<int32>(lightningCharges) * 15;
     }
 
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        amount = -static_cast<int32>(GetLightningShieldCharges(GetTarget())) * 2;
+        uint8 lightningCharges = GetLightningShieldCharges(GetUnitOwner());
+        amount = -static_cast<int32>(lightningCharges) * 2;
     }
 
     void Register() override
     {
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateSnareReduction, EFFECT_1, SPELL_AURA_MECHANIC_MOD);
-        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateDamageReduction, EFFECT_2, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKE);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateSnareReduction, EFFECT_1, SPELL_AURA_MECHANIC_DURATION_MOD);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateDamageReduction, EFFECT_2, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN);
     }
 };
 
