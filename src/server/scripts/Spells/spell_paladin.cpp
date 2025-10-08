@@ -852,7 +852,13 @@ class spell_pal_holy_shock : public SpellScript
             if (caster->IsFriendlyTo(unitTarget))
                 caster->CastSpell(unitTarget, sSpellMgr->GetSpellWithRank(SPELL_PALADIN_HOLY_SHOCK_R1_HEALING, rank), true);
             else
+            {
                 caster->CastSpell(unitTarget, sSpellMgr->GetSpellWithRank(SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE, rank), true);
+                if (caster->HasAura(81489))
+                {
+                    caster->CastSpell(caster, 81490);
+                }
+            }
         }
     }
 
@@ -879,6 +885,27 @@ class spell_pal_holy_shock : public SpellScript
     {
         OnCheckCast += SpellCheckCastFn(spell_pal_holy_shock::CheckCast);
         OnEffectHitTarget += SpellEffectFn(spell_pal_holy_shock::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 81490 - Holy Shock CD Reduce
+class spell_pal_hs_cd_reduce : public SpellScript
+{
+    PrepareSpellScript(spell_pal_hs_cd_reduce);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        uint32 cdreduce = GetEffectValue();
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_pal_hs_cd_reduce::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
@@ -2268,4 +2295,5 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_seal_crusader);
     RegisterSpellScript(spell_pal_hand_of_freedom);
     RegisterSpellScript(spell_pal_seal_of_justice_wrapper);
+    RegisterSpellScript(spell_pal_hs_cd_reduce);
 }

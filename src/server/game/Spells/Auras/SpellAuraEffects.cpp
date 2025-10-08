@@ -3182,6 +3182,9 @@ void AuraEffect::HandleAuraModEffectImmunity(AuraApplication const* aurApp, uint
 
     // when removing flag aura, handle flag drop
     Player* player = target->ToPlayer();
+    if (m_spellInfo->Id == 81488)
+        return;
+
     if (!apply && player && (GetSpellInfo()->AuraInterruptFlags & AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION))
     {
         if (player->InBattleground())
