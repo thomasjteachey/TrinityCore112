@@ -25659,6 +25659,16 @@ void Player::ResummonPetTemporaryUnSummonedIfAny()
     if (GetPetGUID())
         return;
 
+    if (Map* map = FindMap())
+    {
+        if (map->IsBattleArena() && GetLastPetNumber())
+        {
+            CastSpell(this, 6962, true);
+            m_temporaryUnsummonedPetNumber = 0;
+            return;
+        }
+    }
+
     Pet* NewPet = new Pet(this);
     if (!NewPet->LoadPetFromDB(this, 0, m_temporaryUnsummonedPetNumber, true))
         delete NewPet;
