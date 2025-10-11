@@ -678,6 +678,8 @@ public:
             return false;
         }
 
+        float const originalScale = creature->GetObjectScale();
+
         if (!creature->CopyAppearanceFromPlayerGuid(player.GetGUID(), true, true, true))
         {
             handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
@@ -685,8 +687,44 @@ public:
             return false;
         }
 
-        creature->SetName(player.GetName());
+        creature->SetObjectScale(originalScale);
+
+        std::string const newName = player.GetName();
+
+        creature->SetName(newName);
         creature->SetPetNameTimestamp(uint32(GameTime::GetGameTime()));
+
+        if (CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate())
+        {
+            CreatureTemplate* mutableTemplate = const_cast<CreatureTemplate*>(creatureTemplate);
+
+            if (mutableTemplate->Name != newName)
+            {
+                mutableTemplate->Name = newName;
+                mutableTemplate->InitializeQueryData();
+
+                if (WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_TEMPLATE_NAME))
+                {
+                    stmt->setString(0, newName);
+                    stmt->setUInt32(1, mutableTemplate->Entry);
+                    WorldDatabase.Execute(stmt);
+                }
+            }
+
+            if (Map* map = creature->GetMap())
+            {
+                Map::PlayerList const& players = map->GetPlayers();
+                for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+                {
+                    if (Player* nearbyPlayer = itr->GetSource())
+                    {
+                        LocaleConstant locale = nearbyPlayer->GetSession()->GetSessionDbLocaleIndex();
+                        WorldPacket const* response = &mutableTemplate->QueryData[locale];
+                        nearbyPlayer->GetSession()->SendPacket(response);
+                    }
+                }
+            }
+        }
 
         handler->PSendSysMessage("Copied appearance of %s onto the selected creature and saved it.", player.GetName().c_str());
         return true;
