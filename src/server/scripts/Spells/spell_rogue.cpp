@@ -594,7 +594,7 @@ class spell_rog_preparation : public SpellScript
         caster->GetSpellHistory()->ResetCooldowns([caster](SpellHistory::CooldownStorageType::iterator itr) -> bool
         {
             SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(itr->first);
-            if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE)
+            if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE || spellInfo->Id == 14185)
                 return false;
 
             return true;
