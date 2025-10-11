@@ -1497,7 +1497,7 @@ class spell_pri_dispel_magic : public SpellScript
     void HandleSuccessfulDispel(SpellEffIndex effIndex)
     {
         Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
+        Unit* target = GetExplTargetUnit();
 
         if (!caster || !target)
             return;
