@@ -585,6 +585,7 @@ class spell_rog_preparation : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
+        return true;
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
