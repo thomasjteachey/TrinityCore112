@@ -608,6 +608,9 @@ class spell_rog_preparation : public SpellScript
                 spellInfo->SpellFamilyFlags[1] & SPELLFAMILYFLAG1_ROGUE_BLADE_FLURRY)));
             */
         }, true);
+
+        if (caster->HasAura(81412))
+            caster->CastSpell(caster, 81439, true);
     }
 
     void Register() override
@@ -1122,9 +1125,6 @@ class spell_rog_vanish : public AuraScript
             unitTarget->GetSpellHistory()->ResetCooldown(SPELL_ROGUE_STEALTH);
 
         unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
-
-        if(unitTarget->HasAura(81412))
-            unitTarget->CastSpell(nullptr, 81439, true);
     }
 
     void Register() override
