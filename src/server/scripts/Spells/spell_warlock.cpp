@@ -1636,7 +1636,7 @@ class spell_warl_death_coil : public SpellScript
         17926  // Rank 3
     };
 
-    static constexpr uint32 GCD_REDUCE_MS = 750;    // subtract 0.75s from applied GCD
+    static constexpr uint32 GCD_REDUCE_MS = 1000;    // subtract 0.75s from applied GCD
 
     void HandleAfterCast()
     {
