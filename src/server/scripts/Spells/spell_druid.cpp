@@ -32,6 +32,9 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Spell.h"
+#include "WorldPacket.h"
+#include <algorithm>
+#include <iterator>
 
 enum DruidSpells
 {
@@ -2130,6 +2133,56 @@ class spell_dru_wrath : public SpellScript
     }
 };
 
+class spell_dru_natures_grasp : public SpellScript
+{
+    PrepareSpellScript(spell_dru_natures_grasp);
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        if (!spellInfo)
+            return false;
+
+        return std::find(std::begin(NatureGraspAuraSpells), std::end(NatureGraspAuraSpells), spellInfo->Id) != std::end(NatureGraspAuraSpells);
+    }
+
+    bool Load() override
+    {
+        return GetCaster() && GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleAfterCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return;
+
+        if (!player->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
+            return;
+
+        SpellHistory* spellHistory = player->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        SpellInfo const* spellInfo = GetSpellInfo();
+        if (!spellInfo)
+            return;
+
+        if (!spellHistory->HasGlobalCooldown(spellInfo))
+            return;
+
+        spellHistory->CancelGlobalCooldown(spellInfo);
+
+        WorldPacket data;
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, spellInfo->Id, 0);
+        player->SendDirectMessage(&data);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_dru_natures_grasp::HandleAfterCast);
+    }
+};
+
 //claw 1082
 class spell_dru_claw : public SpellScript
 {
@@ -2208,6 +2261,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus_dummy);
     RegisterSpellAndAuraScriptPair(spell_dru_wild_growth, spell_dru_wild_growth_aura);
     RegisterSpellScript(spell_dru_wrath);
+    RegisterSpellScript(spell_dru_natures_grasp);
     RegisterSpellScript(spell_dru_claw);
     RegisterSpellScript(spell_humanoid_speed_pack);
 }
