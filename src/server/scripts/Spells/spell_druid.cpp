@@ -31,6 +31,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "Spell.h"
 
 enum DruidSpells
 {
@@ -2070,7 +2071,7 @@ class spell_dru_wrath : public SpellScript
             if (!auraInfo)
                 return false;
 
-            SpellEffectInfo const& triggerEffect = auraInfo->Effects[EFFECT_1];
+            SpellEffectInfo const& triggerEffect = auraInfo->GetEffect(EFFECT_1);
             if (!triggerEffect.IsEffect() || !triggerEffect.TriggerSpell)
                 return false;
 
