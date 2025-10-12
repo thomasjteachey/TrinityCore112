@@ -2134,49 +2134,6 @@ class spell_dru_wrath : public SpellScript
     }
 };
 
-// 16689 - Nature's Grasp (and ranks)
-class spell_dru_natures_grasp : public SpellScript
-{
-    PrepareSpellScript(spell_dru_natures_grasp);
-
-    bool Validate(SpellInfo const* spellInfo) override
-    {
-        if (!ValidateSpellInfo({ SPELL_DRUID_WRATH_NATURES_GRASP_BUFF }))
-            return false;
-
-        if (!spellInfo)
-            return false;
-
-        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
-            if (natureGraspAuraId == spellInfo->Id)
-                return true;
-
-        return false;
-    }
-
-    void HandleAfterCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster || !caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
-            return;
-
-        SpellInfo const* spellInfo = GetSpellInfo();
-        if (!spellInfo || !spellInfo->StartRecoveryTime)
-            return;
-
-        SpellHistory* spellHistory = caster->GetSpellHistory();
-        if (!spellHistory)
-            return;
-
-        spellHistory->ReduceGlobalCooldown(spellInfo, std::chrono::milliseconds(1000));
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_dru_natures_grasp::HandleAfterCast);
-    }
-};
-
 //claw 1082
 class spell_dru_claw : public SpellScript
 {
