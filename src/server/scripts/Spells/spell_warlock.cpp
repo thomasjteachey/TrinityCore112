@@ -109,7 +109,16 @@ enum WarlockSpells
     SPELL_WARLOCK_INVIS                             = 81335,
     SPELL_WARLOCK_IMP_FIREBOLT                      = 18126,
     SPELL_WARLOCK_HECKIN_DAZED                      = 81336,
-    SPELL_WARLOCK_PYROCLASM                         = 18093
+    SPELL_WARLOCK_PYROCLASM                         = 18093,
+    SPELL_WARLOCK_SUMMON_IMP_BASE                   = 688,
+    SPELL_WARLOCK_SUMMON_FELHUNTER_BASE             = 691,
+    SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE            = 697,
+    SPELL_WARLOCK_SUMMON_SUCCUBUS_BASE              = 712,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP             = 18789,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER      = 18790,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS        = 18791,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER       = 18792,
+    SPELL_WARLOCK_FEL_DOMINATION                    = 18708
 };
 
 enum WarlockSpellIcons
@@ -992,6 +1001,80 @@ class spell_warl_demonic_pact : public AuraScript
     }
 };
 
+class aura_warl_demonic_sacrifice_on_summon : public AuraScript
+{
+    PrepareAuraScript(aura_warl_demonic_sacrifice_on_summon);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({
+            SPELL_WARLOCK_SUMMON_IMP_BASE,
+            SPELL_WARLOCK_SUMMON_FELHUNTER_BASE,
+            SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE,
+            SPELL_WARLOCK_SUMMON_SUCCUBUS_BASE,
+            SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP,
+            SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER,
+            SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS,
+            SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER,
+            SPELL_WARLOCK_FEL_DOMINATION
+        });
+    }
+
+    static uint32 GetSacrificeSpellForSummon(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case SPELL_WARLOCK_SUMMON_IMP_BASE:
+                return SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP;
+            case SPELL_WARLOCK_SUMMON_FELHUNTER_BASE:
+                return SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER;
+            case SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE:
+                return SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER;
+            case SPELL_WARLOCK_SUMMON_SUCCUBUS_BASE:
+                return SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS;
+            default:
+                break;
+        }
+
+        return 0;
+    }
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        if (SpellInfo const* procSpell = eventInfo.GetProcSpell())
+            return GetSacrificeSpellForSummon(procSpell->Id) != 0;
+
+        return false;
+    }
+
+    void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        SpellInfo const* procSpell = eventInfo.GetProcSpell();
+        uint32 sacrificeSpell = procSpell ? GetSacrificeSpellForSummon(procSpell->Id) : 0;
+        if (!sacrificeSpell)
+            return;
+
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        CastSpellExtraArgs args(aurEff);
+        args.AddSpellMod(SPELLVALUE_DURATION, 16 * IN_MILLISECONDS);
+        caster->CastSpell(caster, sacrificeSpell, args);
+
+        if (Player* player = caster->ToPlayer())
+            player->GetSpellHistory()->ModifyCooldown(SPELL_WARLOCK_FEL_DOMINATION, -int32(6 * MINUTE * IN_MILLISECONDS));
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(aura_warl_demonic_sacrifice_on_summon::CheckProc);
+        OnEffectProc += AuraEffectProcFn(aura_warl_demonic_sacrifice_on_summon::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
 // 18541 - Ritual of Doom Effect
 class spell_warl_ritual_of_doom_effect : public SpellScript
 {
@@ -1624,6 +1707,7 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_demonic_circle_teleport);
     RegisterSpellScript(spell_warl_demonic_empowerment);
     RegisterSpellScript(spell_warl_demonic_pact);
+    RegisterSpellScript(aura_warl_demonic_sacrifice_on_summon);
     RegisterSpellScript(spell_warl_drain_soul);
     RegisterSpellScript(spell_warl_everlasting_affliction);
     RegisterSpellScript(spell_warl_fel_synergy);
