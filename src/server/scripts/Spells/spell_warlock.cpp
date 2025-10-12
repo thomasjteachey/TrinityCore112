@@ -109,7 +109,15 @@ enum WarlockSpells
     SPELL_WARLOCK_INVIS                             = 81335,
     SPELL_WARLOCK_IMP_FIREBOLT                      = 18126,
     SPELL_WARLOCK_HECKIN_DAZED                      = 81336,
-    SPELL_WARLOCK_PYROCLASM                         = 18093
+    SPELL_WARLOCK_PYROCLASM                         = 18093,
+    SPELL_WARLOCK_SUMMON_IMP_BASE                   = 688,
+    SPELL_WARLOCK_SUMMON_FELHUNTER_BASE             = 691,
+    SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE            = 697,
+    SPELL_WARLOCK_SUMMON_SUCCUBUS_BASE              = 712,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP             = 18789,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER      = 18790,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS        = 18791,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER       = 18792
 };
 
 enum WarlockSpellIcons
@@ -992,6 +1000,98 @@ class spell_warl_demonic_pact : public AuraScript
     }
 };
 
+namespace {
+void CastDemonicSacrifice(Unit* caster, uint32 sacrificeSpell)
+{
+    if (!caster)
+        return;
+
+    CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+    args.AddSpellMod(SPELLVALUE_DURATION, 16 * IN_MILLISECONDS);
+    caster->CastSpell(caster, sacrificeSpell, args);
+}
+} // namespace
+
+class spell_warl_summon_imp : public SpellScript
+{
+    PrepareSpellScript(spell_warl_summon_imp);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP });
+    }
+
+    void HandleAfterCast()
+    {
+        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_summon_imp::HandleAfterCast);
+    }
+};
+
+class spell_warl_summon_voidwalker : public SpellScript
+{
+    PrepareSpellScript(spell_warl_summon_voidwalker);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER });
+    }
+
+    void HandleAfterCast()
+    {
+        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_summon_voidwalker::HandleAfterCast);
+    }
+};
+
+class spell_warl_summon_succubus : public SpellScript
+{
+    PrepareSpellScript(spell_warl_summon_succubus);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS });
+    }
+
+    void HandleAfterCast()
+    {
+        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_summon_succubus::HandleAfterCast);
+    }
+};
+
+class spell_warl_summon_felhunter : public SpellScript
+{
+    PrepareSpellScript(spell_warl_summon_felhunter);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER });
+    }
+
+    void HandleAfterCast()
+    {
+        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_summon_felhunter::HandleAfterCast);
+    }
+};
+
 // 18541 - Ritual of Doom Effect
 class spell_warl_ritual_of_doom_effect : public SpellScript
 {
@@ -1624,6 +1724,10 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_demonic_circle_teleport);
     RegisterSpellScript(spell_warl_demonic_empowerment);
     RegisterSpellScript(spell_warl_demonic_pact);
+    RegisterSpellScript(spell_warl_summon_imp);
+    RegisterSpellScript(spell_warl_summon_voidwalker);
+    RegisterSpellScript(spell_warl_summon_succubus);
+    RegisterSpellScript(spell_warl_summon_felhunter);
     RegisterSpellScript(spell_warl_drain_soul);
     RegisterSpellScript(spell_warl_everlasting_affliction);
     RegisterSpellScript(spell_warl_fel_synergy);
