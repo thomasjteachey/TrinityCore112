@@ -675,8 +675,39 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (newEnd > now)
         remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now).count();
 
+    PacketCooldowns gcdUpdates;
+    auto tryAddSpell = [this, spellInfo, remaining](SpellInfo const* otherInfo, PacketCooldowns& updates)
+    {
+        if (!otherInfo)
+            return;
+
+        if (otherInfo->StartRecoveryCategory != spellInfo->StartRecoveryCategory)
+            return;
+
+        if (!otherInfo->StartRecoveryTime)
+            return;
+
+        if (HasCooldown(otherInfo))
+            return;
+
+        updates.emplace(otherInfo->Id, remaining);
+    };
+
+    tryAddSpell(spellInfo, gcdUpdates);
+
+    for (auto const& spellPair : player->GetSpellMap())
+    {
+        if (spellPair.second.state == PLAYERSPELL_REMOVED)
+            continue;
+
+        tryAddSpell(sSpellMgr->GetSpellInfo(spellPair.first), gcdUpdates);
+    }
+
+    if (gcdUpdates.empty())
+        return;
+
     WorldPacket data;
-    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, spellInfo->Id, remaining);
+    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, gcdUpdates);
     player->SendDirectMessage(&data);
 }
 
