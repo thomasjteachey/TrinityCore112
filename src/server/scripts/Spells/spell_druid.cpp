@@ -2122,6 +2122,9 @@ class spell_dru_wrath : public SpellScript
             return;
 
         caster->CastSpell(target, *rootSpellId, true);
+
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+            caster->RemoveAurasDueToSpell(natureGraspAuraId);
     }
 
     void Register() override
@@ -2264,6 +2267,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus_dummy);
     RegisterSpellAndAuraScriptPair(spell_dru_wild_growth, spell_dru_wild_growth_aura);
     RegisterSpellScript(spell_dru_wrath);
+    RegisterSpellScript(spell_dru_natures_grasp);
     RegisterSpellScript(spell_dru_claw);
     RegisterSpellScript(spell_humanoid_speed_pack);
 }
