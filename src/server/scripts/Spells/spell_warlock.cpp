@@ -1666,6 +1666,5 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_demon_conceal);
     RegisterSpellScript(spell_pet_firebolt);
     RegisterSpellScript(spell_warl_pyroclasm);
-    RegisterSpellScript(spell_warl_death_coil);
     RegisterSpellScript(aura_warl_immolate_tick_leech);
 }
