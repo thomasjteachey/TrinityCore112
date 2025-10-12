@@ -2159,9 +2159,6 @@ class spell_dru_natures_grasp : public SpellScript
         Unit* caster = GetCaster();
         if (!caster || !caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
             return;
-
-        if (Spell* spell = GetSpell())
-            spell->_triggeredCastFlags = TriggerCastFlags(spell->_triggeredCastFlags | TRIGGERED_IGNORE_GCD);
     }
 
     void HandleAfterCast()
