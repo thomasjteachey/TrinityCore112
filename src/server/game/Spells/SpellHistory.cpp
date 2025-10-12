@@ -647,6 +647,80 @@ void SpellHistory::CancelGlobalCooldown(SpellInfo const* spellInfo)
     _globalCooldowns[spellInfo->StartRecoveryCategory] = Clock::time_point(Clock::duration(0));
 }
 
+void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds reduction)
+{
+    if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
+        return;
+
+    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (itr == _globalCooldowns.end())
+        return;
+
+    Clock::time_point now = GameTime::GetSystemTime();
+    Clock::time_point currentEnd = itr->second;
+    if (currentEnd <= now)
+        return;
+
+    Clock::duration reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
+    Clock::duration currentDuration = currentEnd - now;
+    Clock::time_point newEnd = reductionDuration >= currentDuration ? now : currentEnd - reductionDuration;
+
+    itr->second = newEnd;
+
+    Player* player = GetPlayerOwner();
+    if (!player)
+        return;
+
+    SpellInfo const* const baseSpellInfo = spellInfo;
+    uint32 const gcdCategory = baseSpellInfo->StartRecoveryCategory;
+
+    std::chrono::milliseconds remaining(0);
+    if (newEnd > now)
+        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now);
+
+    PacketCooldowns cooldowns;
+
+    auto tryAddCooldown = [&](SpellInfo const* info)
+    {
+        if (!info)
+            return;
+
+        if (!info->StartRecoveryTime)
+            return;
+
+        if (info->StartRecoveryCategory != gcdCategory)
+            return;
+
+        if (HasCooldown(info, 0, true))
+            return;
+
+        cooldowns.emplace(info->Id, remaining.count());
+    };
+
+    tryAddCooldown(baseSpellInfo);
+
+    PlayerSpellMap const& playerSpells = player->GetSpellMap();
+    for (auto const& playerSpellPair : playerSpells)
+    {
+        if (playerSpellPair.second.state == PLAYERSPELL_REMOVED)
+            continue;
+
+        uint32 const knownSpellId = playerSpellPair.first;
+        if (knownSpellId == baseSpellInfo->Id)
+            continue;
+
+        SpellInfo const* knownSpellInfo = sSpellMgr->GetSpellInfo(knownSpellId);
+        tryAddCooldown(knownSpellInfo);
+    }
+
+    if (cooldowns.empty())
+        return;
+
+    WorldPacket data;
+    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, cooldowns);
+    player->SendDirectMessage(&data);
+}
+
 Player* SpellHistory::GetPlayerOwner() const
 {
     return _owner->GetCharmerOrOwnerPlayerOrPlayerItself();

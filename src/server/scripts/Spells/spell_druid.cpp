@@ -32,6 +32,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Spell.h"
+#include <chrono>
 
 enum DruidSpells
 {
@@ -2130,6 +2131,60 @@ class spell_dru_wrath : public SpellScript
     }
 };
 
+// 16689 - Nature's Grasp (and ranks)
+class spell_dru_natures_grasp : public SpellScript
+{
+    PrepareSpellScript(spell_dru_natures_grasp);
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        if (!ValidateSpellInfo({ SPELL_DRUID_WRATH_NATURES_GRASP_BUFF }))
+            return false;
+
+        if (!spellInfo)
+            return false;
+
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+            if (natureGraspAuraId == spellInfo->Id)
+                return true;
+
+        return false;
+    }
+
+    void HandleBeforeCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
+            return;
+
+        if (Spell* spell = GetSpell())
+            spell->_triggeredCastFlags = TriggerCastFlags(spell->_triggeredCastFlags | TRIGGERED_IGNORE_GCD);
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
+            return;
+
+        SpellInfo const* spellInfo = GetSpellInfo();
+        if (!spellInfo || !spellInfo->StartRecoveryTime)
+            return;
+
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        spellHistory->ReduceGlobalCooldown(spellInfo, std::chrono::milliseconds(1000));
+    }
+
+    void Register() override
+    {
+        BeforeCast += SpellCastFn(spell_dru_natures_grasp::HandleBeforeCast);
+        AfterCast += SpellCastFn(spell_dru_natures_grasp::HandleAfterCast);
+    }
+};
+
 //claw 1082
 class spell_dru_claw : public SpellScript
 {
@@ -2193,6 +2248,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellAndAuraScriptPair(spell_dru_savage_roar, spell_dru_savage_roar_aura);
     RegisterSpellScript(spell_dru_starfall_aoe);
     RegisterSpellScript(spell_dru_starfall_dummy);
+    RegisterSpellScript(spell_dru_natures_grasp);
     RegisterSpellAndAuraScriptPair(spell_dru_survival_instincts, spell_dru_survival_instincts_aura);
     RegisterSpellScript(spell_dru_swift_flight_passive);
     RegisterSpellScript(spell_dru_tiger_s_fury);
