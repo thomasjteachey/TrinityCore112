@@ -1125,6 +1125,9 @@ class spell_rog_vanish : public AuraScript
             unitTarget->GetSpellHistory()->ResetCooldown(SPELL_ROGUE_STEALTH);
 
         unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
+
+        if (unitTarget->HasAura(81412))
+            unitTarget->AddAura(81439, unitTarget);
     }
 
     void Register() override
