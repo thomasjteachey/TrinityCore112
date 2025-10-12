@@ -16,6 +16,7 @@
  */
 
 #include "SpellHistory.h"
+#include <algorithm>
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "ObjectMgr.h"
@@ -652,31 +653,43 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
         return;
 
-    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
-    if (itr == _globalCooldowns.end())
+    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (gcdItr == _globalCooldowns.end())
         return;
 
     Clock::time_point now = GameTime::GetSystemTime();
-    Clock::time_point currentEnd = itr->second;
+    Clock::time_point currentEnd = gcdItr->second;
     if (currentEnd <= now)
         return;
 
     Clock::duration reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
     Clock::duration currentDuration = currentEnd - now;
-    Clock::time_point newEnd = reductionDuration >= currentDuration ? now : currentEnd - reductionDuration;
+    Clock::time_point newEnd = currentEnd;
 
-    itr->second = newEnd;
+    if (reductionDuration >= currentDuration)
+    {
+        newEnd = now;
+        _globalCooldowns.erase(gcdItr);
+    }
+    else
+    {
+        newEnd -= reductionDuration;
+        gcdItr->second = newEnd;
+    }
 
     Player* player = GetPlayerOwner();
     if (!player)
         return;
 
+    bool const cleared = newEnd <= now;
     uint32 remaining = 0;
-    if (newEnd > now)
+    if (!cleared)
         remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now).count();
 
-    PacketCooldowns gcdUpdates;
-    auto tryAddSpell = [this, spellInfo, remaining](SpellInfo const* otherInfo, PacketCooldowns& updates)
+    std::vector<uint32> eligibleSpells;
+    eligibleSpells.reserve(8);
+
+    auto tryAddSpell = [this, spellInfo, now, &eligibleSpells](SpellInfo const* otherInfo)
     {
         if (!otherInfo)
             return;
@@ -687,24 +700,57 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
         if (!otherInfo->StartRecoveryTime)
             return;
 
-        if (HasCooldown(otherInfo))
+        uint32 const spellId = otherInfo->Id;
+
+        if (std::find(eligibleSpells.begin(), eligibleSpells.end(), spellId) != eligibleSpells.end())
             return;
 
-        updates.emplace(otherInfo->Id, remaining);
+        auto const spellCooldown = _spellCooldowns.find(spellId);
+        if (spellCooldown != _spellCooldowns.end() && spellCooldown->second.CooldownEnd > now)
+            return;
+
+        if (uint32 categoryId = otherInfo->GetCategory())
+        {
+            auto const categoryCooldown = _categoryCooldowns.find(categoryId);
+            if (categoryCooldown != _categoryCooldowns.end())
+            {
+                if (CooldownEntry const* entry = categoryCooldown->second)
+                    if (entry->CategoryEnd > now)
+                        return;
+            }
+        }
+
+        eligibleSpells.push_back(spellId);
     };
 
-    tryAddSpell(spellInfo, gcdUpdates);
+    tryAddSpell(spellInfo);
 
     for (auto const& spellPair : player->GetSpellMap())
     {
         if (spellPair.second.state == PLAYERSPELL_REMOVED)
             continue;
 
-        tryAddSpell(sSpellMgr->GetSpellInfo(spellPair.first), gcdUpdates);
+        tryAddSpell(sSpellMgr->GetSpellInfo(spellPair.first));
     }
 
-    if (gcdUpdates.empty())
+    if (eligibleSpells.empty())
         return;
+
+    if (cleared)
+    {
+        std::vector<int32> clearedCooldowns;
+        clearedCooldowns.reserve(eligibleSpells.size());
+        for (uint32 spellId : eligibleSpells)
+            clearedCooldowns.push_back(int32(spellId));
+
+        SendClearCooldowns(clearedCooldowns);
+        return;
+    }
+
+    PacketCooldowns gcdUpdates;
+    gcdUpdates.reserve(eligibleSpells.size());
+    for (uint32 spellId : eligibleSpells)
+        gcdUpdates.emplace(spellId, remaining);
 
     WorldPacket data;
     BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, gcdUpdates);
