@@ -1001,6 +1001,25 @@ class spell_warl_demonic_pact : public AuraScript
 };
 
 namespace {
+uint32 GetDemonicSacrificeSpell(uint32 summonSpellId)
+{
+    switch (summonSpellId)
+    {
+        case SPELL_WARLOCK_SUMMON_IMP_BASE:
+            return SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP;
+        case SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE:
+            return SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER;
+        case SPELL_WARLOCK_SUMMON_SUCCUBUS_BASE:
+            return SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS;
+        case SPELL_WARLOCK_SUMMON_FELHUNTER_BASE:
+            return SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER;
+        default:
+            break;
+    }
+
+    return 0;
+}
+
 void CastDemonicSacrifice(Unit* caster, uint32 sacrificeSpell)
 {
     if (!caster)
@@ -1012,83 +1031,27 @@ void CastDemonicSacrifice(Unit* caster, uint32 sacrificeSpell)
 }
 } // namespace
 
-class spell_warl_summon_imp : public SpellScript
+class spell_warl_demonic_sacrifice_on_summon : public SpellScript
 {
-    PrepareSpellScript(spell_warl_summon_imp);
+    PrepareSpellScript(spell_warl_demonic_sacrifice_on_summon);
 
-    bool Validate(SpellInfo const* /*spellInfo*/) override
+    bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP });
+        if (uint32 sacrificeSpell = GetDemonicSacrificeSpell(spellInfo->Id))
+            return ValidateSpellInfo({ sacrificeSpell });
+
+        return false;
     }
 
     void HandleAfterCast()
     {
-        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP);
+        if (uint32 sacrificeSpell = GetDemonicSacrificeSpell(GetSpellInfo()->Id))
+            CastDemonicSacrifice(GetCaster(), sacrificeSpell);
     }
 
     void Register() override
     {
-        AfterCast += SpellCastFn(spell_warl_summon_imp::HandleAfterCast);
-    }
-};
-
-class spell_warl_summon_voidwalker : public SpellScript
-{
-    PrepareSpellScript(spell_warl_summon_voidwalker);
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER });
-    }
-
-    void HandleAfterCast()
-    {
-        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER);
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_warl_summon_voidwalker::HandleAfterCast);
-    }
-};
-
-class spell_warl_summon_succubus : public SpellScript
-{
-    PrepareSpellScript(spell_warl_summon_succubus);
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS });
-    }
-
-    void HandleAfterCast()
-    {
-        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS);
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_warl_summon_succubus::HandleAfterCast);
-    }
-};
-
-class spell_warl_summon_felhunter : public SpellScript
-{
-    PrepareSpellScript(spell_warl_summon_felhunter);
-
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        return ValidateSpellInfo({ SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER });
-    }
-
-    void HandleAfterCast()
-    {
-        CastDemonicSacrifice(GetCaster(), SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER);
-    }
-
-    void Register() override
-    {
-        AfterCast += SpellCastFn(spell_warl_summon_felhunter::HandleAfterCast);
+        AfterCast += SpellCastFn(spell_warl_demonic_sacrifice_on_summon::HandleAfterCast);
     }
 };
 
@@ -1724,10 +1687,7 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_demonic_circle_teleport);
     RegisterSpellScript(spell_warl_demonic_empowerment);
     RegisterSpellScript(spell_warl_demonic_pact);
-    RegisterSpellScript(spell_warl_summon_imp);
-    RegisterSpellScript(spell_warl_summon_voidwalker);
-    RegisterSpellScript(spell_warl_summon_succubus);
-    RegisterSpellScript(spell_warl_summon_felhunter);
+    RegisterSpellScript(spell_warl_demonic_sacrifice_on_summon);
     RegisterSpellScript(spell_warl_drain_soul);
     RegisterSpellScript(spell_warl_everlasting_affliction);
     RegisterSpellScript(spell_warl_fel_synergy);
