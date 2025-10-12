@@ -647,6 +647,70 @@ void SpellHistory::CancelGlobalCooldown(SpellInfo const* spellInfo)
     _globalCooldowns[spellInfo->StartRecoveryCategory] = Clock::time_point(Clock::duration(0));
 }
 
+void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds reduction)
+{
+    if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
+        return;
+
+    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (itr == _globalCooldowns.end())
+        return;
+
+    Clock::time_point now = GameTime::GetSystemTime();
+    Clock::time_point currentEnd = itr->second;
+    if (currentEnd <= now)
+        return;
+
+    Clock::duration reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
+    Clock::duration currentDuration = currentEnd - now;
+    Clock::time_point newEnd = reductionDuration >= currentDuration ? now : currentEnd - reductionDuration;
+
+    itr->second = newEnd;
+
+    Player* player = GetPlayerOwner();
+    if (!player)
+        return;
+
+    uint32 remaining = 0;
+    if (newEnd > now)
+        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now).count();
+
+    PacketCooldowns gcdUpdates;
+    auto tryAddSpell = [this, spellInfo, remaining](SpellInfo const* otherInfo, PacketCooldowns& updates)
+    {
+        if (!otherInfo)
+            return;
+
+        if (otherInfo->StartRecoveryCategory != spellInfo->StartRecoveryCategory)
+            return;
+
+        if (!otherInfo->StartRecoveryTime)
+            return;
+
+        if (HasCooldown(otherInfo))
+            return;
+
+        updates.emplace(otherInfo->Id, remaining);
+    };
+
+    tryAddSpell(spellInfo, gcdUpdates);
+
+    for (auto const& spellPair : player->GetSpellMap())
+    {
+        if (spellPair.second.state == PLAYERSPELL_REMOVED)
+            continue;
+
+        tryAddSpell(sSpellMgr->GetSpellInfo(spellPair.first), gcdUpdates);
+    }
+
+    if (gcdUpdates.empty())
+        return;
+
+    WorldPacket data;
+    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, gcdUpdates);
+    player->SendDirectMessage(&data);
+}
+
 Player* SpellHistory::GetPlayerOwner() const
 {
     return _owner->GetCharmerOrOwnerPlayerOrPlayerItself();
