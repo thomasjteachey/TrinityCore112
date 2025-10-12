@@ -608,9 +608,6 @@ class spell_rog_preparation : public SpellScript
                 spellInfo->SpellFamilyFlags[1] & SPELLFAMILYFLAG1_ROGUE_BLADE_FLURRY)));
             */
         }, true);
-
-        if (caster->HasAura(81412))
-            caster->CastSpell(caster, 81439, true);
     }
 
     void Register() override
