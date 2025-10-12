@@ -114,10 +114,10 @@ enum WarlockSpells
     SPELL_WARLOCK_SUMMON_FELHUNTER_BASE             = 691,
     SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE            = 697,
     SPELL_WARLOCK_SUMMON_SUCCUBUS_BASE              = 712,
-    SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP             = 18789,
-    SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER      = 18790,
-    SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS        = 18791,
-    SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER       = 18792
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP             = 81525,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER      = 81526,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_SUCCUBUS        = 81527,
+    SPELL_WARLOCK_DEMONIC_SACRIFICE_FELHUNTER       = 81528
 };
 
 enum WarlockSpellIcons
@@ -1026,7 +1026,6 @@ void CastDemonicSacrifice(Unit* caster, uint32 sacrificeSpell)
         return;
 
     CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-    args.AddSpellMod(SPELLVALUE_DURATION, 16 * IN_MILLISECONDS);
     caster->CastSpell(caster, sacrificeSpell, args);
 }
 } // namespace
