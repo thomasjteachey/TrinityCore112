@@ -102,13 +102,28 @@ enum DruidSpells
     SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180,
     SPELL_DRUID_PRIMAL_PRECISION            = 48410,
     SPELL_DRUID_MANGLE                      = 33876,
-    SPELL_DRUID_ENTANGLING_ROOTS_MAX_RANK   = 53308
+    SPELL_DRUID_WRATH_NATURES_GRASP_BUFF    = 81523
 };
 
 enum MiscSpells
 {
     SPELL_CATEGORY_MANGLE_BEAR              = 971
 };
+
+namespace
+{
+    uint32 const NatureGraspAuraSpells[] =
+    {
+        16689,
+        16810,
+        16811,
+        16812,
+        16813,
+        17329,
+        27009,
+        53312
+    };
+}
 
 // 22812 - Barkskin
 class spell_dru_barkskin : public AuraScript
@@ -2046,14 +2061,48 @@ class spell_dru_wrath : public SpellScript
 
     bool Validate(SpellInfo const* spellInfo) override
     {
-        if (!ValidateSpellInfo({ SPELL_DRUID_ENTANGLING_ROOTS_MAX_RANK }))
+        if (!ValidateSpellInfo({ SPELL_DRUID_WRATH_NATURES_GRASP_BUFF }))
             return false;
+
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+        {
+            SpellInfo const* auraInfo = sSpellMgr->GetSpellInfo(natureGraspAuraId);
+            if (!auraInfo)
+                return false;
+
+            SpellEffectInfo const& triggerEffect = auraInfo->Effects[EFFECT_1];
+            if (!triggerEffect.IsEffect() || !triggerEffect.TriggerSpell)
+                return false;
+
+            if (!ValidateSpellInfo({ natureGraspAuraId, triggerEffect.TriggerSpell }))
+                return false;
+        }
 
         return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_DRUID && (spellInfo->SpellFamilyFlags[0] & 1);
     }
 
+    Optional<uint32> GetNatureGraspRootSpell(Unit const* caster) const
+    {
+        if (!caster || !caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
+            return {};
+
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+            if (Aura const* aura = caster->GetAura(natureGraspAuraId))
+                if (AuraEffect const* auraEffect = aura->GetEffect(EFFECT_1))
+                {
+                    SpellEffectInfo const& triggerEffect = auraEffect->GetSpellEffectInfo();
+                    if (triggerEffect.IsEffect() && triggerEffect.TriggerSpell)
+                        return triggerEffect.TriggerSpell;
+                }
+
+        return {};
+    }
+
     void HandleOnCast()
     {
+        if (!GetNatureGraspRootSpell(GetCaster()))
+            return;
+
         if (Spell* spell = GetSpell())
             spell->SetSpellValue(SPELLVALUE_CRIT_CHANCE, 10000);
     }
@@ -2066,7 +2115,11 @@ class spell_dru_wrath : public SpellScript
         if (!caster || !target)
             return;
 
-        caster->CastSpell(target, SPELL_DRUID_ENTANGLING_ROOTS_MAX_RANK, true);
+        Optional<uint32> const rootSpellId = GetNatureGraspRootSpell(caster);
+        if (!rootSpellId)
+            return;
+
+        caster->CastSpell(target, *rootSpellId, true);
     }
 
     void Register() override
