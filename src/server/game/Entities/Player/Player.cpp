@@ -17700,7 +17700,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (!m_taxi.LoadTaxiMask(fields[22].GetString()))                // must be before InitTaxiNodesForLevel
         TC_LOG_WARN("entities.player.loading", "Player::LoadFromDB: Player ({}) has invalid taximask ({}) in DB. Forced partial load.", GetGUID().ToString(), fields[22].GetString());
 
-    uint32 extraflags = fields[36].GetUInt16();
+    uint32 extraflags = fields[36].GetUInt16() & ~PLAYER_EXTRA_SPECTATOR_ON;
 
     _LoadPetStable(fields[37].GetUInt8(), holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_PET_SLOTS));
 
@@ -17795,6 +17795,10 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     _LoadGlyphs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GLYPHS));
     _LoadAuras(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AURAS), time_diff);
+
+    // SPECTATOR_SPELL_SPEED should never persist across sessions
+    if (HasAura(SPECTATOR_SPELL_SPEED))
+        SetIsSpectator(false);
     _LoadGlyphAuras();
     // add ghost flag (must be after aura load: PLAYER_FLAGS_GHOST set in aura)
     if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
@@ -19420,7 +19424,7 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
         //save, but in tavern/city
         stmt->setUInt32(index++, m_resetTalentsCost);
         stmt->setUInt32(index++, uint32(m_resetTalentsTime));
-        stmt->setUInt16(index++, (uint16)m_ExtraFlags);
+        stmt->setUInt16(index++, uint16(m_ExtraFlags & ~PLAYER_EXTRA_SPECTATOR_ON));
         stmt->setUInt8(index++,  m_petStable ? m_petStable->MaxStabledPets : 0);
         stmt->setUInt16(index++, (uint16)m_atLoginFlags);
         stmt->setUInt16(index++, GetZoneId());
@@ -19545,7 +19549,7 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
         //save, but in tavern/city
         stmt->setUInt32(index++, m_resetTalentsCost);
         stmt->setUInt32(index++, uint32(m_resetTalentsTime));
-        stmt->setUInt16(index++, (uint16)m_ExtraFlags);
+        stmt->setUInt16(index++, uint16(m_ExtraFlags & ~PLAYER_EXTRA_SPECTATOR_ON));
         stmt->setUInt8(index++,  m_petStable ? m_petStable->MaxStabledPets : 0);
         stmt->setUInt16(index++, (uint16)m_atLoginFlags);
         stmt->setUInt16(index++, GetZoneId());
