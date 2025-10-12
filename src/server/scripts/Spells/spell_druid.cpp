@@ -2154,13 +2154,6 @@ class spell_dru_natures_grasp : public SpellScript
         return false;
     }
 
-    void HandleBeforeCast()
-    {
-        Unit* caster = GetCaster();
-        if (!caster || !caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF))
-            return;
-    }
-
     void HandleAfterCast()
     {
         Unit* caster = GetCaster();
@@ -2180,7 +2173,6 @@ class spell_dru_natures_grasp : public SpellScript
 
     void Register() override
     {
-        BeforeCast += SpellCastFn(spell_dru_natures_grasp::HandleBeforeCast);
         AfterCast += SpellCastFn(spell_dru_natures_grasp::HandleAfterCast);
     }
 };

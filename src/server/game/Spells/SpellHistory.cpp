@@ -671,53 +671,12 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!player)
         return;
 
-    SpellInfo const* const baseSpellInfo = spellInfo;
-    uint32 const gcdCategory = baseSpellInfo->StartRecoveryCategory;
-
-    std::chrono::milliseconds remaining(0);
+    uint32 remaining = 0;
     if (newEnd > now)
-        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now);
-
-    PacketCooldowns cooldowns;
-
-    auto tryAddCooldown = [&](SpellInfo const* info)
-    {
-        if (!info)
-            return;
-
-        if (!info->StartRecoveryTime)
-            return;
-
-        if (info->StartRecoveryCategory != gcdCategory)
-            return;
-
-        if (HasCooldown(info, 0, true))
-            return;
-
-        cooldowns.emplace(info->Id, remaining.count());
-    };
-
-    tryAddCooldown(baseSpellInfo);
-
-    PlayerSpellMap const& playerSpells = player->GetSpellMap();
-    for (auto const& playerSpellPair : playerSpells)
-    {
-        if (playerSpellPair.second.state == PLAYERSPELL_REMOVED)
-            continue;
-
-        uint32 const knownSpellId = playerSpellPair.first;
-        if (knownSpellId == baseSpellInfo->Id)
-            continue;
-
-        SpellInfo const* knownSpellInfo = sSpellMgr->GetSpellInfo(knownSpellId);
-        tryAddCooldown(knownSpellInfo);
-    }
-
-    if (cooldowns.empty())
-        return;
+        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now).count();
 
     WorldPacket data;
-    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, cooldowns);
+    BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, spellInfo->Id, remaining);
     player->SendDirectMessage(&data);
 }
 
