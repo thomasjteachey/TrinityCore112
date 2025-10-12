@@ -220,7 +220,7 @@ namespace
     }
 }
 std::unordered_map<uint32, MatchRecord> records;
-std::unordered_map<uint64, MatchRecord> loadedReplays;
+std::unordered_map<uint32, MatchRecord> loadedReplays;
 // Headless spectators used for recording packets per battleground instance
 std::unordered_map<uint32, Player*> replayBots;
 // Helper container to avoid recursive bot creation
@@ -540,14 +540,15 @@ public:
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
 
-            if (loadedReplays[player->GetGUID()].packets.empty())
+            uint32 replayKey = player->GetGUID().GetCounter();
+            if (loadedReplays[replayKey].packets.empty())
             {
                 handler.PSendSysMessage("Replay data not found.");
                 handler.SetSentErrorMessage(true);
                 return false;
             }
 
-            MatchRecord record = loadedReplays[player->GetGUID()];
+            MatchRecord record = loadedReplays[replayKey];
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
             if (!bg) {
                 handler.PSendSysMessage("Couldn't create arena map!");
@@ -555,7 +556,7 @@ public:
                 return false;
             }
             player->SetIsSpectator(true);
-            bg->toggleReplay(player->GetGUID());
+            bg->toggleReplay(player->GetGUID().GetCounter());
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
             bg->StartBattleground();
 
@@ -608,8 +609,9 @@ public:
                     record.hordeRecorder = newGuid;
             }
 
-            loadedReplays[p->GetGUID()] = std::move(record);
-            TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[p->GetGUID()].packets.size(), p->GetGUID().ToString());
+            uint32 replayKey = p->GetGUID().GetCounter();
+            loadedReplays[replayKey] = std::move(record);
+            TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[replayKey].packets.size(), p->GetGUID().ToString());
             return true;
         }
 
