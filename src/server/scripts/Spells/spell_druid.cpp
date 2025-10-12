@@ -27,6 +27,7 @@
 #include "Optional.h"
 #include "Player.h"
 #include "SpellAuraEffects.h"
+#include "SpellDefines.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -100,7 +101,8 @@ enum DruidSpells
     SPELL_DRUID_NURTURING_INSTINCT_R1       = 47179,
     SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180,
     SPELL_DRUID_PRIMAL_PRECISION            = 48410,
-    SPELL_DRUID_MANGLE                      = 33876
+    SPELL_DRUID_MANGLE                      = 33876,
+    SPELL_DRUID_ENTANGLING_ROOTS_MAX_RANK   = 53308
 };
 
 enum MiscSpells
@@ -2037,6 +2039,43 @@ class spell_dru_wild_growth_aura : public AuraScript
     float _baseReduction = 2.f;
 };
 
+// 5176 - Wrath (and ranks)
+class spell_dru_wrath : public SpellScript
+{
+    PrepareSpellScript(spell_dru_wrath);
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        if (!ValidateSpellInfo({ SPELL_DRUID_ENTANGLING_ROOTS_MAX_RANK }))
+            return false;
+
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_DRUID && (spellInfo->SpellFamilyFlags[0] & 1);
+    }
+
+    void HandleOnCast()
+    {
+        if (Spell* spell = GetSpell())
+            spell->SetSpellValue(SPELLVALUE_CRIT_CHANCE, 10000);
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        caster->CastSpell(target, SPELL_DRUID_ENTANGLING_ROOTS_MAX_RANK, true);
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(spell_dru_wrath::HandleOnCast);
+        AfterHit += SpellHitFn(spell_dru_wrath::HandleAfterHit);
+    }
+};
+
 //claw 1082
 class spell_dru_claw : public SpellScript
 {
@@ -2114,6 +2153,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus);
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus_dummy);
     RegisterSpellAndAuraScriptPair(spell_dru_wild_growth, spell_dru_wild_growth_aura);
+    RegisterSpellScript(spell_dru_wrath);
     RegisterSpellScript(spell_dru_claw);
     RegisterSpellScript(spell_humanoid_speed_pack);
 }
