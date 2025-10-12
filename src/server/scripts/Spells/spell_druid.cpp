@@ -2121,6 +2121,11 @@ class spell_dru_wrath : public SpellScript
             return;
 
         caster->CastSpell(target, *rootSpellId, true);
+
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+            caster->RemoveAurasDueToSpell(natureGraspAuraId);
+
+        caster->RemoveAurasDueToSpell(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF);
     }
 
     void Register() override
