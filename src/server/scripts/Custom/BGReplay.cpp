@@ -664,6 +664,21 @@ public:
 
                 record.packets.push_back({ packetTimestamp, packet });
             }
+
+            if (!record.packets.empty())
+            {
+                uint32 const firstTimestamp = record.packets.front().timestamp;
+                if (firstTimestamp)
+                {
+                    for (PacketRecord& packetRecord : record.packets)
+                    {
+                        if (packetRecord.timestamp <= firstTimestamp)
+                            packetRecord.timestamp = 0;
+                        else
+                            packetRecord.timestamp -= firstTimestamp;
+                    }
+                }
+            }
         }
     };
     CreatureAI* GetAI(Creature* creature) const override
