@@ -2190,22 +2190,15 @@ class spell_sha_fire_nova_trig : public SpellScript
             return;
 
         std::list<Unit*> friendlyTargets;
-        Trinity::AnyFriendlyUnitInObjectRangeCheck checker(effectCaster, effectCaster, radius);
+        Trinity::AnyFriendlyUnitInObjectRangeCheck checker(effectCaster, shaman, radius);
         Trinity::UnitListSearcher<Trinity::AnyFriendlyUnitInObjectRangeCheck> searcher(effectCaster, friendlyTargets, checker);
         Cell::VisitAllObjects(effectCaster, searcher, radius);
 
         for (Unit* friendly : friendlyTargets)
         {
-            if (!friendly || friendly == effectCaster)
+            if (friendly->ToTotem())
                 continue;
-
-            if (!friendly->IsAlive())
-                continue;
-
-            if (!shaman->IsFriendlyTo(friendly))
-                continue;
-
-            effectCaster->CastSpell(friendly, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+            shaman->CastSpell(friendly, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
             shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
         }
     }
