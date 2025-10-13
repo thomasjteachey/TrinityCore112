@@ -693,6 +693,34 @@ class spell_sha_flametongue_weapon : public AuraScript
     }
 };
 
+// 8034 - Frostbrand Attack
+class spell_sha_frostbrand_attack : public SpellScript
+{
+    PrepareSpellScript(spell_sha_frostbrand_attack);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER, SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        caster->CastSpell(target, SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        caster->CastSpell(caster, SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_sha_frostbrand_attack::HandleAfterHit);
+    }
+};
+
 // -63373 - Frozen Power
 class spell_sha_frozen_power : public AuraScript
 {
@@ -2519,6 +2547,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_fire_nova);
     RegisterSpellScript(spell_sha_flame_shock);
     RegisterSpellScript(spell_sha_flametongue_weapon);
+    RegisterSpellScript(spell_sha_frostbrand_attack);
     RegisterSpellScript(spell_sha_frozen_power);
     RegisterSpellScript(spell_sha_glyph_of_earth_shield);
     RegisterSpellScript(spell_sha_glyph_of_healing_wave);

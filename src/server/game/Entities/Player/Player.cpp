@@ -106,6 +106,24 @@
 #include "WorldStatePackets.h"
 #include "ArenaSpectator.h"
 
+namespace
+{
+bool IsBattlegroundEquipChangeAllowed(uint8 slot)
+{
+    switch (slot)
+    {
+        case EQUIPMENT_SLOT_TRINKET1:
+        case EQUIPMENT_SLOT_TRINKET2:
+        case EQUIPMENT_SLOT_MAINHAND:
+        case EQUIPMENT_SLOT_OFFHAND:
+        case EQUIPMENT_SLOT_RANGED:
+            return true;
+        default:
+            return false;
+    }
+}
+}
+
 #define ZONE_UPDATE_INTERVAL (1*IN_MILLISECONDS)
 
 #define PLAYER_SKILL_INDEX(x)       (PLAYER_SKILL_INFO_1_1 + ((x)*3))
@@ -11373,7 +11391,7 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16 &dest, Item* pItem, bool
                             return EQUIP_ERR_NOT_DURING_ARENA_MATCH;
                 }
 
-                if (IsInCombat()&& (pProto->Class == ITEM_CLASS_WEAPON || pProto->InventoryType == INVTYPE_RELIC) && m_weaponChangeTimer != 0)
+                if (IsInCombat() && (pProto->Class == ITEM_CLASS_WEAPON || pProto->InventoryType == INVTYPE_RELIC) && m_weaponChangeTimer != 0)
                     return EQUIP_ERR_CANT_DO_RIGHT_NOW;         // maybe exist better err
 
                 if (IsNonMeleeSpellCast(false))
@@ -11388,6 +11406,13 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16 &dest, Item* pItem, bool
             uint8 eslot = FindEquipSlot(pProto, slot, swap);
             if (eslot == NULL_SLOT)
                 return EQUIP_ERR_ITEM_CANT_BE_EQUIPPED;
+
+            if (not_loading)
+            {
+                if (Battleground* battleground = GetBattleground())
+                    if (!IsBattlegroundEquipChangeAllowed(eslot))
+                        return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+            }
 
             res = CanUseItem(pItem, not_loading);
             if (res != EQUIP_ERR_OK)
@@ -11535,6 +11560,13 @@ InventoryResult Player::CanUnequipItem(uint16 pos, bool swap) const
 
     if (!swap && pItem->IsNotEmptyBag())
         return EQUIP_ERR_CAN_ONLY_DO_WITH_EMPTY_BAGS;
+
+    uint8 bag = pos >> 8;
+    uint8 slot = pos & 255;
+    if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+        if (Battleground* battleground = GetBattleground())
+            if (!IsBattlegroundEquipChangeAllowed(slot))
+                return EQUIP_ERR_CANT_DO_RIGHT_NOW;
 
     return EQUIP_ERR_OK;
 }
