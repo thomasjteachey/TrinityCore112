@@ -16,6 +16,7 @@
  */
 
 #include "Errors.h"
+#include "Log.h"
 #include "StringFormat.h"
 #include <cstdio>
 #include <cstdlib>
@@ -49,6 +50,14 @@ extern "C" { TC_COMMON_API char const* TrinityAssertionFailedMessage = nullptr; 
 
 namespace
 {
+    void LogCrashMessage(std::string const& message)
+    {
+        if (message.empty())
+            return;
+
+        TC_LOG_FATAL("server.crash", "{}", message);
+    }
+
     std::string FormatAssertionMessage(char const* format, va_list args)
     {
         std::string formatted;
@@ -71,6 +80,7 @@ namespace Trinity
 void Assert(char const* file, int line, char const* function, std::string debugInfo, char const* message)
 {
     std::string formattedMessage = StringFormat("\n{}:{} in {} ASSERTION FAILED:\n  {}\n", file, line, function, message) + debugInfo + '\n';
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
     Crash(formattedMessage.c_str());
@@ -84,6 +94,7 @@ void Assert(char const* file, int line, char const* function, std::string debugI
     std::string formattedMessage = StringFormat("\n{}:{} in {} ASSERTION FAILED:\n  {}\n", file, line, function, message) + FormatAssertionMessage(format, args) + '\n' + debugInfo + '\n';
     va_end(args);
 
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
 
@@ -98,6 +109,7 @@ void Fatal(char const* file, int line, char const* function, char const* message
     std::string formattedMessage = StringFormat("\n{}:{} in {} FATAL ERROR:\n", file, line, function) + FormatAssertionMessage(message, args) + '\n';
     va_end(args);
 
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
 
@@ -108,6 +120,7 @@ void Fatal(char const* file, int line, char const* function, char const* message
 void Error(char const* file, int line, char const* function, char const* message)
 {
     std::string formattedMessage = StringFormat("\n{}:{} in {} ERROR:\n  {}\n", file, line, function, message);
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
     Crash(formattedMessage.c_str());
@@ -122,6 +135,7 @@ void Warning(char const* file, int line, char const* function, char const* messa
 void Abort(char const* file, int line, char const* function)
 {
     std::string formattedMessage = StringFormat("\n{}:{} in {} ABORTED.\n", file, line, function);
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
     Crash(formattedMessage.c_str());
@@ -135,6 +149,7 @@ void Abort(char const* file, int line, char const* function, char const* message
     std::string formattedMessage = StringFormat("\n{}:{} in {} ABORTED:\n", file, line, function) + FormatAssertionMessage(message, args) + '\n';
     va_end(args);
 
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
 
@@ -145,6 +160,7 @@ void AbortHandler(int sigval)
 {
     // nothing useful to log here, no way to pass args
     std::string formattedMessage = StringFormat("Caught signal {}\n", sigval);
+    LogCrashMessage(formattedMessage);
     fprintf(stderr, "%s", formattedMessage.c_str());
     fflush(stderr);
     Crash(formattedMessage.c_str());

@@ -3930,7 +3930,11 @@ AuctionHouseBot.Buyer.Recheck.Interval = 20
 #
 
 Appender.Console=1,3,0
-Appender.Server=2,2,0,Server.log,w
+# By default keep appending to Server.log so crash details from previous sessions are preserved.
+# Crash.log stores the fatal assertions and signal handlers that lead to a shutdown.
+# Change the last parameter back to "w" if you prefer either file to be overwritten on startup.
+Appender.Server=2,2,0,Server.log,a
+Appender.Crash=2,6,7,Crash.log,a
 Appender.GM=2,2,1,GM.log
 Appender.DBErrors=2,2,0,DBErrors.log
 
@@ -3954,6 +3958,7 @@ Appender.DBErrors=2,2,0,DBErrors.log
 
 Logger.root=5,Console Server
 Logger.server=3,Console Server
+Logger.server.crash=6,Crash
 Logger.commands.gm=3,Console GM
 Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors

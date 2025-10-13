@@ -373,7 +373,11 @@ Updates.CleanDeadRefMaxCount = 3
 #
 
 Appender.Console=1,2,0
-Appender.Auth=2,2,0,Auth.log,w
+# Append to Auth.log by default to retain crash information between restarts.
+# Crash.log stores the fatal assertions and signal handlers that lead to a shutdown.
+# Change the last parameter back to "w" if you prefer either file to be overwritten on startup.
+Appender.Auth=2,2,0,Auth.log,a
+Appender.Crash=2,6,7,Crash.log,a
 
 #  Logger config values: Given a logger "name"
 #    Logger.name
@@ -394,6 +398,7 @@ Appender.Auth=2,2,0,Auth.log,w
 #
 
 Logger.root=3,Console Auth
+Logger.server.crash=6,Crash
 
 #
 ###################################################################################################
