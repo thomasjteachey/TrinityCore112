@@ -2466,6 +2466,10 @@ class spell_sha_frost_shock_mana_drain : public SpellScript
         if (!caster || !target)
             return;
 
+
+        if (!caster->HasAura(81854))
+            return;
+
         uint32 const targetMana = target->GetPower(POWER_MANA);
         if (!targetMana)
             return;
