@@ -115,7 +115,9 @@ enum ShamanSpells
     SPELL_SHAMAN_BRAIN_DRAIN                    = 81327,
     SPELL_SHAMAN_SHOCKING                       = 81328,
     SPELL_SHAMAN_SUMMERS_SWELTER                = 81389,
-    SPELL_SHAMAN_FIRE_STUN                      = 81390
+    SPELL_SHAMAN_FIRE_STUN                      = 81390,
+    SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL           = 81849,
+    SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA           = 81850
 };
 
 enum ShamanSpellIcons
@@ -2105,11 +2107,59 @@ class spell_sha_fire_nova_trig : public SpellScript
 {
     PrepareSpellScript(spell_sha_fire_nova_trig);
 
+    bool Load() override
+    {
+        _processedFriendlyHeal = false;
+        return true;
+    }
+
+    bool Validate(SpellInfo const* spellInfo) override
+    {
+        SpellInfo const* firstRankSpellInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_FIRE_NOVA_TRIGGERED_R1);
+        if (!firstRankSpellInfo || !spellInfo->IsRankOf(firstRankSpellInfo))
+            return false;
+
+        return ValidateSpellInfo({ SPELL_SHAMAN_FIRE_STUN, SPELL_SHAMAN_SUMMERS_SWELTER, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA });
+    }
+
+    void HealFriendlies(Unit* shaman, Unit* effectCaster)
+    {
+        if (_processedFriendlyHeal)
+            return;
+
+        if (!effectCaster)
+            return;
+
+        float radius = GetSpellInfo()->GetEffect(EFFECT_0).CalcRadius(effectCaster);
+        if (radius <= 0.0f)
+            radius = 0.0f;
+
+        std::list<Unit*> friendlyTargets;
+        Trinity::AnyFriendlyUnitInObjectRangeCheck checker(effectCaster, effectCaster, radius);
+        Trinity::UnitListSearcher<Trinity::AnyFriendlyUnitInObjectRangeCheck> searcher(effectCaster, friendlyTargets, checker);
+        effectCaster->VisitNearbyObject(radius, searcher);
+
+        for (Unit* friendly : friendlyTargets)
+        {
+            if (!friendly || friendly == effectCaster)
+                continue;
+
+            if (!friendly->IsAlive())
+                continue;
+
+            if (!shaman->IsFriendlyTo(friendly))
+                continue;
+
+            effectCaster->CastSpell(friendly, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+            shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
+        }
+
+        _processedFriendlyHeal = true;
+    }
+
     void HandleHit(SpellEffIndex /*effIndex*/)
     {
         Unit* target = GetHitUnit();
-        if (!target)
-            return;
 
         Unit* originalCaster = GetOriginalCaster();
         Unit* caster = GetCaster();
@@ -2138,16 +2188,30 @@ class spell_sha_fire_nova_trig : public SpellScript
         if (!shaman || !effectCaster)
             return;
 
-        if (!shaman->HasAura(SPELL_SHAMAN_SUMMERS_SWELTER))
+        bool hasSummersSwelter = shaman->HasAura(SPELL_SHAMAN_SUMMERS_SWELTER);
+        bool hasFireNovaTotemAura = shaman->HasAura(SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA);
+
+        if (!hasSummersSwelter && !hasFireNovaTotemAura)
             return;
 
-        if (!shaman->IsFriendlyTo(target))
+        if (hasFireNovaTotemAura)
+        {
+            HealFriendlies(shaman, effectCaster);
+
+            if (target && !shaman->IsFriendlyTo(target))
+                shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
+        }
+
+        if (hasSummersSwelter && target && !shaman->IsFriendlyTo(target))
             effectCaster->CastSpell(target, SPELL_SHAMAN_FIRE_STUN, true);
     }
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(spell_sha_fire_nova_trig::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
     }
+
+private:
+    bool _processedFriendlyHeal;
 };
 
 class spell_sha_purge : public SpellScript
