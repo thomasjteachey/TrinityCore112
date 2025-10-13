@@ -720,8 +720,11 @@ class spell_sha_frostbrand_attack : public SpellScript
         if (!caster || !target)
             return;
 
-        caster->CastSpell(target, SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
-        caster->CastSpell(caster, SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        if (caster->HasAura(81853))
+        {
+            caster->CastSpell(target, SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+            caster->CastSpell(caster, SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        }
     }
 
     void Register() override
