@@ -35,6 +35,7 @@
 #include "SpellScript.h"
 #include "Unit.h"
 #include <algorithm>
+#include <array>
 #include <unordered_map>
 #include "SharedDefines.h"
 
@@ -692,6 +693,34 @@ class spell_sha_flametongue_weapon : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(spell_sha_flametongue_weapon::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_sha_flametongue_weapon::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// 8034 - Frostbrand Attack
+class spell_sha_frostbrand_attack : public SpellScript
+{
+    PrepareSpellScript(spell_sha_frostbrand_attack);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER, SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        caster->CastSpell(target, SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+        caster->CastSpell(caster, SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_sha_frostbrand_attack::HandleAfterHit);
     }
 };
 
@@ -2361,6 +2390,63 @@ class spell_sha_old_purge : public SpellScript
     }
 };
 
+class spell_sha_shock_cooldown_reduction : public SpellScript
+{
+    PrepareSpellScript(spell_sha_shock_cooldown_reduction);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({
+            SPELL_SHAMAN_EARTH_SHOCK_R1,
+            SPELL_SHAMAN_FLAME_SHOCK_R1,
+            SPELL_SHAMAN_FROST_SHOCK_R1,
+            SPELL_SHAMAN_WIND_SHEAR
+        });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (!caster)
+            return;
+
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        int32 cooldownReduction = GetEffectValue();
+        if (cooldownReduction <= 0)
+            return;
+
+        if (cooldownReduction < IN_MILLISECONDS)
+            cooldownReduction *= IN_MILLISECONDS;
+
+        static constexpr std::array<uint32, 4> ShockBaseSpellIds = {
+            SPELL_SHAMAN_EARTH_SHOCK_R1,
+            SPELL_SHAMAN_FLAME_SHOCK_R1,
+            SPELL_SHAMAN_FROST_SHOCK_R1,
+            SPELL_SHAMAN_WIND_SHEAR
+        };
+
+        for (uint32 spellId : ShockBaseSpellIds)
+        {
+            SpellInfo const* rankSpellInfo = sSpellMgr->AssertSpellInfo(spellId);
+            for (SpellInfo const* currentRank = rankSpellInfo; currentRank; currentRank = currentRank->GetNextRankSpell())
+                spellHistory->ModifyCooldown(currentRank->Id, -cooldownReduction);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_sha_shock_cooldown_reduction::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 class spell_totem_cd_reduce : public SpellScript
 {
     PrepareSpellScript(spell_totem_cd_reduce);
@@ -2521,6 +2607,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_fire_nova);
     RegisterSpellScript(spell_sha_flame_shock);
     RegisterSpellScript(spell_sha_flametongue_weapon);
+    RegisterSpellScript(spell_sha_frostbrand_attack);
     RegisterSpellScript(spell_sha_frozen_power);
     RegisterSpellScript(spell_sha_glyph_of_earth_shield);
     RegisterSpellScript(spell_sha_glyph_of_healing_wave);
@@ -2563,6 +2650,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_purge);
     RegisterSpellScript(spell_sha_old_purge);
     RegisterSpellScript(spell_sha_fire_nova_trig);
+    RegisterSpellScript(spell_sha_shock_cooldown_reduction);
     RegisterSpellScript(spell_totem_cd_reduce);
     RegisterSpellScript(spell_sha_lightning_shield_mana_restore);
 
