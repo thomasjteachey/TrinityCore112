@@ -2107,12 +2107,6 @@ class spell_sha_fire_nova_trig : public SpellScript
 {
     PrepareSpellScript(spell_sha_fire_nova_trig);
 
-    bool Load() override
-    {
-        _processedFriendlyHeal = false;
-        return true;
-    }
-
     bool Validate(SpellInfo const* spellInfo) override
     {
         SpellInfo const* firstRankSpellInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_FIRE_NOVA_TRIGGERED_R1);
@@ -2122,14 +2116,35 @@ class spell_sha_fire_nova_trig : public SpellScript
         return ValidateSpellInfo({ SPELL_SHAMAN_FIRE_STUN, SPELL_SHAMAN_SUMMERS_SWELTER, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA });
     }
 
-    void HealFriendlies(Unit* shaman, Unit* effectCaster)
+    bool ResolveShamanAndEffectCaster(Unit*& shaman, Unit*& effectCaster)
     {
-        if (_processedFriendlyHeal)
-            return;
+        if (Unit* originalCaster = GetOriginalCaster())
+        {
+            effectCaster = originalCaster;
+            if (Player* owner = originalCaster->GetCharmerOrOwnerPlayerOrPlayerItself())
+                shaman = owner;
+        }
+
+        if (!shaman)
+        {
+            if (Unit* caster = GetCaster())
+            {
+                if (!effectCaster)
+                    effectCaster = caster;
+
+                if (Player* owner = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+                    shaman = owner;
+            }
+        }
 
         if (!effectCaster)
-            return;
+            effectCaster = shaman;
 
+        return shaman && effectCaster;
+    }
+
+    void HealFriendlies(Unit* shaman, Unit* effectCaster)
+    {
         float radius = GetSpellInfo()->GetEffect(EFFECT_0).CalcRadius(effectCaster);
         if (radius <= 0.0f)
             radius = 0.0f;
@@ -2153,65 +2168,51 @@ class spell_sha_fire_nova_trig : public SpellScript
             effectCaster->CastSpell(friendly, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
             shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
         }
+    }
 
-        _processedFriendlyHeal = true;
+    void HandleAfterCast()
+    {
+        Unit* shaman = nullptr;
+        Unit* effectCaster = nullptr;
+
+        if (!ResolveShamanAndEffectCaster(shaman, effectCaster))
+            return;
+
+        bool hasFireNovaTotemAura = shaman->HasAura(SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA);
+
+        if (!hasFireNovaTotemAura)
+            return;
+
+        HealFriendlies(shaman, effectCaster);
     }
 
     void HandleHit(SpellEffIndex /*effIndex*/)
     {
         Unit* target = GetHitUnit();
 
-        Unit* originalCaster = GetOriginalCaster();
-        Unit* caster = GetCaster();
         Unit* shaman = nullptr;
         Unit* effectCaster = nullptr;
 
-        if (originalCaster)
-        {
-            effectCaster = originalCaster;
-            if (Player* owner = originalCaster->GetCharmerOrOwnerPlayerOrPlayerItself())
-                shaman = owner;
-        }
-
-        if (!shaman && caster)
-        {
-            if (!effectCaster)
-                effectCaster = caster;
-
-            if (Player* owner = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
-                shaman = owner;
-        }
-
-        if (!effectCaster)
-            effectCaster = shaman;
-
-        if (!shaman || !effectCaster)
+        if (!ResolveShamanAndEffectCaster(shaman, effectCaster))
             return;
 
         bool hasSummersSwelter = shaman->HasAura(SPELL_SHAMAN_SUMMERS_SWELTER);
         bool hasFireNovaTotemAura = shaman->HasAura(SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA);
 
-        if (!hasSummersSwelter && !hasFireNovaTotemAura)
+        if (!target || shaman->IsFriendlyTo(target))
             return;
 
         if (hasFireNovaTotemAura)
-        {
-            HealFriendlies(shaman, effectCaster);
+            shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
 
-            if (target && !shaman->IsFriendlyTo(target))
-                shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
-        }
-
-        if (hasSummersSwelter && target && !shaman->IsFriendlyTo(target))
+        if (hasSummersSwelter)
             effectCaster->CastSpell(target, SPELL_SHAMAN_FIRE_STUN, true);
     }
     void Register() override
     {
+        AfterCast += SpellCastFn(spell_sha_fire_nova_trig::HandleAfterCast);
         OnEffectHitTarget += SpellEffectFn(spell_sha_fire_nova_trig::HandleHit, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
     }
-
-private:
-    bool _processedFriendlyHeal;
 };
 
 class spell_sha_purge : public SpellScript
