@@ -119,8 +119,13 @@ Depending on the type, elements optional1 and optional2 will take different
         Allows to use one "%u" to create dynamic files
 
     Mode: Mode to open the file (read as optional2 if Type = File)
-        a - (Append)
+        a - (Append)  (default in sample configs so server restarts do not wipe previous logs)
         w - (Overwrite)
+
+The sample authserver and worldserver configurations also define a dedicated
+`server.crash` logger that writes the fatal assertion and signal messages
+recorded by TrinityCore's crash handler to `Crash.log`, helping you diagnose
+why the process exited even after a restart.
 
 Example:
     Appender.Console1=1,2,6
