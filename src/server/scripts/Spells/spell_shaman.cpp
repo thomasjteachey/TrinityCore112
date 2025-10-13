@@ -2199,7 +2199,7 @@ class spell_sha_fire_nova_trig : public SpellScript
             if (friendly->ToTotem())
                 continue;
             shaman->CastSpell(friendly, SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL, CastSpellExtraArgs(TRIGGERED_FULL_MASK));
-            shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
+            shaman->EnergizeBySpell(shaman, GetSpellInfo()->Id, 60, POWER_MANA);
         }
     }
 
@@ -2236,7 +2236,7 @@ class spell_sha_fire_nova_trig : public SpellScript
             return;
 
         if (hasFireNovaTotemAura)
-            shaman->EnergizeBySpell(shaman, SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA, 60, POWER_MANA);
+            shaman->EnergizeBySpell(shaman, GetSpellInfo()->Id, 60, POWER_MANA);
 
         if (hasSummersSwelter)
             effectCaster->CastSpell(target, SPELL_SHAMAN_FIRE_STUN, true);
@@ -2481,12 +2481,12 @@ class spell_sha_frost_shock_mana_drain : public SpellScript
             return;
 
         if (caster->GetMaxPower(POWER_MANA) > 0)
-            caster->EnergizeBySpell(caster, 81854, 60, POWER_MANA);
+            caster->EnergizeBySpell(caster, GetSpellInfo()->Id, drained, POWER_MANA);
     }
 
     void Register() override
     {
-        OnEffectHitTarget += SpellEffectFn(spell_sha_frost_shock_mana_drain::HandleDrain, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+        OnEffectHitTarget += SpellEffectFn(spell_sha_frost_shock_mana_drain::HandleDrain, EFFECT_1, SPELL_EFFECT_SCHOOL_DAMAGE);
     }
 };
 
