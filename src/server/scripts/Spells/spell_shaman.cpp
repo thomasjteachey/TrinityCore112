@@ -22,7 +22,9 @@
  */
 
 #include "ScriptMgr.h"
+#include "CellImpl.h"
 #include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "Map.h"
@@ -117,15 +119,8 @@ enum ShamanSpells
     SPELL_SHAMAN_SHOCKING                       = 81328,
     SPELL_SHAMAN_SUMMERS_SWELTER                = 81389,
     SPELL_SHAMAN_FIRE_STUN                      = 81390,
-    SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER      = 81851,
-    SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF    = 81852,
-    SPELL_SHAMAN_EARTH_SHOCK_R1                 = 8042,
-    SPELL_SHAMAN_FLAME_SHOCK_R1                 = 8050,
-    SPELL_SHAMAN_FROST_SHOCK_R1                 = 8056,
-    SPELL_SHAMAN_WIND_SHEAR                     = 57994,
-    SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL = 81849,
-    SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA = 81850
-
+    SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL           = 81849,
+    SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA           = 81850
 };
 
 enum ShamanSpellIcons
@@ -2183,12 +2178,12 @@ class spell_sha_fire_nova_trig : public SpellScript
     {
         float radius = GetSpellInfo()->GetEffect(EFFECT_0).CalcRadius(effectCaster);
         if (radius <= 0.0f)
-            radius = 0.0f;
+            return;
 
         std::list<Unit*> friendlyTargets;
         Trinity::AnyFriendlyUnitInObjectRangeCheck checker(effectCaster, effectCaster, radius);
         Trinity::UnitListSearcher<Trinity::AnyFriendlyUnitInObjectRangeCheck> searcher(effectCaster, friendlyTargets, checker);
-        effectCaster->VisitNearbyObject(radius, searcher);
+        Cell::VisitAllObjects(effectCaster, searcher, radius);
 
         for (Unit* friendly : friendlyTargets)
         {
