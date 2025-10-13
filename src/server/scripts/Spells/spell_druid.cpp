@@ -796,36 +796,9 @@ class spell_dru_innervate : public AuraScript
             amount = 0;
     }
 
-    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
-    {
-        Unit* caster = GetCaster();
-        Unit* target = GetTarget();
-        if (caster->HasAura(81418))
-        {
-            if (caster->GetGUID() != target->GetGUID())
-            {
-                CastSpellExtraArgs args(aurEff);
-                caster->AddAura(SPELL_DRUID_INNERVATE, caster);
-                if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE))
-                {
-                    int32 newDuration = innervate->GetDuration() / 2;
-                    int32 newMaxDuration = innervate->GetMaxDuration() / 2;
-
-                    if (newDuration <= 0)
-                        newDuration = 1;
-                    if (newMaxDuration < newDuration)
-                        newMaxDuration = newDuration;
-
-                    innervate->SetMaxDuration(newMaxDuration);
-                    innervate->SetDuration(newDuration);
-                }
-            }
-        }
-    }
-
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_dru_innervate::HandleApply, EFFECT_0, SPELL_AURA_MOD_MANA_REGEN_INTERRUPT, AURA_EFFECT_HANDLE_REAL);
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_innervate::CalculateAmount, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE);
     }
 };
 
