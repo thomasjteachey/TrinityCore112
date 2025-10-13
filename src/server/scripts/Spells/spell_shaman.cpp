@@ -2481,7 +2481,7 @@ class spell_sha_frost_shock_mana_drain : public SpellScript
             return;
 
         if (caster->GetMaxPower(POWER_MANA) > 0)
-            caster->ModifyPower(POWER_MANA, drained);
+            caster->EnergizeBySpell(caster, 81854, 60, POWER_MANA);
     }
 
     void Register() override
