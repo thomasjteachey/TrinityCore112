@@ -122,7 +122,10 @@ enum ShamanSpells
     SPELL_SHAMAN_EARTH_SHOCK_R1                 = 8042,
     SPELL_SHAMAN_FLAME_SHOCK_R1                 = 8050,
     SPELL_SHAMAN_FROST_SHOCK_R1                 = 8056,
-    SPELL_SHAMAN_WIND_SHEAR                     = 57994
+    SPELL_SHAMAN_WIND_SHEAR                     = 57994,
+    SPELL_SHAMAN_FIRE_NOVA_TOTEM_HEAL = 81849,
+    SPELL_SHAMAN_FIRE_NOVA_TOTEM_AURA = 81850
+
 };
 
 enum ShamanSpellIcons
