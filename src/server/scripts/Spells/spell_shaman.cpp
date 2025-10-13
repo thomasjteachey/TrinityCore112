@@ -2449,6 +2449,43 @@ class spell_sha_shock_cooldown_reduction : public SpellScript
     }
 };
 
+class spell_sha_frost_shock_mana_drain : public SpellScript
+{
+    PrepareSpellScript(spell_sha_frost_shock_mana_drain);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_FROST_SHOCK_R1 });
+    }
+
+    void HandleDrain(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        uint32 const targetMana = target->GetPower(POWER_MANA);
+        if (!targetMana)
+            return;
+
+        int32 const desiredDrain = std::min<int32>(75, static_cast<int32>(targetMana));
+        int32 const drained = -target->ModifyPower(POWER_MANA, -desiredDrain);
+
+        if (drained <= 0)
+            return;
+
+        if (caster->GetMaxPower(POWER_MANA) > 0)
+            caster->ModifyPower(POWER_MANA, drained);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_sha_frost_shock_mana_drain::HandleDrain, EFFECT_0, SPELL_EFFECT_SCHOOL_DAMAGE);
+    }
+};
+
 class spell_totem_cd_reduce : public SpellScript
 {
     PrepareSpellScript(spell_totem_cd_reduce);
@@ -2653,6 +2690,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_old_purge);
     RegisterSpellScript(spell_sha_fire_nova_trig);
     RegisterSpellScript(spell_sha_shock_cooldown_reduction);
+    RegisterSpellScript(spell_sha_frost_shock_mana_drain);
     RegisterSpellScript(spell_totem_cd_reduce);
     RegisterSpellScript(spell_sha_lightning_shield_mana_restore);
 
