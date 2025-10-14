@@ -679,6 +679,7 @@ public:
         }
 
         float const originalScale = creature->GetObjectScale();
+        UnitStandStateType const originalStandState = creature->GetStandState();
 
         if (!creature->CopyAppearanceFromPlayerGuid(player.GetGUID(), true, true, true))
         {
@@ -688,6 +689,7 @@ public:
         }
 
         creature->SetObjectScale(originalScale);
+        creature->SetStandState(originalStandState);
 
         std::string const newName = player.GetName();
 
