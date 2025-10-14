@@ -1044,6 +1044,8 @@ class spell_warl_demonic_sacrifice_on_summon : public SpellScript
 
     void HandleAfterCast()
     {
+        if (!GetCaster()->HasAura(81524))
+            return;
         if (uint32 sacrificeSpell = GetDemonicSacrificeSpell(GetSpellInfo()->Id))
             CastDemonicSacrifice(GetCaster(), sacrificeSpell);
     }
