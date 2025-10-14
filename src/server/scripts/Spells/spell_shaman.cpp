@@ -2513,6 +2513,7 @@ class spell_totem_cd_reduce : public SpellScript
         {
             2484,  // Earthbind Totem
             8177,  // Grounding Totem
+            81478,
             1535,  // Fire Nova Totem (Rank 1)
             8498,  // Fire Nova Totem (Rank 2)
             8499,  // Fire Nova Totem (Rank 3)
