@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include "DatabaseEnvFwd.h"
+#include <string>
 
 //- Union that holds element data
 union SQLElementUnion
@@ -40,6 +41,7 @@ struct SQLElementData
 {
     SQLElementUnion element;
     SQLElementDataType type;
+    std::string debugInfo;
 };
 
 class MySQLConnection;
