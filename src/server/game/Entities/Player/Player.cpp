@@ -2198,7 +2198,12 @@ void Player::Regenerate(Powers power)
         else
             m_powerFraction[power] = addvalue - integerValue;
     }
-    if (m_regenTimerCount >= 2000)
+    if (power == POWER_ENERGY)
+    {
+        // Energy regeneration must always notify the client immediately to avoid stale button states
+        SetPower(power, curValue);
+    }
+    else if (m_regenTimerCount >= 2000)
         SetPower(power, curValue);
     else
         UpdateUInt32Value(UNIT_FIELD_POWER1 + AsUnderlyingType(power), curValue);
