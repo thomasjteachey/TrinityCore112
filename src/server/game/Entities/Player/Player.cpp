@@ -90,6 +90,7 @@
 #include "SpellMgr.h"
 #include "SpellPackets.h"
 #include "StringConvert.h"
+#include "StringFormat.h"
 #include "TicketMgr.h"
 #include "TradeData.h"
 #include "Trainer.h"
@@ -20216,6 +20217,26 @@ void Player::_SaveMonthlyQuestStatus(CharacterDatabaseTransaction trans)
     m_MonthlyQuestChanged = false;
 }
 
+namespace
+{
+char const* SkillUpdateStateToString(SkillUpdateState state)
+{
+    switch (state)
+    {
+        case SKILL_UNCHANGED:
+            return "unchanged";
+        case SKILL_CHANGED:
+            return "changed";
+        case SKILL_NEW:
+            return "new";
+        case SKILL_DELETED:
+            return "deleted";
+    }
+
+    return "unknown";
+}
+}
+
 void Player::_SaveSkills(CharacterDatabaseTransaction trans)
 {
     CharacterDatabasePreparedStatement* stmt;
@@ -20228,12 +20249,17 @@ void Player::_SaveSkills(CharacterDatabaseTransaction trans)
             continue;
         }
 
-        if (itr->second.uState == SKILL_DELETED)
+        SkillUpdateState const state = itr->second.uState;
+        char const* const stateLabel = SkillUpdateStateToString(state);
+
+        if (state == SKILL_DELETED)
         {
             stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_SKILL_BY_SKILL);
             stmt->setUInt32(0, GetGUID().GetCounter());
             stmt->setUInt32(1, itr->first);
-            trans->Append(stmt);
+            trans->Append(stmt, Trinity::StringFormat(
+                "character_skills guid={} ({}) skill={} state={}",
+                GetGUID().ToString(), GetName(), itr->first, stateLabel));
 
             mSkillStatus.erase(itr++);
             continue;
@@ -20243,7 +20269,7 @@ void Player::_SaveSkills(CharacterDatabaseTransaction trans)
         uint16 value = SKILL_VALUE(valueData);
         uint16 max = SKILL_MAX(valueData);
 
-        switch (itr->second.uState)
+        switch (state)
         {
             case SKILL_NEW:
                 stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_CHAR_SKILLS);
@@ -20251,7 +20277,9 @@ void Player::_SaveSkills(CharacterDatabaseTransaction trans)
                 stmt->setUInt16(1, uint16(itr->first));
                 stmt->setUInt16(2, value);
                 stmt->setUInt16(3, max);
-                trans->Append(stmt);
+                trans->Append(stmt, Trinity::StringFormat(
+                    "character_skills guid={} ({}) skill={} state={} value={} max={}",
+                    GetGUID().ToString(), GetName(), itr->first, stateLabel, value, max));
 
                 break;
             case SKILL_CHANGED:
@@ -20260,7 +20288,9 @@ void Player::_SaveSkills(CharacterDatabaseTransaction trans)
                 stmt->setUInt16(1, max);
                 stmt->setUInt32(2, GetGUID().GetCounter());
                 stmt->setUInt16(3, uint16(itr->first));
-                trans->Append(stmt);
+                trans->Append(stmt, Trinity::StringFormat(
+                    "character_skills guid={} ({}) skill={} state={} value={} max={}",
+                    GetGUID().ToString(), GetName(), itr->first, stateLabel, value, max));
 
                 break;
             default:
