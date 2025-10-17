@@ -2157,29 +2157,11 @@ class spell_dru_wrath : public SpellScript
     }
 };
 
-// 81905 - Nature's Grasp (Wrath Proc helper)
+// 16689
 class spell_dru_natures_grasp_proc : public SpellScript
 {
     PrepareSpellScript(spell_dru_natures_grasp_proc);
 
-    bool Validate(SpellInfo const* /*spellInfo*/) override
-    {
-        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
-        {
-            SpellInfo const* auraInfo = sSpellMgr->GetSpellInfo(natureGraspAuraId);
-            if (!auraInfo)
-                return false;
-
-            SpellEffectInfo const& triggerEffect = auraInfo->GetEffect(EFFECT_1);
-            if (!triggerEffect.IsEffect())
-                return false;
-
-            if (triggerEffect.TriggerSpell && !ValidateSpellInfo({ triggerEffect.TriggerSpell }))
-                return false;
-        }
-
-        return true;
-    }
 
     void HandleOnCast()
     {
@@ -2187,13 +2169,8 @@ class spell_dru_natures_grasp_proc : public SpellScript
         if (!caster)
             return;
 
-        Optional<uint32> const auraId = GetNatureGraspAuraForSpell(GetSpellInfo()->Id);
-        if (!auraId)
-            return;
-
-        bool const triggered = caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF);
-        caster->AddAura(*auraId, caster);
-        if(!triggered)
+        bool const noGCD = caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF);
+        if(!noGCD)
         {
             caster->GetSpellHistory()->AddGlobalCooldown(GetSpellInfo(), 1500);
             WorldPacket data;
