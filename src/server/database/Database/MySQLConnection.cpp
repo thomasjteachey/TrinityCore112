@@ -426,10 +426,14 @@ int MySQLConnection::ExecuteTransaction(std::shared_ptr<TransactionBase> transac
         if (!debugInfo.empty())
             debugSuffix = " (" + debugInfo + ")";
 
-        TC_LOG_ERROR("sql.sql", "Transaction{} failed while executing {}: [{}] {}", debugSuffix, queryDescription, errorCode, errorMessage ? errorMessage : "");
+        std::string queryDebug = queryDescription;
+        if (!data.debugInfo.empty())
+            queryDebug.append(" [").append(data.debugInfo).append("]");
+
+        TC_LOG_ERROR("sql.sql", "Transaction{} failed while executing {}: [{}] {}", debugSuffix, queryDebug, errorCode, errorMessage ? errorMessage : "");
 
         if (!debugInfo.empty())
-            TC_LOG_ERROR("entities.player.character", "Transaction ({}) failed while executing {}: [{}] {}", debugInfo, queryDescription, errorCode, errorMessage ? errorMessage : "");
+            TC_LOG_ERROR("entities.player.character", "Transaction ({}) failed while executing {}: [{}] {}", debugInfo, queryDebug, errorCode, errorMessage ? errorMessage : "");
 
         return errorCode;
     };

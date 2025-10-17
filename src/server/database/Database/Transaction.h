@@ -40,7 +40,7 @@ class TC_DATABASE_API TransactionBase
         TransactionBase() : _cleanedUp(false) { }
         virtual ~TransactionBase() { Cleanup(); }
 
-        void Append(char const* sql);
+        void Append(char const* sql, std::string debugInfo = {});
         template<typename... Args>
         void PAppend(Trinity::FormatString<Args...> sql, Args&&... args)
         {
@@ -53,7 +53,7 @@ class TC_DATABASE_API TransactionBase
         std::string const& GetDebugInfo() const { return _debugInfo; }
 
     protected:
-        void AppendPreparedStatement(PreparedStatementBase* statement);
+        void AppendPreparedStatement(PreparedStatementBase* statement, std::string debugInfo = {});
         void Cleanup();
         std::vector<SQLElementData> m_queries;
 
@@ -70,6 +70,11 @@ public:
     void Append(PreparedStatement<T>* statement)
     {
         this->AppendPreparedStatement(statement);
+    }
+
+    void Append(PreparedStatement<T>* statement, std::string debugInfo)
+    {
+        this->AppendPreparedStatement(statement, std::move(debugInfo));
     }
 };
 
