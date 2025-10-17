@@ -2192,12 +2192,21 @@ class spell_dru_natures_grasp_proc : public SpellScript
             return;
 
         bool const triggered = caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF);
-        caster->CastSpell(caster, *auraId, triggered);
+        caster->AddAura(*auraId, caster);
+        if(!triggered)
+        {
+            caster->GetSpellHistory()->AddGlobalCooldown(GetSpellInfo(), 1500);
+            WorldPacket data;
+            caster->GetSpellHistory()->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, 6119, 0);
+            caster->ToPlayer()->SendDirectMessage(&data);
+        }
+
+      
     }
 
     void Register() override
     {
-        OnCast += SpellCastFn(spell_dru_natures_grasp_proc::HandleOnCast);
+        AfterCast += SpellCastFn(spell_dru_natures_grasp_proc::HandleOnCast);
     }
 };
 
