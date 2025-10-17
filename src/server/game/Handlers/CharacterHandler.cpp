@@ -603,13 +603,23 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             trans->Append(stmt);
             LoginDatabase.CommitTransaction(trans);
 
-            std::string str = "call createCopyOfChar (" + std::to_string(createInfo->Class) + ", " + std::to_string(createInfo->Race)  + ", " + std::to_string(newChar->GetGUID()) + ", true, true)";
-            CharacterDatabase.Execute(str.c_str());
-
             AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar)](bool success)
             {
                 if (success)
                 {
+                    if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
+                    {
+                        copyStmt->setUInt8(0, newChar->GetClass());
+                        copyStmt->setUInt8(1, newChar->GetRace());
+                        copyStmt->setUInt32(2, newChar->GetGUID().GetCounter());
+                        copyStmt->setBool(3, true);
+                        copyStmt->setBool(4, true);
+
+                        CharacterDatabase.Execute(copyStmt);
+                    }
+                    else
+                        TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Missing prepared statement for stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+
                     TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     sScriptMgr->OnPlayerCreate(newChar.get());
                     sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel());
