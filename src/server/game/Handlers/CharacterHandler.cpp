@@ -592,6 +592,28 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             CharacterDatabaseTransaction characterTransaction = CharacterDatabase.BeginTransaction();
             std::string transactionDebugInfo = Trinity::StringFormat("Account {} (IP: {}) character {} {} (race {} class {})", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), uint32(newChar->GetRace()), uint32(newChar->GetClass()));
             characterTransaction->SetDebugInfo(transactionDebugInfo);
+
+            uint64 leakedSkillRows = 0;
+            if (CharacterDatabasePreparedStatement* leakedSkillsCheck = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_SKILL_COUNT_BY_GUID))
+            {
+                leakedSkillsCheck->setUInt32(0, newChar->GetGUID().GetCounter());
+
+                if (PreparedQueryResult leakedSkillsResult = CharacterDatabase.Query(leakedSkillsCheck))
+                    leakedSkillRows = (*leakedSkillsResult)[0].GetUInt64();
+            }
+
+            if (CharacterDatabasePreparedStatement* leakedSkillsCleanup = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_SKILLS))
+            {
+                leakedSkillsCleanup->setUInt32(0, newChar->GetGUID().GetCounter());
+                characterTransaction->Append(leakedSkillsCleanup, Trinity::StringFormat(
+                    "character_skills cleanup guid={} ({}) leftover_rows={}",
+                    newChar->GetGUID().ToString(), newChar->GetName(), leakedSkillRows));
+            }
+
+            if (leakedSkillRows)
+            {
+                TC_LOG_WARN("entities.player.character", "Account: {} (IP: {}) Found {} pre-existing rows in character_skills for {} {}; deleting them before creation (likely leftover from a prior failed custom copy).", GetAccountId(), GetRemoteAddress(), leakedSkillRows, newChar->GetName(), newChar->GetGUID().ToString());
+            }
             LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
                                                                   // Player created, save it now
 
