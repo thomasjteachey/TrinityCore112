@@ -607,6 +607,8 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             {
                 if (success)
                 {
+                    TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Creation transaction committed for {} {}, invoking createCopyOfChar.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+
                     if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
                     {
                         copyStmt->setUInt8(0, newChar->GetClass());
@@ -615,7 +617,10 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                         copyStmt->setBool(3, true);
                         copyStmt->setBool(4, true);
 
-                        CharacterDatabase.Execute(copyStmt);
+                        if (CharacterDatabase.Execute(copyStmt))
+                            TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Successfully enqueued createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                        else
+                            TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Failed to enqueue stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     }
                     else
                         TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Missing prepared statement for stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
@@ -626,7 +631,10 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                     SendCharCreate(CHAR_CREATE_SUCCESS);
                 }
                 else
+                {
+                    TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Character creation transaction failed for {} {}; sending error to client.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     SendCharCreate(CHAR_CREATE_ERROR);
+                }
             });
         };
 
