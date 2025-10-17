@@ -1354,6 +1354,47 @@ class spell_mage_remove_recalibrating : public AuraScript
     }
 };
 
+enum MagePolyIds
+{
+    POLY_R1 = 118,    // Polymorph (Rank 1)
+    POLY_R2 = 12824,  // (Rank 2)
+    POLY_R3 = 12825,  // (Rank 3)
+    POLY_R4 = 12826,  // (Rank 4)
+    POLY_PENGUIN = 59634   // Polymorph: Penguin (WotLK spell ID)
+};
+
+class spell_mage_polymorph_redirect_to_penguin : public SpellScript
+{
+    PrepareSpellScript(spell_mage_polymorph_redirect_to_penguin);
+
+    void SwapToPenguin()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster->HasAura(81405))
+            return;
+
+        if (!caster || !target)
+            return;
+
+        // Prevent the normal Polymorph effects from applying
+        for (uint8 i = 0; i < 2; ++i)
+            PreventHitDefaultEffect(SpellEffIndex(i));
+
+        // Cast Penguin instead
+        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+        caster->CastSpell(target, POLY_PENGUIN, args);
+    }
+
+    void Register() override
+    {
+        // Polymorph applies an aura in EFFECT_0; hook there and override it
+        OnEffectHitTarget += SpellEffectFn(spell_mage_polymorph_redirect_to_penguin::SwapToPenguin,
+            EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+    }
+};
+
+
 void AddSC_mage_spell_scripts()
 {
     RegisterSpellScript(spell_mage_arcane_potency);
@@ -1392,4 +1433,5 @@ void AddSC_mage_spell_scripts()
     RegisterSpellScript(spell_mage_summon_water_elemental);
     RegisterSpellScript(spell_mage_ignite_tick);
     RegisterSpellScript(spell_mage_remove_recalibrating);
+    RegisterSpellScript(spell_mage_polymorph_redirect_to_penguin);
 }
