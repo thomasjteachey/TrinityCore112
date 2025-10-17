@@ -38,6 +38,7 @@
 #include "Metric.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
+#include "StringFormat.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Pet.h"
@@ -589,6 +590,30 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             //CharacterDatabase.DirectExecute("SELECT racemask, classmask, Spell FROM playercreateinfo_spell_custom");
 
             CharacterDatabaseTransaction characterTransaction = CharacterDatabase.BeginTransaction();
+            std::string transactionDebugInfo = Trinity::StringFormat("Account {} (IP: {}) character {} {} (race {} class {})", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), uint32(newChar->GetRace()), uint32(newChar->GetClass()));
+            characterTransaction->SetDebugInfo(transactionDebugInfo);
+
+            uint64 leakedSkillRows = 0;
+            if (CharacterDatabasePreparedStatement* leakedSkillsCheck = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_SKILL_COUNT_BY_GUID))
+            {
+                leakedSkillsCheck->setUInt32(0, newChar->GetGUID().GetCounter());
+
+                if (PreparedQueryResult leakedSkillsResult = CharacterDatabase.Query(leakedSkillsCheck))
+                    leakedSkillRows = (*leakedSkillsResult)[0].GetUInt64();
+            }
+
+            if (CharacterDatabasePreparedStatement* leakedSkillsCleanup = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_SKILLS))
+            {
+                leakedSkillsCleanup->setUInt32(0, newChar->GetGUID().GetCounter());
+                characterTransaction->Append(leakedSkillsCleanup, Trinity::StringFormat(
+                    "character_skills cleanup guid={} ({}) leftover_rows={}",
+                    newChar->GetGUID().ToString(), newChar->GetName(), leakedSkillRows));
+            }
+
+            if (leakedSkillRows)
+            {
+                TC_LOG_WARN("entities.player.character", "Account: {} (IP: {}) Found {} pre-existing rows in character_skills for {} {}; deleting them before creation (likely leftover from a prior failed custom copy).", GetAccountId(), GetRemoteAddress(), leakedSkillRows, newChar->GetName(), newChar->GetGUID().ToString());
+            }
             LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
                                                                   // Player created, save it now
 
@@ -603,10 +628,12 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             trans->Append(stmt);
             LoginDatabase.CommitTransaction(trans);
 
-            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar)](bool success)
+            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar), transactionDebugInfo = std::move(transactionDebugInfo)](bool success)
             {
                 if (success)
                 {
+                    TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Creation transaction committed for {} {}, invoking createCopyOfChar.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+
                     if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
                     {
                         copyStmt->setUInt8(0, newChar->GetClass());
@@ -615,7 +642,9 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                         copyStmt->setBool(3, true);
                         copyStmt->setBool(4, true);
 
-                        CharacterDatabase.Execute(copyStmt);
+                        TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Running createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                        CharacterDatabase.DirectExecute(copyStmt);
+                        TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Finished createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     }
                     else
                         TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Missing prepared statement for stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
@@ -626,7 +655,10 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                     SendCharCreate(CHAR_CREATE_SUCCESS);
                 }
                 else
+                {
+                    TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Character creation transaction failed for {} {}; context: {}. Sending error to client.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), transactionDebugInfo);
                     SendCharCreate(CHAR_CREATE_ERROR);
+                }
             });
         };
 
