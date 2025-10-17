@@ -67,6 +67,7 @@ void TransactionBase::Cleanup()
 
     m_queries.clear();
     _cleanedUp = true;
+    _debugInfo.clear();
 }
 
 bool TransactionTask::Execute()

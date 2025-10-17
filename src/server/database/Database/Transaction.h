@@ -24,6 +24,7 @@
 #include "StringFormat.h"
 #include <functional>
 #include <mutex>
+#include <string>
 #include <vector>
 
 /*! Transactions, high level class. */
@@ -48,6 +49,9 @@ class TC_DATABASE_API TransactionBase
 
         std::size_t GetSize() const { return m_queries.size(); }
 
+        void SetDebugInfo(std::string debugInfo) { _debugInfo = std::move(debugInfo); }
+        std::string const& GetDebugInfo() const { return _debugInfo; }
+
     protected:
         void AppendPreparedStatement(PreparedStatementBase* statement);
         void Cleanup();
@@ -55,6 +59,7 @@ class TC_DATABASE_API TransactionBase
 
     private:
         bool _cleanedUp;
+        std::string _debugInfo;
 };
 
 template<typename T>
