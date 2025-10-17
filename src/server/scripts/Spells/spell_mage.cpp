@@ -1384,7 +1384,7 @@ class spell_mage_polymorph_redirect_to_penguin : public SpellScript
 {
     PrepareSpellScript(spell_mage_polymorph_redirect_to_penguin);
 
-    void SwapToPenguin()
+    void SwapToPenguin(SpellEffIndex /*effIndex*/)
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
@@ -1414,10 +1414,8 @@ class spell_mage_polymorph_redirect_to_penguin : public SpellScript
     void Register() override
     {
         // Polymorph?s transform is EFFECT_0 APPLY_AURA; override on hit
-        OnEffectHitTarget += SpellEffectFn(
-            spell_mage_polymorph_redirect_to_penguin::SwapToPenguin,
-            EFFECT_0, SPELL_EFFECT_APPLY_AURA
-        );
+        OnEffectHitTarget += SpellEffectFn(spell_mage_polymorph_redirect_to_penguin::SwapToPenguin,
+            EFFECT_0, SPELL_EFFECT_APPLY_AURA);
     }
 };
 
