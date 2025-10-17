@@ -617,10 +617,9 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                         copyStmt->setBool(3, true);
                         copyStmt->setBool(4, true);
 
-                        if (CharacterDatabase.Execute(copyStmt))
-                            TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Successfully enqueued createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
-                        else
-                            TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Failed to enqueue stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                        TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Running createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                        CharacterDatabase.DirectExecute(copyStmt);
+                        TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Finished createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
                     }
                     else
                         TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Missing prepared statement for stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
