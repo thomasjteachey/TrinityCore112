@@ -125,6 +125,28 @@ namespace
         27009,
         53312
     };
+
+    Optional<uint32> GetNatureGraspAuraForSpell(uint32 spellId)
+    {
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+        {
+            SpellInfo const* auraInfo = sSpellMgr->GetSpellInfo(natureGraspAuraId);
+            if (!auraInfo)
+                continue;
+
+            SpellEffectInfo const& triggerEffect = auraInfo->GetEffect(EFFECT_1);
+            if (triggerEffect.IsEffect() && triggerEffect.TriggerSpell == spellId)
+                return natureGraspAuraId;
+        }
+
+        if (uint8 const rank = sSpellMgr->GetSpellRank(spellId))
+        {
+            if (uint32 const rankedAuraId = sSpellMgr->GetSpellWithRank(NatureGraspAuraSpells[0], rank))
+                return rankedAuraId;
+        }
+
+        return {};
+    }
 }
 
 // 22812 - Barkskin
@@ -2135,6 +2157,50 @@ class spell_dru_wrath : public SpellScript
     }
 };
 
+// 81905 - Nature's Grasp (Wrath Proc helper)
+class spell_dru_natures_grasp_proc : public SpellScript
+{
+    PrepareSpellScript(spell_dru_natures_grasp_proc);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        for (uint32 natureGraspAuraId : NatureGraspAuraSpells)
+        {
+            SpellInfo const* auraInfo = sSpellMgr->GetSpellInfo(natureGraspAuraId);
+            if (!auraInfo)
+                return false;
+
+            SpellEffectInfo const& triggerEffect = auraInfo->GetEffect(EFFECT_1);
+            if (!triggerEffect.IsEffect())
+                return false;
+
+            if (triggerEffect.TriggerSpell && !ValidateSpellInfo({ triggerEffect.TriggerSpell }))
+                return false;
+        }
+
+        return true;
+    }
+
+    void HandleOnCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        Optional<uint32> const auraId = GetNatureGraspAuraForSpell(GetSpellInfo()->Id);
+        if (!auraId)
+            return;
+
+        bool const triggered = caster->HasAura(SPELL_DRUID_WRATH_NATURES_GRASP_BUFF);
+        caster->CastSpell(caster, *auraId, triggered);
+    }
+
+    void Register() override
+    {
+        OnCast += SpellCastFn(spell_dru_natures_grasp_proc::HandleOnCast);
+    }
+};
+
 //claw 1082
 class spell_dru_claw : public SpellScript
 {
@@ -2213,6 +2279,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_t10_restoration_4p_bonus_dummy);
     RegisterSpellAndAuraScriptPair(spell_dru_wild_growth, spell_dru_wild_growth_aura);
     RegisterSpellScript(spell_dru_wrath);
+    RegisterSpellScript(spell_dru_natures_grasp_proc);
     RegisterSpellScript(spell_dru_claw);
     RegisterSpellScript(spell_humanoid_speed_pack);
 }
