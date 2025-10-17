@@ -1354,14 +1354,31 @@ class spell_mage_remove_recalibrating : public AuraScript
     }
 };
 
+static constexpr uint32 AURA_TOGGLE_PENGUIN = 81405;
+
+
 enum MagePolyIds
 {
-    POLY_R1 = 118,    // Polymorph (Rank 1)
-    POLY_R2 = 12824,  // (Rank 2)
-    POLY_R3 = 12825,  // (Rank 3)
-    POLY_R4 = 12826,  // (Rank 4)
-    POLY_PENGUIN = 59634   // Polymorph: Penguin (WotLK spell ID)
+    POLY_R1 = 118,       // Polymorph (Rank 1)
+    POLY_R2 = 12824,     // (Rank 2)
+    POLY_R3 = 12825,     // (Rank 3)
+    POLY_R4 = 12826,     // (Rank 4)
+    POLY_PENGUIN_R1 = 81905,  // Polymorph: Penguin 1
+    POLY_PENGUIN_R2 = 81906,  // Polymorph: Penguin 2
+    POLY_PENGUIN_R3 = 81907,  // Polymorph: Penguin 3
+    POLY_PENGUIN_R4 = 81908   // Polymorph: Penguin 4
 };
+static inline uint32 MapPolyToPenguin(uint32 baseId)
+{
+    switch (baseId)
+    {
+    case POLY_R1: return POLY_PENGUIN_R1;
+    case POLY_R2: return POLY_PENGUIN_R2;
+    case POLY_R3: return POLY_PENGUIN_R3;
+    case POLY_R4: return POLY_PENGUIN_R4;
+    default:      return 0;
+    }
+}
 
 class spell_mage_polymorph_redirect_to_penguin : public SpellScript
 {
@@ -1371,26 +1388,36 @@ class spell_mage_polymorph_redirect_to_penguin : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
-        if (!caster->HasAura(81405))
-            return;
-
         if (!caster || !target)
             return;
 
-        // Prevent the normal Polymorph effects from applying
-        for (uint8 i = 0; i < 2; ++i)
+        // Only redirect if your toggle aura is present
+        if (!caster->HasAura(AURA_TOGGLE_PENGUIN))
+            return;
+
+        // Only redirect base Polymorph ranks (avoid any chance of recursion)
+        uint32 baseId = GetSpellInfo()->Id;
+        uint32 penguinId = MapPolyToPenguin(baseId);
+        if (!penguinId || penguinId == baseId)
+            return;
+
+        // Block all default effects of the original Polymorph hit
+        for (uint8 i = 0; i <= 2; ++i)
             PreventHitDefaultEffect(SpellEffIndex(i));
 
-        // Cast Penguin instead
+        // Fire the matching penguin-rank spell instead
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-        caster->CastSpell(target, POLY_PENGUIN, args);
+        // Preserve the original hit target; caster handles LoS/validity already
+        caster->CastSpell(target, penguinId, args);
     }
 
     void Register() override
     {
-        // Polymorph applies an aura in EFFECT_0; hook there and override it
-        OnEffectHitTarget += SpellEffectFn(spell_mage_polymorph_redirect_to_penguin::SwapToPenguin,
-            EFFECT_0, SPELL_EFFECT_APPLY_AURA);
+        // Polymorph?s transform is EFFECT_0 APPLY_AURA; override on hit
+        OnEffectHitTarget += SpellEffectFn(
+            spell_mage_polymorph_redirect_to_penguin::SwapToPenguin,
+            EFFECT_0, SPELL_EFFECT_APPLY_AURA
+        );
     }
 };
 
