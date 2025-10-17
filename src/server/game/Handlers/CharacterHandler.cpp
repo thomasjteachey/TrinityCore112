@@ -38,6 +38,7 @@
 #include "Metric.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
+#include "StringFormat.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Pet.h"
@@ -589,6 +590,8 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             //CharacterDatabase.DirectExecute("SELECT racemask, classmask, Spell FROM playercreateinfo_spell_custom");
 
             CharacterDatabaseTransaction characterTransaction = CharacterDatabase.BeginTransaction();
+            std::string transactionDebugInfo = Trinity::StringFormat("Account {} (IP: {}) character {} {} (race {} class {})", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), uint32(newChar->GetRace()), uint32(newChar->GetClass()));
+            characterTransaction->SetDebugInfo(transactionDebugInfo);
             LoginDatabaseTransaction trans = LoginDatabase.BeginTransaction();
                                                                   // Player created, save it now
 
@@ -603,7 +606,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             trans->Append(stmt);
             LoginDatabase.CommitTransaction(trans);
 
-            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar)](bool success)
+            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar), transactionDebugInfo = std::move(transactionDebugInfo)](bool success)
             {
                 if (success)
                 {
@@ -631,7 +634,7 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
                 }
                 else
                 {
-                    TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Character creation transaction failed for {} {}; sending error to client.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                    TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Character creation transaction failed for {} {}; context: {}. Sending error to client.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), transactionDebugInfo);
                     SendCharCreate(CHAR_CREATE_ERROR);
                 }
             });

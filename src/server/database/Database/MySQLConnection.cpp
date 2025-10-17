@@ -394,6 +394,46 @@ int MySQLConnection::ExecuteTransaction(std::shared_ptr<TransactionBase> transac
 
     BeginTransaction();
 
+    auto const LogTransactionFailure = [this, transaction](SQLElementData const& data)
+    {
+        int const errorCode = GetLastError();
+        char const* errorMessage = mysql_error(m_Mysql);
+        std::string const& debugInfo = transaction->GetDebugInfo();
+
+        std::string queryDescription;
+        switch (data.type)
+        {
+            case SQL_ELEMENT_PREPARED:
+            {
+                PreparedStatementBase* stmt = data.element.stmt;
+                ASSERT(stmt);
+                if (MySQLPreparedStatement* mysqlStmt = GetPreparedStatement(stmt->GetIndex()))
+                    queryDescription = mysqlStmt->getQueryString();
+                else
+                    queryDescription = "prepared statement index " + std::to_string(stmt->GetIndex());
+                break;
+            }
+            case SQL_ELEMENT_RAW:
+            {
+                char const* sql = data.element.query;
+                ASSERT(sql);
+                queryDescription = sql;
+                break;
+            }
+        }
+
+        std::string debugSuffix;
+        if (!debugInfo.empty())
+            debugSuffix = " (" + debugInfo + ")";
+
+        TC_LOG_ERROR("sql.sql", "Transaction{} failed while executing {}: [{}] {}", debugSuffix, queryDescription, errorCode, errorMessage ? errorMessage : "");
+
+        if (!debugInfo.empty())
+            TC_LOG_ERROR("entities.player.character", "Transaction ({}) failed while executing {}: [{}] {}", debugInfo, queryDescription, errorCode, errorMessage ? errorMessage : "");
+
+        return errorCode;
+    };
+
     for (auto itr = queries.begin(); itr != queries.end(); ++itr)
     {
         SQLElementData const& data = *itr;
@@ -406,7 +446,7 @@ int MySQLConnection::ExecuteTransaction(std::shared_ptr<TransactionBase> transac
                 if (!Execute(stmt))
                 {
                     TC_LOG_WARN("sql.sql", "Transaction aborted. {} queries not executed.", (uint32)queries.size());
-                    int errorCode = GetLastError();
+                    int const errorCode = LogTransactionFailure(data);
                     RollbackTransaction();
                     return errorCode;
                 }
@@ -419,7 +459,7 @@ int MySQLConnection::ExecuteTransaction(std::shared_ptr<TransactionBase> transac
                 if (!Execute(sql))
                 {
                     TC_LOG_WARN("sql.sql", "Transaction aborted. {} queries not executed.", (uint32)queries.size());
-                    int errorCode = GetLastError();
+                    int const errorCode = LogTransactionFailure(data);
                     RollbackTransaction();
                     return errorCode;
                 }
