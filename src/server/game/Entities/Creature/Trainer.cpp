@@ -77,7 +77,7 @@ namespace Trainer
         player->SendDirectMessage(trainerList.Write());
     }
 
-    void Trainer::TeachSpell(Creature const* npc, Player* player, uint32 spellId) const
+    void Trainer::TeachSpell(Creature* npc, Player* player, uint32 spellId) const
     {
         if (!IsTrainerValidForPlayer(player))
             return;
@@ -115,6 +115,9 @@ namespace Trainer
             player->LearnSpell(trainerSpell->SpellId, false);
 
         SendTeachSucceeded(npc, player, spellId);
+
+        if (WorldSession* session = player->GetSession())
+            session->SendTrainerList(npc);
     }
 
     Spell const* Trainer::GetSpell(uint32 spellId) const
