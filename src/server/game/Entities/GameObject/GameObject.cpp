@@ -39,6 +39,7 @@
 #include "QueryPackets.h"
 #include "ScriptMgr.h"
 #include "SpellMgr.h"
+#include "SpellDefines.h"
 #include "Transport.h"
 #include "UpdateFieldFlags.h"
 #include "World.h"
@@ -775,7 +776,13 @@ void GameObject::Update(uint32 diff)
                         CastSpellExtraArgs args;
                         args.SetOriginalCaster(GetOwnerGUID());
                         if (goInfo->trap.spellId)
-                            CastSpell(target, goInfo->trap.spellId, args);
+                        {
+                            if (CastSpell(target, goInfo->trap.spellId, args) != SPELL_CAST_OK)
+                            {
+                                SetLootState(GO_READY);
+                                break;
+                            }
+                        }
 
                         // Template value or 4 seconds
                         m_cooldownTime = GameTime::GetGameTimeMS() + (goInfo->trap.cooldown ? goInfo->trap.cooldown : uint32(4)) * IN_MILLISECONDS;
