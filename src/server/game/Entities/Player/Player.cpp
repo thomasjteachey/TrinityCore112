@@ -5040,7 +5040,8 @@ void Player::RepopAtGraveyard()
     WorldSafeLocsEntry const* ClosestGrave;
 
     // Special handle for battleground maps
-    if (Battleground* bg = GetBattleground())
+    Battleground* bg = GetBattleground();
+    if (bg)
         ClosestGrave = bg->GetClosestGraveyard(this);
     else
     {
@@ -5058,6 +5059,20 @@ void Player::RepopAtGraveyard()
     if (ClosestGrave)
     {
         TeleportTo(ClosestGrave->Continent, ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z, GetOrientation(), shouldResurrect ? TELE_REVIVE_AT_TELEPORT : 0);
+        if (bg && !shouldResurrect && isDead())
+        {
+            Position gravePos(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
+            TeamId teamId = GetBGTeam() == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE;
+
+            bg->RemovePlayerFromResurrectQueue(GetGUID());
+
+            if (Creature* spiritGuide = bg->GetClosestSpiritGuide(gravePos, teamId))
+            {
+                bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+            }
+        }
+
         if (isDead())                                        // not send if alive, because it used in TeleportTo()
         {
             WorldPackets::Misc::DeathReleaseLoc packet;
