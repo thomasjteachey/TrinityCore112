@@ -1948,6 +1948,17 @@ void Player::ProcessDelayedOperations()
             g->SendUpdateToPlayer(GetGUID());
     }
 
+    if (m_DelayedOperations & DELAYED_BG_SPIRIT_HEALER)
+    {
+        if (m_bgSpiritGuideDialogGuid)
+        {
+            if (Battleground* bg = GetBattleground())
+                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, m_bgSpiritGuideDialogGuid);
+
+            m_bgSpiritGuideDialogGuid.Clear();
+        }
+    }
+
     //we have executed ALL delayed ops, so clear the flag
     m_DelayedOperations = 0;
 }
