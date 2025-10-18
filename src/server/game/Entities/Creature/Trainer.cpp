@@ -80,22 +80,22 @@ namespace Trainer
         player->SendDirectMessage(trainerList.Write());
     }
 
-    void Trainer::TeachSpell(Creature const* npc, Player* player, uint32 spellId) const
+    bool Trainer::TeachSpell(Creature const* npc, Player* player, uint32 spellId) const
     {
         if (!IsTrainerValidForPlayer(player))
-            return;
+            return false;
 
         Spell const* trainerSpell = GetSpell(spellId);
         if (!trainerSpell)
         {
             SendTeachFailure(npc, player, spellId, FailReason::Unavailable);
-            return;
+            return false;
         }
 
         if (!CanTeachSpell(player, trainerSpell))
         {
             SendTeachFailure(npc, player, spellId, FailReason::NotEnoughSkill);
-            return;
+            return false;
         }
 
         float reputationDiscount = player->GetReputationPriceDiscount(npc);
@@ -103,7 +103,7 @@ namespace Trainer
         if (!player->HasEnoughMoney(moneyCost))
         {
             SendTeachFailure(npc, player, spellId, FailReason::NotEnoughMoney);
-            return;
+            return false;
         }
 
         player->ModifyMoney(-moneyCost);

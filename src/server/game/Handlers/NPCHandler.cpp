@@ -138,7 +138,8 @@ void WorldSession::HandleTrainerBuySpellOpcode(WorldPackets::NPC::TrainerBuySpel
     if (!trainer)
         return;
 
-    trainer->TeachSpell(npc, _player, packet.SpellID);
+    if (trainer->TeachSpell(npc, _player, packet.SpellID))
+        trainer->SendSpells(npc, _player, GetSessionDbLocaleIndex());
 }
 
 void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
