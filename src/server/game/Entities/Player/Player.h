@@ -752,7 +752,6 @@ enum PlayerDelayedOperations
     DELAYED_BG_MOUNT_RESTORE    = 0x08,                     ///< Flag to restore mount state after teleport from BG
     DELAYED_BG_TAXI_RESTORE     = 0x10,                     ///< Flag to restore taxi state after teleport from BG
     DELAYED_BG_GROUP_RESTORE    = 0x20,                     ///< Flag to restore group state after teleport from BG
-    DELAYED_BG_SPIRIT_HEALER    = 0x40,
     DELAYED_END
 };
 
@@ -2266,11 +2265,6 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         BgBattlegroundQueueID_Rec m_bgBattlegroundQueueID[PLAYER_MAX_BATTLEGROUND_QUEUES];
         BGData                    m_bgData;
-        ObjectGuid                m_bgSpiritGuideDialogGuid;
-        uint32                    m_bgSpiritGuideDialogTimer;
-        uint8                     m_bgSpiritGuideDialogSendsRemaining;
-        uint8                     m_bgSpiritGuideDialogSearchAttempts;
-
         bool m_IsBGRandomWinner;
 
         /*********************************************************/
@@ -2534,9 +2528,6 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool IsHasDelayedTeleport() const { return m_bHasDelayedTeleport; }
         void SetDelayedTeleportFlag(bool setting) { m_bHasDelayedTeleport = setting; }
         void ScheduleDelayedOperation(uint32 operation) { if (operation < DELAYED_END) m_DelayedOperations |= operation; }
-        void ClearBattlegroundSpiritGuideDialog();
-        void HandleBattlegroundSpiritGuideDialog(uint32 diff);
-        void StartBattlegroundSpiritGuideDialog(ObjectGuid const& spiritGuideGuid);
 
         bool IsInstanceLoginGameMasterException() const;
 
