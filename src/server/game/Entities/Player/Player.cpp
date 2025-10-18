@@ -292,11 +292,6 @@ Player::Player(WorldSession* session): Unit(true)
         m_bgBattlegroundQueueID[j].invitedToInstance = 0;
     }
 
-    m_bgSpiritGuideDialogGuid.Clear();
-    m_bgSpiritGuideDialogTimer = 0;
-    m_bgSpiritGuideDialogSendsRemaining = 0;
-    m_bgSpiritGuideDialogSearchAttempts = 0;
-
     m_logintime = GameTime::GetGameTime();
     m_Last_tick = m_logintime;
     m_Played_time[PLAYED_TIME_TOTAL] = 0;
@@ -1061,8 +1056,6 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
-
-    HandleBattlegroundSpiritGuideDialog(p_time);
 
     time_t now = GameTime::GetGameTime();
 
@@ -1948,79 +1941,8 @@ void Player::ProcessDelayedOperations()
             g->SendUpdateToPlayer(GetGUID());
     }
 
-    if (m_DelayedOperations & DELAYED_BG_SPIRIT_HEALER)
-    {
-        if (m_bgSpiritGuideDialogGuid)
-        {
-            if (Battleground* bg = GetBattleground())
-                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, m_bgSpiritGuideDialogGuid);
-
-            m_bgSpiritGuideDialogGuid.Clear();
-        }
-    }
-
     //we have executed ALL delayed ops, so clear the flag
     m_DelayedOperations = 0;
-}
-
-void Player::ClearBattlegroundSpiritGuideDialog()
-{
-    m_bgSpiritGuideDialogGuid.Clear();
-    m_bgSpiritGuideDialogTimer = 0;
-    m_bgSpiritGuideDialogSendsRemaining = 0;
-    m_bgSpiritGuideDialogSearchAttempts = 0;
-}
-
-void Player::StartBattlegroundSpiritGuideDialog(ObjectGuid const& spiritGuideGuid)
-{
-    m_bgSpiritGuideDialogGuid = spiritGuideGuid;
-    m_bgSpiritGuideDialogTimer = 0;
-    m_bgSpiritGuideDialogSendsRemaining = 3;
-    m_bgSpiritGuideDialogSearchAttempts = 0;
-}
-
-void Player::HandleBattlegroundSpiritGuideDialog(uint32 diff)
-{
-    if (!m_bgSpiritGuideDialogGuid)
-        return;
-
-    if (!InBattleground() || IsAlive())
-    {
-        ClearBattlegroundSpiritGuideDialog();
-        return;
-    }
-
-    if (m_bgSpiritGuideDialogTimer > diff)
-    {
-        m_bgSpiritGuideDialogTimer -= diff;
-        return;
-    }
-
-    m_bgSpiritGuideDialogTimer = 200;
-
-    if (Map* map = GetMap())
-    {
-        if (Creature* spiritGuide = map->GetCreature(m_bgSpiritGuideDialogGuid))
-        {
-            SetSelection(m_bgSpiritGuideDialogGuid);
-
-            if (Battleground* bg = GetBattleground())
-                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, m_bgSpiritGuideDialogGuid);
-
-            if (m_bgSpiritGuideDialogSendsRemaining)
-                --m_bgSpiritGuideDialogSendsRemaining;
-
-            if (m_bgSpiritGuideDialogSendsRemaining == 0)
-                ClearBattlegroundSpiritGuideDialog();
-            else
-                m_bgSpiritGuideDialogTimer = 1000;
-
-            return;
-        }
-    }
-
-    if (++m_bgSpiritGuideDialogSearchAttempts >= 25)
-        ClearBattlegroundSpiritGuideDialog();
 }
 
 void Player::AddToWorld()
@@ -5140,7 +5062,6 @@ void Player::RepopAtGraveyard()
         TeleportTo(ClosestGrave->Continent, ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z, GetOrientation(), shouldResurrect ? TELE_REVIVE_AT_TELEPORT : 0);
         if (bg && !shouldResurrect && isDead())
         {
-            ClearBattlegroundSpiritGuideDialog();
             Position gravePos(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
             TeamId teamId = GetBGTeam() == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE;
 
@@ -5148,8 +5069,10 @@ void Player::RepopAtGraveyard()
 
             if (Creature* spiritGuide = bg->GetClosestSpiritGuide(gravePos, teamId))
             {
-                bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
-                StartBattlegroundSpiritGuideDialog(spiritGuide->GetGUID());
+                ObjectGuid spiritGuideGuid = spiritGuide->GetGUID();
+                bg->AddPlayerToResurrectQueue(spiritGuideGuid, GetGUID());
+                SetSelection(spiritGuideGuid);
+                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuideGuid);
             }
         }
 

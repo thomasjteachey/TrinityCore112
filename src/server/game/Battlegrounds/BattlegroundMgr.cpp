@@ -735,8 +735,8 @@ void BattlegroundMgr::SendAreaSpiritHealerQueryOpcode(Player* player, Battlegrou
             {
                 if (spiritGuide->IsSpiritGuide())
                 {
-                    player->PlayerTalkClass->ClearMenus();
-                    player->PrepareGossipMenu(spiritGuide, spiritGuide->GetCreatureTemplate()->GossipMenuId, true);
+                    player->SetSelection(guid);
+                    player->PrepareGossipMenu(spiritGuide);
                     player->SendPreparedGossip(spiritGuide);
                 }
             }
