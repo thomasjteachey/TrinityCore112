@@ -47,6 +47,7 @@
 #include "Player.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "GossipDef.h"
 
 bool BattlegroundTemplate::IsArena() const
 {

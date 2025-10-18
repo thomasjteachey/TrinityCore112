@@ -35,6 +35,7 @@
 #include "ObjectMgr.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
+#include "GossipDef.h"
 #include <G3D/g3dmath.h>
 
 Battlefield::Battlefield()
