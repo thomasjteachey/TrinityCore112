@@ -38,6 +38,7 @@
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
+#include "Creature.h"
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
@@ -290,6 +291,8 @@ Player::Player(WorldSession* session): Unit(true)
         m_bgBattlegroundQueueID[j].bgQueueTypeId = BATTLEGROUND_QUEUE_NONE;
         m_bgBattlegroundQueueID[j].invitedToInstance = 0;
     }
+
+    m_bgSpiritGuideDialogGuid.Clear();
 
     m_logintime = GameTime::GetGameTime();
     m_Last_tick = m_logintime;
@@ -1938,6 +1941,17 @@ void Player::ProcessDelayedOperations()
     {
         if (Group* g = GetGroup())
             g->SendUpdateToPlayer(GetGUID());
+    }
+
+    if (m_DelayedOperations & DELAYED_BG_SPIRIT_HEALER)
+    {
+        if (m_bgSpiritGuideDialogGuid)
+        {
+            if (Battleground* bg = GetBattleground())
+                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, m_bgSpiritGuideDialogGuid);
+
+            m_bgSpiritGuideDialogGuid.Clear();
+        }
     }
 
     //we have executed ALL delayed ops, so clear the flag
@@ -5040,7 +5054,8 @@ void Player::RepopAtGraveyard()
     WorldSafeLocsEntry const* ClosestGrave;
 
     // Special handle for battleground maps
-    if (Battleground* bg = GetBattleground())
+    Battleground* bg = GetBattleground();
+    if (bg)
         ClosestGrave = bg->GetClosestGraveyard(this);
     else
     {
@@ -5058,6 +5073,22 @@ void Player::RepopAtGraveyard()
     if (ClosestGrave)
     {
         TeleportTo(ClosestGrave->Continent, ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z, GetOrientation(), shouldResurrect ? TELE_REVIVE_AT_TELEPORT : 0);
+        if (bg && !shouldResurrect && isDead())
+        {
+            m_bgSpiritGuideDialogGuid.Clear();
+            Position gravePos(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
+            TeamId teamId = GetBGTeam() == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE;
+
+            bg->RemovePlayerFromResurrectQueue(GetGUID());
+
+            if (Creature* spiritGuide = bg->GetClosestSpiritGuide(gravePos, teamId))
+            {
+                bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                m_bgSpiritGuideDialogGuid = spiritGuide->GetGUID();
+                ScheduleDelayedOperation(DELAYED_BG_SPIRIT_HEALER);
+            }
+        }
+
         if (isDead())                                        // not send if alive, because it used in TeleportTo()
         {
             WorldPackets::Misc::DeathReleaseLoc packet;

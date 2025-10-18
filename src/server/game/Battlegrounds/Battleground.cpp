@@ -18,6 +18,7 @@
 #include "Battleground.h"
 #include "ArenaScore.h"
 #include "BattlegroundMgr.h"
+#include <limits>
 #include "BattlegroundScore.h"
 #include "ChatTextBuilder.h"
 #include "Creature.h"
@@ -1679,6 +1680,39 @@ bool Battleground::AddSpiritGuide(uint32 type, float x, float y, float z, float 
 bool Battleground::AddSpiritGuide(uint32 type, Position const& pos, TeamId teamId /*= TEAM_NEUTRAL*/)
 {
     return AddSpiritGuide(type, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), teamId);
+}
+
+Creature* Battleground::GetClosestSpiritGuide(Position const& position, TeamId teamId) const
+{
+    Map* map = FindBgMap();
+    if (!map)
+        return nullptr;
+
+    Creature* closest = nullptr;
+    float minDistSq = std::numeric_limits<float>::max();
+    uint32 expectedEntry = (teamId == TEAM_HORDE) ? BG_CREATURE_ENTRY_H_SPIRITGUIDE : BG_CREATURE_ENTRY_A_SPIRITGUIDE;
+
+    for (ObjectGuid const& guid : BgCreatures)
+    {
+        if (!guid)
+            continue;
+
+        Creature* creature = map->GetCreature(guid);
+        if (!creature || !creature->IsSpiritGuide())
+            continue;
+
+        if (creature->GetEntry() != expectedEntry)
+            continue;
+
+        float distSq = creature->GetExactDistSq(position);
+        if (distSq < minDistSq)
+        {
+            minDistSq = distSq;
+            closest = creature;
+        }
+    }
+
+    return closest;
 }
 
 void Battleground::SendMessageToAll(uint32 entry, ChatMsg msgType, Player const* source)
