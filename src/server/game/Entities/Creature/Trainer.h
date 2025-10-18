@@ -71,7 +71,7 @@ namespace Trainer
         std::vector<Spell> const& GetSpells() const { return _spells; }
         void SendSpells(Creature const* npc, Player const* player, LocaleConstant locale) const;
         bool CanTeachSpell(Player const* player, Spell const* trainerSpell) const;
-        void TeachSpell(Creature const* npc, Player* player, uint32 spellId) const;
+        bool TeachSpell(Creature const* npc, Player* player, uint32 spellId) const;
 
         Type GetTrainerType() const { return _type; }
         uint32 GetTrainerRequirement() const { return _requirement; }
