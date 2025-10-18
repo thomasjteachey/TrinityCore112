@@ -483,6 +483,7 @@ class TC_GAME_API Battleground
         bool RemoveObjectFromWorld(uint32 type);
         virtual bool AddSpiritGuide(uint32 type, float x, float y, float z, float o, TeamId teamId = TEAM_NEUTRAL);
         bool AddSpiritGuide(uint32 type, Position const& pos, TeamId teamId = TEAM_NEUTRAL);
+        Creature* GetClosestSpiritGuide(Position const& position, TeamId teamId) const;
         int32 GetObjectType(ObjectGuid guid);
 
         void DoorOpen(uint32 type);
