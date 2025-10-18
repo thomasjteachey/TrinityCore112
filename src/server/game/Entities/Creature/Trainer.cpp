@@ -18,9 +18,12 @@
 #include "Trainer.h"
 #include "Creature.h"
 #include "NPCPackets.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "Duration.h"
+#include "WorldSession.h"
 
 namespace Trainer
 {
@@ -115,7 +118,17 @@ namespace Trainer
             player->LearnSpell(trainerSpell->SpellId, false);
 
         SendTeachSucceeded(npc, player, spellId);
-        return true;
+
+        ObjectGuid const npcGuid = npc->GetGUID();
+        ObjectGuid const playerGuid = player->GetGUID();
+
+        player->m_Events.AddEventAtOffset([npcGuid, playerGuid]()
+        {
+            if (Player* scheduledPlayer = ObjectAccessor::FindPlayer(playerGuid))
+                if (WorldSession* session = scheduledPlayer->GetSession())
+                    if (Creature* scheduledNpc = ObjectAccessor::GetCreature(*scheduledPlayer, npcGuid))
+                        session->SendTrainerList(scheduledNpc);
+        }, 0s);
     }
 
     Spell const* Trainer::GetSpell(uint32 spellId) const
