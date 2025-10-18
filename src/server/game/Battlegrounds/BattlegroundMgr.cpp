@@ -31,6 +31,7 @@
 #include "Common.h"
 #include "Containers.h"
 #include "Chat.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
 #include "Formulas.h"
@@ -724,6 +725,24 @@ void BattlegroundMgr::SendAreaSpiritHealerQueryOpcode(Player* player, Battlegrou
         time_ = 0;
     data << guid << time_;
     player->SendDirectMessage(&data);
+
+    if (!player->IsAlive())
+    {
+        if (Map* map = player->GetMap())
+        {
+            if (Creature* spiritGuide = map->GetCreature(guid))
+            {
+                if (spiritGuide->IsSpiritGuide())
+                {
+                    player->SetSelection(guid);
+
+                    uint32 const gossipMenuId = Player::GetDefaultGossipMenuForSource(spiritGuide);
+                    player->PrepareGossipMenu(spiritGuide, gossipMenuId, true);
+                    player->SendPreparedGossip(spiritGuide);
+                }
+            }
+        }
+    }
 }
 
 bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)

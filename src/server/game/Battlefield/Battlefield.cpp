@@ -18,6 +18,7 @@
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
+#include "Creature.h"
 #include "CellImpl.h"
 #include "CreatureTextMgr.h"
 #include "DBCStores.h"
@@ -26,6 +27,7 @@
 #include "GridNotifiersImpl.h"
 #include "Group.h"
 #include "GroupMgr.h"
+#include "Player.h"
 #include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
@@ -635,6 +637,24 @@ void Battlefield::SendAreaSpiritHealerQueryOpcode(Player* player, ObjectGuid gui
 
     data << guid << time;
     player->SendDirectMessage(&data);
+
+    if (!player->IsAlive())
+    {
+        if (Map* map = player->GetMap())
+        {
+            if (Creature* spiritGuide = map->GetCreature(guid))
+            {
+                if (spiritGuide->IsSpiritGuide())
+                {
+                    player->SetSelection(guid);
+
+                    uint32 const gossipMenuId = Player::GetDefaultGossipMenuForSource(spiritGuide);
+                    player->PrepareGossipMenu(spiritGuide, gossipMenuId, true);
+                    player->SendPreparedGossip(spiritGuide);
+                }
+            }
+        }
+    }
 }
 
 // ----------------------
