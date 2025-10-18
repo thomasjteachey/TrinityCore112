@@ -1663,7 +1663,7 @@ bool Battleground::AddSpiritGuide(uint32 type, float x, float y, float z, float 
         creature->SetChannelObjectGuid(creature->GetGUID());
         // aura
         /// @todo Fix display here
-         creature->SetVisibleAura(0, SPELL_SPIRIT_HEAL_CHANNEL);
+         //creature->SetVisibleAura(0, SPELL_SPIRIT_HEAL_CHANNEL);
         // casting visual effect
         creature->SetChannelSpellId(SPELL_SPIRIT_HEAL_CHANNEL);
         // correct cast speed
