@@ -1948,13 +1948,7 @@ void Player::ProcessDelayedOperations()
         if (m_bgSpiritGuideDialogGuid)
         {
             if (Battleground* bg = GetBattleground())
-            {
-                if (Map* map = bg->FindBgMap())
-                {
-                    if (Creature* spiritGuide = map->GetCreature(m_bgSpiritGuideDialogGuid))
-                        sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
-                }
-            }
+                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, m_bgSpiritGuideDialogGuid);
 
             m_bgSpiritGuideDialogGuid.Clear();
         }
