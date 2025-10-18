@@ -129,6 +129,8 @@ namespace Trainer
                     if (Creature* scheduledNpc = ObjectAccessor::GetCreature(*scheduledPlayer, npcGuid))
                         session->SendTrainerList(scheduledNpc);
         }, 0s);
+
+        return true;
     }
 
     Spell const* Trainer::GetSpell(uint32 spellId) const
