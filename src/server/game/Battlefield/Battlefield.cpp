@@ -18,6 +18,7 @@
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
+#include "Creature.h"
 #include "CellImpl.h"
 #include "CreatureTextMgr.h"
 #include "DBCStores.h"
@@ -34,6 +35,7 @@
 #include "ObjectMgr.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
+#include "GossipDef.h"
 #include <G3D/g3dmath.h>
 
 Battlefield::Battlefield()
@@ -635,6 +637,22 @@ void Battlefield::SendAreaSpiritHealerQueryOpcode(Player* player, ObjectGuid gui
 
     data << guid << time;
     player->SendDirectMessage(&data);
+
+    if (!player->IsAlive())
+    {
+        if (Map* map = player->GetMap())
+        {
+            if (Creature* spiritGuide = map->GetCreature(guid))
+            {
+                if (spiritGuide->IsSpiritGuide())
+                {
+                    player->PlayerTalkClass->ClearMenus();
+                    player->PrepareGossipMenu(spiritGuide, spiritGuide->GetCreatureTemplate()->GossipMenuId, true);
+                    player->SendPreparedGossip(spiritGuide);
+                }
+            }
+        }
+    }
 }
 
 // ----------------------
