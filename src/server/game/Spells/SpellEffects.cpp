@@ -2805,7 +2805,9 @@ void Spell::EffectAddHonor()
     if (unitTarget->GetTypeId() != TYPEID_PLAYER)
         return;
 
-    int value = unitTarget->ToPlayer()->GetHonorPoints() + damage;
+    float scaledHonor = float(damage) * sWorld->getRate(RATE_HONOR);
+    int32 adjustedHonor = int32(scaledHonor);
+    int value = unitTarget->ToPlayer()->GetHonorPoints() + adjustedHonor;
     if (value > sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS))
         return;
 
