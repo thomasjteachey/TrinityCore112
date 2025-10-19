@@ -41,6 +41,7 @@
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
+#include "Duration.h"
 #include "Formulas.h"
 #include "GameClient.h"
 #include "GameEventMgr.h"
@@ -5064,6 +5065,32 @@ void Player::RepopAtGraveyard()
             packet.MapID = ClosestGrave->Continent;
             packet.Loc = Position(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
             GetSession()->SendPacket(packet.Write());
+        }
+
+        if (GetBattleground())
+        {
+            m_Events.AddEventAtOffset([this]()
+            {
+                if (!IsInWorld() || IsAlive() || !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                    return;
+
+                Battleground* bg = GetBattleground();
+                if (!bg)
+                    return;
+
+                if (HasAura(SPELL_WAITING_FOR_RESURRECT))
+                    return;
+
+                uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+                if (!spiritEntry)
+                    return;
+
+                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
+                {
+                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                }
+            }, Milliseconds(500));
         }
     }
     else if (GetPositionZ() < GetMap()->GetMinHeight(GetPositionX(), GetPositionY()))
