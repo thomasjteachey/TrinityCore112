@@ -636,19 +636,19 @@ class spell_warr_rend : public AuraScript
         {
             canBeRecalculated = false;
 
-            // $0.2 * (($MWB + $mwb) / 2 + $AP / 14 * $MWS) bonus per tick
+            // Classic scaling: total bonus damage equals 20% of the caster's attack power.
             float ap = caster->GetTotalAttackPowerValue(BASE_ATTACK);
-            int32 mws = caster->GetAttackTime(BASE_ATTACK);
-            float mwbMin = 0.f;
-            float mwbMax = 0.f;
-            for (uint8 i = 0; i < MAX_ITEM_PROTO_DAMAGES; ++i)
-            {
-                mwbMin += caster->GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE, i);
-                mwbMax += caster->GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE, i);
-            }
+            uint32 amplitude = aurEff->GetAmplitude();
+            uint32 maxDuration = aurEff->GetBase()->GetMaxDuration();
+            if (!maxDuration)
+                maxDuration = GetSpellInfo()->GetMaxDuration();
 
-            float mwb = ((mwbMin + mwbMax) / 2 + ap * mws / 14000) * 0.2f;
-            amount += int32(caster->ApplyEffectModifiers(GetSpellInfo(), aurEff->GetEffIndex(), mwb));
+            uint32 totalTicks = amplitude ? maxDuration / amplitude : 0;
+            if (!totalTicks)
+                totalTicks = 1;
+
+            float apPerTick = ap * 0.2f / totalTicks;
+            amount += int32(caster->ApplyEffectModifiers(GetSpellInfo(), aurEff->GetEffIndex(), apPerTick));
 
             // "If used while your target is above 75% health, Rend does 35% more damage."
             // as for 3.1.3 only ranks above 9 (wrong tooltip?)
