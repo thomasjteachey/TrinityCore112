@@ -162,6 +162,7 @@ private:
         record.arenaTypeId = bg->GetArenaType();
         record.mapId = bg->GetMapId();
         record.packets.push_back({ timestamp, /* copy */ WorldPacket(packet) });
+        return true;
     }
 };
 
@@ -260,11 +261,11 @@ public:
 
 
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ARENA_REPLAYS);
-        stmt->setUInt32(0, uint32(match.arenaTypeId));
-        stmt->setUInt32(1, uint32(match.typeId));
-        stmt->setUInt32(2, buffer.size());
-        stmt->setBinary(3, buffer.contentsAsVector());
-        stmt->setUInt32(4, bg->GetMapId());
+        stmt->SetData<uint32>(0, uint32(match.arenaTypeId));
+        stmt->SetData<uint32>(1, uint32(match.typeId));
+        stmt->SetData<uint32>(2, buffer.size());
+        stmt->SetBinary(3, buffer.contentsAsVector());
+        stmt->SetData<uint32>(4, bg->GetMapId());
         CharacterDatabase.Execute(stmt);
 
         records.erase(it);
