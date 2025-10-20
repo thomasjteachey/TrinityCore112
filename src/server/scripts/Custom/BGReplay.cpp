@@ -76,7 +76,7 @@ std::vector<Opcodes> watchList =
         SMSG_GAMEOBJECT_DESPAWN_ANIM,
         SMSG_CANCEL_COMBAT,
         SMSG_DISMOUNTRESULT,
-        SMSG_MOUNTRESULT,
+        SMSG_MOUNT_RESULT,
         SMSG_DISMOUNT,
         CMSG_MOUNTSPECIAL_ANIM,
         SMSG_MOUNTSPECIAL_ANIM,
@@ -104,53 +104,62 @@ class ArenaReplayServerScript : public ServerScript
 public:
     ArenaReplayServerScript() : ServerScript("ArenaReplayServerScript") {}
 
-
-    bool CanPacketSend(WorldSession* session, WorldPacket& packet) override
+    void OnPacketSend(WorldSession* session, WorldPacket& packet) override
     {
-        if (session == nullptr || session->GetPlayer() == nullptr)
-            return true;
+        HandlePacket(session, packet);
+    }
 
-        Battleground* bg = session->GetPlayer()->GetBattleground();
+    void OnPacketReceive(WorldSession* session, WorldPacket& packet) override
+    {
+        HandlePacket(session, packet);
+    }
 
+private:
+    void HandlePacket(WorldSession* session, WorldPacket& packet)
+    {
+        if (!session)
+            return;
+
+        Player* player = session->GetPlayer();
+        if (!player)
+            return;
+
+        Battleground* bg = player->GetBattleground();
         if (!bg)
-            return true;
+            return;
 
-        uint32 replayId = bg->GetReplayID();
+        uint32 replayId = bg->GetReplayId();
 
         // ignore packet when no bg or casual games
         if (replayId > 0)
-            return true;
+            return;
 
         // ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS)
-            return true; 
+            return;
 
         // record packets from 1 player of each team
-        // iterate just in case a player leaves and used as reference
-        for (auto it : bg->GetPlayers())
+        for (auto const& entry : bg->GetPlayers())
         {
-            if (it.second->GetBgTeamId() == session->GetPlayer()->GetBgTeamId())
+            if (entry.second.Team == player->GetBGTeam())
             {
-                if (it.second->GetGUID() != session->GetPlayer()->GetGUID())
-                    return true;
-                else
-                    break;
+                if (entry.first != player->GetGUID())
+                    return;
+
+                break;
             }
         }
 
         // ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
-            return true;
+            return;
 
-        if (records.find(bg->GetInstanceID()) == records.end())
-            records[bg->GetInstanceID()].packets.clear();
         MatchRecord& record = records[bg->GetInstanceID()];
 
         uint32 timestamp = bg->GetStartTime();
-        record.typeId = bg->GetBgTypeID();
+        record.typeId = bg->GetTypeID();
         record.arenaTypeId = bg->GetArenaType();
         record.mapId = bg->GetMapId();
-        // push back packet inside queue of matchId 0
         record.packets.push_back({ timestamp, /* copy */ WorldPacket(packet) });
         return true;
     }
@@ -163,7 +172,7 @@ public:
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 diff) override
     {
-        uint32 replayId = bg->GetReplayID();
+        uint32 replayId = bg->GetReplayId();
         if (replayId == 0)
             return;
 
@@ -189,7 +198,11 @@ public:
             loadedReplays.erase(it);
 
             if (!bg->GetPlayers().empty())
-                bg->GetPlayers().begin()->second->LeaveBattleground(bg);
+            {
+                Player* spectator = bg->_GetPlayer(bg->GetPlayers().begin(), "ArenaReplayBGScript::OnBattlegroundUpdate");
+                if (spectator)
+                    spectator->LeaveBattleground();
+            }
             return;
         }
 
@@ -200,16 +213,18 @@ public:
                 break;
 
             WorldPacket* myPacket = &match.packets.front().packet;
-            Player* replayer = bg->GetPlayers().begin()->second;
-            Opcodes myOpcode = (Opcodes)myPacket->GetOpcode();
+            Player* replayer = bg->_GetPlayer(bg->GetPlayers().begin(), "ArenaReplayBGScript::OnBattlegroundUpdate::Replay");
+            if (!replayer)
+                break;
+
             replayer->GetSession()->SendPacket(myPacket);
             match.packets.pop_front();
         }
     }
 
-    void OnBattlegroundEnd(Battleground* bg, TeamId winnerTeamId) override
+    void OnBattlegroundEnd(Battleground* bg, uint32 /*winnerTeamId*/) override
     {
-        uint32 replayId = bg->GetReplayID();
+        uint32 replayId = bg->GetReplayId();
 
         // save replay when a bg ends
         if (replayId <= 0)
@@ -264,9 +279,12 @@ public:
                 replayfightid = qResult->Fetch()[0].Get<uint32>();
             } while (qResult->NextRow());
         }
-        for (const auto& playerPair : bg->GetPlayers())
+        for (auto itr = bg->GetPlayers().begin(); itr != bg->GetPlayers().end(); ++itr)
         {
-            Player* player = playerPair.second;
+            Player* player = bg->_GetPlayer(itr, "ArenaReplayBGScript::saveReplay");
+            if (!player)
+                continue;
+
             ChatHandler(player->GetSession()).PSendSysMessage("Replay saved. Match ID: %u", replayfightid + 1);
         }
     }
@@ -563,11 +581,11 @@ private:
             return false;
         }
 
-        bg->SetReplayID(player->GetGUID().GetCounter());
+        bg->SetReplayId(player->GetGUID().GetCounter());
         player->SetPendingSpectatorForBG(bg->GetInstanceID());
         bg->StartBattleground();
 
-        BattlegroundTypeId bgTypeId = bg->GetBgTypeID();
+        BattlegroundTypeId bgTypeId = bg->GetTypeID();
 
         TeamId teamId = Player::TeamIdForRace(player->getRace());
 
