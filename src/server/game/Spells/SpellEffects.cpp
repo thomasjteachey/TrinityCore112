@@ -2805,13 +2805,14 @@ void Spell::EffectAddHonor()
     if (unitTarget->GetTypeId() != TYPEID_PLAYER)
         return;
 
-    int value = unitTarget->ToPlayer()->GetHonorPoints() + damage;
-    if (value > sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS))
+    Player* target = unitTarget->ToPlayer();
+    int value = target->GetHonorPoints() + damage;
+    if (value > int32(target->GetMaxHonorPoints()))
         return;
 
     //maybe we have correct honor_gain in damage already
-    unitTarget->ToPlayer()->RewardHonor(nullptr, 1, damage);
-    TC_LOG_DEBUG("spells", "SpellEffect::AddHonor (spell_id {}) rewards {} honor points (non scale) for player {}", m_spellInfo->Id, damage, unitTarget->ToPlayer()->GetGUID().ToString());
+    target->RewardHonor(nullptr, 1, damage);
+    TC_LOG_DEBUG("spells", "SpellEffect::AddHonor (spell_id {}) rewards {} honor points (non scale) for player {}", m_spellInfo->Id, damage, target->GetGUID().ToString());
 }
 
 void Spell::EffectTradeSkill()

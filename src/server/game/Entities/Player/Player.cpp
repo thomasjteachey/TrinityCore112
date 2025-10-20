@@ -41,6 +41,7 @@
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
+#include "Duration.h"
 #include "Formulas.h"
 #include "GameClient.h"
 #include "GameEventMgr.h"
@@ -106,6 +107,8 @@
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
 #include "ArenaSpectator.h"
+
+#include <initializer_list>
 
 namespace
 {
@@ -5065,6 +5068,32 @@ void Player::RepopAtGraveyard()
             packet.Loc = Position(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
             GetSession()->SendPacket(packet.Write());
         }
+
+        if (GetBattleground())
+        {
+            m_Events.AddEventAtOffset([this]()
+            {
+                if (!IsInWorld() || IsAlive() || !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                    return;
+
+                Battleground* bg = GetBattleground();
+                if (!bg)
+                    return;
+
+                if (HasAura(SPELL_WAITING_FOR_RESURRECT))
+                    return;
+
+                uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+                if (!spiritEntry)
+                    return;
+
+                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
+                {
+                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                }
+            }, Milliseconds(500));
+        }
     }
     else if (GetPositionZ() < GetMap()->GetMinHeight(GetPositionX(), GetPositionY()))
         TeleportTo(m_homebindMapId, m_homebindX, m_homebindY, m_homebindZ, GetOrientation());
@@ -6925,10 +6954,51 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     return true;
 }
 
+uint32 Player::GetMaxHonorPoints() const
+{
+    uint32 baseCap = sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS);
+    uint32 maxCap = baseCap;
+
+    auto CheckCondition = [this, &maxCap](uint32 targetCap, std::initializer_list<uint32> spellIds, std::initializer_list<uint32> questIds)
+    {
+        if (targetCap <= maxCap)
+            return;
+
+        for (uint32 spellId : spellIds)
+        {
+            if (spellId && HasSpell(spellId))
+            {
+                maxCap = targetCap;
+                return;
+            }
+        }
+
+        for (uint32 questId : questIds)
+        {
+            if (questId && GetQuestStatus(questId) == QUEST_STATUS_REWARDED)
+            {
+                maxCap = targetCap;
+                return;
+            }
+        }
+    };
+
+    CheckCondition(sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_POINTS),
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_SPELL) },
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_QUEST) });
+
+    CheckCondition(sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2),
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_SPELL_2) },
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_QUEST_2) });
+
+    return maxCap;
+}
+
 void Player::SetHonorPoints(uint32 value)
 {
-    if (value > sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS))
-        value = sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS);
+    uint32 maxHonor = GetMaxHonorPoints();
+    if (value > maxHonor)
+        value = maxHonor;
     SetUInt32Value(PLAYER_FIELD_HONOR_CURRENCY, value);
     if (value)
         AddKnownCurrency(ITEM_HONOR_POINTS_ID);
