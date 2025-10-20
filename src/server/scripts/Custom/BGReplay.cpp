@@ -5,6 +5,7 @@
 #include "Opcodes.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "DBCStores.h"
 #include "ScriptMgr.h"
 #include "ScriptedGossip.h"
 #include "Chat.h"
@@ -245,16 +246,16 @@ public:
         ByteBuffer buffer;
         uint32 headerSize;
         uint32 timestamp;
-        for (auto it : match.packets)
+        for (PacketRecord const& entry : match.packets)
         {
-            headerSize = it.packet.size(); //header 4Bytes packet size
-            timestamp = it.timestamp;
+            headerSize = entry.packet.size(); //header 4Bytes packet size
+            timestamp = entry.timestamp;
 
             buffer << headerSize; //4 bytes
             buffer << timestamp; //4 bytes
-            buffer << it.packet.GetOpcode(); // 2 bytes
+            buffer << entry.packet.GetOpcode(); // 2 bytes
             if (headerSize > 0)
-                buffer.append(it.packet.contents(), it.packet.size()); // headerSize bytes
+                buffer.append(entry.packet.contents(), entry.packet.size()); // headerSize bytes
         }
         /********************************/
 
@@ -276,7 +277,7 @@ public:
         {
             do
             {
-                replayfightid = qResult->Fetch()[0].Get<uint32>();
+                replayfightid = qResult->Fetch()[0].GetUInt32();
             } while (qResult->NextRow());
         }
         for (auto itr = bg->GetPlayers().begin(); itr != bg->GetPlayers().end(); ++itr)
@@ -296,8 +297,12 @@ public:
 
     ReplayGossip() : CreatureScript("ReplayGossip") { }
 
-    
-    bool OnGossipHello(Player* player, Creature* creature) override
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return nullptr;
+    }
+
+    bool OnGossipHello(Player* player, Creature* creature)
     {
         AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay 2v2 Matches", GOSSIP_SENDER_MAIN, 1);
         AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay 3v3 Matches", GOSSIP_SENDER_MAIN, 2);
@@ -308,7 +313,7 @@ public:
         return true;
     }
 
-    bool OnGossipSelect(Player* player, Creature* creature, uint32 sender, uint32 action) override
+    bool OnGossipSelect(Player* player, Creature* creature, uint32 /*sender*/, uint32 action)
     {
         player->PlayerTalkClass->ClearMenus();
         switch (action)
@@ -335,23 +340,21 @@ public:
 
         default:
             if (action >= GOSSIP_ACTION_INFO_DEF + 10) // Replay selected arenas (intid >= 10)
-            {
                 return replayArenaMatch(player, action - (GOSSIP_ACTION_INFO_DEF + 10));
-                break;
-            }
+            break;
         }
         return true;
     }
 
-    bool OnGossipSelectCode(Player* player, Creature* creature, uint32 sender, uint32 action, const char* code) override
+    bool OnGossipSelectCode(Player* player, Creature* creature, uint32 /*sender*/, uint32 action, const char* code)
     {
         if (action == 0) // "Replay a Match ID"
         {
             if (!code)
-            {
                 return false;
-            }
+
             CloseGossipMenuFor(player);
+
             uint32 replayId;
             try
             {
@@ -368,11 +371,12 @@ public:
         {
             if (!code)
                 return false;
+
             CloseGossipMenuFor(player);
             try
             {
-                uint32 NumeroDigitado = std::stoi(code);
-                BookmarkMatch(player->GetGUID().GetCounter(), NumeroDigitado);
+                uint32 numeroDigitado = std::stoi(code);
+                BookmarkMatch(player->GetGUID().GetCounter(), numeroDigitado);
                 return true;
             }
             catch (...)
@@ -391,8 +395,10 @@ private:
     {
         AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Bookmark a Match ID", GOSSIP_SENDER_MAIN, 5, "Enter the Match ID", 0, true);
 
-        std::string sortOrder = (firstPage) ? "ASC" : "DESC";
-        QueryResult result = CharacterDatabase.Query("SELECT replay_id FROM character_saved_replays WHERE character_id = " + std::to_string(player->GetGUID().GetCounter()) + " ORDER BY id " + sortOrder + " LIMIT 29");
+        std::string sortOrder = firstPage ? "ASC" : "DESC";
+        QueryResult result = CharacterDatabase.PQuery(
+            "SELECT replay_id FROM character_saved_replays WHERE character_id = {} ORDER BY id {} LIMIT 29",
+            player->GetGUID().GetCounter(), sortOrder);
         if (!result)
         {
             AddGossipItemFor(player, GOSSIP_ICON_TAXI, "No saved replays found.", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
@@ -406,7 +412,7 @@ private:
                 if (!fields)
                     break;
 
-                uint32 matchId = fields[0].Get<uint32>();
+                uint32 matchId = fields[0].GetUInt32();
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, actionOffset + matchId);
             } while (result->NextRow());
         }
@@ -432,9 +438,7 @@ private:
         else
         {
             for (uint32 matchId : matchIds)
-            {
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, actionOffset + matchId);
-            }
         }
         AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Back", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
         SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
@@ -452,9 +456,7 @@ private:
         else
         {
             for (uint32 matchId : matchIds)
-            {
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, actionOffset + matchId);
-            }
         }
         AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Back", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
         SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
@@ -472,9 +474,7 @@ private:
         else
         {
             for (uint32 matchId : matchIds)
-            {
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, actionOffset + matchId);
-            }
         }
         AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Back", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF);
         SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, creature->GetGUID());
@@ -492,7 +492,7 @@ private:
             if (!fields)
                 return records;
 
-            uint32 matchId = fields[0].Get<uint32>();
+            uint32 matchId = fields[0].GetUInt32();
             records.push_back(matchId);
         } while (result->NextRow());
 
@@ -510,7 +510,7 @@ private:
             if (!fields)
                 return records;
 
-            uint32 matchId = fields[0].Get<uint32>();
+            uint32 matchId = fields[0].GetUInt32();
             records.push_back(matchId);
         } while (result->NextRow());
 
@@ -528,7 +528,7 @@ private:
             if (!fields)
                 return records;
 
-            uint32 matchId = fields[0].Get<uint32>();
+            uint32 matchId = fields[0].GetUInt32();
             records.push_back(matchId);
         } while (result->NextRow());
 
@@ -546,7 +546,7 @@ private:
             if (!fields)
                 return records;
 
-            uint32 matchId = fields[0].Get<uint32>();
+            uint32 matchId = fields[0].GetUInt32();
             records.push_back(matchId);
         } while (result->NextRow());
 
@@ -555,12 +555,13 @@ private:
 
     void BookmarkMatch(uint64 playerGuid, uint32 code)
     {
-        QueryResult result = CharacterDatabase.Query("SELECT id FROM character_saved_replays WHERE character_id = " + std::to_string(playerGuid) + " AND replay_id = " + std::to_string(code));
+        QueryResult result = CharacterDatabase.PQuery(
+            "SELECT id FROM character_saved_replays WHERE character_id = {} AND replay_id = {}",
+            playerGuid, code);
         if (!result)
-        {
-            std::string query = "INSERT INTO character_saved_replays (character_id, replay_id) VALUES (" + std::to_string(playerGuid) + ", " + std::to_string(code) + ")";
-            CharacterDatabase.Execute(query.c_str());
-        }
+            CharacterDatabase.PExecute(
+                "INSERT INTO character_saved_replays (character_id, replay_id) VALUES ({}, {})",
+                playerGuid, code);
     }
 
 
@@ -571,9 +572,13 @@ private:
         if (!loadReplayDataForPlayer(player, replayId))
             return false;
 
-        MatchRecord record = loadedReplays[player->GetGUID().GetCounter()];
+        auto recordItr = loadedReplays.find(player->GetGUID().GetCounter());
+        if (recordItr == loadedReplays.end())
+            return false;
 
-        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)), record.arenaTypeId, false);
+        MatchRecord& record = recordItr->second;
+
+        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, player->GetLevel()), record.arenaTypeId, false);
         if (!bg)
         {
             handler.PSendSysMessage("Couldn't create arena map!");
@@ -587,7 +592,7 @@ private:
 
         BattlegroundTypeId bgTypeId = bg->GetTypeID();
 
-        TeamId teamId = Player::TeamIdForRace(player->getRace());
+        TeamId teamId = player->GetTeamId();
 
         uint32 queueSlot = 0;
         WorldPacket data;
@@ -625,13 +630,13 @@ private:
 
     void deserializeMatchData(MatchRecord& record, Field* fields)
     {
-        record.arenaTypeId = uint8(fields[1].Get<uint32>());
-        record.typeId = BattlegroundTypeId(fields[2].Get<uint32>());
-        int size = uint32(fields[3].Get<uint32>());
-        std::vector<uint8> data = fields[4].Get<Binary>();
-        record.mapId = uint32(fields[5].Get<uint32>());
+        record.arenaTypeId = uint8(fields[1].GetUInt32());
+        record.typeId = BattlegroundTypeId(fields[2].GetUInt32());
+        std::vector<uint8> data = fields[4].GetBinary();
+        record.mapId = uint32(fields[5].GetUInt32());
         ByteBuffer buffer;
-        buffer.append(&data[0], data.size());
+        if (!data.empty())
+            buffer.append(data.data(), data.size());
 
         /** deserialize replay binary data **/
         uint32 packetSize;
