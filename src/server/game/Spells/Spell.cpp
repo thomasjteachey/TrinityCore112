@@ -5547,10 +5547,9 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             case SPELL_EFFECT_ADD_HONOR:
             {
-                if (spellEffectInfo.BasePoints + 1 + m_caster->ToPlayer()->GetHonorPoints() > sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS))
-                {
-                    return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW;
-                }
+                if (Player* playerCaster = m_caster->ToPlayer())
+                    if (spellEffectInfo.BasePoints + 1 + playerCaster->GetHonorPoints() > playerCaster->GetMaxHonorPoints())
+                        return SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW;
                 break;
             }
             case SPELL_EFFECT_LEARN_SPELL:
