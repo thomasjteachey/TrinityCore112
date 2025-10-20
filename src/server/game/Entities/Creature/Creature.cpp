@@ -38,6 +38,7 @@
 #include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "ObjectAccessor.h"
+#include "ScriptMgr.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "PoolMgr.h"
@@ -284,6 +285,7 @@ void Creature::AddToWorld()
         TC_LOG_DEBUG("entities.unit", "Adding creature {} with DBGUID {} to world in map {}", GetGUID().ToString(), m_spawnId, GetMap()->GetId());
 
         Unit::AddToWorld();
+        sScriptMgr->OnCreatureAddWorld(this);
         SearchFormation();
         AIM_Initialize();
         if (IsVehicle())
@@ -300,6 +302,8 @@ void Creature::RemoveFromWorld()
     {
         if (GetZoneScript())
             GetZoneScript()->OnCreatureRemove(this);
+
+        sScriptMgr->OnCreatureRemoveWorld(this);
 
         if (m_formation)
             sFormationMgr->RemoveCreatureFromGroup(m_formation, this);
@@ -667,6 +671,8 @@ void Creature::Update(uint32 diff)
     }
 
     UpdateMovementFlags();
+
+    sScriptMgr->OnAllCreatureUpdate(this, diff);
 
     switch (m_deathState)
     {
@@ -1419,7 +1425,9 @@ void Creature::SelectLevel()
     uint8 minlevel = std::min(cInfo->maxlevel, cInfo->minlevel);
     uint8 maxlevel = std::max(cInfo->maxlevel, cInfo->minlevel);
     uint8 level = minlevel == maxlevel ? minlevel : urand(minlevel, maxlevel);
+    sScriptMgr->OnBeforeCreatureSelectLevel(cInfo, this, level);
     SetLevel(level);
+    sScriptMgr->OnCreatureSelectLevel(cInfo, this);
 }
 
 void Creature::UpdateLevelDependantStats()

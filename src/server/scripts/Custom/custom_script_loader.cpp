@@ -21,8 +21,10 @@
 // void Add${NameOfDirectory}Scripts()
 #include "AutoBalance.cpp"
 #include "BGReplay.cpp"
+#include "AutoBalance/AB_loader.cpp"
 void AddCustomScripts()
 {
     AddAutoBalanceScripts();
     AddBGReplayScripts();
+    Addmod_autobalanceScripts();
 }
