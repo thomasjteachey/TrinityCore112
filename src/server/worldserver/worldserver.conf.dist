@@ -860,6 +860,58 @@ MaxHonorPoints = 75000
 StartHonorPoints = 0
 
 #
+#    ConditionalMaxHonorPoints
+#        Description: Maximum honor points a character can have when the first
+#                     conditional requirement (see below) is satisfied. Set to
+#                     the same value as MaxHonorPoints to disable the first
+#                     conditional cap.
+#        Default:     75000
+
+ConditionalMaxHonorPoints = 75000
+
+#
+#    ConditionalMaxHonorPoints2
+#        Description: Maximum honor points a character can have when the second
+#                     conditional requirement (see below) is satisfied. Set to
+#                     the same value as MaxHonorPoints to disable the second
+#                     conditional cap.
+#        Default:     75000
+
+ConditionalMaxHonorPoints2 = 75000
+
+#
+#    ConditionalMaxHonorSpellId
+#        Description: Spell identifier a player must know in order to receive the
+#                     first conditional honor cap. Set to 0 to disable the spell requirement.
+#        Default:     0
+
+ConditionalMaxHonorSpellId = 0
+
+#
+#    ConditionalMaxHonorSpellId2
+#        Description: Spell identifier a player must know in order to receive the
+#                     second conditional honor cap. Set to 0 to disable the spell requirement.
+#        Default:     0
+
+ConditionalMaxHonorSpellId2 = 0
+
+#
+#    ConditionalMaxHonorQuestId
+#        Description: Quest identifier a player must have rewarded (turned in) to
+#                     receive the first conditional honor cap. Set to 0 to disable the quest requirement.
+#        Default:     0
+
+ConditionalMaxHonorQuestId = 0
+
+#
+#    ConditionalMaxHonorQuestId2
+#        Description: Quest identifier a player must have rewarded (turned in) to
+#                     receive the second conditional honor cap. Set to 0 to disable the quest requirement.
+#        Default:     0
+
+ConditionalMaxHonorQuestId2 = 0
+
+#
 #    MaxArenaPoints
 #        Description: Maximum arena points a character can have.
 #        Default:     10000

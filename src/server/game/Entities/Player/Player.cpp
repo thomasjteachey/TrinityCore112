@@ -108,6 +108,8 @@
 #include "WorldStatePackets.h"
 #include "ArenaSpectator.h"
 
+#include <initializer_list>
+
 namespace
 {
 bool IsBattlegroundEquipChangeAllowed(uint8 slot)
@@ -6952,10 +6954,51 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     return true;
 }
 
+uint32 Player::GetMaxHonorPoints() const
+{
+    uint32 baseCap = sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS);
+    uint32 maxCap = baseCap;
+
+    auto CheckCondition = [this, &maxCap](uint32 targetCap, std::initializer_list<uint32> spellIds, std::initializer_list<uint32> questIds)
+    {
+        if (targetCap <= maxCap)
+            return;
+
+        for (uint32 spellId : spellIds)
+        {
+            if (spellId && HasSpell(spellId))
+            {
+                maxCap = targetCap;
+                return;
+            }
+        }
+
+        for (uint32 questId : questIds)
+        {
+            if (questId && GetQuestStatus(questId) == QUEST_STATUS_REWARDED)
+            {
+                maxCap = targetCap;
+                return;
+            }
+        }
+    };
+
+    CheckCondition(sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_POINTS),
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_SPELL) },
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_QUEST) });
+
+    CheckCondition(sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2),
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_SPELL_2) },
+        { sWorld->getIntConfig(CONFIG_CONDITIONAL_MAX_HONOR_QUEST_2) });
+
+    return maxCap;
+}
+
 void Player::SetHonorPoints(uint32 value)
 {
-    if (value > sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS))
-        value = sWorld->getIntConfig(CONFIG_MAX_HONOR_POINTS);
+    uint32 maxHonor = GetMaxHonorPoints();
+    if (value > maxHonor)
+        value = maxHonor;
     SetUInt32Value(PLAYER_FIELD_HONOR_CURRENCY, value);
     if (value)
         AddKnownCurrency(ITEM_HONOR_POINTS_ID);

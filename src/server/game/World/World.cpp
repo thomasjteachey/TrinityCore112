@@ -938,6 +938,27 @@ void World::LoadConfigSettings(bool reload)
         m_int_configs[CONFIG_START_HONOR_POINTS] = m_int_configs[CONFIG_MAX_HONOR_POINTS];
     }
 
+    m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS] = sConfigMgr->GetIntDefault("ConditionalMaxHonorPoints", m_int_configs[CONFIG_MAX_HONOR_POINTS]);
+    if (int32(m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS]) < 0)
+    {
+        TC_LOG_ERROR("server.loading", "ConditionalMaxHonorPoints ({}) can't be negative. Set to MaxHonorPoints ({}).",
+            m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS], m_int_configs[CONFIG_MAX_HONOR_POINTS]);
+        m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS] = m_int_configs[CONFIG_MAX_HONOR_POINTS];
+    }
+
+    m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2] = sConfigMgr->GetIntDefault("ConditionalMaxHonorPoints2", m_int_configs[CONFIG_MAX_HONOR_POINTS]);
+    if (int32(m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2]) < 0)
+    {
+        TC_LOG_ERROR("server.loading", "ConditionalMaxHonorPoints2 ({}) can't be negative. Set to MaxHonorPoints ({}).",
+            m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2], m_int_configs[CONFIG_MAX_HONOR_POINTS]);
+        m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_POINTS_2] = m_int_configs[CONFIG_MAX_HONOR_POINTS];
+    }
+
+    m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_SPELL] = sConfigMgr->GetIntDefault("ConditionalMaxHonorSpellId", 0);
+    m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_SPELL_2] = sConfigMgr->GetIntDefault("ConditionalMaxHonorSpellId2", 0);
+    m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_QUEST] = sConfigMgr->GetIntDefault("ConditionalMaxHonorQuestId", 0);
+    m_int_configs[CONFIG_CONDITIONAL_MAX_HONOR_QUEST_2] = sConfigMgr->GetIntDefault("ConditionalMaxHonorQuestId2", 0);
+
     m_int_configs[CONFIG_MAX_ARENA_POINTS] = sConfigMgr->GetIntDefault("MaxArenaPoints", 10000);
     if (int32(m_int_configs[CONFIG_MAX_ARENA_POINTS]) < 0)
     {
