@@ -138,6 +138,15 @@ private:
         // ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS)
             return;
+        }
+    }
+
+    void saveReplay(Battleground* bg)
+    {
+        //retrieve replay data
+        auto it = records.find(bg->GetInstanceID());
+        if (it == records.end()) return;
+        MatchRecord& match = it->second;
 
         // record packets from 1 player of each team
         for (auto const& entry : bg->GetPlayers())
@@ -162,7 +171,6 @@ private:
         record.arenaTypeId = bg->GetArenaType();
         record.mapId = bg->GetMapId();
         record.packets.push_back({ timestamp, /* copy */ WorldPacket(packet) });
-        return true;
     }
 };
 
@@ -204,8 +212,17 @@ public:
                 if (spectator)
                     spectator->LeaveBattleground();
             }
-            return;
+            catch (...)
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("Invalid Match ID.");
+                return false;
+            }
+            return replayArenaMatch(player, replayId);
         }
+        else if (action == 5) // "Add a Favorite Match"
+        {
+            if (!code)
+                return false;
 
         //send replay data to spectator
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime())
@@ -221,6 +238,7 @@ public:
             replayer->GetSession()->SendPacket(myPacket);
             match.packets.pop_front();
         }
+        return false;
     }
 
     void OnBattlegroundEnd(Battleground* bg, uint32 /*winnerTeamId*/) override
@@ -261,11 +279,11 @@ public:
 
 
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ARENA_REPLAYS);
-        stmt->SetData<uint32>(0, uint32(match.arenaTypeId));
-        stmt->SetData<uint32>(1, uint32(match.typeId));
-        stmt->SetData<uint32>(2, buffer.size());
-        stmt->SetBinary(3, buffer.contentsAsVector());
-        stmt->SetData<uint32>(4, bg->GetMapId());
+        stmt->setUInt32(0, uint32(match.arenaTypeId));
+        stmt->setUInt32(1, uint32(match.typeId));
+        stmt->setUInt32(2, buffer.size());
+        stmt->setBinary(3, buffer.contentsAsVector());
+        stmt->setUInt32(4, bg->GetMapId());
         CharacterDatabase.Execute(stmt);
 
         records.erase(it);
@@ -289,7 +307,9 @@ public:
             ChatHandler(player->GetSession()).PSendSysMessage("Replay saved. Match ID: %u", replayfightid + 1);
         }
     }
-};
+    void ShowLastReplays3v3(Player* player, Creature* creature)
+    {
+        auto matchIds = loadLast10Replays3v3();
 
 class ReplayGossip : public CreatureScript
 {
@@ -578,7 +598,17 @@ private:
 
         MatchRecord& record = recordItr->second;
 
-        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, player->GetLevel()), record.arenaTypeId, false);
+        PvPDifficultyEntry const* bracket = GetBattlegroundBracketByLevel(record.mapId, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+        if (!bracket)
+            bracket = GetBattlegroundBracketByLevel(record.mapId, player->GetLevel());
+        if (!bracket)
+        {
+            handler.PSendSysMessage("Couldn't determine arena bracket for map %u.", record.mapId);
+            handler.SetSentErrorMessage(true);
+            return false;
+        }
+
+        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, bracket, record.arenaTypeId, false);
         if (!bg)
         {
             handler.PSendSysMessage("Couldn't create arena map!");
@@ -608,7 +638,10 @@ private:
 
     bool loadReplayDataForPlayer(Player* p, uint32 matchId)
     {
-        QueryResult result = CharacterDatabase.PQuery("SELECT id, arenaTypeId, typeId, contentSize, contents, mapId FROM character_arena_replays WHERE id = {}", matchId);
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ARENA_REPLAYS);
+        stmt->setUInt32(0, matchId);
+
+        PreparedQueryResult result = CharacterDatabase.Query(stmt);
         if (!result)
         {
             ChatHandler(p->GetSession()).PSendSysMessage("Replay data not found.");
