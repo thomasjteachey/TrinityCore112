@@ -628,38 +628,41 @@ void WorldSession::HandleCharCreateOpcode(WorldPacket& recvData)
             trans->Append(stmt);
             LoginDatabase.CommitTransaction(trans);
 
-            AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(characterTransaction)).AfterComplete([this, newChar = std::move(newChar), transactionDebugInfo = std::move(transactionDebugInfo)](bool success)
+            TransactionCallback commitCallback = CharacterDatabase.AsyncCommitTransaction(characterTransaction);
+            bool const creationSucceeded = commitCallback.m_future.get();
+
+            if (!creationSucceeded)
             {
-                if (success)
-                {
-                    TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Creation transaction committed for {} {}, invoking createCopyOfChar.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Character creation transaction failed for {} {}; context: {}. Sending error to client.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), transactionDebugInfo);
+                SendCharCreate(CHAR_CREATE_ERROR);
+                return;
+            }
 
-                    if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
-                    {
-                        copyStmt->setUInt8(0, newChar->GetClass());
-                        copyStmt->setUInt8(1, newChar->GetRace());
-                        copyStmt->setUInt32(2, newChar->GetGUID().GetCounter());
-                        copyStmt->setBool(3, true);
-                        copyStmt->setBool(4, true);
+            TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Creation transaction committed for {} {}, invoking createCopyOfChar.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
 
-                        TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Running createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
-                        CharacterDatabase.DirectExecute(copyStmt);
-                        TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Finished createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
-                    }
-                    else
-                        TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Missing prepared statement for stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+            if (CharacterDatabasePreparedStatement* copyStmt = CharacterDatabase.GetPreparedStatement(CHAR_CALL_CREATE_COPY_OF_CHAR))
+            {
+                copyStmt->setUInt8(0, newChar->GetClass());
+                copyStmt->setUInt8(1, newChar->GetRace());
+                copyStmt->setUInt32(2, newChar->GetGUID().GetCounter());
+                copyStmt->setBool(3, true);
+                copyStmt->setBool(4, true);
 
-                    TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
-                    sScriptMgr->OnPlayerCreate(newChar.get());
-                    sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel());
-                    SendCharCreate(CHAR_CREATE_SUCCESS);
-                }
-                else
-                {
-                    TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Character creation transaction failed for {} {}; context: {}. Sending error to client.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString(), transactionDebugInfo);
-                    SendCharCreate(CHAR_CREATE_ERROR);
-                }
-            });
+                TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Running createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+                // Ensure the stored procedure completes before the player enters the world so the
+                // initial inventory is fully populated. Asynchronous execution can race against the
+                // login flow, leading to missing items and client crashes when manipulating bags.
+                CharacterDatabase.DirectExecute(copyStmt);
+                TC_LOG_DEBUG("entities.player.character", "Account: {} (IP: {}) Finished createCopyOfChar for {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+            }
+            else
+                TC_LOG_ERROR("entities.player.character", "Account: {} (IP: {}) Missing prepared statement for stored procedure createCopyOfChar while creating character: {} {}.", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+
+            TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Create Character: {} {}", GetAccountId(), GetRemoteAddress(), newChar->GetName(), newChar->GetGUID().ToString());
+            sScriptMgr->OnPlayerCreate(newChar.get());
+            sCharacterCache->AddCharacterCacheEntry(newChar->GetGUID(), GetAccountId(), newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel());
+            SendCharCreate(CHAR_CREATE_SUCCESS);
+            return;
         };
 
         if (allowTwoSideAccounts && !skipCinematics && createInfo->Class != CLASS_DEATH_KNIGHT)
