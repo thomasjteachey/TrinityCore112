@@ -3106,6 +3106,385 @@ CharDelete.KeepDays = 30
 ###################################################################################################
 # CUSTOM SERVER OPTIONS
 #
+# AutoBalance logging
+# Add the following Logger.module entries after `Logger.module=4,Console Server`
+# to control the verbosity of the AutoBalance module. 4 = Info, 5 = Debug.
+#
+# Logger.module.AutoBalance=4,Console Server
+# Logger.module.AutoBalance_CombatLocking=4,Console Server
+# Logger.module.AutoBalance_DamageHealingCC=4,Console Server
+# Logger.module.AutoBalance_StatGeneration=4,Console Server
+
+###################################################################################################
+#
+# Enable / Disable Settings
+#
+###################################################################################################
+
+AutoBalance.Enable.Global=1
+AutoBalance.Enable.5M=1
+AutoBalance.Enable.10M=1
+AutoBalance.Enable.15M=1
+AutoBalance.Enable.20M=1
+AutoBalance.Enable.25M=1
+AutoBalance.Enable.40M=1
+AutoBalance.Enable.OtherNormal=1
+
+AutoBalance.Enable.5MHeroic=1
+AutoBalance.Enable.10MHeroic=1
+AutoBalance.Enable.25MHeroic=1
+AutoBalance.Enable.OtherHeroic=1
+
+AutoBalance.Disable.PerInstance = ""
+
+###################################################################################################
+#
+# Minimum Players
+#
+###################################################################################################
+
+AutoBalance.MinPlayers = 1
+AutoBalance.MinPlayers.Heroic = 1
+AutoBalance.MinPlayers.PerInstance = ""
+AutoBalance.MinPlayers.Heroic.PerInstance = ""
+
+###################################################################################################
+#
+# Stat Scaling - Inflection Point
+#
+###################################################################################################
+
+AutoBalance.InflectionPoint=0.35
+AutoBalance.InflectionPoint.CurveFloor=0.0
+AutoBalance.InflectionPoint.CurveCeiling=1.0
+AutoBalance.InflectionPoint.BossModifier=1.0
+
+AutoBalance.InflectionPointHeroic=0.35
+AutoBalance.InflectionPointHeroic.CurveFloor=0.0
+AutoBalance.InflectionPointHeroic.CurveCeiling=1.0
+AutoBalance.InflectionPointHeroic.BossModifier=1.0
+
+AutoBalance.InflectionPointRaid=0.35
+AutoBalance.InflectionPointRaid.CurveFloor=0.0
+AutoBalance.InflectionPointRaid.CurveCeiling=1.0
+AutoBalance.InflectionPointRaid.BossModifier=1.0
+
+AutoBalance.InflectionPointRaidHeroic=0.35
+AutoBalance.InflectionPointRaidHeroic.CurveFloor=0.0
+AutoBalance.InflectionPointRaidHeroic.CurveCeiling=1.0
+AutoBalance.InflectionPointRaidHeroic.BossModifier=1.0
+
+AutoBalance.InflectionPointRaid10M=
+AutoBalance.InflectionPointRaid10M.CurveFloor=
+AutoBalance.InflectionPointRaid10M.CurveCeiling=
+AutoBalance.InflectionPointRaid10M.BossModifier=
+
+AutoBalance.InflectionPointRaid10MHeroic=
+AutoBalance.InflectionPointRaid10MHeroic.CurveFloor=
+AutoBalance.InflectionPointRaid10MHeroic.CurveCeiling=
+AutoBalance.InflectionPointRaid10MHeroic.BossModifier=
+
+AutoBalance.InflectionPointRaid15M=
+AutoBalance.InflectionPointRaid15M.CurveFloor=
+AutoBalance.InflectionPointRaid15M.CurveCeiling=
+AutoBalance.InflectionPointRaid15M.BossModifier=
+
+AutoBalance.InflectionPointRaid20M=
+AutoBalance.InflectionPointRaid20M.CurveFloor=
+AutoBalance.InflectionPointRaid20M.CurveCeiling=
+AutoBalance.InflectionPointRaid20M.BossModifier=
+
+AutoBalance.InflectionPointRaid25M=
+AutoBalance.InflectionPointRaid25M.CurveFloor=
+AutoBalance.InflectionPointRaid25M.CurveCeiling=
+AutoBalance.InflectionPointRaid25M.BossModifier=
+
+AutoBalance.InflectionPointRaid25MHeroic=
+AutoBalance.InflectionPointRaid25MHeroic.CurveFloor=
+AutoBalance.InflectionPointRaid25MHeroic.CurveCeiling=
+AutoBalance.InflectionPointRaid25MHeroic.BossModifier=
+
+AutoBalance.InflectionPointRaid40M=
+AutoBalance.InflectionPointRaid40M.CurveFloor=
+AutoBalance.InflectionPointRaid40M.CurveCeiling=
+AutoBalance.InflectionPointRaid40M.BossModifier=
+
+AutoBalance.InflectionPoint.PerInstance=""
+AutoBalance.InflectionPoint.Boss.PerInstance=""
+AutoBalance.playerCountDifficultyOffset=0
+
+###################################################################################################
+#
+# Stat Scaling - Stat Modifiers
+#
+###################################################################################################
+
+AutoBalance.StatModifier.Global=1.0
+AutoBalance.StatModifier.Health=2
+AutoBalance.StatModifier.Mana=1.0
+AutoBalance.StatModifier.Armor=1.0
+AutoBalance.StatModifier.Damage=2.0
+
+AutoBalance.StatModifier.Boss.Global=1.0
+AutoBalance.StatModifier.Boss.Health=1.0
+AutoBalance.StatModifier.Boss.Mana=1.0
+AutoBalance.StatModifier.Boss.Armor=1.0
+AutoBalance.StatModifier.Boss.Damage=2.0
+
+AutoBalance.StatModifierHeroic.Global=1.0
+AutoBalance.StatModifierHeroic.Health=2.0
+AutoBalance.StatModifierHeroic.Mana=1.0
+AutoBalance.StatModifierHeroic.Armor=1.0
+AutoBalance.StatModifierHeroic.Damage=2.0
+
+AutoBalance.StatModifierHeroic.Boss.Global=1.0
+AutoBalance.StatModifierHeroic.Boss.Health=1.0
+AutoBalance.StatModifierHeroic.Boss.Mana=1.0
+AutoBalance.StatModifierHeroic.Boss.Armor=1.0
+AutoBalance.StatModifierHeroic.Boss.Damage=2.0
+
+AutoBalance.StatModifierRaid.Global=1.0
+AutoBalance.StatModifierRaid.Health=1.0
+AutoBalance.StatModifierRaid.Mana=1.0
+AutoBalance.StatModifierRaid.Armor=1.0
+AutoBalance.StatModifierRaid.Damage=1.5
+
+AutoBalance.StatModifierRaid.Boss.Global=1.0
+AutoBalance.StatModifierRaid.Boss.Health=1.0
+AutoBalance.StatModifierRaid.Boss.Mana=1.0
+AutoBalance.StatModifierRaid.Boss.Armor=1.0
+AutoBalance.StatModifierRaid.Boss.Damage=1.5
+
+AutoBalance.StatModifierRaidHeroic.Global=1.0
+AutoBalance.StatModifierRaidHeroic.Health=1.0
+AutoBalance.StatModifierRaidHeroic.Mana=1.0
+AutoBalance.StatModifierRaidHeroic.Armor=1.0
+AutoBalance.StatModifierRaidHeroic.Damage=1.5
+
+AutoBalance.StatModifierRaidHeroic.Boss.Global=1.0
+AutoBalance.StatModifierRaidHeroic.Boss.Health=1.0
+AutoBalance.StatModifierRaidHeroic.Boss.Mana=1.0
+AutoBalance.StatModifierRaidHeroic.Boss.Armor=1.0
+AutoBalance.StatModifierRaidHeroic.Boss.Damage=1.5
+
+AutoBalance.StatModifierRaid10M.Global=
+AutoBalance.StatModifierRaid10M.Health=
+AutoBalance.StatModifierRaid10M.Mana=
+AutoBalance.StatModifierRaid10M.Armor=
+AutoBalance.StatModifierRaid10M.Damage=
+
+AutoBalance.StatModifierRaid10M.Boss.Global=
+AutoBalance.StatModifierRaid10M.Boss.Health=
+AutoBalance.StatModifierRaid10M.Boss.Mana=
+AutoBalance.StatModifierRaid10M.Boss.Armor=
+AutoBalance.StatModifierRaid10M.Boss.Damage=
+
+AutoBalance.StatModifierRaid10MHeroic.Global=
+AutoBalance.StatModifierRaid10MHeroic.Health=
+AutoBalance.StatModifierRaid10MHeroic.Mana=
+AutoBalance.StatModifierRaid10MHeroic.Armor=
+AutoBalance.StatModifierRaid10MHeroic.Damage=
+
+AutoBalance.StatModifierRaid10MHeroic.Boss.Global=
+AutoBalance.StatModifierRaid10MHeroic.Boss.Health=
+AutoBalance.StatModifierRaid10MHeroic.Boss.Mana=
+AutoBalance.StatModifierRaid10MHeroic.Boss.Armor=
+AutoBalance.StatModifierRaid10MHeroic.Boss.Damage=
+
+AutoBalance.StatModifierRaid15M.Global=
+AutoBalance.StatModifierRaid15M.Health=
+AutoBalance.StatModifierRaid15M.Mana=
+AutoBalance.StatModifierRaid15M.Armor=
+AutoBalance.StatModifierRaid15M.Damage=
+
+AutoBalance.StatModifierRaid15M.Boss.Global=
+AutoBalance.StatModifierRaid15M.Boss.Health=
+AutoBalance.StatModifierRaid15M.Boss.Mana=
+AutoBalance.StatModifierRaid15M.Boss.Armor=
+AutoBalance.StatModifierRaid15M.Boss.Damage=
+
+AutoBalance.StatModifierRaid20M.Global=
+AutoBalance.StatModifierRaid20M.Health=
+AutoBalance.StatModifierRaid20M.Mana=
+AutoBalance.StatModifierRaid20M.Armor=
+AutoBalance.StatModifierRaid20M.Damage=
+
+AutoBalance.StatModifierRaid20M.Boss.Global=
+AutoBalance.StatModifierRaid20M.Boss.Health=
+AutoBalance.StatModifierRaid20M.Boss.Mana=
+AutoBalance.StatModifierRaid20M.Boss.Armor=
+AutoBalance.StatModifierRaid20M.Boss.Damage=
+
+AutoBalance.StatModifierRaid25M.Global=
+AutoBalance.StatModifierRaid25M.Health=
+AutoBalance.StatModifierRaid25M.Mana=
+AutoBalance.StatModifierRaid25M.Armor=
+AutoBalance.StatModifierRaid25M.Damage=
+
+AutoBalance.StatModifierRaid25M.Boss.Global=
+AutoBalance.StatModifierRaid25M.Boss.Health=
+AutoBalance.StatModifierRaid25M.Boss.Mana=
+AutoBalance.StatModifierRaid25M.Boss.Armor=
+AutoBalance.StatModifierRaid25M.Boss.Damage=
+
+AutoBalance.StatModifierRaid25MHeroic.Global=
+AutoBalance.StatModifierRaid25MHeroic.Health=
+AutoBalance.StatModifierRaid25MHeroic.Mana=
+AutoBalance.StatModifierRaid25MHeroic.Armor=
+AutoBalance.StatModifierRaid25MHeroic.Damage=
+
+AutoBalance.StatModifierRaid25MHeroic.Boss.Global=
+AutoBalance.StatModifierRaid25MHeroic.Boss.Health=
+AutoBalance.StatModifierRaid25MHeroic.Boss.Mana=
+AutoBalance.StatModifierRaid25MHeroic.Boss.Armor=
+AutoBalance.StatModifierRaid25MHeroic.Boss.Damage=
+
+AutoBalance.StatModifierRaid40M.Global=
+AutoBalance.StatModifierRaid40M.Health=
+AutoBalance.StatModifierRaid40M.Mana=
+AutoBalance.StatModifierRaid40M.Armor=
+AutoBalance.StatModifierRaid40M.Damage=
+
+AutoBalance.StatModifierRaid40M.Boss.Global=
+AutoBalance.StatModifierRaid40M.Boss.Health=
+AutoBalance.StatModifierRaid40M.Boss.Mana=
+AutoBalance.StatModifierRaid40M.Boss.Armor=
+AutoBalance.StatModifierRaid40M.Boss.Damage=
+
+AutoBalance.StatModifier.CCDuration=
+AutoBalance.StatModifier.Boss.CCDuration=
+AutoBalance.StatModifierHeroic.CCDuration=
+AutoBalance.StatModifierHeroic.Boss.CCDuration=
+AutoBalance.StatModifierRaid.CCDuration=
+AutoBalance.StatModifierRaid.Boss.CCDuration=
+AutoBalance.StatModifierRaidHeroic.CCDuration=
+AutoBalance.StatModifierRaidHeroic.Boss.CCDuration=
+AutoBalance.StatModifierRaid10M.CCDuration=
+AutoBalance.StatModifierRaid10M.Boss.CCDuration=
+AutoBalance.StatModifierRaid10MHeroic.CCDuration=
+AutoBalance.StatModifierRaid10MHeroic.Boss.CCDuration=
+AutoBalance.StatModifierRaid15M.CCDuration=
+AutoBalance.StatModifierRaid15M.Boss.CCDuration=
+AutoBalance.StatModifierRaid20M.CCDuration=
+AutoBalance.StatModifierRaid20M.Boss.CCDuration=
+AutoBalance.StatModifierRaid25M.CCDuration=
+AutoBalance.StatModifierRaid25M.Boss.CCDuration=
+AutoBalance.StatModifierRaid25MHeroic.CCDuration=
+AutoBalance.StatModifierRaid25MHeroic.Boss.CCDuration=
+AutoBalance.StatModifierRaid40M.CCDuration=
+AutoBalance.StatModifierRaid40M.Boss.CCDuration=
+
+AutoBalance.StatModifier.PerInstance=""
+AutoBalance.StatModifier.Boss.PerInstance=""
+AutoBalance.StatModifier.PerCreature=""
+
+AutoBalance.MinHPModifier=0.01
+AutoBalance.MinManaModifier=0.01
+AutoBalance.MinDamageModifier=0.01
+AutoBalance.MinCCDurationModifier=0.25
+AutoBalance.MaxCCDurationModifier=1.0
+
+###################################################################################################
+#
+# Misc Settings
+#
+###################################################################################################
+
+AutoBalance.ForcedID40=""
+AutoBalance.ForcedID25=""
+AutoBalance.ForcedID20=""
+AutoBalance.ForcedID10=""
+AutoBalance.ForcedID5=""
+AutoBalance.ForcedID2=""
+
+AutoBalance.DisabledID=""
+
+###################################################################################################
+#
+# Level Scaling
+#
+###################################################################################################
+
+AutoBalance.LevelScaling=0
+AutoBalance.LevelScaling.Method="dynamic"
+AutoBalance.LevelScaling.SkipHigherLevels = 3
+AutoBalance.LevelScaling.SkipLowerLevels = 5
+
+AutoBalance.LevelScaling.DynamicLevel.Ceiling.Dungeons = 1
+AutoBalance.LevelScaling.DynamicLevel.Floor.Dungeons = 5
+AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicDungeons = 2
+AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicDungeons = 5
+AutoBalance.LevelScaling.DynamicLevel.Ceiling.Raids = 3
+AutoBalance.LevelScaling.DynamicLevel.Floor.Raids = 5
+AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicRaids = 3
+AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicRaids = 5
+AutoBalance.LevelScaling.DynamicLevel.PerInstance="229 -1 -1 1, 230 0 0"
+AutoBalance.LevelScaling.DynamicLevel.DistanceCheck.PerInstance="189 500"
+AutoBalance.LevelScaling.EndGameBoost = 0
+
+###################################################################################################
+#
+# Reward Scaling
+#
+###################################################################################################
+
+AutoBalance.RewardScaling.Method="dynamic"
+AutoBalance.RewardScaling.XP = 1
+AutoBalance.RewardScaling.XP.Modifier = 1.0
+AutoBalance.RewardScaling.Money = 1
+AutoBalance.RewardScaling.Money.Modifier = 1.0
+
+###################################################################################################
+#
+# Messages
+#
+###################################################################################################
+
+AutoBalance.PlayerChangeNotify=1
+
+###################################################################################################
+#
+# Reward System (experimental)
+#
+###################################################################################################
+
+AutoBalance.reward.enable = 0
+AutoBalance.reward.raidToken    = 49426
+AutoBalance.reward.dungeonToken = 47241
+AutoBalance.reward.MinPlayerReward = 1
+
+###################################################################################################
+#
+# Announcement
+#
+###################################################################################################
+
+AutoBalanceAnnounce.enable=1
+
+###################################################################################################
+#
+# Deprecated Settings
+#
+###################################################################################################
+
+AutoBalance.enable=
+AutoBalance.PerDungeonScaling=
+AutoBalance.PerDungeonBossScaling=
+AutoBalance.BossInflectionMult=
+AutoBalance.rate.global=
+AutoBalance.rate.health=
+AutoBalance.rate.mana=
+AutoBalance.rate.armor=
+AutoBalance.rate.damage=
+AutoBalance.DungeonScaleDownXP=
+AutoBalance.DungeonScaleDownMoney=
+AutoBalance.LevelHigherOffset=
+AutoBalance.LevelLowerOffset=
+AutoBalance.PerDungeonPlayerCounts=
+AutoBalance.DungeonsOnly=
+AutoBalance.levelUseDbValuesWhenExists=
+
+#
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)
 #        Default:     0 - (Do not allow)

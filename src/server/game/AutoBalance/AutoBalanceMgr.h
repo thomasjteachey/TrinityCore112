@@ -15,14 +15,31 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-// This is where scripts' loading functions should be declared:
+#ifndef TRINITY_AUTOBALANCEMGR_H
+#define TRINITY_AUTOBALANCEMGR_H
 
-// The name of this function should match:
-// void Add${NameOfDirectory}Scripts()
-#include "AutoBalance.cpp"
-#include "BGReplay.cpp"
-void AddCustomScripts()
+#include "Define.h"
+
+#include <optional>
+
+class Creature;
+class InstanceMap;
+class Map;
+class Unit;
+
+namespace AutoBalance
 {
-    AddAutoBalanceScripts();
-    AddBGReplayScripts();
+    void LoadConfig(bool reload);
+    bool IsEnabled();
+
+    void NotifyPlayerEvent(Map* map);
+
+    void ModifyDamage(Unit* attacker, Unit* victim, uint32& damage);
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
+    void ModifyPeriodicDamage(Unit* attacker, Unit* victim, uint32& damage);
+    void ModifySpellDamage(Unit* target, Unit* attacker, int32& damage);
+
+    float GetMapScale(InstanceMap* map, std::optional<uint32> forcedSize = std::nullopt);
 }
+
+#endif // TRINITY_AUTOBALANCEMGR_H
