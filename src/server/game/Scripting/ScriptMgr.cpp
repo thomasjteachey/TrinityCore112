@@ -1486,6 +1486,7 @@ void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
     ASSERT(player);
 
     FOREACH_SCRIPT(PlayerScript)->OnMapChanged(player);
+    OnPlayerEnterAll(map, player);
 
     SCR_MAP_BGN(WorldMapScript, map, itr, end, entry, IsWorldMap);
         itr->second->OnPlayerEnter(map, player);
@@ -1504,6 +1505,8 @@ void ScriptMgr::OnPlayerLeaveMap(Map* map, Player* player)
 {
     ASSERT(map);
     ASSERT(player);
+
+    OnPlayerLeaveAll(map, player);
 
     SCR_MAP_BGN(WorldMapScript, map, itr, end, entry, IsWorldMap);
         itr->second->OnPlayerLeave(map, player);
@@ -1533,6 +1536,16 @@ void ScriptMgr::OnMapUpdate(Map* map, uint32 diff)
     SCR_MAP_BGN(BattlegroundMapScript, map, itr, end, entry, IsBattleground);
         itr->second->OnUpdate((BattlegroundMap*)map, diff);
     SCR_MAP_END;
+}
+
+void ScriptMgr::OnPlayerEnterAll(Map* map, Player* player)
+{
+    FOREACH_SCRIPT(AllMapScript)->OnPlayerEnterAll(map, player);
+}
+
+void ScriptMgr::OnPlayerLeaveAll(Map* map, Player* player)
+{
+    FOREACH_SCRIPT(AllMapScript)->OnPlayerLeaveAll(map, player);
 }
 
 #undef SCR_MAP_BGN
@@ -1601,6 +1614,34 @@ CreatureAI* ScriptMgr::GetCreatureAI(Creature* creature)
 
     GET_SCRIPT_RET(CreatureScript, creature->GetScriptId(), tmpscript, nullptr);
     return tmpscript->GetAI(creature);
+}
+
+void ScriptMgr::OnBeforeCreatureSelectLevel(CreatureTemplate const* creatureTemplate, Creature* creature, uint8& level)
+{
+    if (SCR_REG_LST(AllCreatureScript).empty())
+        return;
+
+    FOREACH_SCRIPT(AllCreatureScript)->OnBeforeCreatureSelectLevel(creatureTemplate, creature, level);
+}
+
+void ScriptMgr::OnCreatureSelectLevel(CreatureTemplate const* creatureTemplate, Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureSelectLevel(creatureTemplate, creature);
+}
+
+void ScriptMgr::OnCreatureAddWorld(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureAddWorld(creature);
+}
+
+void ScriptMgr::OnCreatureRemoveWorld(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureRemoveWorld(creature);
+}
+
+void ScriptMgr::OnAllCreatureUpdate(Creature* creature, uint32 diff)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnAllCreatureUpdate(creature, diff);
 }
 
 GameObjectAI* ScriptMgr::GetGameObjectAI(GameObject* gameobject)
@@ -1822,6 +1863,11 @@ void ScriptMgr::OnStartup()
 void ScriptMgr::OnShutdown()
 {
     FOREACH_SCRIPT(WorldScript)->OnShutdown();
+}
+
+void ScriptMgr::OnAfterUpdateEncounterState(Map* map, EncounterCreditType type, uint32 creditEntry, Unit* source, Difficulty difficulty, DungeonEncounterList const* encounters, uint32 dungeonCompleted, bool updated)
+{
+    FOREACH_SCRIPT(GlobalScript)->OnAfterUpdateEncounterState(map, type, creditEntry, source, difficulty, encounters, dungeonCompleted, updated);
 }
 
 bool ScriptMgr::OnCriteriaCheck(uint32 scriptId, Player* source, Unit* target)
@@ -2196,6 +2242,16 @@ WorldScript::WorldScript(char const* name)
     ScriptRegistry<WorldScript>::Instance()->AddScript(this);
 }
 
+GlobalScript::GlobalScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<GlobalScript>::Instance()->AddScript(this);
+}
+
+void GlobalScript::OnAfterUpdateEncounterState(Map* /*map*/, EncounterCreditType /*type*/, uint32 /*creditEntry*/, Unit* /*source*/, Difficulty /*difficulty*/, DungeonEncounterList const* /*encounters*/, uint32 /*dungeonCompleted*/, bool /*updated*/)
+{
+}
+
 void WorldScript::OnOpenStateChange(bool /*open*/)
 {
 }
@@ -2406,10 +2462,50 @@ CreatureScript::CreatureScript(char const* name)
     ScriptRegistry<CreatureScript>::Instance()->AddScript(this);
 }
 
+AllCreatureScript::AllCreatureScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllCreatureScript>::Instance()->AddScript(this);
+}
+
+void AllCreatureScript::OnBeforeCreatureSelectLevel(CreatureTemplate const* /*creatureTemplate*/, Creature* /*creature*/, uint8& /*level*/)
+{
+}
+
+void AllCreatureScript::OnCreatureSelectLevel(CreatureTemplate const* /*creatureTemplate*/, Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnCreatureAddWorld(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnCreatureRemoveWorld(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/)
+{
+}
+
 GameObjectScript::GameObjectScript(char const* name)
     : ScriptObject(name)
 {
     ScriptRegistry<GameObjectScript>::Instance()->AddScript(this);
+}
+
+AllMapScript::AllMapScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllMapScript>::Instance()->AddScript(this);
+}
+
+void AllMapScript::OnPlayerEnterAll(Map* /*map*/, Player* /*player*/)
+{
+}
+
+void AllMapScript::OnPlayerLeaveAll(Map* /*map*/, Player* /*player*/)
+{
 }
 
 AreaTriggerScript::AreaTriggerScript(char const* name)
@@ -2855,3 +2951,6 @@ template class TC_GAME_API ScriptRegistry<GuildScript>;
 template class TC_GAME_API ScriptRegistry<GroupScript>;
 template class TC_GAME_API ScriptRegistry<UnitScript>;
 template class TC_GAME_API ScriptRegistry<AccountScript>;
+template class TC_GAME_API ScriptRegistry<AllCreatureScript>;
+template class TC_GAME_API ScriptRegistry<AllMapScript>;
+template class TC_GAME_API ScriptRegistry<GlobalScript>;
