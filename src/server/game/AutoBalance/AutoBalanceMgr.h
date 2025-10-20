@@ -20,6 +20,8 @@
 
 #include "Define.h"
 
+#include <optional>
+
 class Creature;
 class InstanceMap;
 class Map;
@@ -33,8 +35,11 @@ namespace AutoBalance
     void NotifyPlayerEvent(Map* map);
 
     void ModifyDamage(Unit* attacker, Unit* victim, uint32& damage);
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
+    void ModifyPeriodicDamage(Unit* attacker, Unit* victim, uint32& damage);
+    void ModifySpellDamage(Unit* target, Unit* attacker, int32& damage);
 
-    float GetMapScale(InstanceMap* map);
+    float GetMapScale(InstanceMap* map, std::optional<uint32> forcedSize = std::nullopt);
 }
 
 #endif // TRINITY_AUTOBALANCEMGR_H

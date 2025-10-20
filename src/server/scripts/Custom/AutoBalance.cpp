@@ -74,6 +74,21 @@ public:
     {
         AutoBalance::ModifyDamage(attacker, victim, damage);
     }
+
+    void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage) override
+    {
+        AutoBalance::ModifyMeleeDamage(target, attacker, damage);
+    }
+
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage) override
+    {
+        AutoBalance::ModifyPeriodicDamage(attacker, target, damage);
+    }
+
+    void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage) override
+    {
+        AutoBalance::ModifySpellDamage(target, attacker, damage);
+    }
 };
 
 void AddAutoBalanceScripts()
