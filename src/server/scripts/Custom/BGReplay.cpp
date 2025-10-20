@@ -129,26 +129,16 @@ private:
         if (!bg)
             return;
 
-        uint32 replayId = bg->GetReplayId();
-
-        // ignore packet when no bg or casual games
-        if (replayId > 0)
+        // ignore packet when watching a replay
+        if (bg->GetReplayId() != 0)
             return;
 
         // ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS)
             return;
-        }
-    }
 
-    void saveReplay(Battleground* bg)
-    {
-        //retrieve replay data
-        auto it = records.find(bg->GetInstanceID());
-        if (it == records.end()) return;
-        MatchRecord& match = it->second;
-
-        // record packets from 1 player of each team
+        // record packets from one representative per team
+        bool isRepresentative = false;
         for (auto const& entry : bg->GetPlayers())
         {
             if (entry.second.Team == player->GetBGTeam())
@@ -156,9 +146,13 @@ private:
                 if (entry.first != player->GetGUID())
                     return;
 
+                isRepresentative = true;
                 break;
             }
         }
+
+        if (!isRepresentative)
+            return;
 
         // ignore packets not in watch list
         if (std::find(watchList.begin(), watchList.end(), packet.GetOpcode()) == watchList.end())
@@ -166,11 +160,12 @@ private:
 
         MatchRecord& record = records[bg->GetInstanceID()];
 
-        uint32 timestamp = bg->GetStartTime();
         record.typeId = bg->GetTypeID();
         record.arenaTypeId = bg->GetArenaType();
         record.mapId = bg->GetMapId();
-        record.packets.push_back({ timestamp, /* copy */ WorldPacket(packet) });
+
+        uint32 timestamp = bg->GetStartTime();
+        record.packets.push_back({ timestamp, WorldPacket(packet) });
     }
 };
 
@@ -212,17 +207,8 @@ public:
                 if (spectator)
                     spectator->LeaveBattleground();
             }
-            catch (...)
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage("Invalid Match ID.");
-                return false;
-            }
-            return replayArenaMatch(player, replayId);
+            return;
         }
-        else if (action == 5) // "Add a Favorite Match"
-        {
-            if (!code)
-                return false;
 
         //send replay data to spectator
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime())
@@ -238,7 +224,6 @@ public:
             replayer->GetSession()->SendPacket(myPacket);
             match.packets.pop_front();
         }
-        return false;
     }
 
     void OnBattlegroundEnd(Battleground* bg, uint32 /*winnerTeamId*/) override
