@@ -41,7 +41,7 @@ std::vector<Opcodes> watchList = {
         SMSG_NAME_QUERY_RESPONSE,
         SMSG_DESTROY_OBJECT,
         MSG_MOVE_START_FORWARD,
-        MSG_MOVE_SET_FACING,
+        MSG_MOVE_SET_FACING, 
         MSG_MOVE_HEARTBEAT,
         MSG_MOVE_JUMP,
         SMSG_MONSTER_MOVE,
