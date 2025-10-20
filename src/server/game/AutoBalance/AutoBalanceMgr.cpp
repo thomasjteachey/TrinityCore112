@@ -26,6 +26,8 @@ namespace AutoBalance
 {
 namespace
 {
+    constexpr char const* AutoBalanceConfigFileName = "autobalance.conf";
+
     struct CurveConfig
     {
         float value = 0.35f;
@@ -847,10 +849,45 @@ namespace
     {
         sMapStates.clear();
     }
+
+    void LoadAutoBalanceConfigFile()
+    {
+        static bool loaded = false;
+        static bool warned = false;
+
+        if (loaded)
+            return;
+
+        std::string configPath = sConfigMgr->GetFilename();
+        size_t separatorPos = configPath.find_last_of("/\\");
+        if (separatorPos != std::string::npos)
+            configPath.resize(separatorPos + 1);
+        else
+            configPath.clear();
+
+        configPath += AutoBalanceConfigFileName;
+
+        std::string error;
+        if (!sConfigMgr->LoadAdditionalFile(configPath, true, error))
+        {
+            if (!warned)
+            {
+                warned = true;
+                TC_LOG_WARN("module.AutoBalance", "AutoBalance: failed to load configuration file '%s': %s (using built-in defaults)", configPath.c_str()
+, error.c_str());
+            }
+            return;
+        }
+
+        loaded = true;
+        TC_LOG_INFO("module.AutoBalance", "AutoBalance: loaded configuration from '%s'", configPath.c_str());
+    }
 }
 
 void LoadConfig(bool reload)
 {
+    LoadAutoBalanceConfigFile();
+
     sSettings.enableGlobal = sConfigMgr->GetBoolDefault("AutoBalance.Enable.Global", true);
     sSettings.enable5M = sConfigMgr->GetBoolDefault("AutoBalance.Enable.5M", true);
     sSettings.enable10M = sConfigMgr->GetBoolDefault("AutoBalance.Enable.10M", true);
