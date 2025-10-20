@@ -138,6 +138,15 @@ private:
         // ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS)
             return;
+        }
+    }
+
+    void saveReplay(Battleground* bg)
+    {
+        //retrieve replay data
+        auto it = records.find(bg->GetInstanceID());
+        if (it == records.end()) return;
+        MatchRecord& match = it->second;
 
         // record packets from 1 player of each team
         for (auto const& entry : bg->GetPlayers())
@@ -203,8 +212,17 @@ public:
                 if (spectator)
                     spectator->LeaveBattleground();
             }
-            return;
+            catch (...)
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("Invalid Match ID.");
+                return false;
+            }
+            return replayArenaMatch(player, replayId);
         }
+        else if (action == 5) // "Add a Favorite Match"
+        {
+            if (!code)
+                return false;
 
         //send replay data to spectator
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime())
@@ -220,6 +238,7 @@ public:
             replayer->GetSession()->SendPacket(myPacket);
             match.packets.pop_front();
         }
+        return false;
     }
 
     void OnBattlegroundEnd(Battleground* bg, uint32 /*winnerTeamId*/) override
@@ -288,7 +307,9 @@ public:
             ChatHandler(player->GetSession()).PSendSysMessage("Replay saved. Match ID: %u", replayfightid + 1);
         }
     }
-};
+    void ShowLastReplays3v3(Player* player, Creature* creature)
+    {
+        auto matchIds = loadLast10Replays3v3();
 
 class ReplayGossip : public CreatureScript
 {
