@@ -16,6 +16,7 @@
  */
 
 #include "Map.h"
+#include "AutoBalance/AutoBalanceMgr.h"
 #include "Battleground.h"
 #include "CellImpl.h"
 #include "DatabaseEnv.h"
@@ -615,6 +616,7 @@ bool Map::AddPlayerToMap(Player* player)
         ConvertCorpseToBones(player->GetGUID());
 
     sScriptMgr->OnPlayerEnterMap(this, player);
+    sAutoBalanceMgr->OnPlayerEnter(this, player);
     return true;
 }
 
@@ -1011,6 +1013,7 @@ void Map::RemovePlayerFromMap(Player* player, bool remove)
     // Before leaving map, update zone/area for stats
     player->UpdateZone(MAP_INVALID_ZONE, 0);
     sScriptMgr->OnPlayerLeaveMap(this, player);
+    sAutoBalanceMgr->OnPlayerLeave(this, player);
 
     player->CombatStop();
 

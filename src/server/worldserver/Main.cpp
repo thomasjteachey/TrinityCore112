@@ -22,6 +22,7 @@
 #include "Common.h"
 #include "AppenderDB.h"
 #include "AsyncAcceptor.h"
+#include "AutoBalance/AutoBalanceMgr.h"
 #include "Banner.h"
 #include "BattlegroundMgr.h"
 #include "BigNumber.h"
@@ -195,7 +196,14 @@ extern int main(int argc, char** argv)
         return 1;
     }
 
+    fs::path autoBalanceConfig = configFile.parent_path() / "autobalance.conf";
+    std::string autoBalanceError;
+    if (!sConfigMgr->LoadAdditionalFile(autoBalanceConfig.generic_string(), true, autoBalanceError))
+        TC_LOG_WARN("server.worldserver", "AutoBalance config could not be loaded: {}", autoBalanceError);
+
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
+
+    sAutoBalanceMgr->Initialize();
 
     std::shared_ptr<Trinity::Asio::IoContext> ioContext = std::make_shared<Trinity::Asio::IoContext>();
 
