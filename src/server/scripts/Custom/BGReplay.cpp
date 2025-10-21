@@ -658,7 +658,20 @@ public:
                 handler.SetSentErrorMessage(true);
                 return false;
             }
-            bg->SetMapId(record.mapId);
+
+            if (BattlegroundTemplate const* replayTemplate = sBattlegroundMgr->GetBattlegroundTemplateByMapId(record.mapId))
+            {
+                bg->SetMapId(record.mapId);
+                bg->SetTeamStartPosition(TEAM_ALLIANCE, replayTemplate->StartLocation[TEAM_ALLIANCE]);
+                bg->SetTeamStartPosition(TEAM_HORDE, replayTemplate->StartLocation[TEAM_HORDE]);
+            }
+            else
+            {
+                handler.PSendSysMessage("Couldn't locate battleground template for replay map!");
+                handler.SetSentErrorMessage(true);
+                return false;
+            }
+
             player->SetIsSpectator(true);
             bg->toggleReplay(spectatorLowGuid);
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
@@ -668,11 +681,14 @@ public:
 
             uint32 queueSlot = 0;
             WorldPacket data;
-            TeamId teamId = TEAM_NEUTRAL;
+            Team team = player->GetTeam();
+            TeamId teamId = player->GetTeamId();
 
-            player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, queueSlot, true, false, TEAM_NEUTRAL);
+            player->SetBGTeam(team);
+
+            player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, queueSlot, true, false, teamId);
             sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bgTypeId);
-            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), teamId);
+            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), team);
             player->GetSession()->SendPacket(&data);
 
             handler.PSendSysMessage("Replay begins.");
