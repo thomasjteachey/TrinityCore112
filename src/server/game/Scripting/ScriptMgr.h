@@ -35,6 +35,7 @@ class BattlegroundMap;
 class Channel;
 class Creature;
 class CreatureAI;
+class CreatureTemplate;
 class DynamicObject;
 class GameObject;
 class GameObjectAI;
@@ -73,6 +74,8 @@ struct CreatureData;
 struct ItemTemplate;
 struct MapEntry;
 struct Position;
+struct DungeonEncounter;
+typedef std::vector<std::unique_ptr<DungeonEncounter const>> DungeonEncounterList;
 
 namespace Trinity::ChatCommands { struct ChatCommandBuilder; }
 
@@ -81,6 +84,7 @@ enum ContentLevels : uint8;
 enum Difficulty : uint8;
 enum DuelCompleteType : uint8;
 enum Emote : uint32;
+enum EncounterCreditType : uint8;
 enum QuestStatus : uint8;
 enum RemoveMethod : uint8;
 enum ShutdownExitCode : uint32;
@@ -263,6 +267,16 @@ class TC_GAME_API WorldScript : public ScriptObject
         virtual void OnShutdown();
 };
 
+class TC_GAME_API GlobalScript : public ScriptObject
+{
+    protected:
+
+        explicit GlobalScript(char const* name);
+
+    public:
+        virtual void OnAfterUpdateEncounterState(Map* /*map*/, EncounterCreditType /*type*/, uint32 /*creditEntry*/, Unit* /*source*/, Difficulty /*difficulty*/, DungeonEncounterList const* /*encounters*/, uint32 /*dungeonCompleted*/, bool /*updated*/);
+};
+
 class TC_GAME_API FormulaScript : public ScriptObject
 {
     protected:
@@ -412,6 +426,20 @@ class TC_GAME_API CreatureScript : public ScriptObject
         virtual CreatureAI* GetAI(Creature* creature) const = 0;
 };
 
+class TC_GAME_API AllCreatureScript : public ScriptObject
+{
+    protected:
+
+        explicit AllCreatureScript(char const* name);
+
+    public:
+        virtual void OnBeforeCreatureSelectLevel(CreatureTemplate const* /*creatureTemplate*/, Creature* /*creature*/, uint8& /*level*/);
+        virtual void OnCreatureSelectLevel(CreatureTemplate const* /*creatureTemplate*/, Creature* /*creature*/);
+        virtual void OnCreatureAddWorld(Creature* /*creature*/);
+        virtual void OnCreatureRemoveWorld(Creature* /*creature*/);
+        virtual void OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/);
+};
+
 class TC_GAME_API GameObjectScript : public ScriptObject
 {
     protected:
@@ -422,6 +450,17 @@ class TC_GAME_API GameObjectScript : public ScriptObject
 
         // Called when a GameObjectAI object is needed for the gameobject.
         virtual GameObjectAI* GetAI(GameObject* go) const = 0;
+};
+
+class TC_GAME_API AllMapScript : public ScriptObject
+{
+    protected:
+
+        explicit AllMapScript(char const* name);
+
+    public:
+        virtual void OnPlayerEnterAll(Map* /*map*/, Player* /*player*/);
+        virtual void OnPlayerLeaveAll(Map* /*map*/, Player* /*player*/);
 };
 
 class TC_GAME_API AreaTriggerScript : public ScriptObject
@@ -900,6 +939,10 @@ class TC_GAME_API ScriptMgr
         void OnStartup();
         void OnShutdown();
 
+    public: /* GlobalScript */
+
+        void OnAfterUpdateEncounterState(Map* map, EncounterCreditType type, uint32 creditEntry, Unit* source, Difficulty difficulty, DungeonEncounterList const* encounters, uint32 dungeonCompleted, bool updated);
+
     public: /* FormulaScript */
 
         void OnHonorCalculation(float& honor, uint8 level, float multiplier);
@@ -920,6 +963,11 @@ class TC_GAME_API ScriptMgr
         void OnPlayerLeaveMap(Map* map, Player* player);
         void OnMapUpdate(Map* map, uint32 diff);
 
+    public: /* AllMapScript */
+
+        void OnPlayerEnterAll(Map* map, Player* player);
+        void OnPlayerLeaveAll(Map* map, Player* player);
+
     public: /* InstanceMapScript */
 
         InstanceScript* CreateInstanceData(InstanceMap* map);
@@ -935,6 +983,14 @@ class TC_GAME_API ScriptMgr
     public: /* CreatureScript */
 
         CreatureAI* GetCreatureAI(Creature* creature);
+
+    public: /* AllCreatureScript */
+
+        void OnBeforeCreatureSelectLevel(CreatureTemplate const* creatureTemplate, Creature* creature, uint8& level);
+        void OnCreatureSelectLevel(CreatureTemplate const* creatureTemplate, Creature* creature);
+        void OnCreatureAddWorld(Creature* creature);
+        void OnCreatureRemoveWorld(Creature* creature);
+        void OnAllCreatureUpdate(Creature* creature, uint32 diff);
 
     public: /* GameObjectScript */
 
