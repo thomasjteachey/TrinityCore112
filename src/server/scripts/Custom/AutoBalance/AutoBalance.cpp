@@ -16,23 +16,13 @@
  */
 
 #include "AutoBalanceMgr.h"
+#include "ABAllMapScript.h"
 #include "ABCommandScript.h"
 
 #include "Map.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "Unit.h"
-
-namespace
-{
-    void NotifyMap(Map* map)
-    {
-        if (!map)
-            return;
-
-        AutoBalance::NotifyPlayerEvent(map);
-    }
-}
 
 class CustomAutoBalanceWorldScript : public WorldScript
 {
@@ -42,27 +32,6 @@ public:
     void OnConfigLoad(bool reload) override
     {
         AutoBalance::LoadConfig(reload);
-    }
-};
-
-class CustomAutoBalancePlayerScript : public PlayerScript
-{
-public:
-    CustomAutoBalancePlayerScript() : PlayerScript("CustomAutoBalancePlayerScript") { }
-
-    void OnLogin(Player* player, bool /*firstLogin*/) override
-    {
-        NotifyMap(player ? player->GetMap() : nullptr);
-    }
-
-    void OnLogout(Player* player) override
-    {
-        NotifyMap(player ? player->GetMap() : nullptr);
-    }
-
-    void OnMapChanged(Player* player) override
-    {
-        NotifyMap(player ? player->GetMap() : nullptr);
     }
 };
 
@@ -97,7 +66,7 @@ void AddAutoBalanceScripts()
     AutoBalance::LoadConfig(false);
 
     new CustomAutoBalanceWorldScript();
-    new CustomAutoBalancePlayerScript();
+    new AutoBalance_AllMapScript();
     new CustomAutoBalanceUnitScript();
     new AutoBalanceCommandScript();
 }
