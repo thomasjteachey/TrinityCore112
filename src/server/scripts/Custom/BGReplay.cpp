@@ -234,7 +234,7 @@ namespace
     }
 }
 std::unordered_map<uint32, MatchRecord> records;
-std::unordered_map<uint64, MatchRecord> loadedReplays;
+std::unordered_map<uint32, MatchRecord> loadedReplays;
 // Headless spectators used for recording packets per battleground instance
 std::unordered_map<uint32, Player*> replayBots;
 // Helper container to avoid recursive bot creation
@@ -600,14 +600,15 @@ public:
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
 
-            if (loadedReplays[player->GetGUID()].packets.empty())
+            uint32 const spectatorLowGuid = player->GetGUIDLow();
+            if (loadedReplays[spectatorLowGuid].packets.empty())
             {
                 handler.PSendSysMessage("Replay data not found.");
                 handler.SetSentErrorMessage(true);
                 return false;
             }
 
-            MatchRecord record = loadedReplays[player->GetGUID()];
+            MatchRecord record = loadedReplays[spectatorLowGuid];
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
             if (!bg) {
                 handler.PSendSysMessage("Couldn't create arena map!");
@@ -668,8 +669,9 @@ public:
                     record.hordeRecorder = newGuid;
             }
 
-            loadedReplays[p->GetGUID()] = std::move(record);
-            TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[p->GetGUID()].packets.size(), p->GetGUID().ToString());
+            uint32 const spectatorLowGuid = p->GetGUIDLow();
+            loadedReplays[spectatorLowGuid] = std::move(record);
+            TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[spectatorLowGuid].packets.size(), p->GetGUID().ToString());
             return true;
         }
 
