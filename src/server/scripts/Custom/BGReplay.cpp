@@ -18,6 +18,7 @@
 #include <boost/asio.hpp>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
 #include "DatabaseEnv.h"
 #include <ObjectAccessor.h>
 #include "ScriptMgr.h"
@@ -91,6 +92,8 @@ struct MatchRecord {
     ObjectGuid allianceRecorder;
     ObjectGuid hordeRecorder;
     std::deque<PacketRecord> packets;
+    uint32 playbackTime = 0;
+    bool playbackStarted = false;
 };
 
 namespace
@@ -114,10 +117,10 @@ namespace
         return ObjectGuid(newRaw);
     }
 
-    void ReplaceGuid(WorldPacket& packet, ObjectGuid const& oldGuid, ObjectGuid const& newGuid)
+    bool ReplaceGuid(WorldPacket& packet, ObjectGuid const& oldGuid, ObjectGuid const& newGuid)
     {
         if (oldGuid == newGuid || oldGuid.IsEmpty())
-            return;
+            return false;
 
         bool compressed = packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT;
         ByteBuffer buffer;
@@ -125,16 +128,16 @@ namespace
         if (compressed)
         {
             if (packet.size() < sizeof(uint32))
-                return;
+                return false;
 
             uint32 size = packet.read<uint32>(0);
             if (!size)
-                return;
+                return false;
 
             buffer.resize(size);
             uLongf realSize = size;
             if (uncompress(buffer.contents(), &realSize, packet.contents() + sizeof(uint32), packet.size() - sizeof(uint32)) != Z_OK)
-                return;
+                return false;
             buffer.resize(realSize);
             TC_LOG_DEBUG("bg.replay", "Decompressed packet opcode {} from {} to {} bytes", GetOpcodeNameForLogging(static_cast<Opcodes>(packet.GetOpcode())), packet.size(), realSize);
 
@@ -168,13 +171,18 @@ namespace
         auto oldVec = oldPack.contentsAsVector();
         auto newVec = newPack.contentsAsVector();
 
+        bool packedReplaced = false;
+
         if (!oldVec.empty())
         {
             if (oldVec.size() == newVec.size())
             {
                 for (size_t i = 0; i + oldVec.size() <= len; ++i)
                     if (memcmp(data + i, oldVec.data(), oldVec.size()) == 0)
+                    {
                         memcpy(data + i, newVec.data(), newVec.size());
+                        packedReplaced = true;
+                    }
             }
             else
             {
@@ -186,6 +194,7 @@ namespace
                     {
                         newData.insert(newData.end(), newVec.begin(), newVec.end());
                         i += oldVec.size();
+                        packedReplaced = true;
                     }
                     else
                     {
@@ -200,6 +209,11 @@ namespace
             }
         }
 
+        bool const changed = replaced || packedReplaced;
+
+        if (!changed)
+            return false;
+
         TC_LOG_DEBUG("bg.replay", "ReplaceGuid {} -> {} replaced {} raw occurrences", oldGuid.ToString(), newGuid.ToString(), replaced);
 
         packet.clear();
@@ -209,7 +223,7 @@ namespace
             packet.resize(destSize + sizeof(uint32));
             packet.put<uint32>(0, len);
             if (compress(packet.contents() + sizeof(uint32), &destSize, buffer.contents(), len) != Z_OK)
-                return;
+                return false;
             packet.resize(destSize + sizeof(uint32));
             packet.SetOpcode(SMSG_COMPRESSED_UPDATE_OBJECT);
         }
@@ -217,6 +231,8 @@ namespace
         {
             packet.append(buffer.contents(), len);
         }
+
+        return true;
     }
 }
 std::unordered_map<uint32, MatchRecord> records;
@@ -408,14 +424,17 @@ public:
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 diff) override {
 
-        if (!bg->IsReplay()) return;
-        int32 startDelayTime = bg->GetStartDelayTime();
-        if (startDelayTime > 5000)
+        if (!bg->IsReplay())
+            return;
+
+        if (bg->GetStatus() < BattlegroundStatus::STATUS_WAIT_JOIN)
+            return;
+
+        if (bg->GetStartDelayTime() > 0)
         {
-            bg->SetStartDelayTime(5000);
-            bg->SetStartTime(bg->GetStartTime() + (startDelayTime - 5000));
+            bg->SetStartDelayTime(0);
+            bg->SetStartTime(0);
         }
-        if (bg->GetStatus() < BattlegroundStatus::STATUS_WAIT_JOIN) return;
 
         //retrieve replay data
         auto it = loadedReplays.find(bg->GetReplayId());
@@ -426,6 +445,14 @@ public:
         Player* spectator = ObjectAccessor::FindPlayerByLowGUID(bg->GetReplayId());
         if (!spectator || spectator->GetMapId() != bg->GetMapId())
             return;
+
+        if (!match.playbackStarted)
+        {
+            match.playbackStarted = true;
+            match.playbackTime = 0;
+        }
+
+        match.playbackTime += diff;
 
         // free data once all spectators have left or the replay is finished
         if (match.packets.empty() || !bg->HaveSpectators()) {
@@ -442,7 +469,7 @@ public:
         }
 
         //send replay data to spectator
-        while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
+        while (!match.packets.empty() && match.packets.front().timestamp <= match.playbackTime) {
             if (!bg->HaveSpectators())
                 break;
 
@@ -595,17 +622,22 @@ public:
             TC_LOG_INFO("bg.replay", "Deserialized replay: start {} map {} packets {}", record.startTime, record.mapId, record.packets.size());
 
             ObjectGuid spectator = p->GetGUID();
-            if (record.allianceRecorder == spectator || record.hordeRecorder == spectator)
+            if (!spectator.IsEmpty())
             {
-                ObjectGuid newGuid = ObjectGuid::Create<HighGuid::Player>(sObjectMgr->GetGenerator<HighGuid::Player>().Generate());
-                TC_LOG_INFO("bg.replay", "Replacing spectator GUID {} with {}", spectator.ToString(), newGuid.ToString());
+                ObjectGuid remappedGuid = GenerateAlternateGuid(spectator);
+                bool remapped = false;
                 for (PacketRecord& r : record.packets)
-                    ReplaceGuid(r.packet, spectator, newGuid);
+                    remapped |= ReplaceGuid(r.packet, spectator, remappedGuid);
 
-                if (record.allianceRecorder == spectator)
-                    record.allianceRecorder = newGuid;
-                if (record.hordeRecorder == spectator)
-                    record.hordeRecorder = newGuid;
+                if (remapped)
+                {
+                    TC_LOG_INFO("bg.replay", "Replacing spectator GUID {} with {}", spectator.ToString(), remappedGuid.ToString());
+
+                    if (record.allianceRecorder == spectator)
+                        record.allianceRecorder = remappedGuid;
+                    if (record.hordeRecorder == spectator)
+                        record.hordeRecorder = remappedGuid;
+                }
             }
 
             loadedReplays[p->GetGUID()] = std::move(record);
