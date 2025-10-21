@@ -334,28 +334,61 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
     float damageMultiplier = computeStatMultiplier(isBoss ? stats.bossGlobal : stats.global,
         isBoss ? stats.bossDamage : stats.damage);
 
+    uint32 previousPlayerDamageReq = creature->GetPlayerDamageReq();
+
     float scaledHealth = ClampMultiplier(float(base.baseHealth), healthMultiplier, _minHealthModifier);
     uint32 newHealth = uint32(std::max(0.0f, scaledHealth));
     if (newHealth == 0 && base.baseHealth > 0)
         newHealth = 1;
 
+    uint32 previousMaxHealth = creature->GetMaxHealth();
+    uint32 previousHealth = creature->GetHealth();
+    float previousHealthPct = previousMaxHealth > 0 ? float(previousHealth) / float(previousMaxHealth) : 1.0f;
+
     creature->SetCreateHealth(newHealth);
     creature->SetMaxHealth(newHealth);
-    creature->SetHealth(newHealth);
+    creature->ResetPlayerDamageReq();
+    creature->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, float(newHealth));
+
+    uint32 scaledCurrentHealth = newHealth;
+    if (previousMaxHealth > 0)
+    {
+        scaledCurrentHealth = uint32(std::round(previousHealthPct * float(newHealth)));
+        if (scaledCurrentHealth == 0 && newHealth > 0)
+            scaledCurrentHealth = 1;
+    }
+
+    creature->SetHealth(scaledCurrentHealth);
 
     if (base.baseMana > 0)
     {
         float scaledMana = ClampMultiplier(float(base.baseMana), manaMultiplier, _minManaModifier);
         uint32 newMana = uint32(std::max(0.0f, scaledMana));
+
+        uint32 previousMaxMana = creature->GetMaxPower(POWER_MANA);
+        uint32 previousMana = creature->GetPower(POWER_MANA);
+        float previousManaPct = previousMaxMana > 0 ? float(previousMana) / float(previousMaxMana) : 1.0f;
+
         creature->SetCreateMana(newMana);
         creature->SetMaxPower(POWER_MANA, newMana);
-        creature->SetPower(POWER_MANA, newMana);
+        creature->SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, float(newMana));
+
+        uint32 scaledCurrentMana = newMana;
+        if (previousMaxMana > 0)
+        {
+            scaledCurrentMana = uint32(std::round(previousManaPct * float(newMana)));
+            if (scaledCurrentMana == 0 && newMana > 0)
+                scaledCurrentMana = 1;
+        }
+
+        creature->SetPower(POWER_MANA, scaledCurrentMana);
     }
 
     float scaledArmor = base.baseArmor * armorMultiplier;
     if (scaledArmor < 0.0f)
         scaledArmor = 0.0f;
-    creature->SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, scaledArmor);
+    creature->SetArmor(int32(std::round(scaledArmor)));
+    creature->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, scaledArmor);
 
     auto applyWeapon = [&](WeaponAttackType attackType, float baseMin, float baseMax)
     {
@@ -366,9 +399,24 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
         float newMax = ClampMultiplier(baseMax, damageMultiplier, _minDamageModifier);
         creature->SetBaseWeaponDamage(attackType, MINDAMAGE, newMin);
         creature->SetBaseWeaponDamage(attackType, MAXDAMAGE, newMax);
+        creature->UpdateDamagePhysical(attackType);
     };
 
     applyWeapon(BASE_ATTACK, base.baseMainMin, base.baseMainMax);
     applyWeapon(OFF_ATTACK, base.baseOffMin, base.baseOffMax);
     applyWeapon(RANGED_ATTACK, base.baseRangedMin, base.baseRangedMax);
+
+    uint32 playerDamageRequired = creature->GetPlayerDamageReq();
+    if (previousPlayerDamageReq == 0)
+    {
+        creature->LowerPlayerDamageReq(playerDamageRequired);
+    }
+    else if (previousMaxHealth > 0)
+    {
+        uint32 scaledPlayerDamageReq = uint32(std::round(float(previousPlayerDamageReq) * float(newHealth) / float(previousMaxHealth)));
+        if (scaledPlayerDamageReq > playerDamageRequired)
+            scaledPlayerDamageReq = playerDamageRequired;
+
+        creature->LowerPlayerDamageReq(playerDamageRequired - scaledPlayerDamageReq);
+    }
 }
