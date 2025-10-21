@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 #include <sstream>
 
 namespace
@@ -47,6 +48,7 @@ void AutoBalanceMgr::Reload()
     LoadConfigValues();
     _mapStates.clear();
     _creatureBaseData.clear();
+    _mapCreatures.clear();
 }
 
 void AutoBalanceMgr::LoadConfigValues()
@@ -60,6 +62,8 @@ void AutoBalanceMgr::LoadConfigValues()
 
     _minPlayersNormal = uint32(std::max(1, sConfigMgr->GetIntDefault("AutoBalance.MinPlayers", 1)));
     _minPlayersHeroic = uint32(std::max(1, sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.Heroic", 1)));
+    _minPlayersRaidNormal = uint32(std::max(1, sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.Raid", _minPlayersNormal)));
+    _minPlayersRaidHeroic = uint32(std::max(1, sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.RaidHeroic", _minPlayersHeroic)));
     _difficultyOffset = sConfigMgr->GetIntDefault("AutoBalance.playerCountDifficultyOffset", 0);
     _notifyPlayerChanges = sConfigMgr->GetBoolDefault("AutoBalance.PlayerChangeNotify", true);
 
@@ -119,7 +123,13 @@ bool AutoBalanceMgr::IsEnabledFor(InstanceMap* map) const
 
 uint32 AutoBalanceMgr::GetMinPlayers(InstanceMap* map) const
 {
-    return map && map->IsHeroic() ? _minPlayersHeroic : _minPlayersNormal;
+    if (!map)
+        return _minPlayersNormal;
+
+    if (map->IsRaid())
+        return map->IsHeroic() ? _minPlayersRaidHeroic : _minPlayersRaidNormal;
+
+    return map->IsHeroic() ? _minPlayersHeroic : _minPlayersNormal;
 }
 
 AutoBalanceMgr::InflectionSettings const& AutoBalanceMgr::GetInflection(InstanceMap* map, bool /*isBoss*/) const
@@ -173,15 +183,37 @@ void AutoBalanceMgr::OnPlayerEnter(Map* map, Player* /*player*/)
     uint32 previous = state.effectivePlayers;
     UpdateMapState(map, state);
 
-    if (_notifyPlayerChanges && state.effectivePlayers != previous && state.effectivePlayers > 0)
+    if (state.effectivePlayers != previous)
     {
-        state.lastAnnouncedPlayers = state.effectivePlayers;
-        std::ostringstream ss;
-        ss << "AutoBalance: Instance scaled for " << state.effectivePlayers << " player(s).";
-        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
-            if (Player* player = itr->GetSource())
-                ChatHandler(player->GetSession()).SendSysMessage(ss.str().c_str());
+        if (state.effectivePlayers > 0)
+            RescaleMapCreatures(map);
+
+        if (_notifyPlayerChanges && state.effectivePlayers > 0)
+        {
+            state.lastAnnouncedPlayers = state.effectivePlayers;
+            std::ostringstream ss;
+            ss << "AutoBalance: Instance scaled for " << state.effectivePlayers << " player(s).";
+            for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+                if (Player* player = itr->GetSource())
+                    ChatHandler(player->GetSession()).SendSysMessage(ss.str().c_str());
+        }
     }
+}
+
+void AutoBalanceMgr::RescaleMapCreatures(Map* map)
+{
+    auto itr = _mapCreatures.find(map);
+    if (itr == _mapCreatures.end())
+        return;
+
+    std::vector<Creature*> creatures;
+    creatures.reserve(itr->second.size());
+    for (Creature* creature : itr->second)
+        if (creature && creature->IsInWorld() && creature->GetMap() == map)
+            creatures.push_back(creature);
+
+    for (Creature* creature : creatures)
+        ApplyScaling(creature);
 }
 
 void AutoBalanceMgr::OnPlayerLeave(Map* map, Player* /*player*/)
@@ -193,14 +225,20 @@ void AutoBalanceMgr::OnPlayerLeave(Map* map, Player* /*player*/)
     uint32 previous = state.effectivePlayers;
     UpdateMapState(map, state);
 
-    if (_notifyPlayerChanges && state.effectivePlayers != previous && state.effectivePlayers > 0)
+    if (state.effectivePlayers != previous)
     {
-        state.lastAnnouncedPlayers = state.effectivePlayers;
-        std::ostringstream ss;
-        ss << "AutoBalance: Instance scaled for " << state.effectivePlayers << " player(s).";
-        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
-            if (Player* player = itr->GetSource())
-                ChatHandler(player->GetSession()).SendSysMessage(ss.str().c_str());
+        if (state.effectivePlayers > 0)
+            RescaleMapCreatures(map);
+
+        if (_notifyPlayerChanges && state.effectivePlayers > 0)
+        {
+            state.lastAnnouncedPlayers = state.effectivePlayers;
+            std::ostringstream ss;
+            ss << "AutoBalance: Instance scaled for " << state.effectivePlayers << " player(s).";
+            for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+                if (Player* player = itr->GetSource())
+                    ChatHandler(player->GetSession()).SendSysMessage(ss.str().c_str());
+        }
     }
 }
 
@@ -210,6 +248,18 @@ void AutoBalanceMgr::OnCreatureRemoved(Creature* creature)
         return;
 
     _creatureBaseData.erase(creature);
+
+    Map* map = creature->GetMap();
+    if (!map)
+        return;
+
+    auto itr = _mapCreatures.find(map);
+    if (itr != _mapCreatures.end())
+    {
+        itr->second.erase(creature);
+        if (itr->second.empty())
+            _mapCreatures.erase(itr);
+    }
 }
 
 void AutoBalanceMgr::ApplyScaling(Creature* creature)
@@ -225,13 +275,6 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
     if (!instanceMap || !IsEnabledFor(instanceMap))
         return;
 
-    MapState& state = _mapStates[map];
-    if (state.effectivePlayers == 0)
-        UpdateMapState(map, state);
-
-    if (state.effectivePlayers == 0)
-        return;
-
     CreatureBaseData& base = _creatureBaseData[creature];
     if (!base.initialized)
     {
@@ -245,7 +288,16 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
         base.baseRangedMin = creature->GetWeaponDamageRange(RANGED_ATTACK, MINDAMAGE);
         base.baseRangedMax = creature->GetWeaponDamageRange(RANGED_ATTACK, MAXDAMAGE);
         base.initialized = true;
+
+        _mapCreatures[map].insert(creature);
     }
+
+    MapState& state = _mapStates[map];
+    if (state.effectivePlayers == 0)
+        UpdateMapState(map, state);
+
+    if (state.effectivePlayers == 0)
+        return;
 
     uint32 maxPlayers = instanceMap->GetMaxPlayers();
     float adjustedPlayers = float(state.effectivePlayers);

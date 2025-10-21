@@ -3,6 +3,7 @@
 #include "Define.h"
 
 #include <unordered_map>
+#include <unordered_set>
 
 class Creature;
 class InstanceMap;
@@ -73,6 +74,7 @@ private:
     uint32 GetMinPlayers(InstanceMap* map) const;
     InflectionSettings const& GetInflection(InstanceMap* map, bool isBoss) const;
     StatSettings const& GetStats(InstanceMap* map, bool isBoss) const;
+    void RescaleMapCreatures(Map* map);
 
     bool _initialized = false;
     bool _globalEnabled = true;
@@ -82,6 +84,8 @@ private:
     bool _raidHeroicEnabled = true;
     uint32 _minPlayersNormal = 1;
     uint32 _minPlayersHeroic = 1;
+    uint32 _minPlayersRaidNormal = 1;
+    uint32 _minPlayersRaidHeroic = 1;
     int32 _difficultyOffset = 0;
     bool _notifyPlayerChanges = true;
 
@@ -101,6 +105,7 @@ private:
 
     std::unordered_map<Map const*, MapState> _mapStates;
     std::unordered_map<Creature const*, CreatureBaseData> _creatureBaseData;
+    std::unordered_map<Map const*, std::unordered_set<Creature*>> _mapCreatures;
 };
 
 #define sAutoBalanceMgr AutoBalanceMgr::instance()
