@@ -16,6 +16,7 @@
  */
 
 #include "Creature.h"
+#include "AutoBalance/AutoBalanceMgr.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
 #include "Common.h"
@@ -298,6 +299,8 @@ void Creature::RemoveFromWorld()
 {
     if (IsInWorld())
     {
+        sAutoBalanceMgr->OnCreatureRemoved(this);
+
         if (GetZoneScript())
             GetZoneScript()->OnCreatureRemove(this);
 
@@ -1476,6 +1479,8 @@ void Creature::UpdateLevelDependantStats()
 
     float armor = (float)stats->GenerateArmor(cInfo); /// @todo Why is this treated as uint32 when it's a float?
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, armor);
+
+    sAutoBalanceMgr->ApplyScaling(this);
 }
 
 float Creature::_GetHealthMod(int32 Rank)
