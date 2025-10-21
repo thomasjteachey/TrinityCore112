@@ -11,6 +11,7 @@
 #include "WorldSocket.h"
 #include "Log.h"
 #include "Map.h"
+#include "World.h"
 #include "ObjectDefines.h"
 #include "ObjectMgr.h"
 #include "GameTime.h"
@@ -88,6 +89,7 @@ struct MatchRecord {
     uint8 arenaTypeId;
     uint32 mapId;
     uint32 startTime = 0;
+    BattlegroundBracketId bracketId = BG_BRACKET_ID_FIRST;
     ObjectGuid allianceRecorder;
     ObjectGuid hordeRecorder;
     std::deque<PacketRecord> packets;
@@ -126,6 +128,40 @@ namespace
             }
         }
         return ObjectGuid(newRaw);
+    }
+
+    PvPDifficultyEntry const* GetFirstBracketForMap(uint32 mapId)
+    {
+        PvPDifficultyEntry const* firstEntry = nullptr;
+        for (uint32 i = 0; i < sPvPDifficultyStore.GetNumRows(); ++i)
+        {
+            if (PvPDifficultyEntry const* entry = sPvPDifficultyStore.LookupEntry(i))
+            {
+                if (entry->MapID != static_cast<int32>(mapId))
+                    continue;
+
+                if (!firstEntry || entry->MinLevel < firstEntry->MinLevel)
+                    firstEntry = entry;
+            }
+        }
+
+        return firstEntry;
+    }
+
+    PvPDifficultyEntry const* ResolveReplayBracket(Player const* spectator, MatchRecord const& record)
+    {
+        if (record.bracketId <= BG_BRACKET_ID_LAST)
+            if (PvPDifficultyEntry const* bracket = GetBattlegroundBracketById(record.mapId, record.bracketId))
+                return bracket;
+
+        if (spectator)
+            if (PvPDifficultyEntry const* bracket = GetBattlegroundBracketByLevel(record.mapId, spectator->GetLevel()))
+                return bracket;
+
+        if (PvPDifficultyEntry const* bracket = GetBattlegroundBracketByLevel(record.mapId, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)))
+            return bracket;
+
+        return GetFirstBracketForMap(record.mapId);
     }
 
     void ReplaceGuid(WorldPacket& packet, ObjectGuid const& oldGuid, ObjectGuid const& newGuid)
@@ -374,6 +410,7 @@ public:
         if (record.startTime == 0)
         {
             record.startTime = GameTime::GetGameTimeMS() - bg->GetStartTime();
+            record.bracketId = bg->GetBracketId();
             for (auto const& itr : bg->GetPlayers())
             {
                 ObjectGuid guid = itr.first;
@@ -534,8 +571,9 @@ public:
         // serialize arena replay data
         ByteBuffer buffer;
         buffer << ReplayFormatMagic;
-        buffer << uint16(1);
+        buffer << uint16(2);
         buffer << match.startTime;
+        buffer << uint8(match.bracketId);
         buffer << match.allianceRecorder;
         buffer << match.hordeRecorder;
         buffer << uint32(match.guidRemaps.size());
@@ -609,14 +647,23 @@ public:
             }
 
             MatchRecord record = loadedReplays[spectatorLowGuid];
-            Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
+            PvPDifficultyEntry const* bracketEntry = ResolveReplayBracket(player, record);
+            if (!bracketEntry)
+            {
+                handler.PSendSysMessage("Couldn't locate a valid bracket for replay map!");
+                handler.SetSentErrorMessage(true);
+                return false;
+            }
+
+            Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, bracketEntry, record.arenaTypeId, false);
             if (!bg) {
                 handler.PSendSysMessage("Couldn't create arena map!");
                 handler.SetSentErrorMessage(true);
                 return false;
             }
+            bg->SetMapId(record.mapId);
             player->SetIsSpectator(true);
-            bg->toggleReplay(player->GetGUID());
+            bg->toggleReplay(spectatorLowGuid);
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
             bg->StartBattleground();
 
@@ -667,6 +714,8 @@ public:
                     record.allianceRecorder = newGuid;
                 if (record.hordeRecorder == spectator)
                     record.hordeRecorder = newGuid;
+
+                record.guidRemaps[spectator.GetRawValue()] = newGuid.GetRawValue();
             }
 
             uint32 const spectatorLowGuid = p->GetGUID().GetCounter();
@@ -711,6 +760,14 @@ public:
             {
                 buffer >> version;
                 buffer >> record.startTime;
+
+                if (version >= 2)
+                {
+                    uint8 bracketIdValue;
+                    buffer >> bracketIdValue;
+                    if (bracketIdValue <= BG_BRACKET_ID_LAST)
+                        record.bracketId = static_cast<BattlegroundBracketId>(bracketIdValue);
+                }
             }
             else
             {
