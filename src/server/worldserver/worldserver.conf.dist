@@ -3101,11 +3101,7 @@ CharDelete.DeathKnight.MinLevel = 0
 CharDelete.KeepDays = 30
 
 #
-###################################################################################################
 
-###################################################################################################
-# CUSTOM SERVER OPTIONS
-#
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)
 #        Default:     0 - (Do not allow)
