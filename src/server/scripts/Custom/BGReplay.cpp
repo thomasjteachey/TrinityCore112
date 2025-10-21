@@ -133,13 +133,10 @@ namespace
     PvPDifficultyEntry const* GetFirstBracketForMap(uint32 mapId)
     {
         PvPDifficultyEntry const* firstEntry = nullptr;
-        for (uint32 i = 0; i < sPvPDifficultyStore.GetNumRows(); ++i)
+        for (uint8 bracketId = BG_BRACKET_ID_FIRST; bracketId <= BG_BRACKET_ID_LAST; ++bracketId)
         {
-            if (PvPDifficultyEntry const* entry = sPvPDifficultyStore.LookupEntry(i))
+            if (PvPDifficultyEntry const* entry = GetBattlegroundBracketById(mapId, BattlegroundBracketId(bracketId)))
             {
-                if (entry->MapID != static_cast<int32>(mapId))
-                    continue;
-
                 if (!firstEntry || entry->MinLevel < firstEntry->MinLevel)
                     firstEntry = entry;
             }
