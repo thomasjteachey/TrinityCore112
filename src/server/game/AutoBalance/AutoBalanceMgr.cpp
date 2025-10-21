@@ -546,6 +546,7 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
 
     creature->SetCreateHealth(newHealth);
     creature->SetMaxHealth(newHealth);
+    creature->SetStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, float(newHealth));
     creature->ResetPlayerDamageReq();
 
     uint32 scaledCurrentHealth = newHealth;
@@ -569,6 +570,7 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
 
         creature->SetCreateMana(newMana);
         creature->SetMaxPower(POWER_MANA, newMana);
+        creature->SetStatFlatModifier(UNIT_MOD_MANA, BASE_VALUE, float(newMana));
 
         uint32 scaledCurrentMana = newMana;
         if (previousMaxMana > 0)
@@ -585,6 +587,7 @@ void AutoBalanceMgr::ApplyScaling(Creature* creature)
     if (scaledArmor < 0.0f)
         scaledArmor = 0.0f;
     creature->SetArmor(int32(std::round(scaledArmor)));
+    creature->SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, scaledArmor);
 
     auto applyWeapon = [&](WeaponAttackType attackType, float baseMin, float baseMax)
     {
