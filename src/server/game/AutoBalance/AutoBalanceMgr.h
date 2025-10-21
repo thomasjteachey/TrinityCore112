@@ -75,11 +75,14 @@ private:
     InflectionSettings const& GetInflection(InstanceMap* map, bool isBoss) const;
     StatSettings const& GetStats(InstanceMap* map, bool isBoss) const;
     void RescaleMapCreatures(Map* map);
+    uint32 GetRaidSizeKey(InstanceMap* map) const;
 
     bool _initialized = false;
     bool _globalEnabled = true;
     bool _dungeonNormalEnabled = true;
     bool _dungeonHeroicEnabled = true;
+    bool _dungeonOtherNormalEnabled = true;
+    bool _dungeonOtherHeroicEnabled = true;
     bool _raidNormalEnabled = true;
     bool _raidHeroicEnabled = true;
     uint32 _minPlayersNormal = 1;
@@ -98,6 +101,13 @@ private:
     StatSettings _dungeonHeroicStats;
     StatSettings _raidNormalStats;
     StatSettings _raidHeroicStats;
+
+    std::unordered_map<uint32, bool> _raidNormalEnabledBySize;
+    std::unordered_map<uint32, bool> _raidHeroicEnabledBySize;
+    std::unordered_map<uint32, InflectionSettings> _raidNormalInflectionBySize;
+    std::unordered_map<uint32, InflectionSettings> _raidHeroicInflectionBySize;
+    std::unordered_map<uint32, StatSettings> _raidNormalStatsBySize;
+    std::unordered_map<uint32, StatSettings> _raidHeroicStatsBySize;
 
     float _minHealthModifier = 0.01f;
     float _minManaModifier = 0.01f;
