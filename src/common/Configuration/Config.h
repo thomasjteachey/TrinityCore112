@@ -46,6 +46,24 @@ public:
     int GetIntDefault(std::string const& name, int def, bool quiet = false) const;
     float GetFloatDefault(std::string const& name, float def, bool quiet = false) const;
 
+    template<class T>
+    T GetOption(std::string const& name, T def, bool warn = true, bool /*deprecated*/ = true) const
+    {
+        return GetValueDefault<T>(name, def, !warn);
+    }
+
+    template<>
+    inline bool GetOption<bool>(std::string const& name, bool def, bool warn, bool) const
+    {
+        return GetBoolDefault(name, def, !warn);
+    }
+
+    template<>
+    inline std::string GetOption<std::string>(std::string const& name, std::string def, bool warn, bool) const
+    {
+        return GetStringDefault(name, def, !warn);
+    }
+
     std::string const& GetFilename();
     std::vector<std::string> const& GetArguments() const;
     std::vector<std::string> GetKeysByString(std::string const& name);

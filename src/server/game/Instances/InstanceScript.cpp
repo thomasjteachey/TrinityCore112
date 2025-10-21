@@ -18,6 +18,7 @@
 #include "InstanceScript.h"
 #include "AreaBoundary.h"
 #include "Creature.h"
+#include "ScriptMgr.h"
 #include "CreatureAI.h"
 #include "CreatureAIImpl.h"
 #include "DatabaseEnv.h"
@@ -733,19 +734,27 @@ void InstanceScript::SendEncounterUnit(uint32 type, Unit* unit /*= nullptr*/, ui
     instance->SendToPlayers(&data);
 }
 
-void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 creditEntry, Unit* /*source*/)
+void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 creditEntry, Unit* source)
 {
     DungeonEncounterList const* encounters = sObjectMgr->GetDungeonEncounterList(instance->GetId(), instance->GetDifficulty());
     if (!encounters)
         return;
 
     uint32 dungeonId = 0;
+    bool encounterUpdated = false;
 
     for (auto const& encounter : *encounters)
     {
         if (encounter->creditType == type && encounter->creditEntry == creditEntry)
         {
-            completedEncounters |= 1 << encounter->dbcEntry->Bit;
+            uint32 const bit = 1 << encounter->dbcEntry->Bit;
+            if (!(completedEncounters & bit))
+            {
+                encounterUpdated = true;
+                completedEncounters |= bit;
+            }
+            else
+                completedEncounters |= bit;
             if (encounter->lastEncounterDungeon)
             {
                 dungeonId = encounter->lastEncounterDungeon;
@@ -754,6 +763,8 @@ void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 credi
             }
         }
     }
+
+    sScriptMgr->OnAfterUpdateEncounterState(instance, type, creditEntry, source, instance->GetDifficulty(), encounters, dungeonId, encounterUpdated);
 
     if (dungeonId)
     {

@@ -14,6 +14,8 @@ CollectSourceFiles(
   # Exclude
   ${CMAKE_CURRENT_SOURCE_DIR}/PrecompiledHeaders)
 
+set(AUTOBALANCE_CONFIG "${CMAKE_SOURCE_DIR}/src/server/scripts/Custom/AutoBalance/AutoBalance.conf.dist")
+
 list(APPEND PRIVATE_SOURCES ${sources_windows})
 
 if(WIN32)
@@ -82,12 +84,24 @@ if(COPY_CONF AND WIN32)
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/worldserver.conf.dist ${CMAKE_BINARY_DIR}/bin/$(ConfigurationName)/
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/autobalance.conf.dist ${CMAKE_BINARY_DIR}/bin/$(ConfigurationName)/
     )
+    if(EXISTS ${AUTOBALANCE_CONFIG})
+      add_custom_command(TARGET worldserver
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${AUTOBALANCE_CONFIG} ${CMAKE_BINARY_DIR}/bin/$(ConfigurationName)/
+      )
+    endif()
   elseif(MINGW)
     add_custom_command(TARGET worldserver
       POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/worldserver.conf.dist ${CMAKE_BINARY_DIR}/bin/
       COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/autobalance.conf.dist ${CMAKE_BINARY_DIR}/bin/
     )
+    if(EXISTS ${AUTOBALANCE_CONFIG})
+      add_custom_command(TARGET worldserver
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy ${AUTOBALANCE_CONFIG} ${CMAKE_BINARY_DIR}/bin/
+      )
+    endif()
   endif()
 endif()
 
