@@ -1,44 +1,20 @@
-/*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, license: https://github.com/azerothcore/azerothcore-wotlk/blob/master/LICENSE
- */
+#ifndef TRINITY_ABCOMMANDSCRIPT_H
+#define TRINITY_ABCOMMANDSCRIPT_H
 
-#ifndef __AB_COMMAND_SCRIPT_H
-#define __AB_COMMAND_SCRIPT_H
-
-#include "Chat.h"
-#include "Config.h"
+#include "ChatCommand.h"
 #include "ScriptMgr.h"
 
-using namespace Trinity::ChatCommands;
-
-class AutoBalance_CommandScript : public CommandScript
+class AutoBalanceCommandScript : public CommandScript
 {
 public:
-    AutoBalance_CommandScript() : CommandScript("AutoBalance_CommandScript") { }
+    AutoBalanceCommandScript();
 
-    ChatCommandTable GetCommands() const override
-    {
-        static ChatCommandTable ABCommandTable =
-        {
-            { "setoffset",     HandleABSetOffsetCommand,      SEC_GAMEMASTER,  Console::Yes },
-            { "getoffset",     HandleABGetOffsetCommand,      SEC_PLAYER,      Console::Yes },
-            { "mapstat",       HandleABMapStatsCommand,       SEC_PLAYER,      Console::Yes },
-            { "creaturestat",  HandleABCreatureStatsCommand,  SEC_PLAYER,      Console::Yes }
-        };
+    Trinity::ChatCommands::ChatCommandTable GetCommands() const override;
 
-        static ChatCommandTable commandTable =
-        {
-            { "autobalance",  ABCommandTable },
-            { "ab",           ABCommandTable },
-        };
-
-        return commandTable;
-    };
-
-    static bool HandleABSetOffsetCommand(ChatHandler* handler, const char* args);
-    static bool HandleABGetOffsetCommand(ChatHandler* handler, const char* args);
-    static bool HandleABMapStatsCommand(ChatHandler* handler, const char* args);
-    static bool HandleABCreatureStatsCommand(ChatHandler* handler, const char* args);
+private:
+    static bool HandleSetOffsetCommand(ChatHandler* handler, int32 offset);
+    static bool HandleGetOffsetCommand(ChatHandler* handler);
+    static bool HandleMapStatsCommand(ChatHandler* handler);
 };
 
-#endif /* __AB_COMMAND_SCRIPT_H */
+#endif // TRINITY_ABCOMMANDSCRIPT_H

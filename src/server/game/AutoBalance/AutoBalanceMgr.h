@@ -40,6 +40,10 @@ namespace AutoBalance
     void ModifySpellDamage(Unit* target, Unit* attacker, int32& damage);
 
     float GetMapScale(InstanceMap* map, std::optional<uint32> forcedSize = std::nullopt);
+    uint32 GetEffectivePlayerCountForInstance(InstanceMap* map);
+
+    void SetPlayerDifficultyOffset(int32 offset);
+    int32 GetPlayerDifficultyOffset();
 }
 
 #endif // TRINITY_AUTOBALANCEMGR_H

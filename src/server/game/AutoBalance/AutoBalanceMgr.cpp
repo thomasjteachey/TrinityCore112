@@ -1074,4 +1074,33 @@ float GetMapScale(InstanceMap* map, std::optional<uint32> forcedSize)
     CurveConfig curve = ResolveCurveConfig(map, context, false);
     return ComputeDefaultMultiplier(map, context, curve, effectivePlayers);
 }
+
+uint32 GetEffectivePlayerCountForInstance(InstanceMap* map)
+{
+    if (!map)
+        return 0;
+
+    InstanceContext context = MakeContext(map);
+
+    if (!IsEnabledForContext(map, context))
+        return map->GetPlayersCountExceptGMs();
+
+    return GetEffectivePlayerCount(map, context);
+}
+
+void SetPlayerDifficultyOffset(int32 offset)
+{
+    if (sSettings.playerDifficultyOffset == offset)
+        return;
+
+    sSettings.playerDifficultyOffset = offset;
+    sMapStates.clear();
+
+    TC_LOG_INFO("module.AutoBalance", "AutoBalance: player difficulty offset set to %d", offset);
+}
+
+int32 GetPlayerDifficultyOffset()
+{
+    return sSettings.playerDifficultyOffset;
+}
 }
