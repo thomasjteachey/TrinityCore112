@@ -600,7 +600,7 @@ public:
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
 
-            uint32 const spectatorLowGuid = player->GetGUIDLow();
+            uint32 const spectatorLowGuid = player->GetGUID().GetCounter();
             if (loadedReplays[spectatorLowGuid].packets.empty())
             {
                 handler.PSendSysMessage("Replay data not found.");
@@ -669,7 +669,7 @@ public:
                     record.hordeRecorder = newGuid;
             }
 
-            uint32 const spectatorLowGuid = p->GetGUIDLow();
+            uint32 const spectatorLowGuid = p->GetGUID().GetCounter();
             loadedReplays[spectatorLowGuid] = std::move(record);
             TC_LOG_INFO("bg.replay", "Loaded replay {} packets {} for spectator {}", matchId, loadedReplays[spectatorLowGuid].packets.size(), p->GetGUID().ToString());
             return true;
