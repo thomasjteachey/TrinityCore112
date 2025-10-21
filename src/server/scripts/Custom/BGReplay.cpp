@@ -91,7 +91,21 @@ struct MatchRecord {
     ObjectGuid allianceRecorder;
     ObjectGuid hordeRecorder;
     std::deque<PacketRecord> packets;
+    std::unordered_map<uint64, uint64> guidRemaps;
 };
+
+namespace
+{
+    constexpr uint32 ReplayFormatMagic = 0x42475250; // 'BGRP'
+
+    bool IsAlternateGuidUsed(MatchRecord const& record, uint64 alternateRaw)
+    {
+        for (auto const& pair : record.guidRemaps)
+            if (pair.second == alternateRaw)
+                return true;
+        return false;
+    }
+}
 
 namespace
 {
@@ -365,6 +379,21 @@ public:
                 ObjectGuid guid = itr.first;
                 if (Player* plr = ObjectAccessor::FindPlayer(guid))
                 {
+                    if (!plr->IsSpectator())
+                    {
+                        uint64 rawGuid = guid.GetRawValue();
+                        if (record.guidRemaps.find(rawGuid) == record.guidRemaps.end())
+                        {
+                            ObjectGuid alternate;
+                            do
+                            {
+                                alternate = GenerateAlternateGuid(guid);
+                            } while (alternate.IsEmpty() || alternate == guid || IsAlternateGuidUsed(record, alternate.GetRawValue()));
+
+                            record.guidRemaps[rawGuid] = alternate.GetRawValue();
+                        }
+                    }
+
                     uint32 team = plr->GetBGTeam();
                     if (team == ALLIANCE && record.allianceRecorder.IsEmpty())
                         record.allianceRecorder = plr->GetGUID();
@@ -373,6 +402,29 @@ public:
 
                     if (!record.allianceRecorder.IsEmpty() && !record.hordeRecorder.IsEmpty())
                         break;
+                }
+            }
+        }
+        else
+        {
+            for (auto const& itr : bg->GetPlayers())
+            {
+                ObjectGuid guid = itr.first;
+                if (record.guidRemaps.find(guid.GetRawValue()) != record.guidRemaps.end())
+                    continue;
+
+                if (Player* plr = ObjectAccessor::FindPlayer(guid))
+                {
+                    if (plr->IsSpectator())
+                        continue;
+
+                    ObjectGuid alternate;
+                    do
+                    {
+                        alternate = GenerateAlternateGuid(guid);
+                    } while (alternate.IsEmpty() || alternate == guid || IsAlternateGuidUsed(record, alternate.GetRawValue()));
+
+                    record.guidRemaps[guid.GetRawValue()] = alternate.GetRawValue();
                 }
             }
         }
@@ -481,9 +533,17 @@ public:
 
         // serialize arena replay data
         ByteBuffer buffer;
+        buffer << ReplayFormatMagic;
+        buffer << uint16(1);
         buffer << match.startTime;
         buffer << match.allianceRecorder;
         buffer << match.hordeRecorder;
+        buffer << uint32(match.guidRemaps.size());
+        for (auto const& [originalRaw, mappedRaw] : match.guidRemaps)
+        {
+            buffer << ObjectGuid(originalRaw);
+            buffer << ObjectGuid(mappedRaw);
+        }
         uint32 headerSize;
         uint32 timestamp;
         for (auto it : match.packets)
@@ -595,7 +655,7 @@ public:
             TC_LOG_INFO("bg.replay", "Deserialized replay: start {} map {} packets {}", record.startTime, record.mapId, record.packets.size());
 
             ObjectGuid spectator = p->GetGUID();
-            if (record.allianceRecorder == spectator || record.hordeRecorder == spectator)
+            if (record.guidRemaps.empty() && (record.allianceRecorder == spectator || record.hordeRecorder == spectator))
             {
                 ObjectGuid newGuid = ObjectGuid::Create<HighGuid::Player>(sObjectMgr->GetGenerator<HighGuid::Player>().Generate());
                 TC_LOG_INFO("bg.replay", "Replacing spectator GUID {} with {}", spectator.ToString(), newGuid.ToString());
@@ -641,9 +701,36 @@ public:
             ByteBuffer buffer;
             buffer.append(&data[0], data.size());
 
-            buffer >> record.startTime;
+            uint32 maybeMagic;
+            buffer >> maybeMagic;
+
+            uint16 version = 0;
+            if (maybeMagic == ReplayFormatMagic)
+            {
+                buffer >> version;
+                buffer >> record.startTime;
+            }
+            else
+            {
+                record.startTime = maybeMagic;
+            }
+
             buffer >> record.allianceRecorder;
             buffer >> record.hordeRecorder;
+
+            if (version >= 1)
+            {
+                uint32 remapCount;
+                buffer >> remapCount;
+                for (uint32 i = 0; i < remapCount; ++i)
+                {
+                    ObjectGuid original;
+                    ObjectGuid mapped;
+                    buffer >> original;
+                    buffer >> mapped;
+                    record.guidRemaps[original.GetRawValue()] = mapped.GetRawValue();
+                }
+            }
 
             /** deserialize replay binary data **/
             uint32 packetSize;
@@ -677,6 +764,23 @@ public:
                         else
                             packetRecord.timestamp -= firstTimestamp;
                     }
+                }
+            }
+
+            if (!record.guidRemaps.empty())
+            {
+                for (auto const& [originalRaw, mappedRaw] : record.guidRemaps)
+                {
+                    ObjectGuid original(originalRaw);
+                    ObjectGuid mapped(mappedRaw);
+
+                    if (record.allianceRecorder == original)
+                        record.allianceRecorder = mapped;
+                    if (record.hordeRecorder == original)
+                        record.hordeRecorder = mapped;
+
+                    for (PacketRecord& packetRecord : record.packets)
+                        ReplaceGuid(packetRecord.packet, original, mapped);
                 }
             }
         }
