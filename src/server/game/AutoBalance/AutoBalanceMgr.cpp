@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <string>
 #include <vector>
 #include <sstream>
 
@@ -25,6 +27,25 @@ float ClampMultiplier(float base, float multiplier, float minimum)
     if (value < minValue)
         value = minValue;
     return value;
+}
+
+bool TryGetFloatValue(std::string const& key, float& value)
+{
+    std::string raw = sConfigMgr->GetStringDefault(key, "", true);
+    if (raw.empty())
+        return false;
+
+    try
+    {
+        value = std::stof(raw);
+        return true;
+    }
+    catch (std::exception const&)
+    {
+        TC_LOG_ERROR("server.loading", "Bad value defined for name {} in config file {}, going to use {} instead", key,
+            sConfigMgr->GetFilename(), value);
+        return false;
+    }
 }
 }
 
@@ -53,12 +74,38 @@ void AutoBalanceMgr::Reload()
 
 void AutoBalanceMgr::LoadConfigValues()
 {
+    _raidNormalEnabledBySize.clear();
+    _raidHeroicEnabledBySize.clear();
+    _raidNormalInflectionBySize.clear();
+    _raidHeroicInflectionBySize.clear();
+    _raidNormalStatsBySize.clear();
+    _raidHeroicStatsBySize.clear();
+
     _globalEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.Global", true);
 
     _dungeonNormalEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.5M", true);
     _dungeonHeroicEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.5MHeroic", true);
-    _raidNormalEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.10M", true);
-    _raidHeroicEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.10MHeroic", true);
+    _dungeonOtherNormalEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.OtherNormal", true);
+    _dungeonOtherHeroicEnabled = sConfigMgr->GetBoolDefault("AutoBalance.Enable.OtherHeroic", true);
+
+    auto loadRaidEnabled = [&](char const* key, uint32 size, bool heroic)
+    {
+        bool value = sConfigMgr->GetBoolDefault(key, true);
+        if (heroic)
+            _raidHeroicEnabledBySize[size] = value;
+        else
+            _raidNormalEnabledBySize[size] = value;
+        return value;
+    };
+
+    _raidNormalEnabled = loadRaidEnabled("AutoBalance.Enable.10M", 10, false);
+    loadRaidEnabled("AutoBalance.Enable.15M", 15, false);
+    loadRaidEnabled("AutoBalance.Enable.20M", 20, false);
+    loadRaidEnabled("AutoBalance.Enable.25M", 25, false);
+    loadRaidEnabled("AutoBalance.Enable.40M", 40, false);
+
+    _raidHeroicEnabled = loadRaidEnabled("AutoBalance.Enable.10MHeroic", 10, true);
+    loadRaidEnabled("AutoBalance.Enable.25MHeroic", 25, true);
 
     _minPlayersNormal = uint32(std::max(1, sConfigMgr->GetIntDefault("AutoBalance.MinPlayers", 1)));
     _minPlayersHeroic = uint32(std::max(1, sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.Heroic", 1)));
@@ -89,6 +136,59 @@ void AutoBalanceMgr::LoadConfigValues()
     loadInflection("AutoBalance.InflectionPointRaid", _raidNormalInflection);
     loadInflection("AutoBalance.InflectionPointRaidHeroic", _raidHeroicInflection);
 
+    auto loadRaidInflectionOverride = [&](char const* prefix, uint32 size, bool heroic)
+    {
+        InflectionSettings settings = heroic ? _raidHeroicInflection : _raidNormalInflection;
+        bool changed = false;
+
+        float value = settings.value;
+        if (TryGetFloatValue(prefix, value))
+        {
+            settings.value = value;
+            changed = true;
+        }
+
+        std::string floorKey = std::string(prefix) + ".CurveFloor";
+        float floorValue = settings.floor;
+        if (TryGetFloatValue(floorKey, floorValue))
+        {
+            settings.floor = floorValue;
+            changed = true;
+        }
+
+        std::string ceilingKey = std::string(prefix) + ".CurveCeiling";
+        float ceilingValue = settings.ceiling;
+        if (TryGetFloatValue(ceilingKey, ceilingValue))
+        {
+            settings.ceiling = ceilingValue;
+            changed = true;
+        }
+
+        std::string bossKey = std::string(prefix) + ".BossModifier";
+        float bossValue = settings.bossModifier;
+        if (TryGetFloatValue(bossKey, bossValue))
+        {
+            settings.bossModifier = bossValue;
+            changed = true;
+        }
+
+        if (!changed)
+            return;
+
+        if (heroic)
+            _raidHeroicInflectionBySize[size] = settings;
+        else
+            _raidNormalInflectionBySize[size] = settings;
+    };
+
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid10M", 10, false);
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid15M", 15, false);
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid20M", 20, false);
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid25M", 25, false);
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid40M", 40, false);
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid10MHeroic", 10, true);
+    loadRaidInflectionOverride("AutoBalance.InflectionPointRaid25MHeroic", 25, true);
+
     auto loadStats = [&](char const* prefix, StatSettings& target)
     {
         target.global = sConfigMgr->GetFloatDefault(std::string(prefix) + ".Global", 1.0f);
@@ -108,6 +208,50 @@ void AutoBalanceMgr::LoadConfigValues()
     loadStats("AutoBalance.StatModifierHeroic", _dungeonHeroicStats);
     loadStats("AutoBalance.StatModifierRaid", _raidNormalStats);
     loadStats("AutoBalance.StatModifierRaidHeroic", _raidHeroicStats);
+
+    auto loadRaidStatsOverride = [&](char const* prefix, uint32 size, bool heroic)
+    {
+        StatSettings settings = heroic ? _raidHeroicStats : _raidNormalStats;
+        bool changed = false;
+
+        auto apply = [&](std::string const& key, float& field)
+        {
+            float value = field;
+            if (TryGetFloatValue(key, value))
+            {
+                field = value;
+                changed = true;
+            }
+        };
+
+        std::string base(prefix);
+        apply(base + ".Global", settings.global);
+        apply(base + ".Health", settings.health);
+        apply(base + ".Mana", settings.mana);
+        apply(base + ".Armor", settings.armor);
+        apply(base + ".Damage", settings.damage);
+        apply(base + ".Boss.Global", settings.bossGlobal);
+        apply(base + ".Boss.Health", settings.bossHealth);
+        apply(base + ".Boss.Mana", settings.bossMana);
+        apply(base + ".Boss.Armor", settings.bossArmor);
+        apply(base + ".Boss.Damage", settings.bossDamage);
+
+        if (!changed)
+            return;
+
+        if (heroic)
+            _raidHeroicStatsBySize[size] = settings;
+        else
+            _raidNormalStatsBySize[size] = settings;
+    };
+
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid10M", 10, false);
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid15M", 15, false);
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid20M", 20, false);
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid25M", 25, false);
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid40M", 40, false);
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid10MHeroic", 10, true);
+    loadRaidStatsOverride("AutoBalance.StatModifierRaid25MHeroic", 25, true);
 }
 
 bool AutoBalanceMgr::IsEnabledFor(InstanceMap* map) const
@@ -116,9 +260,27 @@ bool AutoBalanceMgr::IsEnabledFor(InstanceMap* map) const
         return false;
 
     if (map->IsRaid())
-        return map->IsHeroic() ? _raidHeroicEnabled : _raidNormalEnabled;
+    {
+        uint32 size = GetRaidSizeKey(map);
+        if (map->IsHeroic())
+        {
+            auto itr = _raidHeroicEnabledBySize.find(size);
+            if (itr != _raidHeroicEnabledBySize.end())
+                return itr->second;
+            return _raidHeroicEnabled;
+        }
 
-    return map->IsHeroic() ? _dungeonHeroicEnabled : _dungeonNormalEnabled;
+        auto itr = _raidNormalEnabledBySize.find(size);
+        if (itr != _raidNormalEnabledBySize.end())
+            return itr->second;
+        return _raidNormalEnabled;
+    }
+
+    uint32 maxPlayers = map->GetMaxPlayers();
+    if (map->IsHeroic())
+        return maxPlayers > 5 ? _dungeonOtherHeroicEnabled : _dungeonHeroicEnabled;
+
+    return maxPlayers > 5 ? _dungeonOtherNormalEnabled : _dungeonNormalEnabled;
 }
 
 uint32 AutoBalanceMgr::GetMinPlayers(InstanceMap* map) const
@@ -135,7 +297,21 @@ uint32 AutoBalanceMgr::GetMinPlayers(InstanceMap* map) const
 AutoBalanceMgr::InflectionSettings const& AutoBalanceMgr::GetInflection(InstanceMap* map, bool /*isBoss*/) const
 {
     if (map->IsRaid())
-        return map->IsHeroic() ? _raidHeroicInflection : _raidNormalInflection;
+    {
+        uint32 size = GetRaidSizeKey(map);
+        if (map->IsHeroic())
+        {
+            auto itr = _raidHeroicInflectionBySize.find(size);
+            if (itr != _raidHeroicInflectionBySize.end())
+                return itr->second;
+            return _raidHeroicInflection;
+        }
+
+        auto itr = _raidNormalInflectionBySize.find(size);
+        if (itr != _raidNormalInflectionBySize.end())
+            return itr->second;
+        return _raidNormalInflection;
+    }
 
     return map->IsHeroic() ? _dungeonHeroicInflection : _dungeonNormalInflection;
 }
@@ -143,9 +319,32 @@ AutoBalanceMgr::InflectionSettings const& AutoBalanceMgr::GetInflection(Instance
 AutoBalanceMgr::StatSettings const& AutoBalanceMgr::GetStats(InstanceMap* map, bool /*isBoss*/) const
 {
     if (map->IsRaid())
-        return map->IsHeroic() ? _raidHeroicStats : _raidNormalStats;
+    {
+        uint32 size = GetRaidSizeKey(map);
+        if (map->IsHeroic())
+        {
+            auto itr = _raidHeroicStatsBySize.find(size);
+            if (itr != _raidHeroicStatsBySize.end())
+                return itr->second;
+            return _raidHeroicStats;
+        }
+
+        auto itr = _raidNormalStatsBySize.find(size);
+        if (itr != _raidNormalStatsBySize.end())
+            return itr->second;
+        return _raidNormalStats;
+    }
 
     return map->IsHeroic() ? _dungeonHeroicStats : _dungeonNormalStats;
+}
+
+uint32 AutoBalanceMgr::GetRaidSizeKey(InstanceMap* map) const
+{
+    if (!map)
+        return 0;
+
+    uint32 maxPlayers = map->GetMaxPlayers();
+    return maxPlayers > 0 ? maxPlayers : 0;
 }
 
 void AutoBalanceMgr::UpdateMapState(Map* map, MapState& state)
