@@ -2370,7 +2370,13 @@ QuaternionData GameObject::GetWorldRotation() const
 
 void GameObject::ModifyHealth(int32 change, WorldObject* attackerOrHealer /*= nullptr*/, uint32 spellId /*= 0*/)
 {
-    if (!m_goValue.Building.MaxHealth || !change)
+    if (!m_goValue.Building.MaxHealth)
+        return;
+
+    Unit* unit = attackerOrHealer ? attackerOrHealer->ToUnit() : nullptr;
+    sScriptMgr->OnGameObjectModifyHealth(this, unit, change, spellId);
+
+    if (!change)
         return;
 
     // prevent double destructions of the same object

@@ -22,6 +22,7 @@
 #include "CreatureAIImpl.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "GameObject.h"
 #include "GossipDef.h"
 #include "InstanceScript.h"
 #include "Item.h"
@@ -1330,6 +1331,11 @@ void ScriptMgr::OnOpenStateChange(bool open)
     FOREACH_SCRIPT(WorldScript)->OnOpenStateChange(open);
 }
 
+void ScriptMgr::OnBeforeConfigLoad(bool reload)
+{
+    FOREACH_SCRIPT(WorldScript)->OnBeforeConfigLoad(reload);
+}
+
 void ScriptMgr::OnConfigLoad(bool reload)
 {
     FOREACH_SCRIPT(WorldScript)->OnConfigLoad(reload);
@@ -1410,9 +1416,18 @@ void ScriptMgr::OnGroupRateCalculation(float& rate, uint32 count, bool isRaid)
         } \
     }
 
+void ScriptMgr::OnCreateMapAll(Map* map)
+{
+    ASSERT(map);
+
+    FOREACH_SCRIPT(AllMapScript)->OnCreateMap(map);
+}
+
 void ScriptMgr::OnCreateMap(Map* map)
 {
     ASSERT(map);
+
+    OnCreateMapAll(map);
 
     SCR_MAP_BGN(WorldMapScript, map, itr, end, entry, IsWorldMap);
         itr->second->OnCreate(map);
@@ -1480,12 +1495,22 @@ void ScriptMgr::OnUnloadGridMap(Map* map, GridMap* gmap, uint32 gx, uint32 gy)
     SCR_MAP_END;
 }
 
+void ScriptMgr::OnPlayerEnterAll(Map* map, Player* player)
+{
+    ASSERT(map);
+    ASSERT(player);
+
+    FOREACH_SCRIPT(AllMapScript)->OnPlayerEnterAll(map, player);
+}
+
 void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
 {
     ASSERT(map);
     ASSERT(player);
 
     FOREACH_SCRIPT(PlayerScript)->OnMapChanged(player);
+
+    OnPlayerEnterAll(map, player);
 
     SCR_MAP_BGN(WorldMapScript, map, itr, end, entry, IsWorldMap);
         itr->second->OnPlayerEnter(map, player);
@@ -1500,10 +1525,20 @@ void ScriptMgr::OnPlayerEnterMap(Map* map, Player* player)
     SCR_MAP_END;
 }
 
+void ScriptMgr::OnPlayerLeaveAll(Map* map, Player* player)
+{
+    ASSERT(map);
+    ASSERT(player);
+
+    FOREACH_SCRIPT(AllMapScript)->OnPlayerLeaveAll(map, player);
+}
+
 void ScriptMgr::OnPlayerLeaveMap(Map* map, Player* player)
 {
     ASSERT(map);
     ASSERT(player);
+
+    OnPlayerLeaveAll(map, player);
 
     SCR_MAP_BGN(WorldMapScript, map, itr, end, entry, IsWorldMap);
         itr->second->OnPlayerLeave(map, player);
@@ -1874,6 +1909,21 @@ void ScriptMgr::OnPlayerMoneyLimit(Player* player, int32 amount)
     FOREACH_SCRIPT(PlayerScript)->OnMoneyLimit(player, amount);
 }
 
+void ScriptMgr::OnBeforeLootMoney(Player* player, Loot* loot)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnBeforeLootMoney(player, loot);
+}
+
+void ScriptMgr::OnPlayerEnterCombat(Player* player)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPlayerEnterCombat(player);
+}
+
+void ScriptMgr::OnPlayerLeaveCombat(Player* player)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPlayerLeaveCombat(player);
+}
+
 void ScriptMgr::OnGivePlayerXP(Player* player, uint32& amount, Unit* victim)
 {
     FOREACH_SCRIPT(PlayerScript)->OnGiveXP(player, amount, victim);
@@ -1987,6 +2037,11 @@ void ScriptMgr::OnQuestStatusChange(Player* player, uint32 questId)
 void ScriptMgr::OnPlayerRepop(Player* player)
 {
     FOREACH_SCRIPT(PlayerScript)->OnPlayerRepop(player);
+}
+
+void ScriptMgr::OnAfterUpdateEncounterState(Map* map, EncounterCreditType type, uint32 creditEntry, Unit* source, bool updated)
+{
+    FOREACH_SCRIPT(GlobalScript)->OnAfterUpdateEncounterState(map, type, creditEntry, source, updated);
 }
 
 void ScriptMgr::OnQuestObjectiveProgress(Player* player, Quest const* quest, uint32 objectiveIndex, uint16 progress)
@@ -2144,6 +2199,46 @@ void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& dama
     FOREACH_SCRIPT(UnitScript)->ModifySpellDamageTaken(target, attacker, damage);
 }
 
+void ScriptMgr::ModifyHealReceived(Unit* target, Unit* healer, uint32& heal)
+{
+    FOREACH_SCRIPT(UnitScript)->ModifyHealReceived(target, healer, heal);
+}
+
+void ScriptMgr::OnAuraApply(Unit* target, Aura* aura)
+{
+    FOREACH_SCRIPT(UnitScript)->OnAuraApply(target, aura);
+}
+
+void ScriptMgr::OnBeforeCreatureSelectLevel(Creature* creature, uint8& level)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnBeforeCreatureSelectLevel(creature, level);
+}
+
+void ScriptMgr::Creature_SelectLevel(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->Creature_SelectLevel(creature);
+}
+
+void ScriptMgr::OnCreatureAddWorld(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureAddWorld(creature);
+}
+
+void ScriptMgr::OnCreatureRemoveWorld(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureRemoveWorld(creature);
+}
+
+void ScriptMgr::OnAllCreatureUpdate(Creature* creature, uint32 diff)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnAllCreatureUpdate(creature, diff);
+}
+
+void ScriptMgr::OnGameObjectModifyHealth(GameObject* go, Unit* attackerOrHealer, int32& change, uint32 spellId)
+{
+    FOREACH_SCRIPT(AllGameObjectScript)->OnGameObjectModifyHealth(go, attackerOrHealer, change, spellId);
+}
+
 SpellScriptLoader::SpellScriptLoader(char const* name)
     : ScriptObject(name)
 {
@@ -2197,6 +2292,20 @@ WorldScript::WorldScript(char const* name)
 }
 
 void WorldScript::OnOpenStateChange(bool /*open*/)
+{
+}
+
+GlobalScript::GlobalScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<GlobalScript>::Instance()->AddScript(this);
+}
+
+void GlobalScript::OnAfterUpdateEncounterState(Map* /*map*/, EncounterCreditType /*type*/, uint32 /*creditEntry*/, Unit* /*source*/, bool /*updated*/)
+{
+}
+
+void WorldScript::OnBeforeConfigLoad(bool /*reload*/)
 {
 }
 
@@ -2400,16 +2509,78 @@ void UnitScript::ModifySpellDamageTaken(Unit* /*target*/, Unit* /*attacker*/, in
 {
 }
 
+void UnitScript::ModifyHealReceived(Unit* /*target*/, Unit* /*healer*/, uint32& /*heal*/)
+{
+}
+
+void UnitScript::OnAuraApply(Unit* /*target*/, Aura* /*aura*/)
+{
+}
+
 CreatureScript::CreatureScript(char const* name)
     : ScriptObject(name)
 {
     ScriptRegistry<CreatureScript>::Instance()->AddScript(this);
 }
 
+AllCreatureScript::AllCreatureScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllCreatureScript>::Instance()->AddScript(this);
+}
+
+void AllCreatureScript::OnBeforeCreatureSelectLevel(Creature* /*creature*/, uint8& /*level*/)
+{
+}
+
+void AllCreatureScript::Creature_SelectLevel(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnCreatureAddWorld(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnCreatureRemoveWorld(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/)
+{
+}
+
 GameObjectScript::GameObjectScript(char const* name)
     : ScriptObject(name)
 {
     ScriptRegistry<GameObjectScript>::Instance()->AddScript(this);
+}
+
+AllGameObjectScript::AllGameObjectScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllGameObjectScript>::Instance()->AddScript(this);
+}
+
+void AllGameObjectScript::OnGameObjectModifyHealth(GameObject* /*go*/, Unit* /*attackerOrHealer*/, int32& /*change*/, uint32 /*spellId*/)
+{
+}
+
+AllMapScript::AllMapScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllMapScript>::Instance()->AddScript(this);
+}
+
+void AllMapScript::OnCreateMap(Map* /*map*/)
+{
+}
+
+void AllMapScript::OnPlayerEnterAll(Map* /*map*/, Player* /*player*/)
+{
+}
+
+void AllMapScript::OnPlayerLeaveAll(Map* /*map*/, Player* /*player*/)
+{
 }
 
 AreaTriggerScript::AreaTriggerScript(char const* name)
@@ -2616,6 +2787,18 @@ void PlayerScript::OnMoneyChanged(Player* /*player*/, int32& /*amount*/)
 }
 
 void PlayerScript::OnMoneyLimit(Player* /*player*/, int32 /*amount*/)
+{
+}
+
+void PlayerScript::OnBeforeLootMoney(Player* /*player*/, Loot* /*loot*/)
+{
+}
+
+void PlayerScript::OnPlayerEnterCombat(Player* /*player*/)
+{
+}
+
+void PlayerScript::OnPlayerLeaveCombat(Player* /*player*/)
 {
 }
 
@@ -2831,6 +3014,7 @@ void GroupScript::OnDisband(Group* /*group*/)
 template class TC_GAME_API ScriptRegistry<SpellScriptLoader>;
 template class TC_GAME_API ScriptRegistry<ServerScript>;
 template class TC_GAME_API ScriptRegistry<WorldScript>;
+template class TC_GAME_API ScriptRegistry<GlobalScript>;
 template class TC_GAME_API ScriptRegistry<FormulaScript>;
 template class TC_GAME_API ScriptRegistry<WorldMapScript>;
 template class TC_GAME_API ScriptRegistry<InstanceMapScript>;
@@ -2838,6 +3022,9 @@ template class TC_GAME_API ScriptRegistry<BattlegroundMapScript>;
 template class TC_GAME_API ScriptRegistry<ItemScript>;
 template class TC_GAME_API ScriptRegistry<CreatureScript>;
 template class TC_GAME_API ScriptRegistry<GameObjectScript>;
+template class TC_GAME_API ScriptRegistry<AllCreatureScript>;
+template class TC_GAME_API ScriptRegistry<AllGameObjectScript>;
+template class TC_GAME_API ScriptRegistry<AllMapScript>;
 template class TC_GAME_API ScriptRegistry<AreaTriggerScript>;
 template class TC_GAME_API ScriptRegistry<BattlefieldScript>;
 template class TC_GAME_API ScriptRegistry<BattlegroundScript>;

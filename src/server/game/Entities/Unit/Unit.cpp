@@ -59,6 +59,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "PlayerAI.h"
+#include "ScriptMgr.h"
 #include "QuestDef.h"
 #include "ReputationMgr.h"
 #include "ScheduledChangeAI.h"
@@ -3315,6 +3316,7 @@ Aura* Unit::_TryStackingOrRefreshingExistingAura(AuraCreateInfo& createInfo)
 
             // try to increase stack amount
             foundAura->ModStackAmount(1, AURA_REMOVE_BY_DEFAULT, createInfo.ResetPeriodicTimer);
+            sScriptMgr->OnAuraApply(this, foundAura);
             return foundAura;
         }
     }
@@ -3459,6 +3461,9 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
         if (frostTrapStart || flareStart || (effMask & 1 << i && (!aurApp->GetRemoveMode())))
             aurApp->_HandleEffect(i, true);
     }
+
+    if (!aurApp->GetRemoveMode())
+        sScriptMgr->OnAuraApply(this, aura);
 
     if (Player* player = ToPlayer())
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
@@ -6224,6 +6229,9 @@ void Unit::SetCharm(Unit* charm, bool apply)
 
     if (UnitAI* healerAI = healer ? healer->GetAI() : nullptr)
         healerAI->HealDone(victim, addhealth);
+
+    if (victim)
+        sScriptMgr->ModifyHealReceived(victim, healer, addhealth);
 
     if (addhealth)
         gain = victim->ModifyHealth(int32(addhealth));

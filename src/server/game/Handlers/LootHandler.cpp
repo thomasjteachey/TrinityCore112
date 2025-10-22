@@ -29,6 +29,7 @@
 #include "Object.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "WorldPacket.h"
 
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
@@ -164,6 +165,9 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
 
     if (loot)
     {
+        loot->sourceWorldObjectGUID = guid;
+        sScriptMgr->OnBeforeLootMoney(player, loot);
+
         loot->NotifyMoneyRemoved();
         if (shareMoney && player->GetGroup())      //item, pickpocket and players can be looted only single player
         {
@@ -213,6 +217,8 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
         // Delete container if empty
         if (loot->isLooted() && guid.IsItem())
             player->GetSession()->DoLootRelease(guid);
+
+        loot->sourceWorldObjectGUID.Clear();
     }
 }
 

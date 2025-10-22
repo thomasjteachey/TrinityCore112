@@ -733,46 +733,53 @@ void InstanceScript::SendEncounterUnit(uint32 type, Unit* unit /*= nullptr*/, ui
     instance->SendToPlayers(&data);
 }
 
-void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 creditEntry, Unit* /*source*/)
+void InstanceScript::UpdateEncounterState(EncounterCreditType type, uint32 creditEntry, Unit* source)
 {
-    DungeonEncounterList const* encounters = sObjectMgr->GetDungeonEncounterList(instance->GetId(), instance->GetDifficulty());
-    if (!encounters)
-        return;
-
+    bool updated = false;
     uint32 dungeonId = 0;
 
-    for (auto const& encounter : *encounters)
+    if (DungeonEncounterList const* encounters = sObjectMgr->GetDungeonEncounterList(instance->GetId(), instance->GetDifficulty()))
     {
-        if (encounter->creditType == type && encounter->creditEntry == creditEntry)
+        for (auto const& encounter : *encounters)
         {
-            completedEncounters |= 1 << encounter->dbcEntry->Bit;
-            if (encounter->lastEncounterDungeon)
+            if (encounter->creditType == type && encounter->creditEntry == creditEntry)
             {
-                dungeonId = encounter->lastEncounterDungeon;
-                TC_LOG_DEBUG("lfg", "UpdateEncounterState: Instance {} (instanceId {}) completed encounter {}. Credit Dungeon: {}", instance->GetMapName(), instance->GetInstanceId(), encounter->dbcEntry->Name[0], dungeonId);
-                break;
+                uint32 const encounterBit = 1u << encounter->dbcEntry->Bit;
+                if (!(completedEncounters & encounterBit))
+                    updated = true;
+
+                completedEncounters |= encounterBit;
+                if (encounter->lastEncounterDungeon)
+                {
+                    dungeonId = encounter->lastEncounterDungeon;
+                    TC_LOG_DEBUG("lfg", "UpdateEncounterState: Instance {} (instanceId {}) completed encounter {}. Credit Dungeon: {}", instance->GetMapName(), instance->GetInstanceId(), encounter->dbcEntry->Name[0], dungeonId);
+                    break;
+                }
             }
         }
-    }
 
-    if (dungeonId)
-    {
-        Map::PlayerList const& players = instance->GetPlayers();
-        for (auto const& ref : players)
+        if (dungeonId)
         {
-            if (Player* player = ref.GetSource())
+            Map::PlayerList const& players = instance->GetPlayers();
+            for (auto const& ref : players)
             {
-                if (Group* grp = player->GetGroup())
+                if (Player* player = ref.GetSource())
                 {
-                    if (grp->isLFGGroup())
+                    if (Group* grp = player->GetGroup())
                     {
-                        sLFGMgr->FinishDungeon(grp->GetGUID(), dungeonId, instance);
-                        return;
+                        if (grp->isLFGGroup())
+                        {
+                            sLFGMgr->FinishDungeon(grp->GetGUID(), dungeonId, instance);
+                            sScriptMgr->OnAfterUpdateEncounterState(instance, type, creditEntry, source, updated);
+                            return;
+                        }
                     }
                 }
             }
         }
     }
+
+    sScriptMgr->OnAfterUpdateEncounterState(instance, type, creditEntry, source, updated);
 }
 
 void InstanceScript::UpdateEncounterStateForKilledCreature(uint32 creatureId, Unit* source)

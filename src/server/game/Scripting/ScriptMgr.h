@@ -73,6 +73,7 @@ struct CreatureData;
 struct ItemTemplate;
 struct MapEntry;
 struct Position;
+struct Loot;
 
 namespace Trinity::ChatCommands { struct ChatCommandBuilder; }
 
@@ -88,6 +89,7 @@ enum ShutdownMask : uint32;
 enum SpellEffIndex : uint8;
 enum WeatherState : uint32;
 enum XPColorChar : uint8;
+enum EncounterCreditType : uint8;
 
 #define VISIBLE_RANGE       166.0f                          //MAX visible range (size of grid)
 
@@ -241,6 +243,9 @@ class TC_GAME_API WorldScript : public ScriptObject
         // Called when the open/closed state of the world changes.
         virtual void OnOpenStateChange(bool open);
 
+        // Called before the world configuration is (re)loaded.
+        virtual void OnBeforeConfigLoad(bool reload);
+
         // Called after the world configuration is (re)loaded.
         virtual void OnConfigLoad(bool reload);
 
@@ -261,6 +266,18 @@ class TC_GAME_API WorldScript : public ScriptObject
 
         // Called when the world is actually shut down.
         virtual void OnShutdown();
+};
+
+class TC_GAME_API GlobalScript : public ScriptObject
+{
+    protected:
+
+        explicit GlobalScript(char const* name);
+
+    public:
+
+        // Called after an encounter state update has completed for a map.
+        virtual void OnAfterUpdateEncounterState(Map* map, EncounterCreditType type, uint32 creditEntry, Unit* source, bool updated);
 };
 
 class TC_GAME_API FormulaScript : public ScriptObject
@@ -399,6 +416,12 @@ class TC_GAME_API UnitScript : public ScriptObject
 
         // Called when Spell Damage is being Dealt
         virtual void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage);
+
+        // Called when healing is being applied to a unit
+        virtual void ModifyHealReceived(Unit* target, Unit* healer, uint32& heal);
+
+        // Called when an aura is applied to a unit
+        virtual void OnAuraApply(Unit* target, Aura* aura);
 };
 
 class TC_GAME_API CreatureScript : public ScriptObject
@@ -412,6 +435,29 @@ class TC_GAME_API CreatureScript : public ScriptObject
         virtual CreatureAI* GetAI(Creature* creature) const = 0;
 };
 
+class TC_GAME_API AllCreatureScript : public ScriptObject
+{
+    protected:
+
+        explicit AllCreatureScript(char const* name);
+
+    public:
+        // Called before a creature selects its spawn level
+        virtual void OnBeforeCreatureSelectLevel(Creature* creature, uint8& level);
+
+        // Called after a creature has selected its spawn level
+        virtual void Creature_SelectLevel(Creature* creature);
+
+        // Called when a creature is added to the world
+        virtual void OnCreatureAddWorld(Creature* creature);
+
+        // Called when a creature is removed from the world
+        virtual void OnCreatureRemoveWorld(Creature* creature);
+
+        // Called every update tick for creatures
+        virtual void OnAllCreatureUpdate(Creature* creature, uint32 diff);
+};
+
 class TC_GAME_API GameObjectScript : public ScriptObject
 {
     protected:
@@ -422,6 +468,34 @@ class TC_GAME_API GameObjectScript : public ScriptObject
 
         // Called when a GameObjectAI object is needed for the gameobject.
         virtual GameObjectAI* GetAI(GameObject* go) const = 0;
+};
+
+class TC_GAME_API AllGameObjectScript : public ScriptObject
+{
+    protected:
+
+        explicit AllGameObjectScript(char const* name);
+
+    public:
+        // Called when a gameobject gains or loses health
+        virtual void OnGameObjectModifyHealth(GameObject* go, Unit* attackerOrHealer, int32& change, uint32 spellId);
+};
+
+class TC_GAME_API AllMapScript : public ScriptObject
+{
+    protected:
+
+        explicit AllMapScript(char const* name);
+
+    public:
+        // Called when any map instance is created
+        virtual void OnCreateMap(Map* map);
+
+        // Called when a player enters any map instance
+        virtual void OnPlayerEnterAll(Map* map, Player* player);
+
+        // Called when a player leaves any map instance
+        virtual void OnPlayerLeaveAll(Map* map, Player* player);
 };
 
 class TC_GAME_API AreaTriggerScript : public ScriptObject
@@ -647,6 +721,15 @@ class TC_GAME_API PlayerScript : public ScriptObject
 
         // Called when a player's money is at limit (amount = money tried to add)
         virtual void OnMoneyLimit(Player* player, int32 amount);
+
+        // Called when a player is about to loot money. Allows scripts to adjust the gold before it is distributed.
+        virtual void OnBeforeLootMoney(Player* player, Loot* loot);
+
+        // Called when a player enters combat.
+        virtual void OnPlayerEnterCombat(Player* player);
+
+        // Called when a player leaves combat.
+        virtual void OnPlayerLeaveCombat(Player* player);
 
         // Called when a player gains XP (before anything is given)
         virtual void OnGiveXP(Player* player, uint32& amount, Unit* victim);
@@ -892,6 +975,7 @@ class TC_GAME_API ScriptMgr
     public: /* WorldScript */
 
         void OnOpenStateChange(bool open);
+        void OnBeforeConfigLoad(bool reload);
         void OnConfigLoad(bool reload);
         void OnMotdChange(std::string& newMotd);
         void OnShutdownInitiate(ShutdownExitCode code, ShutdownMask mask);
@@ -1013,6 +1097,9 @@ class TC_GAME_API ScriptMgr
         void OnPlayerTalentsReset(Player* player, bool noCost);
         void OnPlayerMoneyChanged(Player* player, int32& amount);
         void OnPlayerMoneyLimit(Player* player, int32 amount);
+        void OnBeforeLootMoney(Player* player, Loot* loot);
+        void OnPlayerEnterCombat(Player* player);
+        void OnPlayerLeaveCombat(Player* player);
         void OnGivePlayerXP(Player* player, uint32& amount, Unit* victim);
         void OnPlayerReputationChange(Player* player, uint32 factionID, int32& standing, bool incremental);
         void OnPlayerDuelRequest(Player* target, Player* challenger);
@@ -1038,6 +1125,10 @@ class TC_GAME_API ScriptMgr
         void OnQuestStatusChange(Player* player, uint32 questId);
         void OnMovieComplete(Player* player, uint32 movieId);
         void OnPlayerRepop(Player* player);
+
+    public: /* GlobalScript */
+
+        void OnAfterUpdateEncounterState(Map* map, EncounterCreditType type, uint32 creditEntry, Unit* source, bool updated);
 
     public: /* AccountScript */
 
@@ -1078,6 +1169,26 @@ class TC_GAME_API ScriptMgr
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage);
+        void ModifyHealReceived(Unit* target, Unit* healer, uint32& heal);
+        void OnAuraApply(Unit* target, Aura* aura);
+
+    public: /* AllCreatureScript */
+
+        void OnBeforeCreatureSelectLevel(Creature* creature, uint8& level);
+        void Creature_SelectLevel(Creature* creature);
+        void OnCreatureAddWorld(Creature* creature);
+        void OnCreatureRemoveWorld(Creature* creature);
+        void OnAllCreatureUpdate(Creature* creature, uint32 diff);
+
+    public: /* AllGameObjectScript */
+
+        void OnGameObjectModifyHealth(GameObject* go, Unit* attackerOrHealer, int32& change, uint32 spellId);
+
+    public: /* AllMapScript */
+
+        void OnCreateMapAll(Map* map);
+        void OnPlayerEnterAll(Map* map, Player* player);
+        void OnPlayerLeaveAll(Map* map, Player* player);
 
     private:
         uint32 _scriptCount;
