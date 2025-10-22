@@ -33,6 +33,7 @@
 #include "Player.h"
 #include "WorldSession.h"
 #include "Opcodes.h"
+#include "scripts/Custom/AutoBalance/AutoBalance.h"
 
 MapManager::MapManager()
     : _nextInstanceId(0), _scheduledScripts(0)
@@ -239,6 +240,31 @@ bool MapManager::ExistMapAndVMap(uint32 mapid, float x, float y)
     int gy = (MAX_NUMBER_OF_GRIDS - 1) - p.y_coord;
 
     return Map::ExistMap(mapid, gx, gy) && Map::ExistVMap(mapid, gx, gy);
+}
+
+void MapManager::HandleMapCreated(Map* map)
+{
+    ABScriptMgr::Instance().OnMapCreate(map);
+}
+
+void MapManager::HandleMapDestroyed(Map* map)
+{
+    ABScriptMgr::Instance().OnMapDestroy(map);
+}
+
+void MapManager::HandlePlayerEnterMap(Map* map, Player* player)
+{
+    ABScriptMgr::Instance().OnPlayerEnterMap(map, player);
+}
+
+void MapManager::HandlePlayerLeaveMap(Map* map, Player* player)
+{
+    ABScriptMgr::Instance().OnPlayerLeaveMap(map, player);
+}
+
+void MapManager::HandleInstanceCombatState(Map* map, bool locked, Player* player)
+{
+    ABScriptMgr::Instance().OnCombatStateChanged(map, locked, player);
 }
 
 bool MapManager::IsValidMAP(uint32 mapid, bool startUp)
