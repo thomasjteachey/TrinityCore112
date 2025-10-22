@@ -20,7 +20,10 @@
 // The name of this function should match:
 // void Add${NameOfDirectory}Scripts()
 #include "BGReplay.cpp"
+
+void AddSC_autobalance();
 void AddCustomScripts()
 {
     AddBGReplayScripts();
+    AddSC_autobalance();
 }

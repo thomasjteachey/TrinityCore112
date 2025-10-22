@@ -19,6 +19,7 @@
 #include "Log.h"
 #include "StringConvert.h"
 #include "Util.h"
+#include <boost/filesystem/path.hpp>
 #include <boost/property_tree/ini_parser.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -166,6 +167,16 @@ bool ConfigMgr::LoadAdditionalFile(std::string file, bool keepOnReload, std::str
         _additonalFiles.emplace_back(std::move(file));
 
     return true;
+}
+
+void ConfigMgr::LoadModulesConfigs()
+{
+    namespace fs = boost::filesystem;
+
+    fs::path moduleConfig = fs::path(_filename).parent_path() / "AutoBalance.conf";
+    std::string error;
+    if (!LoadAdditionalFile(moduleConfig.generic_string(), true, error))
+        TC_LOG_ERROR("server.loading", "Error loading module configuration {}: {}", moduleConfig.generic_string(), error);
 }
 
 std::vector<std::string> ConfigMgr::OverrideWithEnvVariablesIfAny()

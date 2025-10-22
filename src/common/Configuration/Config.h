@@ -33,6 +33,7 @@ public:
     /// Method used only for loading main configuration files (authserver.conf and worldserver.conf)
     bool LoadInitial(std::string file, std::vector<std::string> args, std::string& error);
     bool LoadAdditionalFile(std::string file, bool keepOnReload, std::string& error);
+    void LoadModulesConfigs();
 
     /// Overrides configuration with environment variables and returns overridden keys
     std::vector<std::string> OverrideWithEnvVariablesIfAny();

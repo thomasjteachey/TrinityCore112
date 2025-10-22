@@ -195,6 +195,8 @@ extern int main(int argc, char** argv)
         return 1;
     }
 
+    sConfigMgr->LoadModulesConfigs();
+
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
 
     std::shared_ptr<Trinity::Asio::IoContext> ioContext = std::make_shared<Trinity::Asio::IoContext>();
