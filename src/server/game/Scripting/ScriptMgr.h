@@ -1092,7 +1092,7 @@ class TC_GAME_API ScriptMgr
         void OnPVPKill(Player* killer, Player* killed);
         void OnCreatureKill(Player* killer, Creature* killed);
         void OnPlayerKilledByCreature(Creature* killer, Player* killed);
-        void OnPlayerLevelChanged(Player* player, uint8 oldLevel);
+        void OnLevelChanged(Player* player, uint8 oldLevel);
         void OnPlayerFreeTalentPointsChanged(Player* player, uint32 newPoints);
         void OnPlayerTalentsReset(Player* player, bool noCost);
         void OnPlayerMoneyChanged(Player* player, int32& amount);
@@ -1100,7 +1100,7 @@ class TC_GAME_API ScriptMgr
         void OnBeforeLootMoney(Player* player, Loot* loot);
         void OnPlayerEnterCombat(Player* player);
         void OnPlayerLeaveCombat(Player* player);
-        void OnGivePlayerXP(Player* player, uint32& amount, Unit* victim);
+        void OnGiveXP(Player* player, uint32& amount, Unit* victim);
         void OnPlayerReputationChange(Player* player, uint32 factionID, int32& standing, bool incremental);
         void OnPlayerDuelRequest(Player* target, Player* challenger);
         void OnPlayerDuelStart(Player* player1, Player* player2);
