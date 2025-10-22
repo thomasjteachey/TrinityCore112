@@ -2544,7 +2544,7 @@ void Player::GiveXP(uint32 xp, Unit* victim, float group_rate)
 
     uint8 level = GetLevel();
 
-    sScriptMgr->OnGivePlayerXP(this, xp, victim);
+    sScriptMgr->OnGiveXP(this, xp, victim);
 
     // XP to money conversion processed in Player::RewardQuest
     if (IsMaxLevel())
@@ -2673,7 +2673,7 @@ void Player::GiveLevel(uint8 level)
 
     SendQuestGiverStatusMultiple();
 
-    sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
+    sScriptMgr->OnLevelChanged(this, oldLevel);
 }
 
 bool Player::IsMaxLevel() const

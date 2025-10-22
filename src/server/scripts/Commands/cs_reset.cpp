@@ -157,7 +157,7 @@ public:
         if (Pet* pet = target->GetPet())
             pet->SynchronizeLevelWithOwner();
 
-        sScriptMgr->OnPlayerLevelChanged(target, oldLevel);
+        sScriptMgr->OnLevelChanged(target, oldLevel);
 
         return true;
     }
