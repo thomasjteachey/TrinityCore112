@@ -78,6 +78,7 @@
 #include "PoolMgr.h"
 #include "QueryHolder.h"
 #include "QuestDef.h"
+#include "ScriptMgr.h"
 #include "QuestPools.h"
 #include "Realm.h"
 #include "ReputationMgr.h"
@@ -24497,6 +24498,12 @@ void Player::ProcessTerrainStatusUpdate(ZLiquidStatus oldLiquidStatus, Optional<
         m_MirrorTimerFlags &= ~(UNDERWATER_INWATER | UNDERWATER_INLAVA | UNDERWATER_INSLIME | UNDERWATER_INDARKWATER);
 }
 
+void Player::AtEnterCombat()
+{
+    Unit::AtEnterCombat();
+    sScriptMgr->OnPlayerEnterCombat(this);
+}
+
 void Player::AtExitCombat()
 {
     Unit::AtExitCombat();
@@ -24508,6 +24515,8 @@ void Player::AtExitCombat()
             SetRuneTimer(i, 0xFFFFFFFF);
             SetLastRuneGraceTimer(i, 0);
         }
+
+    sScriptMgr->OnPlayerLeaveCombat(this);
 }
 
 void Player::SetCanParry(bool value)

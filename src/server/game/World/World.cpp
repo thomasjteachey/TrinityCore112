@@ -473,6 +473,8 @@ bool World::RemoveQueuedPlayer(WorldSession* sess)
 /// Initialize config values
 void World::LoadConfigSettings(bool reload)
 {
+    sScriptMgr->OnBeforeConfigLoad(reload);
+
     if (reload)
     {
         std::vector<std::string> configErrors;
