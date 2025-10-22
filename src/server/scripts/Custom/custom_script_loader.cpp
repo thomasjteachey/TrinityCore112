@@ -19,8 +19,10 @@
 
 // The name of this function should match:
 // void Add${NameOfDirectory}Scripts()
+#include "AutoBalance/AutoBalanceLoader.cpp"
 #include "BGReplay.cpp"
 void AddCustomScripts()
 {
+    AddAutoBalanceScripts();
     AddBGReplayScripts();
 }
