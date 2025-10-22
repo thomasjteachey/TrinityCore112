@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include <string>
+#include <type_traits>
 #include <vector>
 
 class TC_COMMON_API ConfigMgr
@@ -50,10 +51,56 @@ public:
     std::vector<std::string> const& GetArguments() const;
     std::vector<std::string> GetKeysByString(std::string const& name);
 
+    template<class T>
+    T GetOption(std::string const& name, T const& def, bool quiet = false) const;
+
 private:
     template<class T>
     T GetValueDefault(std::string const& name, T def, bool quiet) const;
 };
+
+template<class T>
+inline T ConfigMgr::GetOption(std::string const& /*name*/, T const& def, bool /*quiet*/) const
+{
+    static_assert(!std::is_same<T, T>::value, "Unsupported config option type requested via ConfigMgr::GetOption");
+    return def;
+}
+
+template<>
+inline std::string ConfigMgr::GetOption<std::string>(std::string const& name, std::string const& def, bool quiet) const
+{
+    return GetStringDefault(name, def, quiet);
+}
+
+template<>
+inline bool ConfigMgr::GetOption<bool>(std::string const& name, bool const& def, bool quiet) const
+{
+    return GetBoolDefault(name, def, quiet);
+}
+
+template<>
+inline int ConfigMgr::GetOption<int>(std::string const& name, int const& def, bool quiet) const
+{
+    return GetIntDefault(name, def, quiet);
+}
+
+template<>
+inline uint32 ConfigMgr::GetOption<uint32>(std::string const& name, uint32 const& def, bool quiet) const
+{
+    return static_cast<uint32>(GetIntDefault(name, static_cast<int>(def), quiet));
+}
+
+template<>
+inline uint8 ConfigMgr::GetOption<uint8>(std::string const& name, uint8 const& def, bool quiet) const
+{
+    return static_cast<uint8>(GetIntDefault(name, static_cast<int>(def), quiet));
+}
+
+template<>
+inline float ConfigMgr::GetOption<float>(std::string const& name, float const& def, bool quiet) const
+{
+    return GetFloatDefault(name, def, quiet);
+}
 
 #define sConfigMgr ConfigMgr::instance()
 
