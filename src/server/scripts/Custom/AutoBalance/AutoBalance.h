@@ -3,6 +3,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "AutoBalance/AutoBalanceConfig.h"
+
 #include "Message.h"
 
 class Map;
