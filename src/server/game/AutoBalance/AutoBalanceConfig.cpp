@@ -105,7 +105,7 @@ namespace AutoBalance
                 if (entry.empty())
                     continue;
 
-                std::istringstream stream(std::string(entry));
+                std::istringstream stream{std::string(entry)};
                 uint32 instanceId = 0;
                 int32 minPlayers = 0;
 
