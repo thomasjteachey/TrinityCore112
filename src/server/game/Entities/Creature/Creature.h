@@ -18,6 +18,7 @@
 #ifndef TRINITYCORE_CREATURE_H
 #define TRINITYCORE_CREATURE_H
 
+#include "AutoBalance/AutoBalanceCreatureInfo.h"
 #include "Unit.h"
 #include "Common.h"
 #include "CreatureData.h"
@@ -61,7 +62,20 @@ typedef std::unordered_map<uint8, CreatureTextRepeatIds> CreatureTextRepeatGroup
 class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public MapObject
 {
     public:
+        struct CustomData
+        {
+            struct AutoBalanceData
+            {
+                AutoBalance::AutoBalanceCreatureInfo CreatureInfo;
+            };
+
+            AutoBalanceData AutoBalance;
+        };
+
         explicit Creature(bool isWorldObject = false);
+
+        CustomData& GetCustomData() { return _customData; }
+        CustomData const& GetCustomData() const { return _customData; }
 
         void AddToWorld() override;
         void RemoveFromWorld() override;
@@ -421,6 +435,8 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
 
         CreatureTemplate const* m_creatureInfo;                 // Can differ from sObjectMgr->GetCreatureTemplate(GetEntry()) in difficulty mode > 0
         CreatureData const* m_creatureData;
+
+        CustomData _customData;
 
         uint16 m_LootMode;                                  // Bitmask (default: LOOT_MODE_DEFAULT) that determines what loot will be lootable
 
