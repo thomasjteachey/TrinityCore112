@@ -34,6 +34,7 @@
 #include "WorldSession.h"
 #include "Opcodes.h"
 #include "AutoBalance.h"
+#include "AutoBalance/AutoBalanceMapData.h"
 
 MapManager::MapManager()
     : _nextInstanceId(0), _scheduledScripts(0)
@@ -247,6 +248,7 @@ void MapManager::HandleMapCreated(Map* map)
     if (!AutoBalance::IsEnabled())
         return;
 
+    AutoBalance::HandleMapCreate(map);
     ABScriptMgr::Instance().OnMapCreate(map);
 }
 
@@ -255,6 +257,7 @@ void MapManager::HandleMapDestroyed(Map* map)
     if (!AutoBalance::IsEnabled())
         return;
 
+    AutoBalance::HandleMapDestroy(map);
     ABScriptMgr::Instance().OnMapDestroy(map);
 }
 
@@ -263,6 +266,7 @@ void MapManager::HandlePlayerEnterMap(Map* map, Player* player)
     if (!AutoBalance::IsEnabled())
         return;
 
+    AutoBalance::HandlePlayerEnter(map, player);
     ABScriptMgr::Instance().OnPlayerEnterMap(map, player);
 }
 
@@ -271,6 +275,7 @@ void MapManager::HandlePlayerLeaveMap(Map* map, Player* player)
     if (!AutoBalance::IsEnabled())
         return;
 
+    AutoBalance::HandlePlayerLeave(map, player);
     ABScriptMgr::Instance().OnPlayerLeaveMap(map, player);
 }
 
@@ -279,6 +284,7 @@ void MapManager::HandleInstanceCombatState(Map* map, bool locked, Player* player
     if (!AutoBalance::IsEnabled())
         return;
 
+    AutoBalance::HandleCombatStateChange(map, locked, player);
     ABScriptMgr::Instance().OnCombatStateChanged(map, locked, player);
 }
 
