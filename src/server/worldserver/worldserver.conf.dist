@@ -3106,6 +3106,13 @@ CharDelete.KeepDays = 30
 ###################################################################################################
 # CUSTOM SERVER OPTIONS
 #
+#    AutoBalance.Conf
+#        Description: Path to the AutoBalance module configuration file. Leave empty to disable loading
+#                     the module configuration file.
+#        Default:     "conf/AutoBalance.conf"
+#
+AutoBalance.Conf = "conf/AutoBalance.conf"
+#
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)
 #        Default:     0 - (Do not allow)

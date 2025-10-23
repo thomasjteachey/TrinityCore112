@@ -25,6 +25,7 @@
 #include "Banner.h"
 #include "BattlegroundMgr.h"
 #include "BigNumber.h"
+#include "AutoBalance/AutoBalanceConfig.h"
 #include "CliRunnable.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
@@ -194,6 +195,8 @@ extern int main(int argc, char** argv)
         printf("Error in config file: %s\n", configError.c_str());
         return 1;
     }
+
+    AutoBalance::LoadConfig(false);
 
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
 
