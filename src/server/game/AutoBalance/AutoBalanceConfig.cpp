@@ -34,7 +34,7 @@ namespace AutoBalance
         };
 
         template<typename... Args>
-        void LogMessage(MessageLevel level, bool logEnabled, char const* format, Args&&... args)
+        void LogMessage(MessageLevel level, bool logEnabled, Trinity::FormatString<Args...> format, Args&&... args)
         {
             std::string const message = Trinity::StringFormat(format, std::forward<Args>(args)...);
 
