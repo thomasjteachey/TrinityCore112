@@ -232,7 +232,21 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
         NotifyAICombat(_owner, who);
     if (needOtherAI)
         NotifyAICombat(who, _owner);
-    return IsInCombatWith(who);
+
+    bool const inCombat = IsInCombatWith(who);
+
+    if (inCombat)
+    {
+        if (Unit* owner = _owner->GetCharmerOrOwner())
+            if (owner != who && !owner->GetCombatManager().IsInCombatWith(who))
+                owner->GetCombatManager().SetInCombatWith(who);
+
+        if (Unit* owner = who->GetCharmerOrOwner())
+            if (owner != _owner && !owner->GetCombatManager().IsInCombatWith(_owner))
+                owner->GetCombatManager().SetInCombatWith(_owner);
+    }
+
+    return inCombat;
 }
 
 bool CombatManager::IsInCombatWith(ObjectGuid const& guid) const
