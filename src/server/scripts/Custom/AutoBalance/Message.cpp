@@ -1,4 +1,4 @@
-#include "Custom/AutoBalance/Message.h"
+#include "Message.h"
 #include "Map.h"
 #include "Player.h"
 

@@ -3,7 +3,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Custom/AutoBalance/Message.h"
+#include "Message.h"
 
 class Map;
 class Player;
