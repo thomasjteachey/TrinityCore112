@@ -181,7 +181,8 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
 
     target_include_directories(${SCRIPT_MODULE_PROJECT_NAME}
       PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR})
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance)
 
     set_target_properties(${SCRIPT_MODULE_PROJECT_NAME}
       PROPERTIES
@@ -229,7 +230,8 @@ target_link_libraries(scripts
 
 target_include_directories(scripts
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance)
 
 set_target_properties(scripts
   PROPERTIES

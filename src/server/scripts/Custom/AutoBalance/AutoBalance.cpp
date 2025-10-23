@@ -1,4 +1,4 @@
-#include "Custom/AutoBalance/AutoBalance.h"
+#include "AutoBalance.h"
 #include "Map.h"
 #include "Player.h"
 #include <algorithm>

@@ -33,7 +33,7 @@
 #include "Player.h"
 #include "WorldSession.h"
 #include "Opcodes.h"
-#include "scripts/Custom/AutoBalance/AutoBalance.h"
+#include "AutoBalance.h"
 
 MapManager::MapManager()
     : _nextInstanceId(0), _scheduledScripts(0)
