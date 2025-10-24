@@ -139,7 +139,7 @@ void ScaleCreature(Creature* creature)
     uint32 const newHealth = std::max<uint32>(1u, static_cast<uint32>(std::round(info.BaseValues.Health * info.Multipliers.Health)));
     creature->SetCreateHealth(newHealth);
     creature->SetMaxHealth(newHealth);
-    creature->SetModifierValue(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(newHealth));
+    creature->SetStatFlatModifier(UNIT_MOD_HEALTH, BASE_VALUE, static_cast<float>(newHealth));
     uint32 const scaledHealth = std::clamp<uint32>(static_cast<uint32>(std::round(newHealth * healthPct)), 1u, newHealth);
     creature->SetHealth(scaledHealth);
 
@@ -151,14 +151,14 @@ void ScaleCreature(Creature* creature)
         uint32 const newMana = static_cast<uint32>(std::round(baseMana * info.Multipliers.Mana));
         creature->SetCreateMana(newMana);
         creature->SetMaxPower(POWER_MANA, newMana);
-        creature->SetModifierValue(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(newMana));
+        creature->SetStatFlatModifier(UNIT_MOD_MANA, BASE_VALUE, static_cast<float>(newMana));
         uint32 const scaledMana = std::min<uint32>(static_cast<uint32>(std::round(newMana * manaPct)), newMana);
         creature->SetPower(POWER_MANA, scaledMana);
     }
 
     uint32 const newArmor = static_cast<uint32>(std::round(info.BaseValues.Armor * info.Multipliers.Armor));
     creature->SetArmor(newArmor);
-    creature->SetModifierValue(UNIT_MOD_ARMOR, BASE_VALUE, static_cast<float>(newArmor));
+    creature->SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, static_cast<float>(newArmor));
 
     float const scaledMinDamage = info.BaseValues.MinDamage * info.Multipliers.Damage;
     float const scaledMaxDamage = info.BaseValues.MaxDamage * info.Multipliers.Damage;
