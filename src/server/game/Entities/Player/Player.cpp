@@ -6896,7 +6896,10 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     {
         if (groupsize > 1)
             honor_f /= groupsize;
+    }
 
+    if (honor_f > 0.0f)
+    {
         // apply honor multiplier from aura (not stacking-get highest)
         AddPct(honor_f, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
     }
