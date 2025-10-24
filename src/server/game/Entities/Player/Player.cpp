@@ -6920,7 +6920,7 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
     SendDirectMessage(&data);
 
     // add honor points
-    ModifyHonorPoints(honor);
+    ModifyHonorPoints(honor, CharacterDatabaseTransaction(nullptr), false);
 
     ApplyModUInt32Value(PLAYER_FIELD_TODAY_CONTRIBUTION, honor, true);
 
@@ -7016,8 +7016,15 @@ void Player::SetArenaPoints(uint32 value)
         AddKnownCurrency(ITEM_ARENA_POINTS_ID);
 }
 
-void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans)
+void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, bool applyHonorGainAuras)
 {
+    if (applyHonorGainAuras && value > 0)
+    {
+        float modifiedHonor = static_cast<float>(value);
+        AddPct(modifiedHonor, GetMaxPositiveAuraModifier(SPELL_AURA_MOD_HONOR_GAIN_PCT));
+        value = int32(modifiedHonor);
+    }
+
     int32 newValue = int32(GetHonorPoints()) + value;
     if (newValue < 0)
         newValue = 0;

@@ -645,7 +645,7 @@ void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayerForTeam(TeamID, itr, "CenturionRewardHonorToTeam"))
-            player->RewardHonor(nullptr, 1, Honor);
+            player->ModifyHonorPoints(int32(Honor));
 }
 
 void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
