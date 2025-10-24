@@ -40,6 +40,8 @@ namespace AutoBalance
         std::unordered_map<uint32, uint32> MinPlayersOverridesNormal;
         std::unordered_map<uint32, uint32> MinPlayersOverridesHeroic;
         int32 PlayerCountDifficultyOffset = 0;
+        float MinCCDurationModifier = 0.25f;
+        float MaxCCDurationModifier = 1.0f;
     };
 
     ModuleConfig const& GetConfig();
