@@ -71,6 +71,79 @@ AutoBalanceCreatureInfo const& GetCreatureInfo(Creature const& creature)
     return creature.GetCustomData().AutoBalance.CreatureInfo;
 }
 
+AutoBalanceCreatureInfo* TryGetCreatureInfo(Unit* unit)
+{
+    if (!unit)
+        return nullptr;
+
+    Creature* creature = unit->ToCreature();
+    if (!creature)
+        return nullptr;
+
+    AutoBalanceCreatureInfo& info = GetCreatureInfo(*creature);
+    if (!info.Initialized)
+        return nullptr;
+
+    return &info;
+}
+
+AutoBalanceCreatureInfo const* TryGetCreatureInfo(Unit const* unit)
+{
+    if (!unit)
+        return nullptr;
+
+    Creature const* creature = unit->ToCreature();
+    if (!creature)
+        return nullptr;
+
+    AutoBalanceCreatureInfo const& info = GetCreatureInfo(*creature);
+    if (!info.Initialized)
+        return nullptr;
+
+    return &info;
+}
+
+Optional<float> GetDamageHealingMultiplier(Unit const* unit)
+{
+    if (!IsEnabled())
+        return { };
+
+    AutoBalanceCreatureInfo const* info = TryGetCreatureInfo(unit);
+    if (!info)
+        return { };
+
+    float const multiplier = info->Multipliers.Damage;
+    if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+        return { };
+
+    if (std::fabs(multiplier - 1.0f) <= 0.0005f)
+        return { };
+
+    return multiplier;
+}
+
+Optional<float> GetCrowdControlDurationMultiplier(Unit const* unit)
+{
+    if (!IsEnabled())
+        return { };
+
+    AutoBalanceCreatureInfo const* info = TryGetCreatureInfo(unit);
+    if (!info)
+        return { };
+
+    float multiplier = info->Multipliers.CrowdControlDuration;
+    if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+        return { };
+
+    ModuleConfig const& config = GetConfig();
+    multiplier = std::clamp(multiplier, config.MinCCDurationModifier, config.MaxCCDurationModifier);
+
+    if (std::fabs(multiplier - 1.0f) <= 0.0005f)
+        return { };
+
+    return multiplier;
+}
+
 void ScaleCreature(Creature* creature)
 {
     if (!creature)
@@ -109,7 +182,8 @@ void ScaleCreature(Creature* creature)
         std::fabs(info.Multipliers.Health - multiplier) > 0.0005f ||
         std::fabs(info.Multipliers.Mana - multiplier) > 0.0005f ||
         std::fabs(info.Multipliers.Damage - multiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Armor - multiplier) > 0.0005f;
+        std::fabs(info.Multipliers.Armor - multiplier) > 0.0005f ||
+        std::fabs(info.Multipliers.CrowdControlDuration - multiplier) > 0.0005f;
 
     if (!requiresUpdate)
         return;
@@ -133,6 +207,7 @@ void ScaleCreature(Creature* creature)
     info.Multipliers.Mana = multiplier;
     info.Multipliers.Damage = multiplier;
     info.Multipliers.Armor = multiplier;
+    info.Multipliers.CrowdControlDuration = multiplier;
 
     uint32 const oldMaxHealth = creature->GetMaxHealth();
     float const healthPct = oldMaxHealth ? std::clamp(static_cast<float>(creature->GetHealth()) / static_cast<float>(oldMaxHealth), 0.0f, 1.0f) : 1.0f;

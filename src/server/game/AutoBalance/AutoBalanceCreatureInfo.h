@@ -21,6 +21,7 @@ namespace AutoBalance
         float Mana = 1.0f;
         float Damage = 1.0f;
         float Armor = 1.0f;
+        float CrowdControlDuration = 1.0f;
     };
 
     struct AutoBalanceCreatureInfo

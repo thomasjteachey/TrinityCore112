@@ -146,6 +146,18 @@ namespace AutoBalance
                 LogMessage(MessageLevel::Warn, logEnabled, "AutoBalance.MinPlayers.Heroic is set to 0. Using 1 instead.");
                 config.MinimumPlayersHeroic = 1;
             }
+
+            if (config.MinCCDurationModifier < 0.0f)
+            {
+                LogMessage(MessageLevel::Warn, logEnabled, "AutoBalance.MinCCDurationModifier ({:.3f}) must be >= 0. Using 0 instead.", config.MinCCDurationModifier);
+                config.MinCCDurationModifier = 0.0f;
+            }
+
+            if (config.MaxCCDurationModifier < config.MinCCDurationModifier)
+            {
+                LogMessage(MessageLevel::Warn, logEnabled, "AutoBalance.MaxCCDurationModifier ({:.3f}) must be >= AutoBalance.MinCCDurationModifier ({:.3f}). Using the minimum value instead.", config.MaxCCDurationModifier, config.MinCCDurationModifier);
+                config.MaxCCDurationModifier = config.MinCCDurationModifier;
+            }
         }
     }
 
@@ -244,6 +256,8 @@ namespace AutoBalance
         newConfig.MinPlayersOverridesNormal = ParseMinPlayersOverrides(sConfigMgr->GetStringDefault("AutoBalance.MinPlayers.PerInstance", ""), logReady, "AutoBalance.MinPlayers.PerInstance");
         newConfig.MinPlayersOverridesHeroic = ParseMinPlayersOverrides(sConfigMgr->GetStringDefault("AutoBalance.MinPlayers.Heroic.PerInstance", ""), logReady, "AutoBalance.MinPlayers.Heroic.PerInstance");
         newConfig.PlayerCountDifficultyOffset = sConfigMgr->GetIntDefault("AutoBalance.playerCountDifficultyOffset", 0);
+        newConfig.MinCCDurationModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MinCCDurationModifier", 0.25f));
+        newConfig.MaxCCDurationModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MaxCCDurationModifier", 1.0f));
 
         Validate(newConfig, logReady);
 
