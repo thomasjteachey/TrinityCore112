@@ -10,5 +10,10 @@
 
 # Additional module configuration (.conf.dist) files that should be installed
 # alongside the core configuration templates.
-set(TRINITYCORE_MODULE_CONF_DIST
+if(NOT DEFINED TRINITYCORE_MODULE_CONF_DIST)
+  set(TRINITYCORE_MODULE_CONF_DIST "")
+endif()
+
+list(APPEND TRINITYCORE_MODULE_CONF_DIST
   ${CMAKE_SOURCE_DIR}/conf/AutoBalance.conf.dist)
+list(REMOVE_DUPLICATES TRINITYCORE_MODULE_CONF_DIST)
