@@ -24,10 +24,18 @@
 enum BG_WS_TimerOrScore
 {
     BG_WS_MAX_TEAM_SCORE    = 3,
-    BG_WS_FLAG_RESPAWN_TIME = 23000,
-    BG_WS_FLAG_DROP_TIME    = 10000,
+    BG_WS_FLAG_RESPAWN_TIME = 12000,
+    BG_WS_FLAG_DROP_TIME    = 15000,
     BG_WS_SPELL_FORCE_TIME  = 600000,
-    BG_WS_SPELL_BRUTAL_TIME = 900000
+    BG_WS_SPELL_BRUTAL_TIME = 900000,
+    BG_WS_RESURRECTION_INTERVAL = 31500
+};
+
+enum BG_WS_BuffRespawnTimes
+{
+    BG_WS_RESTORATION_BUFF_RESPAWN_TIME = 20,
+    BG_WS_BERSERKING_BUFF_RESPAWN_TIME  = 120,
+    BG_WS_SPEED_BUFF_RESPAWN_TIME       = 150
 };
 
 enum BG_WS_BroadcastTexts
@@ -258,6 +266,10 @@ class BattlegroundWS : public Battleground
 
         /* Achievements*/
         bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
+
+    protected:
+        uint32 GetResurrectionInterval() const override;
+        uint32 GetBuffRespawnTime(uint32 type) const override;
 
     private:
         ObjectGuid m_FlagKeepers[2];                            // 0 - alliance, 1 - horde
