@@ -539,6 +539,9 @@ class TC_GAME_API Battleground
         void _ProcessJoin(uint32 diff);
         void _CheckSafePositions(uint32 diff);
 
+        virtual uint32 GetResurrectionInterval() const { return RESURRECTION_INTERVAL; }
+        virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
+
         // Scorekeeping
         BattlegroundScoreMap PlayerScores;                // Player scores
         // must be implemented in BG subclass
