@@ -298,7 +298,7 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
     // *********************************************************
     // this should be handled by spell system
     m_LastResurrectTime += diff;
-    if (m_LastResurrectTime >= RESURRECTION_INTERVAL)
+    if (m_LastResurrectTime >= GetResurrectionInterval())
     {
         if (GetReviveQueueSize())
         {
@@ -1753,7 +1753,7 @@ void Battleground::HandleTriggerBuff(ObjectGuid go_guid)
             }
     }
 
-    SpawnBGObject(index, BUFF_RESPAWN_TIME);
+    SpawnBGObject(index, GetBuffRespawnTime(index));
 }
 
 void Battleground::HandleKillPlayer(Player* victim, Player* killer)
