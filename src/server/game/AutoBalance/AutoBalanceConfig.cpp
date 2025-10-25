@@ -171,6 +171,16 @@ namespace AutoBalance
         return s_Config.Enabled;
     }
 
+    int32 GetPlayerCountDifficultyOffset()
+    {
+        return s_Config.PlayerCountDifficultyOffset;
+    }
+
+    void SetPlayerCountDifficultyOffset(int32 offset)
+    {
+        s_Config.PlayerCountDifficultyOffset = offset;
+    }
+
     void LoadConfig(bool reload)
     {
         bool wasInitialized = s_ConfigInitialized;

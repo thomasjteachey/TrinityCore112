@@ -47,4 +47,6 @@ namespace AutoBalance
     ModuleConfig const& GetConfig();
     bool IsEnabled();
     void LoadConfig(bool reload);
+    int32 GetPlayerCountDifficultyOffset();
+    void SetPlayerCountDifficultyOffset(int32 offset);
 }
