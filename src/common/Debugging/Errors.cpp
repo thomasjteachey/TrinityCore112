@@ -18,10 +18,24 @@
 #include "Errors.h"
 #include "Log.h"
 #include "StringFormat.h"
+#include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <thread>
 #include <cstdarg>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+#include <thread>
+
+#if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
+#include <process.h>
+#else
+#include <unistd.h>
+#if !defined(__EMSCRIPTEN__)
+#include <execinfo.h>
+#endif
+#endif
 
 /**
     @file Errors.cpp
@@ -50,10 +64,66 @@ extern "C" { TC_COMMON_API char const* TrinityAssertionFailedMessage = nullptr; 
 
 namespace
 {
+    std::string BuildCrashContext()
+    {
+        std::ostringstream context;
+
+        auto now = std::chrono::system_clock::now();
+        std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+        std::tm timeInfo;
+
+#if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
+        localtime_s(&timeInfo, &nowTime);
+#else
+        localtime_r(&nowTime, &timeInfo);
+#endif
+
+        context << "Crash timestamp: " << std::put_time(&timeInfo, "%Y-%m-%d %H:%M:%S");
+
+#if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
+        context << ", process id: " << _getpid();
+#else
+        context << ", process id: " << getpid();
+#endif
+
+        context << ", thread id: " << std::this_thread::get_id();
+
+#if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS && !defined(__EMSCRIPTEN__)
+        std::array<void*, 32> stack{};
+        int frames = backtrace(stack.data(), stack.size());
+
+        if (frames > 0)
+        {
+            char** symbols = backtrace_symbols(stack.data(), frames);
+
+            if (symbols)
+            {
+                context << "\nBacktrace:";
+
+                for (int i = 0; i < frames; ++i)
+                    context << "\n  [" << i << "] " << symbols[i];
+
+                free(symbols);
+            }
+        }
+#endif
+
+        return context.str();
+    }
+
     void LogCrashMessage(std::string const& message)
     {
         if (message.empty())
             return;
+
+        std::string const context = BuildCrashContext();
+
+        if (!context.empty())
+        {
+            TC_LOG_FATAL("server.crash", "{}", context);
+            fprintf(stderr, "%s\n", context.c_str());
+            fflush(stderr);
+        }
 
         TC_LOG_FATAL("server.crash", "{}", message);
     }
