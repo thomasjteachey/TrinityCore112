@@ -24,6 +24,7 @@ EndScriptData */
 
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
+#include "AutoBalance/AutoBalanceConfig.h"
 #include "AchievementMgr.h"
 #include "AuctionHouseMgr.h"
 #include "BattlegroundMgr.h"
@@ -82,6 +83,7 @@ public:
             { "areatrigger_involvedrelation",  rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_INVOLVEDRELATION,     true,  &HandleReloadQuestAreaTriggersCommand,          "" },
             { "areatrigger_tavern",            rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_TAVERN,               true,  &HandleReloadAreaTriggerTavernCommand,          "" },
             { "areatrigger_teleport",          rbac::RBAC_PERM_COMMAND_RELOAD_AREATRIGGER_TELEPORT,             true,  &HandleReloadAreaTriggerTeleportCommand,        "" },
+            { "autobalance",                  rbac::RBAC_PERM_COMMAND_RELOAD_AUTOBALANCE,                     true,  &HandleReloadAutoBalanceCommand,               "" },
             { "autobroadcast",                 rbac::RBAC_PERM_COMMAND_RELOAD_AUTOBROADCAST,                    true,  &HandleReloadAutobroadcastCommand,              "" },
             { "battleground_template",         rbac::RBAC_PERM_COMMAND_RELOAD_BATTLEGROUND_TEMPLATE,            true,  &HandleReloadBattlegroundTemplate,              "" },
             { "broadcast_text",                rbac::RBAC_PERM_COMMAND_RELOAD_BROADCAST_TEXT,                   true,  &HandleReloadBroadcastTextCommand,              "" },
@@ -327,6 +329,14 @@ public:
         HandleReloadLocalesQuestOfferRewardCommand(handler, "a");
         HandleReloadLocalesQuestRequestItemsCommand(handler, "a");
         HandleReloadLocalesQuestGreetingCommand(handler, "");
+        return true;
+    }
+
+    static bool HandleReloadAutoBalanceCommand(ChatHandler* handler, char const* /*args*/)
+    {
+        TC_LOG_INFO("misc", "Re-Loading AutoBalance module configuration...");
+        AutoBalance::LoadConfig(true);
+        handler->SendGlobalGMSysMessage("AutoBalance configuration reloaded.");
         return true;
     }
 
