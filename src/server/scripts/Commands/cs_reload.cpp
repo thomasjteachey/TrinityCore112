@@ -25,6 +25,7 @@ EndScriptData */
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
 #include "AutoBalance/AutoBalanceConfig.h"
+#include "AutoBalance/AutoBalanceMapData.h"
 #include "AchievementMgr.h"
 #include "AuctionHouseMgr.h"
 #include "BattlegroundMgr.h"
@@ -336,6 +337,10 @@ public:
     {
         TC_LOG_INFO("misc", "Re-Loading AutoBalance module configuration...");
         AutoBalance::LoadConfig(true);
+        sMapMgr->DoForAllMaps([](Map* map)
+        {
+            AutoBalance::RefreshEffectivePlayerCount(map);
+        });
         handler->SendGlobalGMSysMessage("AutoBalance configuration reloaded.");
         return true;
     }
