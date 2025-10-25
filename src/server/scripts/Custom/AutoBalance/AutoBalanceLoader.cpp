@@ -30,8 +30,11 @@ namespace
     };
 }
 
+extern void AddAutoBalanceCommandScripts();
+
 void AddAutoBalanceScripts()
 {
     new DefaultAutoBalanceModule();
     new AutoBalanceCreatureUpdateScript();
+    AddAutoBalanceCommandScripts();
 }

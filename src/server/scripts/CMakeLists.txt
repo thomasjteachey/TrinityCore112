@@ -97,6 +97,7 @@ GroupSources(${CMAKE_CURRENT_SOURCE_DIR})
 
 set(CUSTOM_AUTOBALANCE_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/AutoBalance.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/AutoBalanceCommands.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/AutoBalanceLoader.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/Message.cpp)
 
