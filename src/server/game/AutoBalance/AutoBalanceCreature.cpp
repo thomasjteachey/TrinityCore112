@@ -6,8 +6,10 @@
 #include "Map.h"
 #include "ObjectMgr.h"
 #include "SharedDefines.h"
+#include "TemporarySummon.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace AutoBalance
 {
@@ -44,7 +46,53 @@ namespace
         return 1;
     }
 
-    float CalculateMultiplier(uint32 effectivePlayers, uint32 targetPlayers)
+    void ApplyInflectionOverride(InflectionPointSettings& settings, InflectionOverride const& override)
+    {
+        if (override.Value)
+            settings.Value = *override.Value;
+        if (override.CurveFloor)
+            settings.CurveFloor = *override.CurveFloor;
+        if (override.CurveCeiling)
+            settings.CurveCeiling = *override.CurveCeiling;
+        if (override.BossModifier)
+            settings.BossModifier = *override.BossModifier;
+    }
+
+    void ApplyStatOverride(StatModifierValues& values, StatModifierOverride const& override)
+    {
+        if (override.Global)
+            values.Global = *override.Global;
+        if (override.Health)
+            values.Health = *override.Health;
+        if (override.Mana)
+            values.Mana = *override.Mana;
+        if (override.Armor)
+            values.Armor = *override.Armor;
+        if (override.Damage)
+            values.Damage = *override.Damage;
+        if (override.CrowdControlDuration)
+            values.CrowdControlDuration = *override.CrowdControlDuration;
+    }
+
+    bool IsBossCreature(Creature const& creature)
+    {
+        if (creature.IsDungeonBoss() || creature.isWorldBoss())
+            return true;
+
+        if (TempSummon const* summon = creature.ToTempSummon())
+        {
+            if (Unit const* summoner = summon->GetSummoner())
+            {
+                Creature const* summonerCreature = summoner->ToCreature();
+                if (summonerCreature && (summonerCreature->IsDungeonBoss() || summonerCreature->isWorldBoss()))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    float EvaluateInflectionMultiplier(uint32 effectivePlayers, uint32 targetPlayers, InflectionPointSettings const& settings)
     {
         if (!effectivePlayers)
             effectivePlayers = 1;
@@ -52,13 +100,96 @@ namespace
         if (!targetPlayers)
             targetPlayers = 1;
 
-        float multiplier = static_cast<float>(effectivePlayers) / static_cast<float>(targetPlayers);
+        float const maxPlayers = static_cast<float>(targetPlayers);
+        float const adjustedPlayers = static_cast<float>(effectivePlayers);
+
+        float diff = (maxPlayers / 5.0f) * 1.5f;
+        if (!std::isfinite(diff) || diff <= 0.0f)
+            diff = 1.0f;
+
+        auto evaluate = [&](float players)
+        {
+            return (std::tanh((players - settings.Value) / diff) + 1.0f) / 2.0f;
+        };
+
+        float curveCeilingAdjustment = 1.0f;
+        {
+            float const numerator = evaluate(maxPlayers);
+            float const denominator = numerator * (settings.CurveCeiling - settings.CurveFloor) + settings.CurveFloor;
+            if (std::fabs(denominator) > std::numeric_limits<float>::epsilon())
+                curveCeilingAdjustment = settings.CurveCeiling / denominator;
+        }
+
+        float multiplier = evaluate(adjustedPlayers) * (settings.CurveCeiling * curveCeilingAdjustment - settings.CurveFloor) + settings.CurveFloor;
         if (!std::isfinite(multiplier) || multiplier <= 0.0f)
             multiplier = 0.01f;
 
         return multiplier;
     }
 
+    InflectionPointSettings SelectInflectionSettings(ModuleConfig const& config, Map const* map, uint32 targetPlayers, bool isBoss)
+    {
+        InflectionPointSettings settings = map->IsRaid()
+            ? (map->IsHeroic() ? config.RaidHeroicInflection : config.RaidInflection)
+            : (map->IsHeroic() ? config.DungeonHeroicInflection : config.DungeonInflection);
+
+        if (map->IsRaid())
+        {
+            auto const& overrides = map->IsHeroic() ? config.RaidHeroicInflectionOverrides : config.RaidInflectionOverrides;
+            if (auto const it = overrides.find(targetPlayers); it != overrides.end())
+                ApplyInflectionOverride(settings, it->second);
+        }
+
+        if (auto const it = config.InflectionOverridesByInstance.find(map->GetId()); it != config.InflectionOverridesByInstance.end())
+            ApplyInflectionOverride(settings, it->second);
+
+        if (isBoss)
+        {
+            float bossMultiplier = settings.BossModifier;
+            if (auto const it = config.InflectionBossOverridesByInstance.find(map->GetId()); it != config.InflectionBossOverridesByInstance.end())
+                bossMultiplier = it->second;
+
+            if (!std::isfinite(bossMultiplier) || bossMultiplier <= 0.0f)
+                bossMultiplier = 1.0f;
+
+            settings.Value *= bossMultiplier;
+            settings.BossModifier = bossMultiplier;
+        }
+
+        return settings;
+    }
+
+    StatModifierValues SelectStatModifiers(ModuleConfig const& config, Map const* map, Creature const& creature, bool isBoss, uint32 targetPlayers)
+    {
+        StatModifierValues values;
+
+        if (map->IsRaid())
+            values = map->IsHeroic() ? (isBoss ? config.RaidHeroicBossStatModifiers : config.RaidHeroicStatModifiers)
+                                     : (isBoss ? config.RaidBossStatModifiers : config.RaidStatModifiers);
+        else
+            values = map->IsHeroic() ? (isBoss ? config.DungeonHeroicBossStatModifiers : config.DungeonHeroicStatModifiers)
+                                     : (isBoss ? config.DungeonBossStatModifiers : config.DungeonStatModifiers);
+
+        if (map->IsRaid())
+        {
+            auto const& overrides = map->IsHeroic()
+                ? (isBoss ? config.RaidHeroicBossStatOverridesBySize : config.RaidHeroicStatOverridesBySize)
+                : (isBoss ? config.RaidBossStatOverridesBySize : config.RaidStatOverridesBySize);
+
+            if (auto const it = overrides.find(targetPlayers); it != overrides.end())
+                ApplyStatOverride(values, it->second);
+        }
+
+        auto const& instanceOverrides = isBoss ? config.StatModifierBossOverridesByInstance : config.StatModifierOverridesByInstance;
+        if (auto const it = instanceOverrides.find(map->GetId()); it != instanceOverrides.end())
+            ApplyStatOverride(values, it->second);
+
+        auto const& creatureOverrides = isBoss ? config.StatModifierBossOverridesByCreature : config.StatModifierOverridesByCreature;
+        if (auto const it = creatureOverrides.find(creature.GetEntry()); it != creatureOverrides.end())
+            ApplyStatOverride(values, it->second);
+
+        return values;
+    }
 }
 
 AutoBalanceCreatureInfo& GetCreatureInfo(Creature& creature)
@@ -162,7 +293,30 @@ void ScaleCreature(Creature* creature)
 
     uint32 const effectivePlayers = GetEffectivePlayerCount(map);
     uint32 const targetPlayers = GetTargetPlayerCount(map);
-    float const multiplier = CalculateMultiplier(effectivePlayers, targetPlayers);
+    bool const isBoss = IsBossCreature(*creature);
+
+    InflectionPointSettings const inflectionSettings = SelectInflectionSettings(config, map, targetPlayers, isBoss);
+    float const baseMultiplier = EvaluateInflectionMultiplier(effectivePlayers, targetPlayers, inflectionSettings);
+    StatModifierValues const statModifiers = SelectStatModifiers(config, map, *creature, isBoss, targetPlayers);
+
+    auto sanitize = [](float value, float fallback)
+    {
+        if (!std::isfinite(value) || value <= 0.0f)
+            return fallback;
+        return value;
+    };
+
+    float healthMultiplier = sanitize(baseMultiplier * statModifiers.Global * statModifiers.Health, config.MinHPModifier);
+    float manaMultiplier = sanitize(baseMultiplier * statModifiers.Global * statModifiers.Mana, config.MinManaModifier);
+    float armorMultiplier = sanitize(baseMultiplier * statModifiers.Global * statModifiers.Armor, 1.0f);
+    float damageMultiplier = sanitize(baseMultiplier * statModifiers.Global * statModifiers.Damage, config.MinDamageModifier);
+    float crowdControlMultiplier = sanitize(baseMultiplier * statModifiers.CrowdControlDuration, 1.0f);
+
+    healthMultiplier = std::max(healthMultiplier, config.MinHPModifier);
+    manaMultiplier = std::max(manaMultiplier, config.MinManaModifier);
+    armorMultiplier = std::max(armorMultiplier, 0.01f);
+    damageMultiplier = std::max(damageMultiplier, config.MinDamageModifier);
+    crowdControlMultiplier = std::clamp(crowdControlMultiplier, config.MinCCDurationModifier, config.MaxCCDurationModifier);
 
     CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate();
     if (!creatureTemplate)
@@ -179,11 +333,11 @@ void ScaleCreature(Creature* creature)
         info.BaseLevel != level ||
         info.TargetPlayerCount != targetPlayers ||
         info.EffectivePlayerCount != effectivePlayers ||
-        std::fabs(info.Multipliers.Health - multiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Mana - multiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Damage - multiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Armor - multiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.CrowdControlDuration - multiplier) > 0.0005f;
+        std::fabs(info.Multipliers.Health - healthMultiplier) > 0.0005f ||
+        std::fabs(info.Multipliers.Mana - manaMultiplier) > 0.0005f ||
+        std::fabs(info.Multipliers.Damage - damageMultiplier) > 0.0005f ||
+        std::fabs(info.Multipliers.Armor - armorMultiplier) > 0.0005f ||
+        std::fabs(info.Multipliers.CrowdControlDuration - crowdControlMultiplier) > 0.0005f;
 
     if (!requiresUpdate)
         return;
@@ -203,11 +357,11 @@ void ScaleCreature(Creature* creature)
     info.EffectivePlayerCount = effectivePlayers;
     info.Initialized = true;
 
-    info.Multipliers.Health = multiplier;
-    info.Multipliers.Mana = multiplier;
-    info.Multipliers.Damage = multiplier;
-    info.Multipliers.Armor = multiplier;
-    info.Multipliers.CrowdControlDuration = multiplier;
+    info.Multipliers.Health = healthMultiplier;
+    info.Multipliers.Mana = manaMultiplier;
+    info.Multipliers.Damage = damageMultiplier;
+    info.Multipliers.Armor = armorMultiplier;
+    info.Multipliers.CrowdControlDuration = crowdControlMultiplier;
 
     uint32 const oldMaxHealth = creature->GetMaxHealth();
     float const healthPct = oldMaxHealth ? std::clamp(static_cast<float>(creature->GetHealth()) / static_cast<float>(oldMaxHealth), 0.0f, 1.0f) : 1.0f;
@@ -252,7 +406,7 @@ void ScaleCreature(Creature* creature)
     creature->UpdateDamagePhysical(RANGED_ATTACK);
 
     if (config.DebugLogging)
-        TC_LOG_DEBUG(LogFilter, "AutoBalance::ScaleCreature - entry={} level={} players={}/{} multiplier={:.3f}",
-            creature->GetEntry(), level, effectivePlayers, targetPlayers, multiplier);
+        TC_LOG_DEBUG(LogFilter, "AutoBalance::ScaleCreature - entry={} level={} players={}/{} base={:.3f} health={:.3f} mana={:.3f} damage={:.3f} armor={:.3f} cc={:.3f}",
+            creature->GetEntry(), level, effectivePlayers, targetPlayers, baseMultiplier, info.Multipliers.Health, info.Multipliers.Mana, info.Multipliers.Damage, info.Multipliers.Armor, info.Multipliers.CrowdControlDuration);
 }
 }
