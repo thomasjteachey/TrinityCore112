@@ -650,8 +650,24 @@ namespace AutoBalance
             minPlayersHeroic = 0;
         }
 
+        int32 minPlayersRaid = sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.Raid", minPlayers);
+        if (minPlayersRaid < 0)
+        {
+            LogMessage(MessageLevel::Warn, logReady, "AutoBalance.MinPlayers.Raid ({}) must be >= 0. Using 0 instead.", minPlayersRaid);
+            minPlayersRaid = 0;
+        }
+
+        int32 minPlayersRaidHeroic = sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.RaidHeroic", minPlayersHeroic);
+        if (minPlayersRaidHeroic < 0)
+        {
+            LogMessage(MessageLevel::Warn, logReady, "AutoBalance.MinPlayers.RaidHeroic ({}) must be >= 0. Using 0 instead.", minPlayersRaidHeroic);
+            minPlayersRaidHeroic = 0;
+        }
+
         newConfig.MinimumPlayers = static_cast<uint32>(minPlayers);
         newConfig.MinimumPlayersHeroic = static_cast<uint32>(minPlayersHeroic);
+        newConfig.MinimumPlayersRaid = static_cast<uint32>(minPlayersRaid);
+        newConfig.MinimumPlayersRaidHeroic = static_cast<uint32>(minPlayersRaidHeroic);
 
         newConfig.DisabledInstances = ParseDisabledInstances(sConfigMgr->GetStringDefault("AutoBalance.Disable.PerInstance", ""), logReady);
         newConfig.MinPlayersOverridesNormal = ParseMinPlayersOverrides(sConfigMgr->GetStringDefault("AutoBalance.MinPlayers.PerInstance", ""), logReady, "AutoBalance.MinPlayers.PerInstance");

@@ -29,6 +29,10 @@ namespace
         if (auto const itr = overrides.find(mapId); itr != overrides.end())
             return itr->second;
 
+        bool const isRaid = map->IsRaid();
+        if (isRaid)
+            return map->IsHeroic() ? config.MinimumPlayersRaidHeroic : config.MinimumPlayersRaid;
+
         return map->IsHeroic() ? config.MinimumPlayersHeroic : config.MinimumPlayers;
     }
 

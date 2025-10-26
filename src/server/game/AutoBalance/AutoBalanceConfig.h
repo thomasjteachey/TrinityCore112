@@ -96,6 +96,8 @@ namespace AutoBalance
         bool DebugLogging = false;
         uint32 MinimumPlayers = 1;
         uint32 MinimumPlayersHeroic = 1;
+        uint32 MinimumPlayersRaid = 1;
+        uint32 MinimumPlayersRaidHeroic = 1;
         std::array<bool, static_cast<size_t>(InstanceDifficultyToggle::Count)> InstanceToggles{};
         std::vector<uint32> DisabledInstances;
         std::unordered_map<uint32, uint32> MinPlayersOverridesNormal;
