@@ -416,6 +416,96 @@ namespace AutoBalance
             return overrides;
         }
 
+        ScalingMethod ParseScalingMethod(char const* option, ScalingMethod defaultValue, bool logEnabled)
+        {
+            std::string raw = sConfigMgr->GetStringDefault(option, defaultValue == ScalingMethod::Dynamic ? "dynamic" : "fixed");
+            std::string lowered = raw;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            if (lowered == "dynamic")
+                return ScalingMethod::Dynamic;
+
+            if (lowered == "fixed")
+                return ScalingMethod::Fixed;
+
+            LogMessage(MessageLevel::Warn, logEnabled, "Invalid scaling method '{}' for {}. Expected 'dynamic' or 'fixed'. Using default ({}).",
+                raw, option, defaultValue == ScalingMethod::Dynamic ? "dynamic" : "fixed");
+            return defaultValue;
+        }
+
+        LevelScalingSettings ParseLevelScalingSettings(char const* ceilingOption, char const* floorOption, LevelScalingSettings defaults, bool logEnabled)
+        {
+            LevelScalingSettings settings = defaults;
+
+            int32 ceiling = sConfigMgr->GetIntDefault(ceilingOption, defaults.Ceiling);
+            int32 floor = sConfigMgr->GetIntDefault(floorOption, defaults.Floor);
+
+            if (ceiling < 0)
+            {
+                LogMessage(MessageLevel::Warn, logEnabled, "{} ({}) must be >= 0. Using {} instead.", ceilingOption, ceiling, defaults.Ceiling);
+                ceiling = defaults.Ceiling;
+            }
+
+            if (floor < 0)
+            {
+                LogMessage(MessageLevel::Warn, logEnabled, "{} ({}) must be >= 0. Using {} instead.", floorOption, floor, defaults.Floor);
+                floor = defaults.Floor;
+            }
+
+            settings.Ceiling = static_cast<int8>(ceiling);
+            settings.Floor = static_cast<int8>(floor);
+            return settings;
+        }
+
+        std::unordered_map<uint32, LevelScalingSettings> ParseLevelScalingOverrides(std::string const& value, bool logEnabled)
+        {
+            std::unordered_map<uint32, LevelScalingSettings> overrides;
+
+            for (std::string_view entry : Trinity::Tokenize(value, ',', false))
+            {
+                entry = Trim(entry);
+                if (entry.empty())
+                    continue;
+
+                std::istringstream stream{std::string(entry)};
+                uint32 mapId = 0;
+                if (!(stream >> mapId))
+                {
+                    LogMessage(MessageLevel::Warn, logEnabled, "Ignoring entry '{}' in AutoBalance.LevelScaling.DynamicLevel.PerInstance: missing map id.", entry);
+                    continue;
+                }
+
+                LevelScalingSettings settings{};
+                settings.Floor = -1;
+                settings.Ceiling = -1;
+                settings.SkipHigher = -1;
+                settings.SkipLower = -1;
+
+                auto readNext = [&](int8& field)
+                {
+                    int32 temp = 0;
+                    if (!(stream >> temp))
+                        return false;
+
+                    field = static_cast<int8>(temp);
+                    return true;
+                };
+
+                if (!readNext(settings.SkipHigher))
+                    settings.SkipHigher = -1;
+                if (!readNext(settings.SkipLower))
+                    settings.SkipLower = -1;
+                if (!readNext(settings.Ceiling))
+                    settings.Ceiling = -1;
+                if (!readNext(settings.Floor))
+                    settings.Floor = -1;
+
+                overrides[mapId] = settings;
+            }
+
+            return overrides;
+        }
+
         void Validate(ModuleConfig& config, bool logEnabled)
         {
             if (!config.MinimumPlayers)
@@ -572,6 +662,22 @@ namespace AutoBalance
         newConfig.MinHPModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MinHPModifier", 0.01f));
         newConfig.MinManaModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MinManaModifier", 0.01f));
         newConfig.MinDamageModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MinDamageModifier", 0.01f));
+
+        newConfig.LevelScalingEnabled = sConfigMgr->GetBoolDefault("AutoBalance.LevelScaling", false);
+        newConfig.LevelScalingMethod = ParseScalingMethod("AutoBalance.LevelScaling.Method", ScalingMethod::Dynamic, logReady);
+        newConfig.LevelScalingSkipHigherLevels = static_cast<int8>(sConfigMgr->GetIntDefault("AutoBalance.LevelScaling.SkipHigherLevels", 0));
+        newConfig.LevelScalingSkipLowerLevels = static_cast<int8>(sConfigMgr->GetIntDefault("AutoBalance.LevelScaling.SkipLowerLevels", 0));
+        newConfig.LevelScalingDungeonSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.Dungeons", "AutoBalance.LevelScaling.DynamicLevel.Floor.Dungeons", newConfig.LevelScalingDungeonSettings, logReady);
+        newConfig.LevelScalingHeroicDungeonSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicDungeons", "AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicDungeons", newConfig.LevelScalingHeroicDungeonSettings, logReady);
+        newConfig.LevelScalingRaidSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.Raids", "AutoBalance.LevelScaling.DynamicLevel.Floor.Raids", newConfig.LevelScalingRaidSettings, logReady);
+        newConfig.LevelScalingHeroicRaidSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicRaids", "AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicRaids", newConfig.LevelScalingHeroicRaidSettings, logReady);
+        newConfig.LevelScalingOverridesByInstance = ParseLevelScalingOverrides(sConfigMgr->GetStringDefault("AutoBalance.LevelScaling.DynamicLevel.PerInstance", ""), logReady);
+
+        newConfig.RewardScalingMethod = ParseScalingMethod("AutoBalance.RewardScaling.Method", ScalingMethod::Dynamic, logReady);
+        newConfig.RewardScalingXP = sConfigMgr->GetBoolDefault("AutoBalance.RewardScaling.XP", false);
+        newConfig.RewardScalingXPModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.RewardScaling.XP.Modifier", 1.0f));
+        newConfig.RewardScalingMoney = sConfigMgr->GetBoolDefault("AutoBalance.RewardScaling.Money", false);
+        newConfig.RewardScalingMoneyModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.RewardScaling.Money.Modifier", 1.0f));
 
         auto const defaultInflection = InflectionPointSettings{};
         newConfig.DungeonInflection = ParseInflectionPointSettings("AutoBalance.InflectionPoint", "AutoBalance.InflectionPoint.CurveFloor", "AutoBalance.InflectionPoint.CurveCeiling", "AutoBalance.InflectionPoint.BossModifier", defaultInflection);

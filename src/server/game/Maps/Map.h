@@ -330,6 +330,7 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
                 uint32 PlayerCount = 0;
                 uint32 EffectivePlayerCount = 0;
                 int32 QueueOffset = 0;
+                uint8 HighestPlayerLevel = 0;
                 uint32 CombatLockMinPlayers = 0;
                 uint32 LastPlayerJoinTimeMS = 0;
                 uint32 LastPlayerLeaveTimeMS = 0;

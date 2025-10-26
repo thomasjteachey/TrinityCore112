@@ -127,6 +127,44 @@ namespace
         return multiplier;
     }
 
+    float GetBaseExpansionValueForLevel(float const (&baseValues)[MAX_EXPANSIONS], uint8 targetLevel)
+    {
+        float const vanilla = baseValues[EXPANSION_CLASSIC];
+        float const burningCrusade = baseValues[EXPANSION_THE_BURNING_CRUSADE];
+        float const wrath = baseValues[EXPANSION_WRATH_OF_THE_LICH_KING];
+
+        if (targetLevel <= 60)
+            return vanilla;
+
+        if (targetLevel < 63)
+        {
+            float const vanillaMultiplier = (63.0f - static_cast<float>(targetLevel)) / 3.0f;
+            float const bcMultiplier = 1.0f - vanillaMultiplier;
+            return vanilla * vanillaMultiplier + burningCrusade * bcMultiplier;
+        }
+
+        if (targetLevel <= 70)
+            return burningCrusade;
+
+        if (targetLevel < 73)
+        {
+            float const bcMultiplier = (73.0f - static_cast<float>(targetLevel)) / 3.0f;
+            float const wrathMultiplier = 1.0f - bcMultiplier;
+            return burningCrusade * bcMultiplier + wrath * wrathMultiplier;
+        }
+
+        return wrath;
+    }
+
+    float GetBaseExpansionValueForLevel(uint32 const (&baseValues)[MAX_EXPANSIONS], uint8 targetLevel)
+    {
+        float converted[MAX_EXPANSIONS];
+        for (uint8 i = 0; i < MAX_EXPANSIONS; ++i)
+            converted[i] = static_cast<float>(baseValues[i]);
+
+        return GetBaseExpansionValueForLevel(converted, targetLevel);
+    }
+
     InflectionPointSettings SelectInflectionSettings(ModuleConfig const& config, Map const* map, uint32 targetPlayers, bool isBoss)
     {
         InflectionPointSettings settings = map->IsRaid()
@@ -294,6 +332,9 @@ void ScaleCreature(Creature* creature)
     uint32 const effectivePlayers = GetEffectivePlayerCount(map);
     uint32 const targetPlayers = GetTargetPlayerCount(map);
     bool const isBoss = IsBossCreature(*creature);
+    uint8 highestPlayerLevel = GetHighestPlayerLevel(map);
+    if (!highestPlayerLevel)
+        highestPlayerLevel = creature->GetLevel();
 
     InflectionPointSettings const inflectionSettings = SelectInflectionSettings(config, map, targetPlayers, isBoss);
     float const baseMultiplier = EvaluateInflectionMultiplier(effectivePlayers, targetPlayers, inflectionSettings);
@@ -323,8 +364,11 @@ void ScaleCreature(Creature* creature)
         return;
 
     AutoBalanceCreatureInfo& info = GetCreatureInfo(*creature);
+    info.IsBoss = isBoss;
+    info.InstancePlayerCount = effectivePlayers;
 
     uint8 const level = creature->GetLevel();
+    info.SelectedLevel = level;
     uint8 const unmodifiedLevel = info.Initialized ? info.UnmodifiedLevel : level;
 
     CreatureBaseStats const* originalBaseStats = sObjectMgr->GetCreatureBaseStats(unmodifiedLevel, creatureTemplate->unit_class);
@@ -346,10 +390,11 @@ void ScaleCreature(Creature* creature)
     originalBaseValues.RangedAttackPower = static_cast<float>(originalBaseStats->RangedAttackPower);
 
     CreatureBaseValues levelBaseValues;
-    levelBaseValues.Health = levelBaseStats->GenerateHealth(creatureTemplate);
+    float const smoothedBaseHealth = GetBaseExpansionValueForLevel(levelBaseStats->BaseHealth, highestPlayerLevel);
+    levelBaseValues.Health = static_cast<uint32>(std::round(smoothedBaseHealth * creatureTemplate->ModHealth));
     levelBaseValues.Mana = levelBaseStats->GenerateMana(creatureTemplate);
     levelBaseValues.Armor = levelBaseStats->GenerateArmor(creatureTemplate);
-    float const levelBaseDamage = levelBaseStats->GenerateBaseDamage(creatureTemplate);
+    float const levelBaseDamage = GetBaseExpansionValueForLevel(levelBaseStats->BaseDamage, highestPlayerLevel);
     levelBaseValues.MinDamage = levelBaseDamage;
     levelBaseValues.MaxDamage = levelBaseDamage * 1.5f;
     levelBaseValues.AttackPower = static_cast<float>(levelBaseStats->AttackPower);
@@ -430,6 +475,8 @@ void ScaleCreature(Creature* creature)
     info.EffectivePlayerCount = effectivePlayers;
     info.BaseMultipliers = baseMultipliers;
     info.Multipliers = finalMultipliers;
+    info.XPModifier = 1.0f;
+    info.MoneyModifier = 1.0f;
     info.Initialized = true;
 
     uint32 const oldMaxHealth = creature->GetMaxHealth();
@@ -471,6 +518,46 @@ void ScaleCreature(Creature* creature)
     float const rangedAttackPowerMultiplier = info.BaseMultipliers.Damage * levelRangedAttackPowerMultiplier;
     creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, info.BaseValues.AttackPower * attackPowerMultiplier);
     creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, info.BaseValues.RangedAttackPower * rangedAttackPowerMultiplier);
+
+    if (TempSummon* summon = creature->ToTempSummon())
+    {
+        info.IsSummon = true;
+        if (Unit* summoner = summon->GetSummonerUnit())
+        {
+            if (Creature* summonerCreature = summoner->ToCreature())
+            {
+                info.SummonerName = summonerCreature->GetName();
+                info.SummonerLevel = summonerCreature->GetLevel();
+            }
+            else if (Player* summonerPlayer = summoner->ToPlayer())
+            {
+                info.SummonerName = summonerPlayer->GetName();
+                info.SummonerLevel = summonerPlayer->GetLevel();
+            }
+        }
+    }
+    else
+    {
+        info.IsSummon = false;
+        info.SummonerName.clear();
+        info.SummonerLevel = 0;
+        info.IsSummonClone = false;
+    }
+
+    auto computeRewardModifier = [&](bool enabled, float modifier)
+    {
+        if (!enabled)
+            return 1.0f;
+
+        if (config.RewardScalingMethod == ScalingMethod::Fixed)
+            return modifier;
+
+        float avg = (finalMultipliers.Health + finalMultipliers.Damage) / 2.0f;
+        return std::max(0.0f, avg * modifier);
+    };
+
+    info.XPModifier = computeRewardModifier(config.RewardScalingXP, config.RewardScalingXPModifier);
+    info.MoneyModifier = computeRewardModifier(config.RewardScalingMoney, config.RewardScalingMoneyModifier);
 
     creature->UpdateDamagePhysical(BASE_ATTACK);
     creature->UpdateDamagePhysical(OFF_ATTACK);

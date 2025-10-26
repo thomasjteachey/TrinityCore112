@@ -32,6 +32,27 @@ namespace
         return map->IsHeroic() ? config.MinimumPlayersHeroic : config.MinimumPlayers;
     }
 
+    uint8 ComputeHighestPlayerLevel(Map const* map)
+    {
+        if (!map)
+            return 0;
+
+        uint8 highest = 0;
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            if (Player const* player = itr->GetSource())
+            {
+                if (player->IsGameMaster())
+                    continue;
+
+                highest = std::max<uint8>(highest, player->GetLevel());
+            }
+        }
+
+        return highest;
+    }
+
     void UpdateEffectivePlayerCountInternal(Map* map, uint32 now)
     {
         auto& data = GetMapData(map);
@@ -82,6 +103,9 @@ namespace
             adjustedPlayerCount = 1;
 
         data.EffectivePlayerCount = static_cast<uint32>(adjustedPlayerCount);
+        uint8 const computedHighest = ComputeHighestPlayerLevel(map);
+        if (computedHighest || data.PlayerCount == 0)
+            data.HighestPlayerLevel = computedHighest;
         data.LastPlayerCountUpdateTimeMS = now;
     }
 }
@@ -107,7 +131,7 @@ void HandleMapDestroy(Map* map)
     GetMapData(map) = Map::CustomData::AutoBalanceData{};
 }
 
-void HandlePlayerEnter(Map* map, Player* /*player*/)
+void HandlePlayerEnter(Map* map, Player* player)
 {
     if (!map)
         return;
@@ -117,6 +141,8 @@ void HandlePlayerEnter(Map* map, Player* /*player*/)
 
     ++data.PlayerCount;
     data.LastPlayerJoinTimeMS = now;
+    if (player && !player->IsGameMaster())
+        data.HighestPlayerLevel = std::max<uint8>(data.HighestPlayerLevel, player->GetLevel());
     UpdateEffectivePlayerCountInternal(map, now);
 }
 
@@ -132,6 +158,7 @@ void HandlePlayerLeave(Map* map, Player* /*player*/)
         --data.PlayerCount;
 
     data.LastPlayerLeaveTimeMS = now;
+    data.HighestPlayerLevel = ComputeHighestPlayerLevel(map);
     UpdateEffectivePlayerCountInternal(map, now);
 }
 
@@ -195,5 +222,13 @@ uint32 GetEffectivePlayerCount(Map const* map)
         return 0;
 
     return GetMapData(map).EffectivePlayerCount;
+}
+
+uint8 GetHighestPlayerLevel(Map const* map)
+{
+    if (!map)
+        return 0;
+
+    return GetMapData(map).HighestPlayerLevel;
 }
 }
