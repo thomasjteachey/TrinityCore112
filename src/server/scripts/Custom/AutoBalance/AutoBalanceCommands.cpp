@@ -20,6 +20,7 @@
 #include "AutoBalance/AutoBalanceCreature.h"
 #include "AutoBalance/AutoBalanceCreatureInfo.h"
 #include "AutoBalance/AutoBalanceMapData.h"
+#include "Configuration/Config.h"
 #include "Chat.h"
 #include "Creature.h"
 #include "GameTime.h"
@@ -31,6 +32,8 @@
 #include "StringFormat.h"
 #include <algorithm>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 using namespace Trinity::ChatCommands;
 
@@ -128,6 +131,7 @@ public:
     {
         static ChatCommandTable autoBalanceCommandTable =
         {
+            { "config", HandleAutoBalanceConfigCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "mapstat", HandleAutoBalanceMapStatCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "creaturestat", HandleAutoBalanceCreatureStatCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::No },
             { "offset", HandleAutoBalanceOffsetCommand, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes }
@@ -139,6 +143,109 @@ public:
         };
 
         return commandTable;
+    }
+
+    static bool HandleAutoBalanceConfigCommand(ChatHandler* handler)
+    {
+        AutoBalance::ConfigLoadInfo const& loadInfo = AutoBalance::GetConfigLoadInfo();
+        AutoBalance::ModuleConfig const& config = AutoBalance::GetConfig();
+
+        handler->PSendSysMessage("---");
+
+        std::string requested = loadInfo.RequestedPath.empty() ? std::string("<default>") : loadInfo.RequestedPath;
+        handler->PSendSysMessage("Requested file: %s", requested.c_str());
+
+        if (loadInfo.Loaded)
+        {
+            std::string resolved = loadInfo.ResolvedPath.empty() ? requested : loadInfo.ResolvedPath;
+            handler->PSendSysMessage("Loaded file: %s%s", resolved.c_str(), loadInfo.UsedFallback ? " (fallback)" : "");
+        }
+        else if (!loadInfo.RequestedPath.empty())
+        {
+            if (loadInfo.Error.empty())
+                handler->PSendSysMessage("Loaded file: FAILED");
+            else
+                handler->PSendSysMessage("Loaded file: FAILED (%s)", loadInfo.Error.c_str());
+        }
+        else
+            handler->PSendSysMessage("Loaded file: <none>");
+
+        if (!loadInfo.Attempts.empty())
+        {
+            std::string attempts = loadInfo.Attempts.front();
+            for (size_t i = 1; i < loadInfo.Attempts.size(); ++i)
+                attempts += ", " + loadInfo.Attempts[i];
+            handler->PSendSysMessage("Attempted paths: %s", attempts.c_str());
+        }
+
+        std::vector<std::string> keys = sConfigMgr->GetKeysByString("AutoBalance.");
+        std::unordered_set<std::string> keySet(keys.begin(), keys.end());
+        handler->PSendSysMessage("Loaded AutoBalance keys: %zu", keySet.size());
+
+        auto sourceLabel = [&](std::string const& key) -> std::string
+        {
+            if (key.empty())
+                return "default";
+
+            return keySet.count(key) ? "config" : "default";
+        };
+
+        auto printInflection = [&](char const* label, char const* baseKey, AutoBalance::InflectionPointSettings const& settings)
+        {
+            std::string base(baseKey ? baseKey : "");
+            std::string floorKey = base.empty() ? std::string() : base + ".CurveFloor";
+            std::string ceilingKey = base.empty() ? std::string() : base + ".CurveCeiling";
+            std::string bossKey = base.empty() ? std::string() : base + ".BossModifier";
+
+            std::string valueSource = sourceLabel(base);
+            std::string floorSource = sourceLabel(floorKey);
+            std::string ceilingSource = sourceLabel(ceilingKey);
+            std::string bossSource = sourceLabel(bossKey);
+
+            handler->PSendSysMessage("%s: ratio %.3f (%s) | floor %.3f (%s) | ceiling %.3f (%s) | boss %.3f (%s)",
+                label,
+                settings.Value,
+                valueSource.c_str(),
+                settings.CurveFloor,
+                floorSource.c_str(),
+                settings.CurveCeiling,
+                ceilingSource.c_str(),
+                settings.BossModifier,
+                bossSource.c_str());
+        };
+
+        printInflection("Dungeon", "AutoBalance.InflectionPoint", config.DungeonInflection);
+        printInflection("Dungeon Heroic", "AutoBalance.InflectionPointHeroic", config.DungeonHeroicInflection);
+        printInflection("Raid", "AutoBalance.InflectionPointRaid", config.RaidInflection);
+        printInflection("Raid Heroic", "AutoBalance.InflectionPointRaidHeroic", config.RaidHeroicInflection);
+        printInflection("Raid 10", "AutoBalance.InflectionPointRaid10M", config.RaidInflection10);
+        printInflection("Raid 15", "AutoBalance.InflectionPointRaid15M", config.RaidInflection15);
+        printInflection("Raid 20", "AutoBalance.InflectionPointRaid20M", config.RaidInflection20);
+        printInflection("Raid 25", "AutoBalance.InflectionPointRaid25M", config.RaidInflection25);
+        printInflection("Raid 40", "AutoBalance.InflectionPointRaid40M", config.RaidInflection40);
+        printInflection("Raid 10 Heroic", "AutoBalance.InflectionPointRaid10MHeroic", config.RaidHeroicInflection10);
+        printInflection("Raid 25 Heroic", "AutoBalance.InflectionPointRaid25MHeroic", config.RaidHeroicInflection25);
+
+        auto minSource = [&](char const* key)
+        {
+            return sourceLabel(key);
+        };
+
+        handler->PSendSysMessage("Minimum players: normal %u (%s) | heroic %u (%s) | raid %u (%s) | raid heroic %u (%s)",
+            config.MinimumPlayers, minSource("AutoBalance.MinPlayers").c_str(),
+            config.MinimumPlayersHeroic, minSource("AutoBalance.MinPlayers.Heroic").c_str(),
+            config.MinimumPlayersRaid, minSource("AutoBalance.MinPlayers.Raid").c_str(),
+            config.MinimumPlayersRaidHeroic, minSource("AutoBalance.MinPlayers.RaidHeroic").c_str());
+
+        std::string offsetSource = sourceLabel("AutoBalance.playerCountDifficultyOffset");
+        handler->PSendSysMessage("Global player offset: %d (%s)", AutoBalance::GetPlayerCountDifficultyOffset(), offsetSource.c_str());
+
+        handler->PSendSysMessage("Raid size inflection overrides: normal %zu | heroic %zu",
+            config.RaidInflectionOverrides.size(), config.RaidHeroicInflectionOverrides.size());
+        handler->PSendSysMessage("Instance inflection overrides: %zu | boss overrides: %zu",
+            config.InflectionOverridesByInstance.size(), config.InflectionBossOverridesByInstance.size());
+
+        return true;
     }
 
     static bool HandleAutoBalanceMapStatCommand(ChatHandler* handler, Optional<uint32> mapIdArg, Optional<uint32> instanceIdArg)
@@ -203,6 +310,41 @@ public:
 
         handler->PSendSysMessage("Minimum players: %u | Global offset: %d",
             minimumPlayers, AutoBalance::GetPlayerCountDifficultyOffset());
+
+        AutoBalance::ActiveInflectionInfo inflectionInfo = AutoBalance::GetInflectionInfoForMap(map, false);
+        AutoBalance::ActiveInflectionInfo bossInflectionInfo = AutoBalance::GetInflectionInfoForMap(map, true);
+
+        handler->PSendSysMessage("Inflection target players: %u", inflectionInfo.TargetPlayers);
+
+        auto computeRatio = [](AutoBalance::ActiveInflectionInfo const& info)
+        {
+            float const players = static_cast<float>(std::max<uint32>(info.TargetPlayers, 1u));
+            if (players <= 0.0f)
+                return info.Settings.Value;
+            return info.Settings.Value / players;
+        };
+
+        float const nonBossRatio = computeRatio(inflectionInfo);
+        handler->PSendSysMessage("Inflection (non-boss): ratio %.3f | value %.3f | floor %.3f | ceiling %.3f | boss modifier %.3f",
+            nonBossRatio,
+            inflectionInfo.Settings.Value,
+            inflectionInfo.Settings.CurveFloor,
+            inflectionInfo.Settings.CurveCeiling,
+            inflectionInfo.Settings.BossModifier);
+
+        float const bossRatio = computeRatio(bossInflectionInfo);
+        std::string bossNote;
+        if (bossInflectionInfo.Settings.Value == inflectionInfo.Settings.Value &&
+            bossInflectionInfo.Settings.BossModifier == inflectionInfo.Settings.BossModifier)
+        {
+            bossNote = " (same as non-boss)";
+        }
+
+        handler->PSendSysMessage("Inflection (boss): ratio %.3f | value %.3f | boss modifier %.3f%s",
+            bossRatio,
+            bossInflectionInfo.Settings.Value,
+            bossInflectionInfo.Settings.BossModifier,
+            bossNote.c_str());
 
         handler->PSendSysMessage("Last join: %s | Last leave: %s | Last count update: %s",
             FormatTimeSince(data.LastPlayerJoinTimeMS, now).c_str(),

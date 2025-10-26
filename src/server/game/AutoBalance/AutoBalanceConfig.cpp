@@ -21,6 +21,16 @@ namespace AutoBalance
         ModuleConfig s_Config;
         bool s_ConfigInitialized = false;
         bool s_LoggedStartup = false;
+        ConfigLoadInfo s_ConfigLoadInfo;
+
+        struct ConfigFileLoadResult
+        {
+            bool Loaded = false;
+            bool UsedFallback = false;
+            std::string ResolvedPath;
+            std::vector<std::string> Attempts;
+            std::string Error;
+        };
 
         constexpr size_t ToggleIndex(InstanceDifficultyToggle toggle)
         {
@@ -58,10 +68,43 @@ namespace AutoBalance
                 std::printf("AutoBalance: %s\n", message.c_str());
         }
 
-        void MergeConfigFile(std::string const& file, bool logEnabled)
+        ConfigFileLoadResult MergeConfigFile(std::string const& file, bool logEnabled)
         {
+            ConfigFileLoadResult result;
+
             if (file.empty())
-                return;
+                return result;
+
+            auto registerAttempt = [&](std::string const& candidate)
+            {
+                if (candidate.empty())
+                    return;
+
+                if (std::find(result.Attempts.begin(), result.Attempts.end(), candidate) == result.Attempts.end())
+                    result.Attempts.push_back(candidate);
+            };
+
+            auto tryLoad = [&](std::string const& candidate, bool fallback, std::string& lastError) -> bool
+            {
+                if (candidate.empty())
+                    return false;
+
+                registerAttempt(candidate);
+
+                std::string error;
+                if (sConfigMgr->LoadAdditionalFile(candidate, false, error))
+                {
+                    result.Loaded = true;
+                    result.UsedFallback = fallback;
+                    result.ResolvedPath = candidate;
+                    return true;
+                }
+
+                if (!error.empty())
+                    lastError = error;
+
+                return false;
+            };
 
             auto tryLoad = [&](std::string const& candidate, std::string& lastError) -> bool
             {
@@ -76,8 +119,8 @@ namespace AutoBalance
             };
 
             std::string error;
-            if (tryLoad(file, error))
-                return;
+            if (tryLoad(file, false, error))
+                return result;
 
             std::vector<std::string> fallbacks;
             fallbacks.reserve(4);
@@ -89,6 +132,21 @@ namespace AutoBalance
 
                 if (std::find(fallbacks.begin(), fallbacks.end(), candidate) == fallbacks.end())
                     fallbacks.emplace_back(std::move(candidate));
+            };
+
+            auto ensureDistCandidate = [&](std::string const& candidate)
+            {
+                if (candidate.empty())
+                    return;
+
+                constexpr std::string_view distSuffix = ".dist";
+                if (candidate.size() >= distSuffix.size() &&
+                    candidate.compare(candidate.size() - distSuffix.size(), distSuffix.size(), distSuffix) == 0)
+                {
+                    return;
+                }
+
+                pushUnique(candidate + std::string(distSuffix));
             };
 
             std::string directory;
@@ -108,6 +166,8 @@ namespace AutoBalance
                 });
 
                 pushUnique(directory + lowerFilename);
+                ensureDistCandidate(directory + filename);
+                ensureDistCandidate(directory + lowerFilename);
 
                 std::string modsDirectory = directory;
                 if (!modsDirectory.empty() && modsDirectory.back() != '/' && modsDirectory.back() != '\\')
@@ -116,18 +176,22 @@ namespace AutoBalance
                 modsDirectory += "mods/";
                 pushUnique(modsDirectory + filename);
                 pushUnique(modsDirectory + lowerFilename);
+                ensureDistCandidate(modsDirectory + filename);
+                ensureDistCandidate(modsDirectory + lowerFilename);
             }
 
             for (std::string const& candidate : fallbacks)
             {
-                if (tryLoad(candidate, error))
+                if (tryLoad(candidate, true, error))
                 {
                     LogMessage(MessageLevel::Info, logEnabled, "Loaded configuration file '{}' via fallback '{}'.", file, candidate);
-                    return;
+                    return result;
                 }
             }
 
+            result.Error = error;
             LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({}).", file, error);
+            return result;
         }
 
         std::string_view Trim(std::string_view view)
@@ -651,6 +715,11 @@ namespace AutoBalance
         s_Config.PlayerCountDifficultyOffset = offset;
     }
 
+    ConfigLoadInfo const& GetConfigLoadInfo()
+    {
+        return s_ConfigLoadInfo;
+    }
+
     void LoadConfig(bool reload)
     {
         bool wasInitialized = s_ConfigInitialized;
@@ -658,8 +727,18 @@ namespace AutoBalance
         std::string configFile = sConfigMgr->GetStringDefault("AutoBalance.Conf", "conf/AutoBalance.conf");
         bool logReady = reload || wasInitialized;
 
+        ConfigFileLoadResult loadResult;
         if (!configFile.empty())
-            MergeConfigFile(configFile, logReady);
+            loadResult = MergeConfigFile(configFile, logReady);
+
+        s_ConfigLoadInfo.RequestedPath = configFile;
+        s_ConfigLoadInfo.Attempts = std::move(loadResult.Attempts);
+        s_ConfigLoadInfo.ResolvedPath = std::move(loadResult.ResolvedPath);
+        s_ConfigLoadInfo.Loaded = loadResult.Loaded;
+        s_ConfigLoadInfo.UsedFallback = loadResult.UsedFallback;
+        s_ConfigLoadInfo.Error = std::move(loadResult.Error);
+        if (configFile.empty())
+            s_ConfigLoadInfo.Attempts.clear();
 
         ModuleConfig newConfig;
 
@@ -862,12 +941,21 @@ namespace AutoBalance
         s_Config = std::move(newConfig);
         s_ConfigInitialized = true;
 
-        if (reload)
-            LogMessage(MessageLevel::Info, true, "AutoBalance configuration reloaded from '{}'.", configFile);
-        else if (logReady && !s_LoggedStartup)
+        std::string logPath = s_ConfigLoadInfo.ResolvedPath.empty() ? configFile : s_ConfigLoadInfo.ResolvedPath;
+        if (logPath.empty())
+            logPath = "<defaults>";
+
+        if (s_ConfigLoadInfo.Loaded)
         {
-            LogMessage(MessageLevel::Info, true, "AutoBalance configuration loaded from '{}'.", configFile);
-            s_LoggedStartup = true;
+            if (reload)
+                LogMessage(MessageLevel::Info, true, "AutoBalance configuration reloaded from '{}'.", logPath);
+            else if (logReady && !s_LoggedStartup)
+            {
+                LogMessage(MessageLevel::Info, true, "AutoBalance configuration loaded from '{}'.", logPath);
+                s_LoggedStartup = true;
+            }
         }
+        else if (logReady && !s_LoggedStartup)
+            s_LoggedStartup = true;
     }
 }

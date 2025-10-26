@@ -4,6 +4,7 @@
 #include "Optional.h"
 #include <array>
 #include <cstddef>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -159,9 +160,20 @@ namespace AutoBalance
         std::unordered_map<uint32, StatModifierOverride> StatModifierBossOverridesByCreature;
     };
 
+    struct ConfigLoadInfo
+    {
+        bool Loaded = false;
+        bool UsedFallback = false;
+        std::string RequestedPath;
+        std::string ResolvedPath;
+        std::vector<std::string> Attempts;
+        std::string Error;
+    };
+
     ModuleConfig const& GetConfig();
     bool IsEnabled();
     void LoadConfig(bool reload);
     int32 GetPlayerCountDifficultyOffset();
     void SetPlayerCountDifficultyOffset(int32 offset);
+    ConfigLoadInfo const& GetConfigLoadInfo();
 }

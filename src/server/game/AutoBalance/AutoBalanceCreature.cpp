@@ -323,6 +323,14 @@ namespace
     }
 }
 
+ActiveInflectionInfo GetInflectionInfoForMap(Map const* map, bool forBoss)
+{
+    ActiveInflectionInfo info;
+    info.TargetPlayers = GetTargetPlayerCount(map);
+    info.Settings = SelectInflectionSettings(GetConfig(), map, info.TargetPlayers, forBoss);
+    return info;
+}
+
 AutoBalanceCreatureInfo& GetCreatureInfo(Creature& creature)
 {
     return creature.GetCustomData().AutoBalance.CreatureInfo;
