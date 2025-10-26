@@ -29,6 +29,7 @@
 #include "Player.h"
 #include "RBAC.h"
 #include "StringFormat.h"
+#include <algorithm>
 #include <string>
 
 using namespace Trinity::ChatCommands;
@@ -88,6 +89,23 @@ namespace
         return map;
     }
 
+    bool IsMapEnabled(Map const* map, AutoBalance::ModuleConfig const& config)
+    {
+        if (!map)
+            return false;
+
+        if (std::find(config.DisabledInstances.begin(), config.DisabledInstances.end(), map->GetId()) != config.DisabledInstances.end())
+            return false;
+
+        if (!map->IsDungeon())
+            return config.EnableWorldMaps;
+
+        if (map->IsRaid())
+            return config.EnableRaids;
+
+        return config.EnableDungeons;
+    }
+
     uint32 CalculateMinimumPlayers(Map const* map, AutoBalance::ModuleConfig const& config)
     {
         if (!map)
@@ -135,19 +153,65 @@ public:
         Map::CustomData::AutoBalanceData const& data = map->GetCustomData().AutoBalance;
         uint32 const now = GameTime::GetGameTimeMS();
 
-        handler->PSendSysMessage("AutoBalance map stats for map %u (instance %u):", mapId, instanceId);
-        handler->PSendSysMessage(" Active players: %u | Effective players: %u | Minimum players: %u",
-            data.PlayerCount, data.EffectivePlayerCount, CalculateMinimumPlayers(map, config));
-        handler->PSendSysMessage(" Global offset: %d | Applied offset: %d",
-            AutoBalance::GetPlayerCountDifficultyOffset(), data.QueueOffset);
-        handler->PSendSysMessage(" Last join: %s | Last leave: %s | Last count update: %s",
+        InstanceMap* instanceMap = map->ToInstanceMap();
+        uint32 const maxPlayers = instanceMap ? instanceMap->GetMaxPlayers() : 0u;
+        bool const heroic = instanceMap ? instanceMap->IsHeroic() : map->IsHeroic();
+        bool const enabled = IsMapEnabled(map, config) && AutoBalance::IsEnabled();
+
+        handler->PSendSysMessage("---");
+        handler->PSendSysMessage("%s (%u-player %s) | ID %u-%u%s",
+            map->GetMapName(),
+            maxPlayers,
+            heroic ? "Heroic" : "Normal",
+            mapId,
+            instanceId,
+            enabled ? "" : " | AutoBalance DISABLED");
+
+        uint32 nonGMPlayers = 0;
+        uint8 lowestLevel = 0;
+        uint8 highestLevel = 0;
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            if (Player const* player = itr->GetSource())
+            {
+                if (player->IsGameMaster())
+                    continue;
+
+                ++nonGMPlayers;
+                uint8 level = player->GetLevel();
+                if (!lowestLevel || level < lowestLevel)
+                    lowestLevel = level;
+                if (level > highestLevel)
+                    highestLevel = level;
+            }
+        }
+
+        handler->PSendSysMessage("Players on map: %u (Lvl %u - %u)", nonGMPlayers, lowestLevel, highestLevel);
+
+        uint32 const minimumPlayers = CalculateMinimumPlayers(map, config);
+        if (data.CombatLocked && data.CombatLockTripped)
+            handler->PSendSysMessage("Adjusted player count: %u (combat locked)", data.EffectivePlayerCount);
+        else if (nonGMPlayers < minimumPlayers && data.QueueOffset)
+            handler->PSendSysMessage("Adjusted player count: %u (map minimum + offset %d)", data.EffectivePlayerCount, data.QueueOffset);
+        else if (nonGMPlayers < minimumPlayers)
+            handler->PSendSysMessage("Adjusted player count: %u (map minimum)", data.EffectivePlayerCount);
+        else if (data.QueueOffset)
+            handler->PSendSysMessage("Adjusted player count: %u (offset %d)", data.EffectivePlayerCount, data.QueueOffset);
+        else
+            handler->PSendSysMessage("Adjusted player count: %u", data.EffectivePlayerCount);
+
+        handler->PSendSysMessage("Minimum players: %u | Global offset: %d",
+            minimumPlayers, AutoBalance::GetPlayerCountDifficultyOffset());
+
+        handler->PSendSysMessage("Last join: %s | Last leave: %s | Last count update: %s",
             FormatTimeSince(data.LastPlayerJoinTimeMS, now).c_str(),
             FormatTimeSince(data.LastPlayerLeaveTimeMS, now).c_str(),
             FormatTimeSince(data.LastPlayerCountUpdateTimeMS, now).c_str());
-        handler->PSendSysMessage(" Combat locked: %s | Dirty state: %s",
+        handler->PSendSysMessage("Combat locked: %s | Dirty state: %s",
             data.CombatLocked ? "yes" : "no",
             data.CombatStateDirty ? "yes" : "no");
-        handler->PSendSysMessage(" Last combat start: %s | Last combat end: %s",
+        handler->PSendSysMessage("Last combat start: %s | Last combat end: %s",
             FormatTimeSince(data.LastCombatStartTimeMS, now).c_str(),
             FormatTimeSince(data.LastCombatEndTimeMS, now).c_str());
 
@@ -173,18 +237,44 @@ public:
             return false;
         }
 
-        handler->PSendSysMessage("AutoBalance stats for %s (entry %u):",
-            creature->GetName().c_str(), creature->GetEntry());
-        handler->PSendSysMessage(" Level: %u | Target players: %u | Effective players: %u",
-            info->BaseLevel, info->TargetPlayerCount, info->EffectivePlayerCount);
-        handler->PSendSysMessage(" Base Health: %u | Base Mana: %u | Base Armor: %u",
-            info->BaseValues.Health, info->BaseValues.Mana, info->BaseValues.Armor);
-        handler->PSendSysMessage(" Base Damage: %.3f - %.3f | Base AP: %.3f | Base RAP: %.3f",
-            info->BaseValues.MinDamage, info->BaseValues.MaxDamage,
-            info->BaseValues.AttackPower, info->BaseValues.RangedAttackPower);
-        handler->PSendSysMessage(" Multipliers -> Health: %.3f | Mana: %.3f | Damage: %.3f | Armor: %.3f | CC: %.3f",
-            info->Multipliers.Health, info->Multipliers.Mana, info->Multipliers.Damage,
-            info->Multipliers.Armor, info->Multipliers.CrowdControlDuration);
+        handler->PSendSysMessage("---");
+
+        std::string levelInfo = Trinity::StringFormat("%u", info->UnmodifiedLevel);
+        if (info->SelectedLevel && info->SelectedLevel != info->UnmodifiedLevel)
+            levelInfo += Trinity::StringFormat("->%u", info->SelectedLevel);
+
+        std::string flags;
+        if (info->IsBoss)
+            flags += " | Boss";
+
+        handler->PSendSysMessage("%s (%s%s), %s",
+            creature->GetName().c_str(), levelInfo.c_str(), flags.c_str(),
+            info->ActiveForMapStats ? "active for map stats" : "ignored for map stats");
+
+        handler->PSendSysMessage("Creature difficulty level: %u", info->InstancePlayerCount);
+
+        if (info->IsSummon)
+        {
+            if (!info->SummonerName.empty())
+                handler->PSendSysMessage("Summon of %s (Lvl %u)", info->SummonerName.c_str(), info->SummonerLevel);
+            else
+                handler->PSendSysMessage("Summon without summoner data");
+        }
+
+        auto printMultiplier = [&](char const* label, float baseMultiplier, float finalMultiplier)
+        {
+            if (info->SelectedLevel && info->SelectedLevel != info->UnmodifiedLevel)
+                handler->PSendSysMessage("%s multiplier: %.3f -> %.3f", label, baseMultiplier, finalMultiplier);
+            else
+                handler->PSendSysMessage("%s multiplier: %.3f", label, finalMultiplier);
+        };
+
+        printMultiplier("Health", info->BaseMultipliers.Health, info->Multipliers.Health);
+        printMultiplier("Mana", info->BaseMultipliers.Mana, info->Multipliers.Mana);
+        printMultiplier("Armor", info->BaseMultipliers.Armor, info->Multipliers.Armor);
+        printMultiplier("Damage", info->BaseMultipliers.Damage, info->Multipliers.Damage);
+        handler->PSendSysMessage("CC duration multiplier: %.3f", info->Multipliers.CrowdControlDuration);
+        handler->PSendSysMessage("XP multiplier: %.3f | Money multiplier: %.3f", info->XPModifier, info->MoneyModifier);
 
         return true;
     }

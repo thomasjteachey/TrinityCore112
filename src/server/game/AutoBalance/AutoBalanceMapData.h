@@ -17,4 +17,5 @@ namespace AutoBalance
 
     uint32 GetActivePlayerCount(Map const* map);
     uint32 GetEffectivePlayerCount(Map const* map);
+    uint8 GetHighestPlayerLevel(Map const* map);
 }
