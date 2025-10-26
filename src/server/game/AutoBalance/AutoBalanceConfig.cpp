@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <utility>
 
 namespace AutoBalance
@@ -20,6 +21,16 @@ namespace AutoBalance
         ModuleConfig s_Config;
         bool s_ConfigInitialized = false;
         bool s_LoggedStartup = false;
+        ConfigLoadInfo s_ConfigLoadInfo;
+
+        struct ConfigFileLoadResult
+        {
+            bool Loaded = false;
+            bool UsedFallback = false;
+            std::string ResolvedPath;
+            std::vector<std::string> Attempts;
+            std::string Error;
+        };
 
         constexpr size_t ToggleIndex(InstanceDifficultyToggle toggle)
         {
@@ -57,14 +68,164 @@ namespace AutoBalance
                 std::printf("AutoBalance: %s\n", message.c_str());
         }
 
-        void MergeConfigFile(std::string const& file, bool logEnabled)
+        bool IsAbsolutePath(std::string const& path)
         {
-            if (file.empty())
-                return;
+            if (path.empty())
+                return false;
 
-            std::string error;
-            if (!sConfigMgr->LoadAdditionalFile(file, false, error))
-                LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({})", file, error);
+            if (path[0] == '/' || path[0] == '\\')
+                return true;
+
+            if (path.size() > 1 && path[1] == ':' && std::isalpha(static_cast<unsigned char>(path[0])))
+                return true;
+
+            return false;
+        }
+
+        std::string ExtractDirectory(std::string const& path)
+        {
+            size_t slash = path.find_last_of("/\\");
+            if (slash == std::string::npos)
+                return { };
+
+            return path.substr(0, slash + 1);
+        }
+
+        ConfigFileLoadResult MergeConfigFile(std::string const& file, bool logEnabled)
+        {
+            ConfigFileLoadResult result;
+
+            if (file.empty())
+                return result;
+
+            auto registerAttempt = [&](std::string const& candidate)
+            {
+                if (candidate.empty())
+                    return;
+
+                if (std::find(result.Attempts.begin(), result.Attempts.end(), candidate) == result.Attempts.end())
+                    result.Attempts.push_back(candidate);
+            };
+
+            std::string lastError;
+
+            auto tryLoad = [&](std::string const& candidate, bool fallback) -> bool
+            {
+                if (candidate.empty())
+                    return false;
+
+                registerAttempt(candidate);
+
+                std::string error;
+                if (sConfigMgr->LoadAdditionalFile(candidate, false, error))
+                {
+                    result.Loaded = true;
+                    result.UsedFallback = fallback;
+                    result.ResolvedPath = candidate;
+                    return true;
+                }
+
+                if (!error.empty())
+                    lastError = error;
+
+                return false;
+            };
+
+            std::vector<std::string> fallbacks;
+            fallbacks.reserve(4);
+
+            auto pushUnique = [&](std::string candidate)
+            {
+                if (candidate.empty() || candidate == file)
+                    return;
+
+                if (std::find(fallbacks.begin(), fallbacks.end(), candidate) == fallbacks.end())
+                    fallbacks.emplace_back(std::move(candidate));
+            };
+
+            auto addJoinedCandidate = [&](std::string const& baseDir, std::string const& relative)
+            {
+                if (relative.empty())
+                    return;
+
+                if (baseDir.empty())
+                {
+                    pushUnique(relative);
+                    return;
+                }
+
+                std::string candidate = baseDir;
+                if (!candidate.empty() && candidate.back() != '/' && candidate.back() != '\\')
+                    candidate.push_back('/');
+
+                candidate += relative;
+                pushUnique(std::move(candidate));
+            };
+
+            std::string const primaryDirectory = ExtractDirectory(file);
+            std::string const filename = primaryDirectory.empty() ? file : file.substr(primaryDirectory.size());
+            std::string const lowerFilename = [&]() -> std::string
+            {
+                std::string lowered = filename;
+                std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c)
+                {
+                    return static_cast<char>(std::tolower(c));
+                });
+                return lowered;
+            }();
+
+            std::string const configDirectory = ExtractDirectory(sConfigMgr->GetFilename());
+
+            if (tryLoad(file, false))
+                return result;
+
+            if (!filename.empty())
+            {
+                pushUnique(primaryDirectory + lowerFilename);
+
+                if (!IsAbsolutePath(file))
+                {
+                    addJoinedCandidate(configDirectory, file);
+                    addJoinedCandidate(configDirectory, primaryDirectory + filename);
+                    addJoinedCandidate(configDirectory, filename);
+
+                    if (lowerFilename != filename)
+                    {
+                        addJoinedCandidate(configDirectory, lowerFilename);
+                        addJoinedCandidate(configDirectory, primaryDirectory + lowerFilename);
+                    }
+                }
+
+                std::string modsDirectory = primaryDirectory;
+                if (!modsDirectory.empty() && modsDirectory.back() != '/' && modsDirectory.back() != '\\')
+                    modsDirectory.push_back('/');
+
+                modsDirectory += "mods/";
+                pushUnique(modsDirectory + filename);
+                if (lowerFilename != filename)
+                    pushUnique(modsDirectory + lowerFilename);
+
+                if (!configDirectory.empty() && !IsAbsolutePath(file))
+                {
+                    addJoinedCandidate(configDirectory, modsDirectory + filename);
+                    if (lowerFilename != filename)
+                        addJoinedCandidate(configDirectory, modsDirectory + lowerFilename);
+                }
+            }
+
+            for (std::string const& candidate : fallbacks)
+            {
+                if (tryLoad(candidate, true))
+                {
+                    LogMessage(MessageLevel::Info, logEnabled, "Loaded configuration file '{}' via fallback '{}'.", file, candidate);
+                    return result;
+                }
+            }
+
+            std::string const errorMessage = lastError.empty() ? std::string("unknown error") : lastError;
+            result.Error = errorMessage;
+            LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({}).", file, errorMessage);
+            return result;
         }
 
         std::string_view Trim(std::string_view view)
@@ -145,13 +306,29 @@ namespace AutoBalance
             return { };
         }
 
-        InflectionPointSettings ParseInflectionPointSettings(char const* valueOption, char const* floorOption, char const* ceilingOption, char const* bossOption, InflectionPointSettings defaults)
+        float ParseInflectionPointField(char const* option, float fallback, bool logEnabled)
+        {
+            if (!option)
+                return fallback;
+
+            std::string const raw = sConfigMgr->GetStringDefault(option, "");
+            std::string_view const trimmed = Trim(raw);
+            if (trimmed.empty())
+                return fallback;
+
+            if (Optional<float> parsed = ParseOptionalFloat(std::string(trimmed), option, logEnabled))
+                return *parsed;
+
+            return fallback;
+        }
+
+        InflectionPointSettings ParseInflectionPointSettings(char const* valueOption, char const* floorOption, char const* ceilingOption, char const* bossOption, InflectionPointSettings defaults, bool logEnabled)
         {
             InflectionPointSettings settings = defaults;
-            settings.Value = sConfigMgr->GetFloatDefault(valueOption, defaults.Value);
-            settings.CurveFloor = sConfigMgr->GetFloatDefault(floorOption, defaults.CurveFloor);
-            settings.CurveCeiling = sConfigMgr->GetFloatDefault(ceilingOption, defaults.CurveCeiling);
-            settings.BossModifier = sConfigMgr->GetFloatDefault(bossOption, defaults.BossModifier);
+            settings.Value = ParseInflectionPointField(valueOption, settings.Value, logEnabled);
+            settings.CurveFloor = ParseInflectionPointField(floorOption, settings.CurveFloor, logEnabled);
+            settings.CurveCeiling = ParseInflectionPointField(ceilingOption, settings.CurveCeiling, logEnabled);
+            settings.BossModifier = ParseInflectionPointField(bossOption, settings.BossModifier, logEnabled);
             return settings;
         }
 
@@ -416,6 +593,96 @@ namespace AutoBalance
             return overrides;
         }
 
+        ScalingMethod ParseScalingMethod(char const* option, ScalingMethod defaultValue, bool logEnabled)
+        {
+            std::string raw = sConfigMgr->GetStringDefault(option, defaultValue == ScalingMethod::Dynamic ? "dynamic" : "fixed");
+            std::string lowered = raw;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            if (lowered == "dynamic")
+                return ScalingMethod::Dynamic;
+
+            if (lowered == "fixed")
+                return ScalingMethod::Fixed;
+
+            LogMessage(MessageLevel::Warn, logEnabled, "Invalid scaling method '{}' for {}. Expected 'dynamic' or 'fixed'. Using default ({}).",
+                raw, option, defaultValue == ScalingMethod::Dynamic ? "dynamic" : "fixed");
+            return defaultValue;
+        }
+
+        LevelScalingSettings ParseLevelScalingSettings(char const* ceilingOption, char const* floorOption, LevelScalingSettings defaults, bool logEnabled)
+        {
+            LevelScalingSettings settings = defaults;
+
+            int32 ceiling = sConfigMgr->GetIntDefault(ceilingOption, defaults.Ceiling);
+            int32 floor = sConfigMgr->GetIntDefault(floorOption, defaults.Floor);
+
+            if (ceiling < 0)
+            {
+                LogMessage(MessageLevel::Warn, logEnabled, "{} ({}) must be >= 0. Using {} instead.", ceilingOption, ceiling, defaults.Ceiling);
+                ceiling = defaults.Ceiling;
+            }
+
+            if (floor < 0)
+            {
+                LogMessage(MessageLevel::Warn, logEnabled, "{} ({}) must be >= 0. Using {} instead.", floorOption, floor, defaults.Floor);
+                floor = defaults.Floor;
+            }
+
+            settings.Ceiling = static_cast<int8>(ceiling);
+            settings.Floor = static_cast<int8>(floor);
+            return settings;
+        }
+
+        std::unordered_map<uint32, LevelScalingSettings> ParseLevelScalingOverrides(std::string const& value, bool logEnabled)
+        {
+            std::unordered_map<uint32, LevelScalingSettings> overrides;
+
+            for (std::string_view entry : Trinity::Tokenize(value, ',', false))
+            {
+                entry = Trim(entry);
+                if (entry.empty())
+                    continue;
+
+                std::istringstream stream{std::string(entry)};
+                uint32 mapId = 0;
+                if (!(stream >> mapId))
+                {
+                    LogMessage(MessageLevel::Warn, logEnabled, "Ignoring entry '{}' in AutoBalance.LevelScaling.DynamicLevel.PerInstance: missing map id.", entry);
+                    continue;
+                }
+
+                LevelScalingSettings settings{};
+                settings.Floor = -1;
+                settings.Ceiling = -1;
+                settings.SkipHigher = -1;
+                settings.SkipLower = -1;
+
+                auto readNext = [&](int8& field)
+                {
+                    int32 temp = 0;
+                    if (!(stream >> temp))
+                        return false;
+
+                    field = static_cast<int8>(temp);
+                    return true;
+                };
+
+                if (!readNext(settings.SkipHigher))
+                    settings.SkipHigher = -1;
+                if (!readNext(settings.SkipLower))
+                    settings.SkipLower = -1;
+                if (!readNext(settings.Ceiling))
+                    settings.Ceiling = -1;
+                if (!readNext(settings.Floor))
+                    settings.Floor = -1;
+
+                overrides[mapId] = settings;
+            }
+
+            return overrides;
+        }
+
         void Validate(ModuleConfig& config, bool logEnabled)
         {
             if (!config.MinimumPlayers)
@@ -482,6 +749,11 @@ namespace AutoBalance
         s_Config.PlayerCountDifficultyOffset = offset;
     }
 
+    ConfigLoadInfo const& GetConfigLoadInfo()
+    {
+        return s_ConfigLoadInfo;
+    }
+
     void LoadConfig(bool reload)
     {
         bool wasInitialized = s_ConfigInitialized;
@@ -489,8 +761,18 @@ namespace AutoBalance
         std::string configFile = sConfigMgr->GetStringDefault("AutoBalance.Conf", "conf/AutoBalance.conf");
         bool logReady = reload || wasInitialized;
 
+        ConfigFileLoadResult loadResult;
         if (!configFile.empty())
-            MergeConfigFile(configFile, logReady);
+            loadResult = MergeConfigFile(configFile, logReady);
+
+        s_ConfigLoadInfo.RequestedPath = configFile;
+        s_ConfigLoadInfo.Attempts = std::move(loadResult.Attempts);
+        s_ConfigLoadInfo.ResolvedPath = std::move(loadResult.ResolvedPath);
+        s_ConfigLoadInfo.Loaded = loadResult.Loaded;
+        s_ConfigLoadInfo.UsedFallback = loadResult.UsedFallback;
+        s_ConfigLoadInfo.Error = std::move(loadResult.Error);
+        if (configFile.empty())
+            s_ConfigLoadInfo.Attempts.clear();
 
         ModuleConfig newConfig;
 
@@ -560,8 +842,24 @@ namespace AutoBalance
             minPlayersHeroic = 0;
         }
 
+        int32 minPlayersRaid = sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.Raid", minPlayers);
+        if (minPlayersRaid < 0)
+        {
+            LogMessage(MessageLevel::Warn, logReady, "AutoBalance.MinPlayers.Raid ({}) must be >= 0. Using 0 instead.", minPlayersRaid);
+            minPlayersRaid = 0;
+        }
+
+        int32 minPlayersRaidHeroic = sConfigMgr->GetIntDefault("AutoBalance.MinPlayers.RaidHeroic", minPlayersHeroic);
+        if (minPlayersRaidHeroic < 0)
+        {
+            LogMessage(MessageLevel::Warn, logReady, "AutoBalance.MinPlayers.RaidHeroic ({}) must be >= 0. Using 0 instead.", minPlayersRaidHeroic);
+            minPlayersRaidHeroic = 0;
+        }
+
         newConfig.MinimumPlayers = static_cast<uint32>(minPlayers);
         newConfig.MinimumPlayersHeroic = static_cast<uint32>(minPlayersHeroic);
+        newConfig.MinimumPlayersRaid = static_cast<uint32>(minPlayersRaid);
+        newConfig.MinimumPlayersRaidHeroic = static_cast<uint32>(minPlayersRaidHeroic);
 
         newConfig.DisabledInstances = ParseDisabledInstances(sConfigMgr->GetStringDefault("AutoBalance.Disable.PerInstance", ""), logReady);
         newConfig.MinPlayersOverridesNormal = ParseMinPlayersOverrides(sConfigMgr->GetStringDefault("AutoBalance.MinPlayers.PerInstance", ""), logReady, "AutoBalance.MinPlayers.PerInstance");
@@ -573,11 +871,34 @@ namespace AutoBalance
         newConfig.MinManaModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MinManaModifier", 0.01f));
         newConfig.MinDamageModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.MinDamageModifier", 0.01f));
 
+        newConfig.LevelScalingEnabled = sConfigMgr->GetBoolDefault("AutoBalance.LevelScaling", false);
+        newConfig.LevelScalingMethod = ParseScalingMethod("AutoBalance.LevelScaling.Method", ScalingMethod::Dynamic, logReady);
+        newConfig.LevelScalingSkipHigherLevels = static_cast<int8>(sConfigMgr->GetIntDefault("AutoBalance.LevelScaling.SkipHigherLevels", 0));
+        newConfig.LevelScalingSkipLowerLevels = static_cast<int8>(sConfigMgr->GetIntDefault("AutoBalance.LevelScaling.SkipLowerLevels", 0));
+        newConfig.LevelScalingDungeonSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.Dungeons", "AutoBalance.LevelScaling.DynamicLevel.Floor.Dungeons", newConfig.LevelScalingDungeonSettings, logReady);
+        newConfig.LevelScalingHeroicDungeonSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicDungeons", "AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicDungeons", newConfig.LevelScalingHeroicDungeonSettings, logReady);
+        newConfig.LevelScalingRaidSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.Raids", "AutoBalance.LevelScaling.DynamicLevel.Floor.Raids", newConfig.LevelScalingRaidSettings, logReady);
+        newConfig.LevelScalingHeroicRaidSettings = ParseLevelScalingSettings("AutoBalance.LevelScaling.DynamicLevel.Ceiling.HeroicRaids", "AutoBalance.LevelScaling.DynamicLevel.Floor.HeroicRaids", newConfig.LevelScalingHeroicRaidSettings, logReady);
+        newConfig.LevelScalingOverridesByInstance = ParseLevelScalingOverrides(sConfigMgr->GetStringDefault("AutoBalance.LevelScaling.DynamicLevel.PerInstance", ""), logReady);
+
+        newConfig.RewardScalingMethod = ParseScalingMethod("AutoBalance.RewardScaling.Method", ScalingMethod::Dynamic, logReady);
+        newConfig.RewardScalingXP = sConfigMgr->GetBoolDefault("AutoBalance.RewardScaling.XP", false);
+        newConfig.RewardScalingXPModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.RewardScaling.XP.Modifier", 1.0f));
+        newConfig.RewardScalingMoney = sConfigMgr->GetBoolDefault("AutoBalance.RewardScaling.Money", false);
+        newConfig.RewardScalingMoneyModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.RewardScaling.Money.Modifier", 1.0f));
+
         auto const defaultInflection = InflectionPointSettings{};
-        newConfig.DungeonInflection = ParseInflectionPointSettings("AutoBalance.InflectionPoint", "AutoBalance.InflectionPoint.CurveFloor", "AutoBalance.InflectionPoint.CurveCeiling", "AutoBalance.InflectionPoint.BossModifier", defaultInflection);
-        newConfig.DungeonHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointHeroic", "AutoBalance.InflectionPointHeroic.CurveFloor", "AutoBalance.InflectionPointHeroic.CurveCeiling", "AutoBalance.InflectionPointHeroic.BossModifier", defaultInflection);
-        newConfig.RaidInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid", "AutoBalance.InflectionPointRaid.CurveFloor", "AutoBalance.InflectionPointRaid.CurveCeiling", "AutoBalance.InflectionPointRaid.BossModifier", defaultInflection);
-        newConfig.RaidHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaidHeroic", "AutoBalance.InflectionPointRaidHeroic.CurveFloor", "AutoBalance.InflectionPointRaidHeroic.CurveCeiling", "AutoBalance.InflectionPointRaidHeroic.BossModifier", defaultInflection);
+        newConfig.DungeonInflection = ParseInflectionPointSettings("AutoBalance.InflectionPoint", "AutoBalance.InflectionPoint.CurveFloor", "AutoBalance.InflectionPoint.CurveCeiling", "AutoBalance.InflectionPoint.BossModifier", defaultInflection, logReady);
+        newConfig.DungeonHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointHeroic", "AutoBalance.InflectionPointHeroic.CurveFloor", "AutoBalance.InflectionPointHeroic.CurveCeiling", "AutoBalance.InflectionPointHeroic.BossModifier", defaultInflection, logReady);
+        newConfig.RaidInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid", "AutoBalance.InflectionPointRaid.CurveFloor", "AutoBalance.InflectionPointRaid.CurveCeiling", "AutoBalance.InflectionPointRaid.BossModifier", defaultInflection, logReady);
+        newConfig.RaidHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaidHeroic", "AutoBalance.InflectionPointRaidHeroic.CurveFloor", "AutoBalance.InflectionPointRaidHeroic.CurveCeiling", "AutoBalance.InflectionPointRaidHeroic.BossModifier", defaultInflection, logReady);
+        newConfig.RaidInflection10 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid10M", "AutoBalance.InflectionPointRaid10M.CurveFloor", "AutoBalance.InflectionPointRaid10M.CurveCeiling", "AutoBalance.InflectionPointRaid10M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection15 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid15M", "AutoBalance.InflectionPointRaid15M.CurveFloor", "AutoBalance.InflectionPointRaid15M.CurveCeiling", "AutoBalance.InflectionPointRaid15M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection20 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid20M", "AutoBalance.InflectionPointRaid20M.CurveFloor", "AutoBalance.InflectionPointRaid20M.CurveCeiling", "AutoBalance.InflectionPointRaid20M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection25 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid25M", "AutoBalance.InflectionPointRaid25M.CurveFloor", "AutoBalance.InflectionPointRaid25M.CurveCeiling", "AutoBalance.InflectionPointRaid25M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection40 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid40M", "AutoBalance.InflectionPointRaid40M.CurveFloor", "AutoBalance.InflectionPointRaid40M.CurveCeiling", "AutoBalance.InflectionPointRaid40M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidHeroicInflection10 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid10MHeroic", "AutoBalance.InflectionPointRaid10MHeroic.CurveFloor", "AutoBalance.InflectionPointRaid10MHeroic.CurveCeiling", "AutoBalance.InflectionPointRaid10MHeroic.BossModifier", newConfig.RaidHeroicInflection, logReady);
+        newConfig.RaidHeroicInflection25 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid25MHeroic", "AutoBalance.InflectionPointRaid25MHeroic.CurveFloor", "AutoBalance.InflectionPointRaid25MHeroic.CurveCeiling", "AutoBalance.InflectionPointRaid25MHeroic.BossModifier", newConfig.RaidHeroicInflection, logReady);
 
         auto applyRaidInflectionOverride = [&](uint32 size, char const* normalPrefix, char const* heroicPrefix)
         {
@@ -654,12 +975,21 @@ namespace AutoBalance
         s_Config = std::move(newConfig);
         s_ConfigInitialized = true;
 
-        if (reload)
-            LogMessage(MessageLevel::Info, true, "AutoBalance configuration reloaded from '{}'.", configFile);
-        else if (logReady && !s_LoggedStartup)
+        std::string logPath = s_ConfigLoadInfo.ResolvedPath.empty() ? configFile : s_ConfigLoadInfo.ResolvedPath;
+        if (logPath.empty())
+            logPath = "<defaults>";
+
+        if (s_ConfigLoadInfo.Loaded)
         {
-            LogMessage(MessageLevel::Info, true, "AutoBalance configuration loaded from '{}'.", configFile);
-            s_LoggedStartup = true;
+            if (reload)
+                LogMessage(MessageLevel::Info, true, "AutoBalance configuration reloaded from '{}'.", logPath);
+            else if (logReady && !s_LoggedStartup)
+            {
+                LogMessage(MessageLevel::Info, true, "AutoBalance configuration loaded from '{}'.", logPath);
+                s_LoggedStartup = true;
+            }
         }
+        else if (logReady && !s_LoggedStartup)
+            s_LoggedStartup = true;
     }
 }

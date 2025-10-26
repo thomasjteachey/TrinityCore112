@@ -4,12 +4,27 @@
 #include "Optional.h"
 #include <array>
 #include <cstddef>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace AutoBalance
 {
     inline constexpr char const* LogFilter = "module.AutoBalance";
+
+    enum class ScalingMethod : uint8
+    {
+        Fixed,
+        Dynamic
+    };
+
+    struct LevelScalingSettings
+    {
+        int8 Floor = 0;
+        int8 Ceiling = 0;
+        int8 SkipHigher = -1;
+        int8 SkipLower = -1;
+    };
 
     enum class InstanceDifficultyToggle : uint8
     {
@@ -29,7 +44,7 @@ namespace AutoBalance
 
     struct InflectionPointSettings
     {
-        float Value = 0.5f;
+        float Value = 0.35f;
         float CurveFloor = 0.0f;
         float CurveCeiling = 1.0f;
         float BossModifier = 1.0f;
@@ -82,6 +97,8 @@ namespace AutoBalance
         bool DebugLogging = false;
         uint32 MinimumPlayers = 1;
         uint32 MinimumPlayersHeroic = 1;
+        uint32 MinimumPlayersRaid = 1;
+        uint32 MinimumPlayersRaidHeroic = 1;
         std::array<bool, static_cast<size_t>(InstanceDifficultyToggle::Count)> InstanceToggles{};
         std::vector<uint32> DisabledInstances;
         std::unordered_map<uint32, uint32> MinPlayersOverridesNormal;
@@ -93,10 +110,33 @@ namespace AutoBalance
         float MinManaModifier = 0.01f;
         float MinDamageModifier = 0.01f;
 
+        bool LevelScalingEnabled = false;
+        ScalingMethod LevelScalingMethod = ScalingMethod::Dynamic;
+        int8 LevelScalingSkipHigherLevels = 0;
+        int8 LevelScalingSkipLowerLevels = 0;
+        LevelScalingSettings LevelScalingDungeonSettings{5, 1, -1, -1};
+        LevelScalingSettings LevelScalingHeroicDungeonSettings{5, 2, -1, -1};
+        LevelScalingSettings LevelScalingRaidSettings{5, 3, -1, -1};
+        LevelScalingSettings LevelScalingHeroicRaidSettings{5, 3, -1, -1};
+        std::unordered_map<uint32, LevelScalingSettings> LevelScalingOverridesByInstance;
+
+        bool RewardScalingXP = false;
+        bool RewardScalingMoney = false;
+        float RewardScalingXPModifier = 1.0f;
+        float RewardScalingMoneyModifier = 1.0f;
+        ScalingMethod RewardScalingMethod = ScalingMethod::Dynamic;
+
         InflectionPointSettings DungeonInflection;
         InflectionPointSettings DungeonHeroicInflection;
         InflectionPointSettings RaidInflection;
         InflectionPointSettings RaidHeroicInflection;
+        InflectionPointSettings RaidInflection10;
+        InflectionPointSettings RaidInflection15;
+        InflectionPointSettings RaidInflection20;
+        InflectionPointSettings RaidInflection25;
+        InflectionPointSettings RaidInflection40;
+        InflectionPointSettings RaidHeroicInflection10;
+        InflectionPointSettings RaidHeroicInflection25;
         std::unordered_map<uint32, InflectionOverride> RaidInflectionOverrides;
         std::unordered_map<uint32, InflectionOverride> RaidHeroicInflectionOverrides;
         std::unordered_map<uint32, InflectionOverride> InflectionOverridesByInstance;
@@ -120,9 +160,20 @@ namespace AutoBalance
         std::unordered_map<uint32, StatModifierOverride> StatModifierBossOverridesByCreature;
     };
 
+    struct ConfigLoadInfo
+    {
+        bool Loaded = false;
+        bool UsedFallback = false;
+        std::string RequestedPath;
+        std::string ResolvedPath;
+        std::vector<std::string> Attempts;
+        std::string Error;
+    };
+
     ModuleConfig const& GetConfig();
     bool IsEnabled();
     void LoadConfig(bool reload);
     int32 GetPlayerCountDifficultyOffset();
     void SetPlayerCountDifficultyOffset(int32 offset);
+    ConfigLoadInfo const& GetConfigLoadInfo();
 }
