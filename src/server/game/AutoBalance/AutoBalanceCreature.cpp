@@ -15,6 +15,8 @@ namespace AutoBalance
 {
 namespace
 {
+    constexpr float DefaultInflectionRatio = 0.35f;
+
     bool IsMapEnabled(ModuleConfig const& config, Map const* map)
     {
         if (!map)
@@ -172,7 +174,7 @@ namespace
 
         auto assignFrom = [&](InflectionPointSettings const& base)
         {
-            float const ratio = sanitizeRatio(base.Value, 0.5f);
+            float const ratio = sanitizeRatio(base.Value, DefaultInflectionRatio);
             inflectionValue = playerCount * ratio;
             curveFloor = base.CurveFloor;
             curveCeiling = base.CurveCeiling;
@@ -272,7 +274,7 @@ namespace
         }
 
         if (!std::isfinite(inflectionValue) || inflectionValue <= 0.0f)
-            inflectionValue = playerCount * 0.5f;
+            inflectionValue = playerCount * DefaultInflectionRatio;
 
         if (!std::isfinite(curveFloor))
             curveFloor = 0.0f;

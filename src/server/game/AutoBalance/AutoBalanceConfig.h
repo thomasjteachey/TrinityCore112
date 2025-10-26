@@ -43,7 +43,7 @@ namespace AutoBalance
 
     struct InflectionPointSettings
     {
-        float Value = 0.5f;
+        float Value = 0.35f;
         float CurveFloor = 0.0f;
         float CurveCeiling = 1.0f;
         float BossModifier = 1.0f;
