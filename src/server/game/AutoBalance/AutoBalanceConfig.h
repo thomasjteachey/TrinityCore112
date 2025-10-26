@@ -11,6 +11,20 @@ namespace AutoBalance
 {
     inline constexpr char const* LogFilter = "module.AutoBalance";
 
+    enum class ScalingMethod : uint8
+    {
+        Fixed,
+        Dynamic
+    };
+
+    struct LevelScalingSettings
+    {
+        int8 Floor = 0;
+        int8 Ceiling = 0;
+        int8 SkipHigher = -1;
+        int8 SkipLower = -1;
+    };
+
     enum class InstanceDifficultyToggle : uint8
     {
         Normal5,
@@ -92,6 +106,22 @@ namespace AutoBalance
         float MinHPModifier = 0.01f;
         float MinManaModifier = 0.01f;
         float MinDamageModifier = 0.01f;
+
+        bool LevelScalingEnabled = false;
+        ScalingMethod LevelScalingMethod = ScalingMethod::Dynamic;
+        int8 LevelScalingSkipHigherLevels = 0;
+        int8 LevelScalingSkipLowerLevels = 0;
+        LevelScalingSettings LevelScalingDungeonSettings{5, 1, -1, -1};
+        LevelScalingSettings LevelScalingHeroicDungeonSettings{5, 2, -1, -1};
+        LevelScalingSettings LevelScalingRaidSettings{5, 3, -1, -1};
+        LevelScalingSettings LevelScalingHeroicRaidSettings{5, 3, -1, -1};
+        std::unordered_map<uint32, LevelScalingSettings> LevelScalingOverridesByInstance;
+
+        bool RewardScalingXP = false;
+        bool RewardScalingMoney = false;
+        float RewardScalingXPModifier = 1.0f;
+        float RewardScalingMoneyModifier = 1.0f;
+        ScalingMethod RewardScalingMethod = ScalingMethod::Dynamic;
 
         InflectionPointSettings DungeonInflection;
         InflectionPointSettings DungeonHeroicInflection;

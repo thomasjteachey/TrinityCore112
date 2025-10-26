@@ -364,8 +364,11 @@ void ScaleCreature(Creature* creature)
         return;
 
     AutoBalanceCreatureInfo& info = GetCreatureInfo(*creature);
+    info.IsBoss = isBoss;
+    info.InstancePlayerCount = effectivePlayers;
 
     uint8 const level = creature->GetLevel();
+    info.SelectedLevel = level;
     uint8 const unmodifiedLevel = info.Initialized ? info.UnmodifiedLevel : level;
 
     CreatureBaseStats const* originalBaseStats = sObjectMgr->GetCreatureBaseStats(unmodifiedLevel, creatureTemplate->unit_class);
@@ -472,6 +475,8 @@ void ScaleCreature(Creature* creature)
     info.EffectivePlayerCount = effectivePlayers;
     info.BaseMultipliers = baseMultipliers;
     info.Multipliers = finalMultipliers;
+    info.XPModifier = 1.0f;
+    info.MoneyModifier = 1.0f;
     info.Initialized = true;
 
     uint32 const oldMaxHealth = creature->GetMaxHealth();
@@ -513,6 +518,46 @@ void ScaleCreature(Creature* creature)
     float const rangedAttackPowerMultiplier = info.BaseMultipliers.Damage * levelRangedAttackPowerMultiplier;
     creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, info.BaseValues.AttackPower * attackPowerMultiplier);
     creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, info.BaseValues.RangedAttackPower * rangedAttackPowerMultiplier);
+
+    if (TempSummon* summon = creature->ToTempSummon())
+    {
+        info.IsSummon = true;
+        if (Unit* summoner = summon->GetSummonerUnit())
+        {
+            if (Creature* summonerCreature = summoner->ToCreature())
+            {
+                info.SummonerName = summonerCreature->GetName();
+                info.SummonerLevel = summonerCreature->GetLevel();
+            }
+            else if (Player* summonerPlayer = summoner->ToPlayer())
+            {
+                info.SummonerName = summonerPlayer->GetName();
+                info.SummonerLevel = summonerPlayer->GetLevel();
+            }
+        }
+    }
+    else
+    {
+        info.IsSummon = false;
+        info.SummonerName.clear();
+        info.SummonerLevel = 0;
+        info.IsSummonClone = false;
+    }
+
+    auto computeRewardModifier = [&](bool enabled, float modifier)
+    {
+        if (!enabled)
+            return 1.0f;
+
+        if (config.RewardScalingMethod == ScalingMethod::Fixed)
+            return modifier;
+
+        float avg = (finalMultipliers.Health + finalMultipliers.Damage) / 2.0f;
+        return std::max(0.0f, avg * modifier);
+    };
+
+    info.XPModifier = computeRewardModifier(config.RewardScalingXP, config.RewardScalingXPModifier);
+    info.MoneyModifier = computeRewardModifier(config.RewardScalingMoney, config.RewardScalingMoneyModifier);
 
     creature->UpdateDamagePhysical(BASE_ATTACK);
     creature->UpdateDamagePhysical(OFF_ATTACK);
