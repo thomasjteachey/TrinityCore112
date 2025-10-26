@@ -46,18 +46,6 @@ namespace
         return 1;
     }
 
-    void ApplyInflectionOverride(InflectionPointSettings& settings, InflectionOverride const& override)
-    {
-        if (override.Value)
-            settings.Value = *override.Value;
-        if (override.CurveFloor)
-            settings.CurveFloor = *override.CurveFloor;
-        if (override.CurveCeiling)
-            settings.CurveCeiling = *override.CurveCeiling;
-        if (override.BossModifier)
-            settings.BossModifier = *override.BossModifier;
-    }
-
     void ApplyStatOverride(StatModifierValues& values, StatModifierOverride const& override)
     {
         if (override.Global)
@@ -167,33 +155,135 @@ namespace
 
     InflectionPointSettings SelectInflectionSettings(ModuleConfig const& config, Map const* map, uint32 targetPlayers, bool isBoss)
     {
-        InflectionPointSettings settings = map->IsRaid()
-            ? (map->IsHeroic() ? config.RaidHeroicInflection : config.RaidInflection)
-            : (map->IsHeroic() ? config.DungeonHeroicInflection : config.DungeonInflection);
+        uint32 const maxPlayers = std::max<uint32>(targetPlayers, 1u);
+        float const playerCount = static_cast<float>(maxPlayers);
 
-        if (map->IsRaid())
+        auto sanitizeRatio = [](float value, float fallback)
         {
-            auto const& overrides = map->IsHeroic() ? config.RaidHeroicInflectionOverrides : config.RaidInflectionOverrides;
-            if (auto const it = overrides.find(targetPlayers); it != overrides.end())
-                ApplyInflectionOverride(settings, it->second);
+            if (!std::isfinite(value) || value <= 0.0f)
+                return fallback;
+            return value;
+        };
+
+        float curveFloor = 0.0f;
+        float curveCeiling = 1.0f;
+        float baseBossMultiplier = 1.0f;
+        float inflectionValue = playerCount;
+
+        auto assignFrom = [&](InflectionPointSettings const& base)
+        {
+            float const ratio = sanitizeRatio(base.Value, 0.5f);
+            inflectionValue = playerCount * ratio;
+            curveFloor = base.CurveFloor;
+            curveCeiling = base.CurveCeiling;
+            baseBossMultiplier = base.BossModifier;
+        };
+
+        bool const isRaid = map->IsRaid();
+        bool const isHeroic = map->IsHeroic();
+
+        if (isHeroic)
+        {
+            if (maxPlayers <= 5)
+                assignFrom(config.DungeonHeroicInflection);
+            else if (isRaid)
+            {
+                if (maxPlayers <= 10)
+                    assignFrom(config.RaidHeroicInflection10);
+                else if (maxPlayers <= 25)
+                    assignFrom(config.RaidHeroicInflection25);
+                else
+                    assignFrom(config.RaidHeroicInflection);
+            }
+            else
+            {
+                assignFrom(config.DungeonHeroicInflection);
+            }
+        }
+        else if (!isRaid || maxPlayers <= 5)
+        {
+            assignFrom(config.DungeonInflection);
+        }
+        else if (maxPlayers <= 10)
+        {
+            assignFrom(config.RaidInflection10);
+        }
+        else if (maxPlayers <= 15)
+        {
+            assignFrom(config.RaidInflection15);
+        }
+        else if (maxPlayers <= 20)
+        {
+            assignFrom(config.RaidInflection20);
+        }
+        else if (maxPlayers <= 25)
+        {
+            assignFrom(config.RaidInflection25);
+        }
+        else if (maxPlayers <= 40)
+        {
+            assignFrom(config.RaidInflection40);
+        }
+        else
+        {
+            assignFrom(config.RaidInflection);
+        }
+
+        auto applyOverride = [&](InflectionOverride const& override)
+        {
+            if (override.Value)
+            {
+                float const currentRatio = playerCount > 0.0f ? inflectionValue / playerCount : 1.0f;
+                float const ratio = sanitizeRatio(*override.Value, currentRatio);
+                inflectionValue = playerCount * ratio;
+            }
+
+            if (override.CurveFloor)
+                curveFloor = *override.CurveFloor;
+
+            if (override.CurveCeiling)
+                curveCeiling = *override.CurveCeiling;
+
+            if (override.BossModifier)
+                baseBossMultiplier = *override.BossModifier;
+        };
+
+        if (isRaid)
+        {
+            auto const& overrides = isHeroic ? config.RaidHeroicInflectionOverrides : config.RaidInflectionOverrides;
+            if (auto const it = overrides.find(maxPlayers); it != overrides.end())
+                applyOverride(it->second);
         }
 
         if (auto const it = config.InflectionOverridesByInstance.find(map->GetId()); it != config.InflectionOverridesByInstance.end())
-            ApplyInflectionOverride(settings, it->second);
+            applyOverride(it->second);
 
         float bossMultiplier = 1.0f;
         if (isBoss)
         {
-            bossMultiplier = settings.BossModifier;
+            bossMultiplier = baseBossMultiplier;
             if (auto const it = config.InflectionBossOverridesByInstance.find(map->GetId()); it != config.InflectionBossOverridesByInstance.end())
                 bossMultiplier = it->second;
 
             if (!std::isfinite(bossMultiplier) || bossMultiplier <= 0.0f)
                 bossMultiplier = 1.0f;
+
+            inflectionValue *= bossMultiplier;
         }
 
-        float const playerCount = static_cast<float>(std::max<uint32>(targetPlayers, 1u));
-        settings.Value = settings.Value * bossMultiplier * playerCount;
+        if (!std::isfinite(inflectionValue) || inflectionValue <= 0.0f)
+            inflectionValue = playerCount * 0.5f;
+
+        if (!std::isfinite(curveFloor))
+            curveFloor = 0.0f;
+
+        if (!std::isfinite(curveCeiling) || curveCeiling <= 0.0f)
+            curveCeiling = 1.0f;
+
+        InflectionPointSettings settings;
+        settings.Value = inflectionValue;
+        settings.CurveFloor = curveFloor;
+        settings.CurveCeiling = curveCeiling;
         settings.BossModifier = bossMultiplier;
         return settings;
     }

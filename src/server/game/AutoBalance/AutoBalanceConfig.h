@@ -129,6 +129,13 @@ namespace AutoBalance
         InflectionPointSettings DungeonHeroicInflection;
         InflectionPointSettings RaidInflection;
         InflectionPointSettings RaidHeroicInflection;
+        InflectionPointSettings RaidInflection10;
+        InflectionPointSettings RaidInflection15;
+        InflectionPointSettings RaidInflection20;
+        InflectionPointSettings RaidInflection25;
+        InflectionPointSettings RaidInflection40;
+        InflectionPointSettings RaidHeroicInflection10;
+        InflectionPointSettings RaidHeroicInflection25;
         std::unordered_map<uint32, InflectionOverride> RaidInflectionOverrides;
         std::unordered_map<uint32, InflectionOverride> RaidHeroicInflectionOverrides;
         std::unordered_map<uint32, InflectionOverride> InflectionOverridesByInstance;
