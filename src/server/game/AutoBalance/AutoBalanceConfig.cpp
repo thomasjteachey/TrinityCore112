@@ -145,13 +145,29 @@ namespace AutoBalance
             return { };
         }
 
-        InflectionPointSettings ParseInflectionPointSettings(char const* valueOption, char const* floorOption, char const* ceilingOption, char const* bossOption, InflectionPointSettings defaults)
+        float ParseInflectionPointField(char const* option, float fallback, bool logEnabled)
+        {
+            if (!option)
+                return fallback;
+
+            std::string const raw = sConfigMgr->GetStringDefault(option, "");
+            std::string_view const trimmed = Trim(raw);
+            if (trimmed.empty())
+                return fallback;
+
+            if (Optional<float> parsed = ParseOptionalFloat(std::string(trimmed), option, logEnabled))
+                return *parsed;
+
+            return fallback;
+        }
+
+        InflectionPointSettings ParseInflectionPointSettings(char const* valueOption, char const* floorOption, char const* ceilingOption, char const* bossOption, InflectionPointSettings defaults, bool logEnabled)
         {
             InflectionPointSettings settings = defaults;
-            settings.Value = sConfigMgr->GetFloatDefault(valueOption, defaults.Value);
-            settings.CurveFloor = sConfigMgr->GetFloatDefault(floorOption, defaults.CurveFloor);
-            settings.CurveCeiling = sConfigMgr->GetFloatDefault(ceilingOption, defaults.CurveCeiling);
-            settings.BossModifier = sConfigMgr->GetFloatDefault(bossOption, defaults.BossModifier);
+            settings.Value = ParseInflectionPointField(valueOption, settings.Value, logEnabled);
+            settings.CurveFloor = ParseInflectionPointField(floorOption, settings.CurveFloor, logEnabled);
+            settings.CurveCeiling = ParseInflectionPointField(ceilingOption, settings.CurveCeiling, logEnabled);
+            settings.BossModifier = ParseInflectionPointField(bossOption, settings.BossModifier, logEnabled);
             return settings;
         }
 
@@ -696,17 +712,17 @@ namespace AutoBalance
         newConfig.RewardScalingMoneyModifier = static_cast<float>(sConfigMgr->GetFloatDefault("AutoBalance.RewardScaling.Money.Modifier", 1.0f));
 
         auto const defaultInflection = InflectionPointSettings{};
-        newConfig.DungeonInflection = ParseInflectionPointSettings("AutoBalance.InflectionPoint", "AutoBalance.InflectionPoint.CurveFloor", "AutoBalance.InflectionPoint.CurveCeiling", "AutoBalance.InflectionPoint.BossModifier", defaultInflection);
-        newConfig.DungeonHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointHeroic", "AutoBalance.InflectionPointHeroic.CurveFloor", "AutoBalance.InflectionPointHeroic.CurveCeiling", "AutoBalance.InflectionPointHeroic.BossModifier", defaultInflection);
-        newConfig.RaidInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid", "AutoBalance.InflectionPointRaid.CurveFloor", "AutoBalance.InflectionPointRaid.CurveCeiling", "AutoBalance.InflectionPointRaid.BossModifier", defaultInflection);
-        newConfig.RaidHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaidHeroic", "AutoBalance.InflectionPointRaidHeroic.CurveFloor", "AutoBalance.InflectionPointRaidHeroic.CurveCeiling", "AutoBalance.InflectionPointRaidHeroic.BossModifier", defaultInflection);
-        newConfig.RaidInflection10 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid10M", "AutoBalance.InflectionPointRaid10M.CurveFloor", "AutoBalance.InflectionPointRaid10M.CurveCeiling", "AutoBalance.InflectionPointRaid10M.BossModifier", newConfig.RaidInflection);
-        newConfig.RaidInflection15 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid15M", "AutoBalance.InflectionPointRaid15M.CurveFloor", "AutoBalance.InflectionPointRaid15M.CurveCeiling", "AutoBalance.InflectionPointRaid15M.BossModifier", newConfig.RaidInflection);
-        newConfig.RaidInflection20 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid20M", "AutoBalance.InflectionPointRaid20M.CurveFloor", "AutoBalance.InflectionPointRaid20M.CurveCeiling", "AutoBalance.InflectionPointRaid20M.BossModifier", newConfig.RaidInflection);
-        newConfig.RaidInflection25 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid25M", "AutoBalance.InflectionPointRaid25M.CurveFloor", "AutoBalance.InflectionPointRaid25M.CurveCeiling", "AutoBalance.InflectionPointRaid25M.BossModifier", newConfig.RaidInflection);
-        newConfig.RaidInflection40 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid40M", "AutoBalance.InflectionPointRaid40M.CurveFloor", "AutoBalance.InflectionPointRaid40M.CurveCeiling", "AutoBalance.InflectionPointRaid40M.BossModifier", newConfig.RaidInflection);
-        newConfig.RaidHeroicInflection10 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid10MHeroic", "AutoBalance.InflectionPointRaid10MHeroic.CurveFloor", "AutoBalance.InflectionPointRaid10MHeroic.CurveCeiling", "AutoBalance.InflectionPointRaid10MHeroic.BossModifier", newConfig.RaidHeroicInflection);
-        newConfig.RaidHeroicInflection25 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid25MHeroic", "AutoBalance.InflectionPointRaid25MHeroic.CurveFloor", "AutoBalance.InflectionPointRaid25MHeroic.CurveCeiling", "AutoBalance.InflectionPointRaid25MHeroic.BossModifier", newConfig.RaidHeroicInflection);
+        newConfig.DungeonInflection = ParseInflectionPointSettings("AutoBalance.InflectionPoint", "AutoBalance.InflectionPoint.CurveFloor", "AutoBalance.InflectionPoint.CurveCeiling", "AutoBalance.InflectionPoint.BossModifier", defaultInflection, logReady);
+        newConfig.DungeonHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointHeroic", "AutoBalance.InflectionPointHeroic.CurveFloor", "AutoBalance.InflectionPointHeroic.CurveCeiling", "AutoBalance.InflectionPointHeroic.BossModifier", defaultInflection, logReady);
+        newConfig.RaidInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid", "AutoBalance.InflectionPointRaid.CurveFloor", "AutoBalance.InflectionPointRaid.CurveCeiling", "AutoBalance.InflectionPointRaid.BossModifier", defaultInflection, logReady);
+        newConfig.RaidHeroicInflection = ParseInflectionPointSettings("AutoBalance.InflectionPointRaidHeroic", "AutoBalance.InflectionPointRaidHeroic.CurveFloor", "AutoBalance.InflectionPointRaidHeroic.CurveCeiling", "AutoBalance.InflectionPointRaidHeroic.BossModifier", defaultInflection, logReady);
+        newConfig.RaidInflection10 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid10M", "AutoBalance.InflectionPointRaid10M.CurveFloor", "AutoBalance.InflectionPointRaid10M.CurveCeiling", "AutoBalance.InflectionPointRaid10M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection15 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid15M", "AutoBalance.InflectionPointRaid15M.CurveFloor", "AutoBalance.InflectionPointRaid15M.CurveCeiling", "AutoBalance.InflectionPointRaid15M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection20 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid20M", "AutoBalance.InflectionPointRaid20M.CurveFloor", "AutoBalance.InflectionPointRaid20M.CurveCeiling", "AutoBalance.InflectionPointRaid20M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection25 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid25M", "AutoBalance.InflectionPointRaid25M.CurveFloor", "AutoBalance.InflectionPointRaid25M.CurveCeiling", "AutoBalance.InflectionPointRaid25M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidInflection40 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid40M", "AutoBalance.InflectionPointRaid40M.CurveFloor", "AutoBalance.InflectionPointRaid40M.CurveCeiling", "AutoBalance.InflectionPointRaid40M.BossModifier", newConfig.RaidInflection, logReady);
+        newConfig.RaidHeroicInflection10 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid10MHeroic", "AutoBalance.InflectionPointRaid10MHeroic.CurveFloor", "AutoBalance.InflectionPointRaid10MHeroic.CurveCeiling", "AutoBalance.InflectionPointRaid10MHeroic.BossModifier", newConfig.RaidHeroicInflection, logReady);
+        newConfig.RaidHeroicInflection25 = ParseInflectionPointSettings("AutoBalance.InflectionPointRaid25MHeroic", "AutoBalance.InflectionPointRaid25MHeroic.CurveFloor", "AutoBalance.InflectionPointRaid25MHeroic.CurveCeiling", "AutoBalance.InflectionPointRaid25MHeroic.BossModifier", newConfig.RaidHeroicInflection, logReady);
 
         auto applyRaidInflectionOverride = [&](uint32 size, char const* normalPrefix, char const* heroicPrefix)
         {
