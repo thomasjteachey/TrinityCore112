@@ -175,14 +175,22 @@ public:
 
         handler->PSendSysMessage("AutoBalance stats for %s (entry %u):",
             creature->GetName().c_str(), creature->GetEntry());
-        handler->PSendSysMessage(" Level: %u | Target players: %u | Effective players: %u",
-            info->BaseLevel, info->TargetPlayerCount, info->EffectivePlayerCount);
-        handler->PSendSysMessage(" Base Health: %u | Base Mana: %u | Base Armor: %u",
+        handler->PSendSysMessage(" Original level: %u | Current level: %u | Target players: %u | Effective players: %u",
+            info->UnmodifiedLevel, info->BaseLevel, info->TargetPlayerCount, info->EffectivePlayerCount);
+        handler->PSendSysMessage(" Original base -> Health: %u | Mana: %u | Armor: %u",
             info->BaseValues.Health, info->BaseValues.Mana, info->BaseValues.Armor);
-        handler->PSendSysMessage(" Base Damage: %.3f - %.3f | Base AP: %.3f | Base RAP: %.3f",
+        handler->PSendSysMessage(" Original base -> Damage: %.3f - %.3f | AP: %.3f | RAP: %.3f",
             info->BaseValues.MinDamage, info->BaseValues.MaxDamage,
             info->BaseValues.AttackPower, info->BaseValues.RangedAttackPower);
-        handler->PSendSysMessage(" Multipliers -> Health: %.3f | Mana: %.3f | Damage: %.3f | Armor: %.3f | CC: %.3f",
+        handler->PSendSysMessage(" Level-scaled base -> Health: %u | Mana: %u | Armor: %u",
+            info->LevelScaledBaseValues.Health, info->LevelScaledBaseValues.Mana, info->LevelScaledBaseValues.Armor);
+        handler->PSendSysMessage(" Level-scaled base -> Damage: %.3f - %.3f | AP: %.3f | RAP: %.3f",
+            info->LevelScaledBaseValues.MinDamage, info->LevelScaledBaseValues.MaxDamage,
+            info->LevelScaledBaseValues.AttackPower, info->LevelScaledBaseValues.RangedAttackPower);
+        handler->PSendSysMessage(" Base multipliers -> Health: %.3f | Mana: %.3f | Damage: %.3f | Armor: %.3f | CC: %.3f",
+            info->BaseMultipliers.Health, info->BaseMultipliers.Mana, info->BaseMultipliers.Damage,
+            info->BaseMultipliers.Armor, info->BaseMultipliers.CrowdControlDuration);
+        handler->PSendSysMessage(" Final multipliers -> Health: %.3f | Mana: %.3f | Damage: %.3f | Armor: %.3f | CC: %.3f",
             info->Multipliers.Health, info->Multipliers.Mana, info->Multipliers.Damage,
             info->Multipliers.Armor, info->Multipliers.CrowdControlDuration);
 

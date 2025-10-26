@@ -39,14 +39,49 @@ namespace
 
         data.QueueOffset = config.PlayerCountDifficultyOffset;
 
-        int32 const adjustedPlayerCount = std::max<int32>(0, static_cast<int32>(data.PlayerCount) + data.QueueOffset);
-        uint32 effectivePlayerCount = static_cast<uint32>(adjustedPlayerCount);
+        uint32 playerCount = data.PlayerCount;
+        if (map->IsDungeon())
+            playerCount = std::max<uint32>(playerCount, 1u);
+
+        uint32 effectivePlayerCount = playerCount;
+
+        if (map->IsDungeon())
+        {
+            if (data.CombatLocked)
+            {
+                if (playerCount > data.CombatLockMinPlayers)
+                {
+                    data.CombatLockMinPlayers = playerCount;
+                    data.CombatLockTripped = false;
+                }
+                else if (playerCount < data.CombatLockMinPlayers)
+                {
+                    data.CombatLockTripped = true;
+                }
+
+                effectivePlayerCount = std::max(playerCount, data.CombatLockMinPlayers);
+            }
+            else
+            {
+                data.CombatLockMinPlayers = 0;
+                data.CombatLockTripped = false;
+            }
+        }
+        else
+        {
+            data.CombatLockMinPlayers = 0;
+            data.CombatLockTripped = false;
+        }
 
         uint32 const minimumPlayers = GetMinimumPlayersForMap(map);
         if (effectivePlayerCount < minimumPlayers)
             effectivePlayerCount = minimumPlayers;
 
-        data.EffectivePlayerCount = effectivePlayerCount;
+        int32 adjustedPlayerCount = static_cast<int32>(effectivePlayerCount) + data.QueueOffset;
+        if (adjustedPlayerCount < 1)
+            adjustedPlayerCount = 1;
+
+        data.EffectivePlayerCount = static_cast<uint32>(adjustedPlayerCount);
         data.LastPlayerCountUpdateTimeMS = now;
     }
 }
@@ -116,9 +151,26 @@ void HandleCombatStateChange(Map* map, bool locked, Player* /*player*/)
     data.LastCombatStateChangeTimeMS = now;
 
     if (locked)
+    {
         data.LastCombatStartTimeMS = now;
+
+        if (map->IsDungeon())
+        {
+            uint32 const playerCount = std::max<uint32>(data.PlayerCount, 1u);
+            if (playerCount > data.CombatLockMinPlayers)
+                data.CombatLockMinPlayers = playerCount;
+
+            data.CombatLockTripped = false;
+        }
+    }
     else
+    {
         data.LastCombatEndTimeMS = now;
+        data.CombatLockMinPlayers = 0;
+        data.CombatLockTripped = false;
+    }
+
+    UpdateEffectivePlayerCountInternal(map, now);
 }
 
 void RefreshEffectivePlayerCount(Map* map)

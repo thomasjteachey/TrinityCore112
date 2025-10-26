@@ -27,8 +27,11 @@ namespace AutoBalance
     struct AutoBalanceCreatureInfo
     {
         CreatureBaseValues BaseValues;
+        CreatureBaseValues LevelScaledBaseValues;
+        CreatureMultipliers BaseMultipliers;
         CreatureMultipliers Multipliers;
         uint8 BaseLevel = 0;
+        uint8 UnmodifiedLevel = 0;
         uint32 TargetPlayerCount = 0;
         uint32 EffectivePlayerCount = 0;
         bool Initialized = false;
