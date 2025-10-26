@@ -127,6 +127,44 @@ namespace
         return multiplier;
     }
 
+    float GetBaseExpansionValueForLevel(float const (&baseValues)[MAX_EXPANSIONS], uint8 targetLevel)
+    {
+        float const vanilla = baseValues[EXPANSION_CLASSIC];
+        float const burningCrusade = baseValues[EXPANSION_THE_BURNING_CRUSADE];
+        float const wrath = baseValues[EXPANSION_WRATH_OF_THE_LICH_KING];
+
+        if (targetLevel <= 60)
+            return vanilla;
+
+        if (targetLevel < 63)
+        {
+            float const vanillaMultiplier = (63.0f - static_cast<float>(targetLevel)) / 3.0f;
+            float const bcMultiplier = 1.0f - vanillaMultiplier;
+            return vanilla * vanillaMultiplier + burningCrusade * bcMultiplier;
+        }
+
+        if (targetLevel <= 70)
+            return burningCrusade;
+
+        if (targetLevel < 73)
+        {
+            float const bcMultiplier = (73.0f - static_cast<float>(targetLevel)) / 3.0f;
+            float const wrathMultiplier = 1.0f - bcMultiplier;
+            return burningCrusade * bcMultiplier + wrath * wrathMultiplier;
+        }
+
+        return wrath;
+    }
+
+    float GetBaseExpansionValueForLevel(uint32 const (&baseValues)[MAX_EXPANSIONS], uint8 targetLevel)
+    {
+        float converted[MAX_EXPANSIONS];
+        for (uint8 i = 0; i < MAX_EXPANSIONS; ++i)
+            converted[i] = static_cast<float>(baseValues[i]);
+
+        return GetBaseExpansionValueForLevel(converted, targetLevel);
+    }
+
     InflectionPointSettings SelectInflectionSettings(ModuleConfig const& config, Map const* map, uint32 targetPlayers, bool isBoss)
     {
         InflectionPointSettings settings = map->IsRaid()
@@ -294,6 +332,9 @@ void ScaleCreature(Creature* creature)
     uint32 const effectivePlayers = GetEffectivePlayerCount(map);
     uint32 const targetPlayers = GetTargetPlayerCount(map);
     bool const isBoss = IsBossCreature(*creature);
+    uint8 highestPlayerLevel = GetHighestPlayerLevel(map);
+    if (!highestPlayerLevel)
+        highestPlayerLevel = creature->GetLevel();
 
     InflectionPointSettings const inflectionSettings = SelectInflectionSettings(config, map, targetPlayers, isBoss);
     float const baseMultiplier = EvaluateInflectionMultiplier(effectivePlayers, targetPlayers, inflectionSettings);
@@ -322,46 +363,132 @@ void ScaleCreature(Creature* creature)
     if (!creatureTemplate)
         return;
 
+    AutoBalanceCreatureInfo& info = GetCreatureInfo(*creature);
+    info.IsBoss = isBoss;
+    info.InstancePlayerCount = effectivePlayers;
+
     uint8 const level = creature->GetLevel();
-    CreatureBaseStats const* baseStats = sObjectMgr->GetCreatureBaseStats(level, creatureTemplate->unit_class);
-    if (!baseStats)
+    info.SelectedLevel = level;
+    uint8 const unmodifiedLevel = info.Initialized ? info.UnmodifiedLevel : level;
+
+    CreatureBaseStats const* originalBaseStats = sObjectMgr->GetCreatureBaseStats(unmodifiedLevel, creatureTemplate->unit_class);
+    if (!originalBaseStats)
         return;
 
-    AutoBalanceCreatureInfo& info = GetCreatureInfo(*creature);
+    CreatureBaseValues originalBaseValues;
+    originalBaseValues.Health = originalBaseStats->GenerateHealth(creatureTemplate);
+    originalBaseValues.Mana = originalBaseStats->GenerateMana(creatureTemplate);
+    originalBaseValues.Armor = originalBaseStats->GenerateArmor(creatureTemplate);
+    float const originalBaseDamage = originalBaseStats->GenerateBaseDamage(creatureTemplate);
+    originalBaseValues.MinDamage = originalBaseDamage;
+    originalBaseValues.MaxDamage = originalBaseDamage * 1.5f;
+    originalBaseValues.AttackPower = static_cast<float>(originalBaseStats->AttackPower);
+    originalBaseValues.RangedAttackPower = static_cast<float>(originalBaseStats->RangedAttackPower);
+
+    CreatureBaseValues levelBaseValues = originalBaseValues;
+    float levelHealthMultiplier = 1.0f;
+    float levelManaMultiplier = 1.0f;
+    float levelArmorMultiplier = 1.0f;
+    float levelDamageMultiplier = 1.0f;
+    float levelAttackPowerMultiplier = 1.0f;
+    float levelRangedAttackPowerMultiplier = 1.0f;
+
+    bool const levelScalingActive = config.LevelScalingEnabled && unmodifiedLevel != level;
+    if (levelScalingActive)
+    {
+        CreatureBaseStats const* levelBaseStats = sObjectMgr->GetCreatureBaseStats(level, creatureTemplate->unit_class);
+        if (!levelBaseStats)
+            return;
+
+        float const smoothedBaseHealth = GetBaseExpansionValueForLevel(levelBaseStats->BaseHealth, highestPlayerLevel);
+        levelBaseValues.Health = static_cast<uint32>(std::round(smoothedBaseHealth * creatureTemplate->ModHealth));
+        levelBaseValues.Mana = levelBaseStats->GenerateMana(creatureTemplate);
+        levelBaseValues.Armor = levelBaseStats->GenerateArmor(creatureTemplate);
+        float const levelBaseDamage = GetBaseExpansionValueForLevel(levelBaseStats->BaseDamage, highestPlayerLevel);
+        levelBaseValues.MinDamage = levelBaseDamage;
+        levelBaseValues.MaxDamage = levelBaseDamage * 1.5f;
+        levelBaseValues.AttackPower = static_cast<float>(levelBaseStats->AttackPower);
+        levelBaseValues.RangedAttackPower = static_cast<float>(levelBaseStats->RangedAttackPower);
+
+        auto computeLevelMultiplier = [](float originalValue, float newValue)
+        {
+            if (originalValue <= 0.0f)
+                return 1.0f;
+
+            float multiplier = newValue / originalValue;
+            if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+                return 1.0f;
+
+            return multiplier;
+        };
+
+        levelHealthMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Health), static_cast<float>(levelBaseValues.Health));
+        levelManaMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Mana), static_cast<float>(levelBaseValues.Mana));
+        levelArmorMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Armor), static_cast<float>(levelBaseValues.Armor));
+        levelDamageMultiplier = computeLevelMultiplier(originalBaseValues.MinDamage, levelBaseValues.MinDamage);
+        levelAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.AttackPower, levelBaseValues.AttackPower);
+        levelRangedAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.RangedAttackPower, levelBaseValues.RangedAttackPower);
+    }
+
+    CreatureMultipliers const baseMultipliers = { healthMultiplier, manaMultiplier, damageMultiplier, armorMultiplier, crowdControlMultiplier };
+    CreatureMultipliers finalMultipliers = baseMultipliers;
+    if (levelScalingActive)
+    {
+        finalMultipliers.Health *= levelHealthMultiplier;
+        finalMultipliers.Mana *= levelManaMultiplier;
+        finalMultipliers.Damage *= levelDamageMultiplier;
+        finalMultipliers.Armor *= levelArmorMultiplier;
+    }
+
+    auto multipliersDiffer = [](float lhs, float rhs)
+    {
+        return std::fabs(lhs - rhs) > 0.0005f;
+    };
+
+    auto baseValuesDiffer = [](CreatureBaseValues const& lhs, CreatureBaseValues const& rhs)
+    {
+        auto floatsDiffer = [](float l, float r)
+        {
+            return std::fabs(l - r) > 0.0005f;
+        };
+
+        return lhs.Health != rhs.Health || lhs.Mana != rhs.Mana || lhs.Armor != rhs.Armor ||
+            floatsDiffer(lhs.MinDamage, rhs.MinDamage) || floatsDiffer(lhs.MaxDamage, rhs.MaxDamage) ||
+            floatsDiffer(lhs.AttackPower, rhs.AttackPower) || floatsDiffer(lhs.RangedAttackPower, rhs.RangedAttackPower);
+    };
 
     bool const requiresUpdate = !info.Initialized ||
         info.BaseLevel != level ||
         info.TargetPlayerCount != targetPlayers ||
         info.EffectivePlayerCount != effectivePlayers ||
-        std::fabs(info.Multipliers.Health - healthMultiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Mana - manaMultiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Damage - damageMultiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.Armor - armorMultiplier) > 0.0005f ||
-        std::fabs(info.Multipliers.CrowdControlDuration - crowdControlMultiplier) > 0.0005f;
+        multipliersDiffer(info.BaseMultipliers.Health, baseMultipliers.Health) ||
+        multipliersDiffer(info.BaseMultipliers.Mana, baseMultipliers.Mana) ||
+        multipliersDiffer(info.BaseMultipliers.Damage, baseMultipliers.Damage) ||
+        multipliersDiffer(info.BaseMultipliers.Armor, baseMultipliers.Armor) ||
+        multipliersDiffer(info.BaseMultipliers.CrowdControlDuration, baseMultipliers.CrowdControlDuration) ||
+        multipliersDiffer(info.Multipliers.Health, finalMultipliers.Health) ||
+        multipliersDiffer(info.Multipliers.Mana, finalMultipliers.Mana) ||
+        multipliersDiffer(info.Multipliers.Damage, finalMultipliers.Damage) ||
+        multipliersDiffer(info.Multipliers.Armor, finalMultipliers.Armor) ||
+        multipliersDiffer(info.Multipliers.CrowdControlDuration, finalMultipliers.CrowdControlDuration) ||
+        baseValuesDiffer(info.LevelScaledBaseValues, levelBaseValues);
 
     if (!requiresUpdate)
         return;
 
-    info.BaseValues.Health = baseStats->GenerateHealth(creatureTemplate);
-    info.BaseValues.Mana = baseStats->GenerateMana(creatureTemplate);
-    info.BaseValues.Armor = baseStats->GenerateArmor(creatureTemplate);
+    if (!info.Initialized)
+        info.UnmodifiedLevel = unmodifiedLevel;
 
-    float const baseDamage = baseStats->GenerateBaseDamage(creatureTemplate);
-    info.BaseValues.MinDamage = baseDamage;
-    info.BaseValues.MaxDamage = baseDamage * 1.5f;
-    info.BaseValues.AttackPower = static_cast<float>(baseStats->AttackPower);
-    info.BaseValues.RangedAttackPower = static_cast<float>(baseStats->RangedAttackPower);
-
+    info.BaseValues = originalBaseValues;
+    info.LevelScaledBaseValues = levelBaseValues;
     info.BaseLevel = level;
     info.TargetPlayerCount = targetPlayers;
     info.EffectivePlayerCount = effectivePlayers;
+    info.BaseMultipliers = baseMultipliers;
+    info.Multipliers = finalMultipliers;
+    info.XPModifier = 1.0f;
+    info.MoneyModifier = 1.0f;
     info.Initialized = true;
-
-    info.Multipliers.Health = healthMultiplier;
-    info.Multipliers.Mana = manaMultiplier;
-    info.Multipliers.Damage = damageMultiplier;
-    info.Multipliers.Armor = armorMultiplier;
-    info.Multipliers.CrowdControlDuration = crowdControlMultiplier;
 
     uint32 const oldMaxHealth = creature->GetMaxHealth();
     float const healthPct = oldMaxHealth ? std::clamp(static_cast<float>(creature->GetHealth()) / static_cast<float>(oldMaxHealth), 0.0f, 1.0f) : 1.0f;
@@ -398,15 +525,63 @@ void ScaleCreature(Creature* creature)
         creature->SetBaseWeaponDamage(attackType, MAXDAMAGE, scaledMaxDamage);
     }
 
-    creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, info.BaseValues.AttackPower * info.Multipliers.Damage);
-    creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, info.BaseValues.RangedAttackPower * info.Multipliers.Damage);
+    float const attackPowerMultiplier = info.BaseMultipliers.Damage * levelAttackPowerMultiplier;
+    float const rangedAttackPowerMultiplier = info.BaseMultipliers.Damage * levelRangedAttackPowerMultiplier;
+    creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, BASE_VALUE, info.BaseValues.AttackPower * attackPowerMultiplier);
+    creature->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER_RANGED, BASE_VALUE, info.BaseValues.RangedAttackPower * rangedAttackPowerMultiplier);
+
+    if (TempSummon* summon = creature->ToTempSummon())
+    {
+        info.IsSummon = true;
+        if (Unit* summoner = summon->GetSummonerUnit())
+        {
+            if (Creature* summonerCreature = summoner->ToCreature())
+            {
+                info.SummonerName = summonerCreature->GetName();
+                info.SummonerLevel = summonerCreature->GetLevel();
+            }
+            else if (Player* summonerPlayer = summoner->ToPlayer())
+            {
+                info.SummonerName = summonerPlayer->GetName();
+                info.SummonerLevel = summonerPlayer->GetLevel();
+            }
+        }
+    }
+    else
+    {
+        info.IsSummon = false;
+        info.SummonerName.clear();
+        info.SummonerLevel = 0;
+        info.IsSummonClone = false;
+    }
+
+    auto computeRewardModifier = [&](bool enabled, float modifier)
+    {
+        if (!enabled)
+            return 1.0f;
+
+        if (config.RewardScalingMethod == ScalingMethod::Fixed)
+            return modifier;
+
+        float avg = (finalMultipliers.Health + finalMultipliers.Damage) / 2.0f;
+        return std::max(0.0f, avg * modifier);
+    };
+
+    info.XPModifier = computeRewardModifier(config.RewardScalingXP, config.RewardScalingXPModifier);
+    info.MoneyModifier = computeRewardModifier(config.RewardScalingMoney, config.RewardScalingMoneyModifier);
 
     creature->UpdateDamagePhysical(BASE_ATTACK);
     creature->UpdateDamagePhysical(OFF_ATTACK);
     creature->UpdateDamagePhysical(RANGED_ATTACK);
 
     if (config.DebugLogging)
-        TC_LOG_DEBUG(LogFilter, "AutoBalance::ScaleCreature - entry={} level={} players={}/{} base={:.3f} health={:.3f} mana={:.3f} damage={:.3f} armor={:.3f} cc={:.3f}",
-            creature->GetEntry(), level, effectivePlayers, targetPlayers, baseMultiplier, info.Multipliers.Health, info.Multipliers.Mana, info.Multipliers.Damage, info.Multipliers.Armor, info.Multipliers.CrowdControlDuration);
+        TC_LOG_DEBUG(LogFilter,
+            "AutoBalance::ScaleCreature - entry={} level={} players={}/{} base={:.3f} baseMult(h/m/d/a)={:.3f}/{:.3f}/{:.3f}/{:.3f} "
+            "levelAdj(h/m/d/a)={:.3f}/{:.3f}/{:.3f}/{:.3f} final(h/m/d/a)={:.3f}/{:.3f}/{:.3f}/{:.3f} cc={:.3f}",
+            creature->GetEntry(), level, effectivePlayers, targetPlayers, baseMultiplier,
+            info.BaseMultipliers.Health, info.BaseMultipliers.Mana, info.BaseMultipliers.Damage, info.BaseMultipliers.Armor,
+            levelHealthMultiplier, levelManaMultiplier, levelDamageMultiplier, levelArmorMultiplier,
+            info.Multipliers.Health, info.Multipliers.Mana, info.Multipliers.Damage, info.Multipliers.Armor,
+            info.Multipliers.CrowdControlDuration);
 }
 }
