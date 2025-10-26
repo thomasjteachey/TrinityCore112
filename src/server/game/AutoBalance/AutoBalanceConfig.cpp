@@ -84,7 +84,9 @@ namespace AutoBalance
                     result.Attempts.push_back(candidate);
             };
 
-            auto tryLoad = [&](std::string const& candidate, bool fallback, std::string& lastError) -> bool
+            std::string lastError;
+
+            auto tryLoad = [&](std::string const& candidate, bool fallback) -> bool
             {
                 if (candidate.empty())
                     return false;
@@ -106,20 +108,7 @@ namespace AutoBalance
                 return false;
             };
 
-            auto tryLoad = [&](std::string const& candidate, std::string& lastError) -> bool
-            {
-                std::string error;
-                if (sConfigMgr->LoadAdditionalFile(candidate, false, error))
-                    return true;
-
-                if (!error.empty())
-                    lastError = error;
-
-                return false;
-            };
-
-            std::string error;
-            if (tryLoad(file, false, error))
+            if (tryLoad(file, false))
                 return result;
 
             std::vector<std::string> fallbacks;
@@ -182,15 +171,16 @@ namespace AutoBalance
 
             for (std::string const& candidate : fallbacks)
             {
-                if (tryLoad(candidate, true, error))
+                if (tryLoad(candidate, true))
                 {
                     LogMessage(MessageLevel::Info, logEnabled, "Loaded configuration file '{}' via fallback '{}'.", file, candidate);
                     return result;
                 }
             }
 
-            result.Error = error;
-            LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({}).", file, error);
+            std::string const errorMessage = lastError.empty() ? std::string("unknown error") : lastError;
+            result.Error = errorMessage;
+            LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({}).", file, errorMessage);
             return result;
         }
 
