@@ -29,7 +29,13 @@
 #include "StringConvert.h"
 #include "World.h"
 #include "WorldSession.h"
+#include "Log.h"
 #include <boost/algorithm/string/replace.hpp>
+
+namespace
+{
+    constexpr size_t MAX_CHAT_PACKET_MESSAGE_LENGTH = 16 * 1024; // 16 KiB safeguard for outgoing chat text
+}
 
 Player* ChatHandler::GetPlayer() const { return m_session ? m_session->GetPlayer() : nullptr; }
 
@@ -255,8 +261,16 @@ size_t ChatHandler::BuildChatPacket(WorldPacket& data, ChatMsg chatType, Languag
             break;
     }
 
-    data << uint32(message.length() + 1);
-    data << message;
+    std::string_view sanitizedMessage = message;
+    if (sanitizedMessage.length() > MAX_CHAT_PACKET_MESSAGE_LENGTH)
+    {
+        TC_LOG_ERROR("network", "ChatHandler::BuildChatPacket: truncated chat message of length {} for type {} to {} characters.",
+            sanitizedMessage.length(), uint32(chatType), MAX_CHAT_PACKET_MESSAGE_LENGTH);
+        sanitizedMessage = sanitizedMessage.substr(0, MAX_CHAT_PACKET_MESSAGE_LENGTH);
+    }
+
+    data << uint32(sanitizedMessage.length() + 1);
+    data << sanitizedMessage;
     data << uint8(chatTag);
 
     if (chatType == CHAT_MSG_ACHIEVEMENT || chatType == CHAT_MSG_GUILD_ACHIEVEMENT)
