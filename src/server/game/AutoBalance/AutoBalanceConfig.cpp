@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <utility>
 
 namespace AutoBalance
@@ -62,9 +63,71 @@ namespace AutoBalance
             if (file.empty())
                 return;
 
+            auto tryLoad = [&](std::string const& candidate, std::string& lastError) -> bool
+            {
+                std::string error;
+                if (sConfigMgr->LoadAdditionalFile(candidate, false, error))
+                    return true;
+
+                if (!error.empty())
+                    lastError = error;
+
+                return false;
+            };
+
             std::string error;
-            if (!sConfigMgr->LoadAdditionalFile(file, false, error))
-                LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({})", file, error);
+            if (tryLoad(file, error))
+                return;
+
+            std::vector<std::string> fallbacks;
+            fallbacks.reserve(4);
+
+            auto pushUnique = [&](std::string candidate)
+            {
+                if (candidate.empty() || candidate == file)
+                    return;
+
+                if (std::find(fallbacks.begin(), fallbacks.end(), candidate) == fallbacks.end())
+                    fallbacks.emplace_back(std::move(candidate));
+            };
+
+            std::string directory;
+            std::string filename = file;
+            if (size_t slash = file.find_last_of("/\\"); slash != std::string::npos)
+            {
+                directory = file.substr(0, slash + 1);
+                filename = file.substr(slash + 1);
+            }
+
+            if (!filename.empty())
+            {
+                std::string lowerFilename = filename;
+                std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), [](unsigned char c)
+                {
+                    return static_cast<char>(std::tolower(c));
+                });
+
+                pushUnique(directory + lowerFilename);
+
+                std::string modsDirectory = directory;
+                if (!modsDirectory.empty() && modsDirectory.back() != '/' && modsDirectory.back() != '\\')
+                    modsDirectory.push_back('/');
+
+                modsDirectory += "mods/";
+                pushUnique(modsDirectory + filename);
+                pushUnique(modsDirectory + lowerFilename);
+            }
+
+            for (std::string const& candidate : fallbacks)
+            {
+                if (tryLoad(candidate, error))
+                {
+                    LogMessage(MessageLevel::Info, logEnabled, "Loaded configuration file '{}' via fallback '{}'.", file, candidate);
+                    return;
+                }
+            }
+
+            LogMessage(MessageLevel::Error, logEnabled, "Failed to load configuration file '{}' ({}).", file, error);
         }
 
         std::string_view Trim(std::string_view view)
