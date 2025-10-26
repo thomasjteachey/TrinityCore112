@@ -68,6 +68,29 @@ namespace AutoBalance
                 std::printf("AutoBalance: %s\n", message.c_str());
         }
 
+        bool IsAbsolutePath(std::string const& path)
+        {
+            if (path.empty())
+                return false;
+
+            if (path[0] == '/' || path[0] == '\\')
+                return true;
+
+            if (path.size() > 1 && path[1] == ':' && std::isalpha(static_cast<unsigned char>(path[0])))
+                return true;
+
+            return false;
+        }
+
+        std::string ExtractDirectory(std::string const& path)
+        {
+            size_t slash = path.find_last_of("/\\");
+            if (slash == std::string::npos)
+                return { };
+
+            return path.substr(0, slash + 1);
+        }
+
         ConfigFileLoadResult MergeConfigFile(std::string const& file, bool logEnabled)
         {
             ConfigFileLoadResult result;
@@ -108,9 +131,6 @@ namespace AutoBalance
                 return false;
             };
 
-            if (tryLoad(file, false))
-                return result;
-
             std::vector<std::string> fallbacks;
             fallbacks.reserve(4);
 
@@ -123,50 +143,74 @@ namespace AutoBalance
                     fallbacks.emplace_back(std::move(candidate));
             };
 
-            auto ensureDistCandidate = [&](std::string const& candidate)
+            auto addJoinedCandidate = [&](std::string const& baseDir, std::string const& relative)
             {
-                if (candidate.empty())
+                if (relative.empty())
                     return;
 
-                constexpr std::string_view distSuffix = ".dist";
-                if (candidate.size() >= distSuffix.size() &&
-                    candidate.compare(candidate.size() - distSuffix.size(), distSuffix.size(), distSuffix) == 0)
+                if (baseDir.empty())
                 {
+                    pushUnique(relative);
                     return;
                 }
 
-                pushUnique(candidate + std::string(distSuffix));
+                std::string candidate = baseDir;
+                if (!candidate.empty() && candidate.back() != '/' && candidate.back() != '\\')
+                    candidate.push_back('/');
+
+                candidate += relative;
+                pushUnique(std::move(candidate));
             };
 
-            std::string directory;
-            std::string filename = file;
-            if (size_t slash = file.find_last_of("/\\"); slash != std::string::npos)
+            std::string const primaryDirectory = ExtractDirectory(file);
+            std::string const filename = primaryDirectory.empty() ? file : file.substr(primaryDirectory.size());
+            std::string const lowerFilename = [&]() -> std::string
             {
-                directory = file.substr(0, slash + 1);
-                filename = file.substr(slash + 1);
-            }
-
-            if (!filename.empty())
-            {
-                std::string lowerFilename = filename;
-                std::transform(lowerFilename.begin(), lowerFilename.end(), lowerFilename.begin(), [](unsigned char c)
+                std::string lowered = filename;
+                std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c)
                 {
                     return static_cast<char>(std::tolower(c));
                 });
+                return lowered;
+            }();
 
-                pushUnique(directory + lowerFilename);
-                ensureDistCandidate(directory + filename);
-                ensureDistCandidate(directory + lowerFilename);
+            std::string const configDirectory = ExtractDirectory(sConfigMgr->GetFilename());
 
-                std::string modsDirectory = directory;
+            if (tryLoad(file, false))
+                return result;
+
+            if (!filename.empty())
+            {
+                pushUnique(primaryDirectory + lowerFilename);
+
+                if (!IsAbsolutePath(file))
+                {
+                    addJoinedCandidate(configDirectory, file);
+                    addJoinedCandidate(configDirectory, primaryDirectory + filename);
+                    addJoinedCandidate(configDirectory, filename);
+
+                    if (lowerFilename != filename)
+                    {
+                        addJoinedCandidate(configDirectory, lowerFilename);
+                        addJoinedCandidate(configDirectory, primaryDirectory + lowerFilename);
+                    }
+                }
+
+                std::string modsDirectory = primaryDirectory;
                 if (!modsDirectory.empty() && modsDirectory.back() != '/' && modsDirectory.back() != '\\')
                     modsDirectory.push_back('/');
 
                 modsDirectory += "mods/";
                 pushUnique(modsDirectory + filename);
-                pushUnique(modsDirectory + lowerFilename);
-                ensureDistCandidate(modsDirectory + filename);
-                ensureDistCandidate(modsDirectory + lowerFilename);
+                if (lowerFilename != filename)
+                    pushUnique(modsDirectory + lowerFilename);
+
+                if (!configDirectory.empty() && !IsAbsolutePath(file))
+                {
+                    addJoinedCandidate(configDirectory, modsDirectory + filename);
+                    if (lowerFilename != filename)
+                        addJoinedCandidate(configDirectory, modsDirectory + lowerFilename);
+                }
             }
 
             for (std::string const& candidate : fallbacks)
