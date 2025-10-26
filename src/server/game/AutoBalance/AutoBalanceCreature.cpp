@@ -181,19 +181,20 @@ namespace
         if (auto const it = config.InflectionOverridesByInstance.find(map->GetId()); it != config.InflectionOverridesByInstance.end())
             ApplyInflectionOverride(settings, it->second);
 
+        float bossMultiplier = 1.0f;
         if (isBoss)
         {
-            float bossMultiplier = settings.BossModifier;
+            bossMultiplier = settings.BossModifier;
             if (auto const it = config.InflectionBossOverridesByInstance.find(map->GetId()); it != config.InflectionBossOverridesByInstance.end())
                 bossMultiplier = it->second;
 
             if (!std::isfinite(bossMultiplier) || bossMultiplier <= 0.0f)
                 bossMultiplier = 1.0f;
-
-            settings.Value *= bossMultiplier;
-            settings.BossModifier = bossMultiplier;
         }
 
+        float const playerCount = static_cast<float>(std::max<uint32>(targetPlayers, 1u));
+        settings.Value = settings.Value * bossMultiplier * playerCount;
+        settings.BossModifier = bossMultiplier;
         return settings;
     }
 
