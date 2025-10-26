@@ -106,6 +106,18 @@ namespace AutoBalance
                 return false;
             };
 
+            auto tryLoad = [&](std::string const& candidate, std::string& lastError) -> bool
+            {
+                std::string error;
+                if (sConfigMgr->LoadAdditionalFile(candidate, false, error))
+                    return true;
+
+                if (!error.empty())
+                    lastError = error;
+
+                return false;
+            };
+
             std::string error;
             if (tryLoad(file, false, error))
                 return result;
