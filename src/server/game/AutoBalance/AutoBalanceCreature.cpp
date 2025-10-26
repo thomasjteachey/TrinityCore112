@@ -81,7 +81,7 @@ namespace
 
         if (TempSummon const* summon = creature.ToTempSummon())
         {
-            if (Unit const* summoner = summon->GetSummoner())
+            if (Unit const* summoner = summon->GetSummonerUnit())
             {
                 Creature const* summonerCreature = summoner->ToCreature();
                 if (summonerCreature && (summonerCreature->IsDungeonBoss() || summonerCreature->isWorldBoss()))
