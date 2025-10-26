@@ -375,10 +375,6 @@ void ScaleCreature(Creature* creature)
     if (!originalBaseStats)
         return;
 
-    CreatureBaseStats const* levelBaseStats = sObjectMgr->GetCreatureBaseStats(level, creatureTemplate->unit_class);
-    if (!levelBaseStats)
-        return;
-
     CreatureBaseValues originalBaseValues;
     originalBaseValues.Health = originalBaseStats->GenerateHealth(creatureTemplate);
     originalBaseValues.Mana = originalBaseStats->GenerateMana(creatureTemplate);
@@ -389,45 +385,60 @@ void ScaleCreature(Creature* creature)
     originalBaseValues.AttackPower = static_cast<float>(originalBaseStats->AttackPower);
     originalBaseValues.RangedAttackPower = static_cast<float>(originalBaseStats->RangedAttackPower);
 
-    CreatureBaseValues levelBaseValues;
-    float const smoothedBaseHealth = GetBaseExpansionValueForLevel(levelBaseStats->BaseHealth, highestPlayerLevel);
-    levelBaseValues.Health = static_cast<uint32>(std::round(smoothedBaseHealth * creatureTemplate->ModHealth));
-    levelBaseValues.Mana = levelBaseStats->GenerateMana(creatureTemplate);
-    levelBaseValues.Armor = levelBaseStats->GenerateArmor(creatureTemplate);
-    float const levelBaseDamage = GetBaseExpansionValueForLevel(levelBaseStats->BaseDamage, highestPlayerLevel);
-    levelBaseValues.MinDamage = levelBaseDamage;
-    levelBaseValues.MaxDamage = levelBaseDamage * 1.5f;
-    levelBaseValues.AttackPower = static_cast<float>(levelBaseStats->AttackPower);
-    levelBaseValues.RangedAttackPower = static_cast<float>(levelBaseStats->RangedAttackPower);
+    CreatureBaseValues levelBaseValues = originalBaseValues;
+    float levelHealthMultiplier = 1.0f;
+    float levelManaMultiplier = 1.0f;
+    float levelArmorMultiplier = 1.0f;
+    float levelDamageMultiplier = 1.0f;
+    float levelAttackPowerMultiplier = 1.0f;
+    float levelRangedAttackPowerMultiplier = 1.0f;
 
-    auto computeLevelMultiplier = [](float originalValue, float newValue)
+    bool const levelScalingActive = config.LevelScalingEnabled && unmodifiedLevel != level;
+    if (levelScalingActive)
     {
-        if (originalValue <= 0.0f)
-            return 1.0f;
+        CreatureBaseStats const* levelBaseStats = sObjectMgr->GetCreatureBaseStats(level, creatureTemplate->unit_class);
+        if (!levelBaseStats)
+            return;
 
-        float multiplier = newValue / originalValue;
-        if (!std::isfinite(multiplier) || multiplier <= 0.0f)
-            return 1.0f;
+        float const smoothedBaseHealth = GetBaseExpansionValueForLevel(levelBaseStats->BaseHealth, highestPlayerLevel);
+        levelBaseValues.Health = static_cast<uint32>(std::round(smoothedBaseHealth * creatureTemplate->ModHealth));
+        levelBaseValues.Mana = levelBaseStats->GenerateMana(creatureTemplate);
+        levelBaseValues.Armor = levelBaseStats->GenerateArmor(creatureTemplate);
+        float const levelBaseDamage = GetBaseExpansionValueForLevel(levelBaseStats->BaseDamage, highestPlayerLevel);
+        levelBaseValues.MinDamage = levelBaseDamage;
+        levelBaseValues.MaxDamage = levelBaseDamage * 1.5f;
+        levelBaseValues.AttackPower = static_cast<float>(levelBaseStats->AttackPower);
+        levelBaseValues.RangedAttackPower = static_cast<float>(levelBaseStats->RangedAttackPower);
 
-        return multiplier;
-    };
+        auto computeLevelMultiplier = [](float originalValue, float newValue)
+        {
+            if (originalValue <= 0.0f)
+                return 1.0f;
 
-    float const levelHealthMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Health), static_cast<float>(levelBaseValues.Health));
-    float const levelManaMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Mana), static_cast<float>(levelBaseValues.Mana));
-    float const levelArmorMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Armor), static_cast<float>(levelBaseValues.Armor));
-    float const levelDamageMultiplier = computeLevelMultiplier(originalBaseValues.MinDamage, levelBaseValues.MinDamage);
-    float const levelAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.AttackPower, levelBaseValues.AttackPower);
-    float const levelRangedAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.RangedAttackPower, levelBaseValues.RangedAttackPower);
+            float multiplier = newValue / originalValue;
+            if (!std::isfinite(multiplier) || multiplier <= 0.0f)
+                return 1.0f;
+
+            return multiplier;
+        };
+
+        levelHealthMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Health), static_cast<float>(levelBaseValues.Health));
+        levelManaMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Mana), static_cast<float>(levelBaseValues.Mana));
+        levelArmorMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Armor), static_cast<float>(levelBaseValues.Armor));
+        levelDamageMultiplier = computeLevelMultiplier(originalBaseValues.MinDamage, levelBaseValues.MinDamage);
+        levelAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.AttackPower, levelBaseValues.AttackPower);
+        levelRangedAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.RangedAttackPower, levelBaseValues.RangedAttackPower);
+    }
 
     CreatureMultipliers const baseMultipliers = { healthMultiplier, manaMultiplier, damageMultiplier, armorMultiplier, crowdControlMultiplier };
-    CreatureMultipliers const finalMultipliers =
+    CreatureMultipliers finalMultipliers = baseMultipliers;
+    if (levelScalingActive)
     {
-        healthMultiplier * levelHealthMultiplier,
-        manaMultiplier * levelManaMultiplier,
-        damageMultiplier * levelDamageMultiplier,
-        armorMultiplier * levelArmorMultiplier,
-        crowdControlMultiplier
-    };
+        finalMultipliers.Health *= levelHealthMultiplier;
+        finalMultipliers.Mana *= levelManaMultiplier;
+        finalMultipliers.Damage *= levelDamageMultiplier;
+        finalMultipliers.Armor *= levelArmorMultiplier;
+    }
 
     auto multipliersDiffer = [](float lhs, float rhs)
     {
