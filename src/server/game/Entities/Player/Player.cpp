@@ -5044,9 +5044,6 @@ void Player::RepopAtGraveyard()
 
     // Special handle for battleground maps
     if (Battleground* bg = GetBattleground())
-        // Ghosts are queued for resurrection when they talk to the spirit guide
-        // (WorldSession::HandleGossipHelloOpcode), so releasing here only moves
-        // them to the graveyard without opening the spirit healer dialog.
         ClosestGrave = bg->GetClosestGraveyard(this);
     else
     {
@@ -5070,6 +5067,32 @@ void Player::RepopAtGraveyard()
             packet.MapID = ClosestGrave->Continent;
             packet.Loc = Position(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
             GetSession()->SendPacket(packet.Write());
+        }
+
+        if (GetBattleground())
+        {
+            m_Events.AddEventAtOffset([this]()
+            {
+                if (!IsInWorld() || IsAlive() || !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                    return;
+
+                Battleground* bg = GetBattleground();
+                if (!bg)
+                    return;
+
+                if (HasAura(SPELL_WAITING_FOR_RESURRECT))
+                    return;
+
+                uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+                if (!spiritEntry)
+                    return;
+
+                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
+                {
+                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                }
+            }, Milliseconds(500));
         }
 
     }
