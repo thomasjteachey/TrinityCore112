@@ -109,6 +109,7 @@
 #include "ArenaSpectator.h"
 
 #include <initializer_list>
+#include <limits>
 
 namespace
 {
@@ -5071,6 +5072,9 @@ void Player::RepopAtGraveyard()
 
         if (GetBattleground())
         {
+            // AzerothCore (3.3.5) relies on the client to immediately fire CMSG_AREA_SPIRIT_HEALER_QUEUE after teleporting the
+            // ghost to the graveyard, which in turn re-opens the spirit healer gossip. The 1.12.1 client never does that, so in
+            // classic battlegrounds we need to requeue the player server-side once the spirit guide is visible again.
             m_Events.AddEventAtOffset([this]()
             {
                 if (!IsInWorld() || IsAlive() || !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
@@ -5083,17 +5087,19 @@ void Player::RepopAtGraveyard()
                 if (HasAura(SPELL_WAITING_FOR_RESURRECT))
                     return;
 
-                uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+                TeamId teamId = Battleground::GetTeamIndexByTeamId(GetBGTeam());
+                uint32 spiritEntry = teamId == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
                 if (!spiritEntry)
                     return;
 
-                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
+                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 150.0f, false))
                 {
                     bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
                     sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
                 }
             }, Milliseconds(500));
         }
+
     }
     else if (GetPositionZ() < GetMap()->GetMinHeight(GetPositionX(), GetPositionY()))
         TeleportTo(m_homebindMapId, m_homebindX, m_homebindY, m_homebindZ, GetOrientation());
