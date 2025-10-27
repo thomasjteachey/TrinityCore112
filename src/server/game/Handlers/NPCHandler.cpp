@@ -175,6 +175,9 @@ void WorldSession::HandleGossipHelloOpcode(WorldPacket& recvData)
         Battleground* bg = _player->GetBattleground();
         if (bg)
         {
+            // Battleground ghosts are only added to the resurrection queue after
+            // they initiate gossip with the spirit guide. Releasing at the
+            // graveyard does not auto-open the dialog.
             bg->AddPlayerToResurrectQueue(unit->GetGUID(), _player->GetGUID());
             sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(_player, bg, unit->GetGUID());
             return;
