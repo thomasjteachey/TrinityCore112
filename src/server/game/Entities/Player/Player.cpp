@@ -109,6 +109,7 @@
 #include "ArenaSpectator.h"
 
 #include <initializer_list>
+#include <list>
 
 namespace
 {
@@ -5087,7 +5088,25 @@ void Player::RepopAtGraveyard()
                 if (!spiritEntry)
                     return;
 
-                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
+                std::list<Creature*> spiritGuides;
+                GetCreatureListWithEntryInGrid(spiritGuides, spiritEntry, 30.0f);
+
+                Creature* spiritGuide = nullptr;
+                float closestDistSq = std::numeric_limits<float>::max();
+                for (Creature* candidate : spiritGuides)
+                {
+                    if (!candidate)
+                        continue;
+
+                    float const distSq = GetExactDistSq(candidate);
+                    if (distSq < closestDistSq)
+                    {
+                        closestDistSq = distSq;
+                        spiritGuide = candidate;
+                    }
+                }
+
+                if (spiritGuide)
                 {
                     bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
                     sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
