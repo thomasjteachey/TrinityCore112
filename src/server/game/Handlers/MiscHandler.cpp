@@ -1118,7 +1118,7 @@ void WorldSession::HandleFarSightOpcode(WorldPacket& recvData)
         _player->SetSeer(_player);
     }
 
-    GetPlayer()->UpdateVisibilityForPlayer();
+    GetPlayer()->UpdateVisibilityForPlayer(false);
 }
 
 void WorldSession::HandleSetTitleOpcode(WorldPacket& recvData)

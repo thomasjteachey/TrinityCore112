@@ -5140,6 +5140,7 @@ void Player::RepopAtGraveyard()
                 map->LoadGrid(GetPositionX(), GetPositionY());
 
                 UpdateObjectVisibility();
+                UpdateVisibilityForPlayer(true);
 
                 if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
                 {
@@ -22891,16 +22892,32 @@ void Player::UpdateObjectVisibility(bool forced)
     else
     {
         Unit::UpdateObjectVisibility(true);
-        UpdateVisibilityForPlayer();
+        UpdateVisibilityForPlayer(false);
     }
 }
 
-void Player::UpdateVisibilityForPlayer()
+void Player::UpdateVisibilityForPlayer(bool mapChange)
 {
     // updates visibility of all objects around point of view for current player
     Trinity::VisibleNotifier notifier(*this);
     Cell::VisitAllObjects(m_seer, notifier, GetSightRange());
     notifier.SendToSelf();   // send gathered data
+
+    if (!mapChange)
+        return;
+
+    // When changing maps, force a far visibility pass to preload distant objects
+    float farVisibility = GetSightRange();
+    if (Map* map = GetMap())
+    {
+        float mapVisibility = map->GetVisibilityRange();
+        if (mapVisibility > farVisibility)
+            farVisibility = mapVisibility;
+    }
+
+    Trinity::VisibleNotifier farNotifier(*this);
+    Cell::VisitAllObjects(m_seer, farNotifier, farVisibility, false);
+    farNotifier.SendToSelf();
 }
 
 void Player::SetPhaseMask(uint32 newPhaseMask, bool update)
@@ -23055,7 +23072,7 @@ void Player::SendInitialPacketsBeforeAddToMap()
 
 void Player::SendInitialPacketsAfterAddToMap()
 {
-    UpdateVisibilityForPlayer();
+    UpdateVisibilityForPlayer(true);
 
     // update zone
     uint32 newzone, newarea;

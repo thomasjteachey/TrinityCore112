@@ -2064,7 +2064,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         void SendInitialVisiblePackets(Unit* target) const;
         void UpdateObjectVisibility(bool forced = true) override;
-        void UpdateVisibilityForPlayer();
+        void UpdateVisibilityForPlayer(bool mapChange);
         void UpdateVisibilityOf(WorldObject* target);
         void UpdateTriggerVisibility();
         void SetPhaseMask(uint32 newPhaseMask, bool update) override;// overwrite Unit::SetPhaseMask
