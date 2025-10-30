@@ -63,7 +63,11 @@ struct SummonPropertiesEntry;
 enum Difficulty : uint8;
 enum WeatherState : uint32;
 
-namespace Trinity { struct ObjectUpdater; }
+namespace Trinity
+{
+    struct ObjectUpdater;
+    struct VisibleNotifier;
+}
 namespace VMAP { enum class ModelIgnoreFlags : uint32; }
 namespace G3D { class Plane; }
 
@@ -348,6 +352,7 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         template<class T> void RemoveFromMap(T *, bool);
 
         void VisitNearbyCellsOf(WorldObject* obj, TypeContainerVisitor<Trinity::ObjectUpdater, GridTypeMapContainer> &gridVisitor, TypeContainerVisitor<Trinity::ObjectUpdater, WorldTypeMapContainer> &worldVisitor);
+        void VisitFarVisibleObjects(WorldObject const* obj, Trinity::VisibleNotifier& notifier, float radius);
         virtual void Update(uint32);
 
         float GetVisibilityRange() const { return m_VisibleDistance; }

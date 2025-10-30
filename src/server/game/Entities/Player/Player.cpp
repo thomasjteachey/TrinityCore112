@@ -71,6 +71,7 @@
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "ObjectDefines.h"
 #include "Opcodes.h"
 #include "OutdoorPvP.h"
 #include "OutdoorPvPMgr.h"
@@ -5075,88 +5076,68 @@ void Player::RepopAtGraveyard()
             GetSession()->SendPacket(packet.Write());
         }
 
-        if (GetBattleground())
+        if (Battleground* bg = GetBattleground())
         {
-            Position const queuedGraveyardPosition = graveyardPosition;
-
-            m_Events.AddEventAtOffset([this, queuedGraveyardPosition]()
+            if (!IsInWorld())
             {
-                if (!IsInWorld())
-                {
-                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - player is not in world",
-                        GetGUID().ToString());
-                    return;
-                }
-
-                if (IsAlive())
-                {
-                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - player already alive",
-                        GetGUID().ToString());
-                    return;
-                }
-
-                if (!HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-                {
-                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - ghost flag missing",
-                        GetGUID().ToString());
-                    return;
-                }
-
-                Battleground* bg = GetBattleground();
-                if (!bg)
-                {
-                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - battleground not found",
-                        GetGUID().ToString());
-                    return;
-                }
-
-                if (HasAura(SPELL_WAITING_FOR_RESURRECT))
-                {
-                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} in BG instance {} - already waiting for resurrect",
-                        GetGUID().ToString(), bg->GetInstanceID());
-                    return;
-                }
-
+                TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - player is not in world",
+                    GetGUID().ToString());
+            }
+            else if (IsAlive())
+            {
+                TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - player already alive",
+                    GetGUID().ToString());
+            }
+            else if (!HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            {
+                TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - ghost flag missing",
+                    GetGUID().ToString());
+            }
+            else if (HasAura(SPELL_WAITING_FOR_RESURRECT))
+            {
+                TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} in BG instance {} - already waiting for resurrect",
+                    GetGUID().ToString(), bg->GetInstanceID());
+            }
+            else
+            {
                 uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
                 if (!spiritEntry)
                 {
                     TC_LOG_WARN("bg.spiritguide", "Unable to determine spirit guide entry for player {} in BG instance {}",
                         GetGUID().ToString(), bg->GetInstanceID());
-                    return;
                 }
-
-                Map* map = GetMap();
-                if (!map)
+                else if (Map* map = GetMap())
                 {
-                    TC_LOG_WARN("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - no active map",
-                        GetGUID().ToString());
-                    return;
-                }
+                    TC_LOG_INFO("bg.spiritguide", "Player {} forcing spirit guide visibility check on map {} instance {} towards graveyard {}",
+                        GetGUID().ToString(), map->GetId(), map->GetInstanceId(), graveyardPosition.ToString());
 
-                TC_LOG_INFO("bg.spiritguide", "Player {} forcing spirit guide visibility check on map {} instance {} towards graveyard {}",
-                    GetGUID().ToString(), map->GetId(), map->GetInstanceId(), queuedGraveyardPosition.ToString());
+                    map->LoadGrid(graveyardPosition.GetPositionX(), graveyardPosition.GetPositionY());
+                    map->LoadGrid(GetPositionX(), GetPositionY());
 
-                map->LoadGrid(queuedGraveyardPosition.GetPositionX(), queuedGraveyardPosition.GetPositionY());
-                map->LoadGrid(GetPositionX(), GetPositionY());
+                    UpdateObjectVisibility();
+                    UpdateVisibilityForPlayer(true);
 
-                UpdateObjectVisibility();
-                UpdateVisibilityForPlayer(true);
+                    if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
+                    {
+                        TC_LOG_INFO("bg.spiritguide", "Player {} detected spirit guide {} at {} - queuing resurrect and ASQ",
+                            GetGUID().ToString(), spiritGuide->GetGUID().ToString(), spiritGuide->GetPosition().ToString());
 
-                if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
-                {
-                    TC_LOG_INFO("bg.spiritguide", "Player {} detected spirit guide {} at {} - queuing resurrect and ASQ",
-                        GetGUID().ToString(), spiritGuide->GetGUID().ToString(), spiritGuide->GetPosition().ToString());
-
-                    UpdateVisibilityOf(spiritGuide);
-                    bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
-                    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                        UpdateVisibilityOf(spiritGuide);
+                        bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
+                        sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                    }
+                    else
+                    {
+                        TC_LOG_WARN("bg.spiritguide", "Player {} failed to locate spirit guide entry {} within 30.0f range after visibility refresh",
+                            GetGUID().ToString(), spiritEntry);
+                    }
                 }
                 else
                 {
-                    TC_LOG_WARN("bg.spiritguide", "Player {} failed to locate spirit guide entry {} within 30.0f range after visibility refresh",
-                        GetGUID().ToString(), spiritEntry);
+                    TC_LOG_WARN("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - no active map",
+                        GetGUID().ToString());
                 }
-            }, Milliseconds(500));
+            }
         }
     }
     else if (GetPositionZ() < GetMap()->GetMinHeight(GetPositionX(), GetPositionY()))
@@ -22898,6 +22879,9 @@ void Player::UpdateObjectVisibility(bool forced)
 
 void Player::UpdateVisibilityForPlayer(bool mapChange)
 {
+    if (!m_seer)
+        return;
+
     // updates visibility of all objects around point of view for current player
     Trinity::VisibleNotifier notifier(*this);
     Cell::VisitAllObjects(m_seer, notifier, GetSightRange());
@@ -22906,18 +22890,14 @@ void Player::UpdateVisibilityForPlayer(bool mapChange)
     if (!mapChange)
         return;
 
-    // When changing maps, force a far visibility pass to preload distant objects
-    float farVisibility = GetSightRange();
     if (Map* map = GetMap())
     {
-        float mapVisibility = map->GetVisibilityRange();
-        if (mapVisibility > farVisibility)
-            farVisibility = mapVisibility;
+        Trinity::VisibleNotifier farNotifier(*this);
+        map->VisitFarVisibleObjects(m_seer, farNotifier, VISIBILITY_DISTANCE_GIGANTIC);
+        farNotifier.SendToSelf();
     }
 
-    Trinity::VisibleNotifier farNotifier(*this);
-    Cell::VisitAllObjects(m_seer, farNotifier, farVisibility, false);
-    farNotifier.SendToSelf();
+    m_lastNotifyPosition.Relocate(m_seer->GetPosition());
 }
 
 void Player::SetPhaseMask(uint32 newPhaseMask, bool update)

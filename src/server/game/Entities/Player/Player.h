@@ -2064,7 +2064,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         void SendInitialVisiblePackets(Unit* target) const;
         void UpdateObjectVisibility(bool forced = true) override;
-        void UpdateVisibilityForPlayer(bool mapChange);
+        void UpdateVisibilityForPlayer(bool mapChange = false);
         void UpdateVisibilityOf(WorldObject* target);
         void UpdateTriggerVisibility();
         void SetPhaseMask(uint32 newPhaseMask, bool update) override;// overwrite Unit::SetPhaseMask
@@ -2578,6 +2578,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 manaBeforeDuel;
 
         WorldLocation _corpseLocation;
+        Position m_lastNotifyPosition;
 };
 
 TC_GAME_API void AddItemsSetItem(Player* player, Item* item);
