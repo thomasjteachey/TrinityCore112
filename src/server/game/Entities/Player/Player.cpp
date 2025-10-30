@@ -5060,7 +5060,13 @@ void Player::RepopAtGraveyard()
     // and don't show spirit healer location
     if (ClosestGrave)
     {
-        TeleportTo(ClosestGrave->Continent, ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z, GetOrientation(), shouldResurrect ? TELE_REVIVE_AT_TELEPORT : 0);
+        Position graveyardPosition;
+        graveyardPosition.Relocate(ClosestGrave->Loc.X, ClosestGrave->Loc.Y, ClosestGrave->Loc.Z);
+
+        TC_LOG_INFO("bg.spiritguide", "Player {} repopping at graveyard map {} position {} (shouldResurrect: {}, battleground: {})",
+            GetGUID().ToString(), ClosestGrave->Continent, graveyardPosition.ToString(), shouldResurrect, GetBattleground() ? "yes" : "no");
+
+        TeleportTo(ClosestGrave->Continent, graveyardPosition.GetPositionX(), graveyardPosition.GetPositionY(), graveyardPosition.GetPositionZ(), GetOrientation(), shouldResurrect ? TELE_REVIVE_AT_TELEPORT : 0);
         if (isDead())                                        // not send if alive, because it used in TeleportTo()
         {
             WorldPackets::Misc::DeathReleaseLoc packet;
@@ -5071,26 +5077,83 @@ void Player::RepopAtGraveyard()
 
         if (GetBattleground())
         {
-            m_Events.AddEventAtOffset([this]()
+            Position const queuedGraveyardPosition = graveyardPosition;
+
+            m_Events.AddEventAtOffset([this, queuedGraveyardPosition]()
             {
-                if (!IsInWorld() || IsAlive() || !HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                if (!IsInWorld())
+                {
+                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - player is not in world",
+                        GetGUID().ToString());
                     return;
+                }
+
+                if (IsAlive())
+                {
+                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - player already alive",
+                        GetGUID().ToString());
+                    return;
+                }
+
+                if (!HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                {
+                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - ghost flag missing",
+                        GetGUID().ToString());
+                    return;
+                }
 
                 Battleground* bg = GetBattleground();
                 if (!bg)
+                {
+                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - battleground not found",
+                        GetGUID().ToString());
                     return;
+                }
 
                 if (HasAura(SPELL_WAITING_FOR_RESURRECT))
+                {
+                    TC_LOG_INFO("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} in BG instance {} - already waiting for resurrect",
+                        GetGUID().ToString(), bg->GetInstanceID());
                     return;
+                }
 
                 uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
                 if (!spiritEntry)
+                {
+                    TC_LOG_WARN("bg.spiritguide", "Unable to determine spirit guide entry for player {} in BG instance {}",
+                        GetGUID().ToString(), bg->GetInstanceID());
                     return;
+                }
+
+                Map* map = GetMap();
+                if (!map)
+                {
+                    TC_LOG_WARN("bg.spiritguide", "Skipping spirit guide visibility refresh for player {} - no active map",
+                        GetGUID().ToString());
+                    return;
+                }
+
+                TC_LOG_INFO("bg.spiritguide", "Player {} forcing spirit guide visibility check on map {} instance {} towards graveyard {}",
+                    GetGUID().ToString(), map->GetId(), map->GetInstanceId(), queuedGraveyardPosition.ToString());
+
+                map->LoadGrid(queuedGraveyardPosition.GetPositionX(), queuedGraveyardPosition.GetPositionY());
+                map->LoadGrid(GetPositionX(), GetPositionY());
+
+                UpdateObjectVisibility();
 
                 if (Creature* spiritGuide = FindNearestCreature(spiritEntry, 30.0f, false))
                 {
+                    TC_LOG_INFO("bg.spiritguide", "Player {} detected spirit guide {} at {} - queuing resurrect and ASQ",
+                        GetGUID().ToString(), spiritGuide->GetGUID().ToString(), spiritGuide->GetPosition().ToString());
+
+                    UpdateVisibilityOf(spiritGuide);
                     bg->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), GetGUID());
                     sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(this, bg, spiritGuide->GetGUID());
+                }
+                else
+                {
+                    TC_LOG_WARN("bg.spiritguide", "Player {} failed to locate spirit guide entry {} within 30.0f range after visibility refresh",
+                        GetGUID().ToString(), spiritEntry);
                 }
             }, Milliseconds(500));
         }
