@@ -751,6 +751,14 @@ void Map::VisitNearbyCellsOf(WorldObject* obj, TypeContainerVisitor<Trinity::Obj
     }
 }
 
+void Map::VisitFarVisibleObjects(WorldObject const* obj, Trinity::VisibleNotifier& notifier, float radius)
+{
+    if (!obj)
+        return;
+
+    Cell::VisitAllObjects(obj, notifier, radius, false);
+}
+
 void Map::UpdatePlayerZoneStats(uint32 oldZone, uint32 newZone)
 {
     // Nothing to do if no change
