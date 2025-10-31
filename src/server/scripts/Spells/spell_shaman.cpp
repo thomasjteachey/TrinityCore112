@@ -1676,13 +1676,22 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         caster->RemoveAurasDueToSpell(SPELL_SHAMAN_GHOST_WOLF);
 
         if (SpellHistory* spellHistory = caster->GetSpellHistory())
+        {
             spellHistory->AddCooldown(SPELL_SHAMAN_GHOST_WOLF, 0, std::chrono::seconds(6));
+
+            if (SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF))
+                spellHistory->SendCooldownEvent(ghostWolfInfo, 0, nullptr, false);
+        }
 
         if (caster->GetShapeshiftForm() == FORM_GHOSTWOLF)
             caster->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
         if (!target->IsAlive())
             return;
+
+        caster->resetAttackTimer(BASE_ATTACK);
+        if (caster->haveOffhandWeapon())
+            caster->resetAttackTimer(OFF_ATTACK);
 
         bool const startedMelee = caster->Attack(target, true);
         if (!startedMelee && caster->GetVictim() != target)
