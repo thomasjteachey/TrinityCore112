@@ -1658,7 +1658,7 @@ class spell_sha_spirit_hunt : public AuraScript
     }
 };
 
-// 81909 - Spirit Walk
+// 81910 - Spirit Walk
 class spell_sha_ghost_wolf_charge : public SpellScript
 {
     PrepareSpellScript(spell_sha_ghost_wolf_charge);
@@ -1712,8 +1712,6 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         bool const startedMelee = caster->Attack(target, true);
         if (!startedMelee && caster->GetVictim() != target)
             return;
-
-        caster->CastSpell(target, SPELL_SHAMAN_SPIRIT_WALK_CHARGE_TRIGGER, true);
     }
 
     void Register() override
