@@ -1711,6 +1711,16 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         bool const startedMelee = caster->Attack(target, true);
         if (!startedMelee && caster->GetVictim() != target)
             return;
+
+        caster->resetAttackTimer(BASE_ATTACK);
+        caster->resetAttackTimer(OFF_ATTACK);
+
+        caster->AttackerStateUpdate(target);
+
+        static constexpr uint32 HalfSecondSwingDelayMs = 500;
+        caster->setAttackTimer(BASE_ATTACK, HalfSecondSwingDelayMs);
+        if (caster->haveOffhandWeapon())
+            caster->setAttackTimer(OFF_ATTACK, HalfSecondSwingDelayMs);
     }
 
     void Register() override
