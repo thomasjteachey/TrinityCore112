@@ -1708,7 +1708,7 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         if (!target->IsAlive())
             return;
 
-        static constexpr uint32 HalfSecondSwingDelayMs = 500;
+        static constexpr uint32 HalfSecondSwingDelayMs = 100;
         caster->setAttackTimer(BASE_ATTACK, HalfSecondSwingDelayMs);
         bool const startedMelee = caster->Attack(target, true);
         //caster->AttackerStateUpdate(target);
