@@ -1679,7 +1679,7 @@ class spell_sha_ghost_wolf_charge : public SpellScript
 
         if (SpellHistory* spellHistory = caster->GetSpellHistory())
         {
-            static constexpr std::chrono::seconds GhostWolfCooldown(6);
+            static constexpr std::chrono::seconds GhostWolfCooldown(12);
             SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
 
             if (ghostWolfInfo)
@@ -1712,15 +1712,10 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         if (!startedMelee && caster->GetVictim() != target)
             return;
 
-        caster->resetAttackTimer(BASE_ATTACK);
-        caster->resetAttackTimer(OFF_ATTACK);
-
         caster->AttackerStateUpdate(target);
 
         static constexpr uint32 HalfSecondSwingDelayMs = 500;
         caster->setAttackTimer(BASE_ATTACK, HalfSecondSwingDelayMs);
-        if (caster->haveOffhandWeapon())
-            caster->setAttackTimer(OFF_ATTACK, HalfSecondSwingDelayMs);
     }
 
     void Register() override
