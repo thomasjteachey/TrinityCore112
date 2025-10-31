@@ -1709,6 +1709,9 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         if (!target->IsAlive())
             return;
 
+        caster->resetAttackTimer(BASE_ATTACK);
+        caster->resetAttackTimer(OFF_ATTACK);
+
         bool const startedMelee = caster->Attack(target, true);
         if (!startedMelee && caster->GetVictim() != target)
             return;
