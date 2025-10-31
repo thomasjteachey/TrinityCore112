@@ -34,8 +34,11 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include "WorldPacket.h"
+#include "GameTime.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <unordered_map>
 #include "SharedDefines.h"
 
@@ -62,6 +65,7 @@ enum ShamanSpells
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD          = 23552,
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD_DAMAGE   = 27635,
     SPELL_SHAMAN_ITEM_MANA_SURGE                = 23571,
+    SPELL_SHAMAN_GHOST_WOLF                     = 2645,
     SPELL_SHAMAN_LIGHTNING_SHIELD_DEFENSIVE_AURA = 81459,
     SPELL_SHAMAN_LAVA_FLOWS_R1                  = 51480,
     SPELL_SHAMAN_LAVA_FLOWS_TRIGGERED_R1        = 64694,
@@ -1653,6 +1657,75 @@ class spell_sha_spirit_hunt : public AuraScript
     }
 };
 
+// 81909 - Spirit Walk
+class spell_sha_ghost_wolf_charge : public SpellScript
+{
+    PrepareSpellScript(spell_sha_ghost_wolf_charge);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_SHAMAN_GHOST_WOLF });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+
+        if (!caster || !target)
+            return;
+
+        caster->RemoveAurasDueToSpell(SPELL_SHAMAN_GHOST_WOLF);
+
+        if (SpellHistory* spellHistory = caster->GetSpellHistory())
+        {
+            static constexpr std::chrono::seconds GhostWolfCooldown(6);
+            SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
+
+            if (ghostWolfInfo)
+            {
+                SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+                SpellHistory::Clock::time_point const cooldownEnd = now + GhostWolfCooldown;
+                SpellHistory::Clock::time_point const categoryEnd = ghostWolfInfo->GetCategory() ? cooldownEnd : now;
+
+                spellHistory->AddCooldown(ghostWolfInfo->Id, 0, cooldownEnd, ghostWolfInfo->GetCategory(), categoryEnd);
+            }
+            else
+                spellHistory->AddCooldown(SPELL_SHAMAN_GHOST_WOLF, 0, GhostWolfCooldown);
+
+            if (Player* playerCaster = caster->ToPlayer())
+            {
+                WorldPacket cooldownData;
+                uint32 const ghostWolfCooldownMs = static_cast<uint32>(std::chrono::duration_cast<std::chrono::milliseconds>(GhostWolfCooldown).count());
+                spellHistory->BuildCooldownPacket(cooldownData, SPELL_COOLDOWN_FLAG_NONE, SPELL_SHAMAN_GHOST_WOLF, ghostWolfCooldownMs);
+                playerCaster->SendDirectMessage(&cooldownData);
+            }
+        }
+
+        if (caster->GetShapeshiftForm() == FORM_GHOSTWOLF)
+            caster->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
+        if (!target->IsAlive())
+            return;
+
+        static constexpr uint32 GhostWolfChargeSwingDelayMs = 500;
+        caster->setAttackTimer(BASE_ATTACK, GhostWolfChargeSwingDelayMs);
+        if (caster->haveOffhandWeapon())
+            caster->setAttackTimer(OFF_ATTACK, GhostWolfChargeSwingDelayMs);
+
+        bool const startedMelee = caster->Attack(target, true);
+        if (!startedMelee && caster->GetVictim() != target)
+            return;
+
+        caster->AttackerStateUpdate(target);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_sha_ghost_wolf_charge::HandleDummy, EFFECT_2, SPELL_EFFECT_DUMMY);
+    }
+};
+
 // -51525 - Static Shock
 class spell_sha_static_shock : public AuraScript
 {
@@ -2677,6 +2750,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_shamanistic_rage);
     RegisterSpellScript(spell_sha_stoneclaw_totem);
     RegisterSpellScript(spell_sha_spirit_hunt);
+    RegisterSpellScript(spell_sha_ghost_wolf_charge);
     RegisterSpellScript(spell_sha_static_shock);
     RegisterSpellScript(spell_sha_tidal_force_dummy);
     RegisterSpellScript(spell_sha_thunderstorm);
