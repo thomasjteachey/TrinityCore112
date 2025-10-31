@@ -34,6 +34,8 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Unit.h"
+#include "WorldPacket.h"
+#include "GameTime.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -1677,10 +1679,27 @@ class spell_sha_ghost_wolf_charge : public SpellScript
 
         if (SpellHistory* spellHistory = caster->GetSpellHistory())
         {
-            spellHistory->AddCooldown(SPELL_SHAMAN_GHOST_WOLF, 0, std::chrono::seconds(6));
+            static constexpr std::chrono::seconds GhostWolfCooldown(6);
+            SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
 
-            if (SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF))
-                spellHistory->SendCooldownEvent(ghostWolfInfo, 0, nullptr, false);
+            if (ghostWolfInfo)
+            {
+                SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+                SpellHistory::Clock::time_point const cooldownEnd = now + GhostWolfCooldown;
+                SpellHistory::Clock::time_point const categoryEnd = ghostWolfInfo->GetCategory() ? cooldownEnd : now;
+
+                spellHistory->AddCooldown(ghostWolfInfo->Id, 0, cooldownEnd, ghostWolfInfo->GetCategory(), categoryEnd);
+            }
+            else
+                spellHistory->AddCooldown(SPELL_SHAMAN_GHOST_WOLF, 0, GhostWolfCooldown);
+
+            if (Player* playerCaster = caster->ToPlayer())
+            {
+                WorldPacket cooldownData;
+                uint32 const ghostWolfCooldownMs = static_cast<uint32>(std::chrono::duration_cast<std::chrono::milliseconds>(GhostWolfCooldown).count());
+                spellHistory->BuildCooldownPacket(cooldownData, SPELL_COOLDOWN_FLAG_NONE, SPELL_SHAMAN_GHOST_WOLF, ghostWolfCooldownMs);
+                playerCaster->SendDirectMessage(&cooldownData);
+            }
         }
 
         if (caster->GetShapeshiftForm() == FORM_GHOSTWOLF)
