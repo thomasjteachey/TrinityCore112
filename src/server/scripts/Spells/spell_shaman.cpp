@@ -66,6 +66,7 @@ enum ShamanSpells
     SPELL_SHAMAN_ITEM_LIGHTNING_SHIELD_DAMAGE   = 27635,
     SPELL_SHAMAN_ITEM_MANA_SURGE                = 23571,
     SPELL_SHAMAN_GHOST_WOLF                     = 2645,
+    SPELL_SHAMAN_SPIRIT_WALK_CHARGE_TRIGGER     = 81910,
     SPELL_SHAMAN_LIGHTNING_SHIELD_DEFENSIVE_AURA = 81459,
     SPELL_SHAMAN_LAVA_FLOWS_R1                  = 51480,
     SPELL_SHAMAN_LAVA_FLOWS_TRIGGERED_R1        = 64694,
@@ -1664,7 +1665,7 @@ class spell_sha_ghost_wolf_charge : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_SHAMAN_GHOST_WOLF });
+        return ValidateSpellInfo({ SPELL_SHAMAN_GHOST_WOLF, SPELL_SHAMAN_SPIRIT_WALK_CHARGE_TRIGGER });
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
@@ -1679,7 +1680,7 @@ class spell_sha_ghost_wolf_charge : public SpellScript
 
         if (SpellHistory* spellHistory = caster->GetSpellHistory())
         {
-            static constexpr std::chrono::seconds GhostWolfCooldown(12);
+            static constexpr std::chrono::seconds GhostWolfCooldown(6);
             SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
 
             if (ghostWolfInfo)
@@ -1708,10 +1709,11 @@ class spell_sha_ghost_wolf_charge : public SpellScript
         if (!target->IsAlive())
             return;
 
-        static constexpr uint32 HalfSecondSwingDelayMs = 100;
-        caster->setAttackTimer(BASE_ATTACK, HalfSecondSwingDelayMs);
         bool const startedMelee = caster->Attack(target, true);
-        //caster->AttackerStateUpdate(target);
+        if (!startedMelee && caster->GetVictim() != target)
+            return;
+
+        caster->CastSpell(target, SPELL_SHAMAN_SPIRIT_WALK_CHARGE_TRIGGER, true);
     }
 
     void Register() override
