@@ -4259,6 +4259,9 @@ void Unit::RemoveArenaAuras()
         if (aura->GetSpellInfo()->Id == 58553)
             return false;
 
+        if (aura->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_AURA)
+            return false;
+
         return (!aura->GetSpellInfo()->HasAttribute(SPELL_ATTR4_DONT_REMOVE_IN_ARENA)                          // don't remove stances, shadowform, pally/hunter auras
             && !aura->IsPassive()                                                                              // don't remove passive auras
             && (aurApp->IsPositive() || !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR3_DEATH_PERSISTENT))) || // not negative death persistent auras
