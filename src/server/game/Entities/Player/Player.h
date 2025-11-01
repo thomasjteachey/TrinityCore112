@@ -1051,6 +1051,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         PetStable const* GetPetStable() const { return m_petStable.get(); }
 
         Pet* GetPet() const;
+        Pet* EnsureArenaPetResurrected();
         Pet* SummonPet(uint32 entry, float x, float y, float z, float ang, PetType petType, uint32 despwtime);
         void RemovePet(Pet* pet, PetSaveMode mode, bool returnreagent = false);
         uint32 GetPhaseMaskForSpawn() const;                // used for proper set phase for DB at GM-mode creature/GO spawn
