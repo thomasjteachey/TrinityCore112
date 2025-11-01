@@ -3332,14 +3332,20 @@ class spell_item_chicken_cover : public SpellScript
 
 enum Refocus
 {
-    SPELL_AIMED_SHOT    = 19434,
-    SPELL_MULTISHOT     = 2643,
-    SPELL_VOLLEY        = 42243,
+    SPELL_AIMED_SHOT   = 19434,
+    SPELL_MULTI_SHOT   = 2643,
+    SPELL_VOLLEY       = 1510,
+    SPELL_ARCANE_SHOT  = 14281,
 };
 
 class spell_item_refocus : public SpellScript
 {
     PrepareSpellScript(spell_item_refocus);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_AIMED_SHOT, SPELL_MULTI_SHOT, SPELL_VOLLEY, SPELL_ARCANE_SHOT });
+    }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
@@ -3348,14 +3354,19 @@ class spell_item_refocus : public SpellScript
         if (!caster || caster->GetClass() != CLASS_HUNTER)
             return;
 
-        if (caster->GetSpellHistory()->HasCooldown(SPELL_AIMED_SHOT))
-            caster->GetSpellHistory()->ResetCooldown(SPELL_AIMED_SHOT, true);
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        uint32 const spellsToReset[] = { SPELL_AIMED_SHOT, SPELL_MULTI_SHOT, SPELL_VOLLEY, SPELL_ARCANE_SHOT };
 
-        if (caster->GetSpellHistory()->HasCooldown(SPELL_MULTISHOT))
-            caster->GetSpellHistory()->ResetCooldown(SPELL_MULTISHOT, true);
+        for (uint32 spellId : spellsToReset)
+        {
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId))
+            {
+                if (spellInfo->Category)
+                    spellHistory->ResetCategoryCooldown(spellInfo->Category, true);
 
-        if (caster->GetSpellHistory()->HasCooldown(SPELL_VOLLEY))
-            caster->GetSpellHistory()->ResetCooldown(SPELL_VOLLEY, true);
+                spellHistory->ResetCooldown(spellId, true);
+            }
+        }
     }
 
     void Register() override
