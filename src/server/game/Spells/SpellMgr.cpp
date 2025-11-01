@@ -3729,6 +3729,18 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AttributesEx5 |= SPELL_ATTR5_START_PERIODIC_AT_APPLY;
     });
 
+    // Shaman weapon imbues - keep them in arenas and battlegrounds
+    ApplySpellFix({
+        8017, 8018, 8019, 10399,           // Rockbiter Weapon (Ranks 1-4)
+        8024, 8027, 8030, 16339, 16341, 16342, // Flametongue Weapon (Ranks 1-6)
+        8033, 8038, 10456, 16355, 16356,   // Frostbrand Weapon (Ranks 1-5)
+        8232, 8235, 10486, 16362           // Windfury Weapon (Ranks 1-4)
+    }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_NOT_SHAPESHIFT;
+        spellInfo->AttributesEx2 |= SPELL_ATTR2_PRESERVE_ENCHANT_IN_ARENA;
+    });
+
     // Flametongue Totem (Aura)
     ApplySpellFix({
         52109, // rank 1
