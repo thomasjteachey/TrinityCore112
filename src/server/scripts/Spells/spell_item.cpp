@@ -38,6 +38,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include <array>
+#include <chrono>
 #include <set>
 
 enum GenericData
@@ -3336,59 +3337,80 @@ namespace Refocus
 {
     enum Spells : uint32
     {
-        SPELL_AIMED_SHOT_R1    = 19434,
-        SPELL_AIMED_SHOT_R2    = 20900,
         SPELL_AIMED_SHOT_R3    = 20901,
-        SPELL_MULTISHOT_R1     = 2643,
-        SPELL_MULTISHOT_R2     = 14288,
-        SPELL_MULTISHOT_R3     = 14289,
+        SPELL_AIMED_SHOT_R2    = 20900,
+        SPELL_AIMED_SHOT_R1    = 19434,
         SPELL_MULTISHOT_R4     = 14290,
-        SPELL_ARCANE_SHOT_R1   = 3044,
-        SPELL_ARCANE_SHOT_R2   = 14281,
-        SPELL_ARCANE_SHOT_R3   = 14282,
-        SPELL_ARCANE_SHOT_R4   = 14283,
-        SPELL_ARCANE_SHOT_R5   = 14284,
-        SPELL_ARCANE_SHOT_R6   = 14285,
-        SPELL_ARCANE_SHOT_R7   = 14286,
+        SPELL_MULTISHOT_R3     = 14289,
+        SPELL_MULTISHOT_R2     = 14288,
+        SPELL_MULTISHOT_R1     = 2643,
         SPELL_ARCANE_SHOT_R8   = 14287,
-        SPELL_VOLLEY_R1        = 1510,
-        SPELL_VOLLEY_R2        = 14294,
+        SPELL_ARCANE_SHOT_R7   = 14286,
+        SPELL_ARCANE_SHOT_R6   = 14285,
+        SPELL_ARCANE_SHOT_R5   = 14284,
+        SPELL_ARCANE_SHOT_R4   = 14283,
+        SPELL_ARCANE_SHOT_R3   = 14282,
+        SPELL_ARCANE_SHOT_R2   = 14281,
+        SPELL_ARCANE_SHOT_R1   = 3044,
         SPELL_VOLLEY_R3        = 14295,
+        SPELL_VOLLEY_R2        = 14294,
+        SPELL_VOLLEY_R1        = 1510,
     };
 
     static constexpr std::array<uint32, 3> AimedShotRanks =
     {
-        SPELL_AIMED_SHOT_R1,
+        SPELL_AIMED_SHOT_R3,
         SPELL_AIMED_SHOT_R2,
-        SPELL_AIMED_SHOT_R3
+        SPELL_AIMED_SHOT_R1
     };
 
     static constexpr std::array<uint32, 4> MultiShotRanks =
     {
-        SPELL_MULTISHOT_R1,
-        SPELL_MULTISHOT_R2,
+        SPELL_MULTISHOT_R4,
         SPELL_MULTISHOT_R3,
-        SPELL_MULTISHOT_R4
+        SPELL_MULTISHOT_R2,
+        SPELL_MULTISHOT_R1
     };
 
     static constexpr std::array<uint32, 8> ArcaneShotRanks =
     {
-        SPELL_ARCANE_SHOT_R1,
-        SPELL_ARCANE_SHOT_R2,
-        SPELL_ARCANE_SHOT_R3,
-        SPELL_ARCANE_SHOT_R4,
-        SPELL_ARCANE_SHOT_R5,
-        SPELL_ARCANE_SHOT_R6,
+        SPELL_ARCANE_SHOT_R8,
         SPELL_ARCANE_SHOT_R7,
-        SPELL_ARCANE_SHOT_R8
+        SPELL_ARCANE_SHOT_R6,
+        SPELL_ARCANE_SHOT_R5,
+        SPELL_ARCANE_SHOT_R4,
+        SPELL_ARCANE_SHOT_R3,
+        SPELL_ARCANE_SHOT_R2,
+        SPELL_ARCANE_SHOT_R1
     };
 
     static constexpr std::array<uint32, 3> VolleyRanks =
     {
-        SPELL_VOLLEY_R1,
+        SPELL_VOLLEY_R3,
         SPELL_VOLLEY_R2,
-        SPELL_VOLLEY_R3
+        SPELL_VOLLEY_R1
     };
+
+    template <std::size_t N>
+    static void ResetKnownRanks(Player* caster, SpellHistory* spellHistory, std::array<uint32, N> const& spellIds, std::set<uint32>& processedCategories)
+    {
+        for (uint32 const spellId : spellIds)
+        {
+            if (!caster->HasSpell(spellId))
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!spellInfo)
+                continue;
+
+            if (uint32 const categoryId = spellInfo->GetCategory())
+                if (processedCategories.insert(categoryId).second)
+                    spellHistory->ResetCategoryCooldown(categoryId, true);
+
+            if (spellHistory->HasCooldown(spellId))
+                spellHistory->ResetCooldown(spellId, true);
+        }
+    }
 }
 
 class spell_item_refocus : public SpellScript
@@ -3410,38 +3432,22 @@ class spell_item_refocus : public SpellScript
         if (!caster || caster->GetClass() != CLASS_HUNTER)
             return;
 
-        SpellHistory* spellHistory = caster->GetSpellHistory();
-        if (!spellHistory)
-            return;
-
-        std::set<uint32> processedCategories;
-
-        auto resetCooldowns = [&](uint32 spellId)
+        caster->m_Events.AddEventAtOffset([caster]()
         {
-            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-            if (!spellInfo)
+            if (!caster)
                 return;
 
-            if (uint32 categoryId = spellInfo->GetCategory())
-            {
-                if (processedCategories.insert(categoryId).second)
-                    spellHistory->ResetCategoryCooldown(categoryId, true);
-            }
+            SpellHistory* spellHistory = caster->GetSpellHistory();
+            if (!spellHistory)
+                return;
 
-            if (spellHistory->HasCooldown(spellId))
-                spellHistory->ResetCooldown(spellId, true);
-        };
+            std::set<uint32> processedCategories;
 
-        auto resetRanks = [&](auto const& spellIds)
-        {
-            for (uint32 spellId : spellIds)
-                resetCooldowns(spellId);
-        };
-
-        resetRanks(Refocus::AimedShotRanks);
-        resetRanks(Refocus::MultiShotRanks);
-        resetRanks(Refocus::ArcaneShotRanks);
-        resetRanks(Refocus::VolleyRanks);
+            Refocus::ResetKnownRanks(caster, spellHistory, Refocus::AimedShotRanks, processedCategories);
+            Refocus::ResetKnownRanks(caster, spellHistory, Refocus::MultiShotRanks, processedCategories);
+            Refocus::ResetKnownRanks(caster, spellHistory, Refocus::ArcaneShotRanks, processedCategories);
+            Refocus::ResetKnownRanks(caster, spellHistory, Refocus::VolleyRanks, processedCategories);
+        }, std::chrono::milliseconds(1));
     }
 
     void Register() override
