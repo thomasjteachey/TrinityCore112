@@ -1816,10 +1816,26 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             {
                 RemoveArenaSpellCooldowns(true);
                 RemoveArenaAuras();
+                if (mEntry->IsBattleArena())
+                    pet = EnsureArenaPetResurrected();
+                else
+                    pet = GetPet();
+
                 if (pet)
                 {
                     pet->RemoveArenaAuras();
-                    pet->SetMaxHealth(pet->GetMaxHealth());
+
+                    if (mEntry->IsBattleArena())
+                    {
+                        pet->SetFullHealth();
+
+                        for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
+                        {
+                            Powers powerType = Powers(i);
+                            if (pet->GetMaxPower(powerType))
+                                pet->SetPower(powerType, pet->GetMaxPower(powerType));
+                        }
+                    }
                 }
             }
 
@@ -25783,15 +25799,64 @@ void Player::UpdateFallInformationIfNeed(MovementInfo const& minfo, uint16 opcod
         SetFallInformation(minfo.fallTime, minfo.pos.GetPositionZ());
 }
 
+Pet* Player::EnsureArenaPetResurrected()
+{
+    Pet* pet = GetPet();
+
+    uint32 petNumber = GetLastPetNumber();
+
+    if (!pet)
+    {
+        if (!petNumber)
+        {
+            if (PetStable const* petStable = GetPetStable())
+            {
+                if (petStable->CurrentPet)
+                    petNumber = petStable->CurrentPet->PetNumber;
+                else if (PetStable::PetInfo const* unslotted = petStable->GetUnslottedHunterPet())
+                    petNumber = unslotted->PetNumber;
+            }
+        }
+
+        if (petNumber)
+        {
+            Pet* newPet = new Pet(this);
+            if (!newPet->LoadPetFromDB(this, 0, petNumber, false))
+            {
+                delete newPet;
+                newPet = nullptr;
+            }
+
+            pet = GetPet();
+        }
+    }
+
+    if (!pet)
+        return nullptr;
+
+    if (!pet->IsAlive())
+    {
+        pet->setDeathState(ALIVE);
+        pet->ClearUnitState(UNIT_STATE_ALL_ERASABLE);
+    }
+
+    return pet;
+}
+
 void Player::UnsummonPetTemporaryIfAny()
 {
     Pet* pet = GetPet();
     if (!pet)
         return;
 
-    if (!m_temporaryUnsummonedPetNumber && pet->isControlled() && !pet->isTemporarySummoned())
+    if (pet->isControlled() && !pet->isTemporarySummoned())
     {
-        m_temporaryUnsummonedPetNumber = pet->GetCharmInfo()->GetPetNumber();
+        uint32 petNumber = pet->GetCharmInfo()->GetPetNumber();
+
+        if (!m_temporaryUnsummonedPetNumber)
+            m_temporaryUnsummonedPetNumber = petNumber;
+
+        SetLastPetNumber(petNumber);
         m_oldpetspell = pet->GetUInt32Value(UNIT_CREATED_BY_SPELL);
     }
 
@@ -25815,6 +25880,40 @@ void Player::ResummonPetTemporaryUnSummonedIfAny()
         if (map->IsBattleArena() && GetLastPetNumber())
         {
             CastSpell(this, 6962, true);
+
+            Pet* pet = GetPet();
+            if (!pet)
+            {
+                pet = new Pet(this);
+                if (!pet->LoadPetFromDB(this, 0, m_temporaryUnsummonedPetNumber, true))
+                {
+                    delete pet;
+                    pet = nullptr;
+                }
+                else
+                    pet = GetPet();
+            }
+
+            if (pet)
+            {
+                if (!pet->IsAlive())
+                {
+                    pet->setDeathState(ALIVE);
+                    pet->ClearUnitState(UNIT_STATE_ALL_ERASABLE);
+                }
+
+                pet->SetFullHealth();
+
+                for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
+                {
+                    Powers powerType = Powers(i);
+                    if (pet->GetMaxPower(powerType))
+                        pet->SetPower(powerType, pet->GetMaxPower(powerType));
+                }
+
+                pet->RemoveArenaAuras();
+            }
+
             m_temporaryUnsummonedPetNumber = 0;
             return;
         }
