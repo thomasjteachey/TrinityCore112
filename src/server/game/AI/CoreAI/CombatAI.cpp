@@ -163,7 +163,8 @@ void CasterAI::UpdateAI(uint32 diff)
 
     if (me->GetVictim() && me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me))
     {
-        me->InterruptNonMeleeSpells(false);
+        if(!me->IsPet())
+            me->InterruptNonMeleeSpells(false);
         return;
     }
 
