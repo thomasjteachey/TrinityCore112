@@ -3134,7 +3134,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
 
     uint32 param1 = 0, param2 = 0;
     SpellCastResult result = CheckCast(true, &param1, &param2);
-    bool skipCheck = m_spellInfo->Id == 13810; // frost trap should always trigger?
+    bool skipCheck = m_spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER &&
+        ((m_spellInfo->SpellFamilyFlags[0] & 0x18) ||          // Freezing and Frost Trap, Freezing Arrow
+            m_spellInfo->Id == 57879 ||                        // Snake Trap - done this way to avoid double proc
+            (m_spellInfo->SpellFamilyFlags[2] & 0x00024000));  // Explosive and Immolation Trap
     if (!skipCheck && result != SPELL_CAST_OK && !IsAutoRepeat())          //always cast autorepeat dummy for triggering
     {
         // Periodic auras should be interrupted when aura triggers a spell which can't be cast
