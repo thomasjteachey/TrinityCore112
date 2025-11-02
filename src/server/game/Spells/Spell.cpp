@@ -3106,7 +3106,12 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
 
     uint32 param1 = 0, param2 = 0;
     SpellCastResult result = CheckCast(true, &param1, &param2);
-    bool skipCheck = m_spellInfo->Id == 13810; //frost trap should always trigger?
+    bool skipCheck = m_spellInfo->Id == 13810; // frost trap should always trigger?
+    if (!skipCheck)
+    {
+        if (GameObject const* goCaster = m_caster->ToGameObject())
+            skipCheck = goCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
+    }
     if (!skipCheck && result != SPELL_CAST_OK && !IsAutoRepeat())          //always cast autorepeat dummy for triggering
     {
         // Periodic auras should be interrupted when aura triggers a spell which can't be cast
