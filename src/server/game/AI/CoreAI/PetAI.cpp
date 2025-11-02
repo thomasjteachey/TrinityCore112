@@ -72,15 +72,19 @@ void PetAI::UpdateAI(uint32 diff)
             victim->HasBreakableByDamageCrowdControlAura(me))
         {
             ObjectGuid victimGuid = victim->GetGUID();
-            if (!me->GetCharmInfo()->IsCommandAttack() || _lastCrowdControlledVictim != victimGuid)
+            if (_lastCrowdControlledVictim != victimGuid)
             {
                 _lastCrowdControlledVictim = victimGuid;
-                me->InterruptNonMeleeSpells(false);
-                StopAttack();
-                return;
+
+                if (!me->GetCharmInfo()->IsCommandAttack())
+                {
+                    me->InterruptNonMeleeSpells(false);
+                    StopAttack();
+                    return;
+                }
             }
         }
-        else if (_lastCrowdControlledVictim == victim->GetGUID())
+        else if (!_lastCrowdControlledVictim.IsEmpty() && _lastCrowdControlledVictim == victim->GetGUID())
             _lastCrowdControlledVictim.Clear();
 
         if (NeedToStop())
@@ -278,6 +282,9 @@ void PetAI::_AttackStart(Unit* target)
     // Check all pet states to decide if we can attack this target
     if (!CanAttack(target))
         return;
+
+    if (target->HasBreakableByDamageCrowdControlAura(me) && me->GetCharmInfo()->IsCommandAttack())
+        _lastCrowdControlledVictim = target->GetGUID();
 
     // Only chase if not commanded to stay or if stay but commanded to attack
     DoAttack(target, (!me->GetCharmInfo()->HasCommandState(COMMAND_STAY) || me->GetCharmInfo()->IsCommandAttack()));
