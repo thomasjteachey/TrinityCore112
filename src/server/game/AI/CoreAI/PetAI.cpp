@@ -71,6 +71,7 @@ void PetAI::UpdateAI(uint32 diff)
             me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me))
         {
             me->InterruptNonMeleeSpells(false);
+            StopAttack();
             return;
         }
 
