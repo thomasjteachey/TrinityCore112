@@ -203,7 +203,7 @@ bool ShouldPropagateCombatToOwner(Unit* owner, Unit* controlled)
     if (controlled->GetOwnerGUID() != owner->GetGUID())
         return true;
 
-    switch (owner->ToPlayer()->getClass())
+    switch (owner->ToPlayer()->GetClass())
     {
         case CLASS_HUNTER:
         case CLASS_WARLOCK:
