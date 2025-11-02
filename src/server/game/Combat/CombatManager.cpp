@@ -190,6 +190,32 @@ Unit* CombatManager::GetAnyTarget() const
     return nullptr;
 }
 
+namespace
+{
+bool ShouldPropagateCombatToOwner(Unit* owner, Unit* controlled)
+{
+    if (!owner || owner->GetTypeId() != TYPEID_PLAYER)
+        return true;
+
+    if (!controlled || !controlled->IsPet())
+        return true;
+
+    if (controlled->GetOwnerGUID() != owner->GetGUID())
+        return true;
+
+    switch (owner->ToPlayer()->GetClass())
+    {
+        case CLASS_HUNTER:
+        case CLASS_WARLOCK:
+            return false;
+        default:
+            break;
+    }
+
+    return true;
+}
+}
+
 bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
 {
     // Are we already in combat? If yes, refresh pvp combat
@@ -238,11 +264,11 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     if (inCombat)
     {
         if (Unit* owner = _owner->GetCharmerOrOwner())
-            if (owner != who && !owner->GetCombatManager().IsInCombatWith(who))
+            if (owner != who && !owner->GetCombatManager().IsInCombatWith(who) && ShouldPropagateCombatToOwner(owner, _owner))
                 owner->GetCombatManager().SetInCombatWith(who);
 
         if (Unit* owner = who->GetCharmerOrOwner())
-            if (owner != _owner && !owner->GetCombatManager().IsInCombatWith(_owner))
+            if (owner != _owner && !owner->GetCombatManager().IsInCombatWith(_owner) && ShouldPropagateCombatToOwner(owner, who))
                 owner->GetCombatManager().SetInCombatWith(_owner);
     }
 

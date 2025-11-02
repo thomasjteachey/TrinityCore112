@@ -66,6 +66,34 @@
 
 extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
+namespace
+{
+    // Allow trap game objects to continue casting so immunity/resist feedback is handled during hit resolution.
+    bool TrapGameObjectCanIgnoreTargetFailure(WorldObject const* caster, SpellCastResult result)
+    {
+        if (result == SPELL_CAST_OK || !caster)
+            return false;
+
+        GameObject const* goCaster = caster->ToGameObject();
+        if (!goCaster || goCaster->GetGoType() != GAMEOBJECT_TYPE_TRAP)
+            return false;
+
+        switch (result)
+        {
+            case SPELL_FAILED_BAD_IMPLICIT_TARGETS:
+            case SPELL_FAILED_BAD_TARGETS:
+            case SPELL_FAILED_TARGET_AFFECTING_COMBAT:
+            case SPELL_FAILED_TARGET_AURASTATE:
+            case SPELL_FAILED_CANT_CAST_ON_TAPPED:
+                return true;
+            default:
+                break;
+        }
+
+        return false;
+    }
+}
+
 SpellDestination::SpellDestination()
 {
     _position.Relocate(0, 0, 0, 0);
@@ -3106,7 +3134,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
 
     uint32 param1 = 0, param2 = 0;
     SpellCastResult result = CheckCast(true, &param1, &param2);
-    bool skipCheck = m_spellInfo->Id == 13810; //frost trap should always trigger?
+    bool skipCheck = m_spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER &&
+        ((m_spellInfo->SpellFamilyFlags[0] & 0x18) ||          // Freezing and Frost Trap, Freezing Arrow
+            m_spellInfo->Id == 57879 ||                        // Snake Trap - done this way to avoid double proc
+            (m_spellInfo->SpellFamilyFlags[2] & 0x00024000));  // Explosive and Immolation Trap
     if (!skipCheck && result != SPELL_CAST_OK && !IsAutoRepeat())          //always cast autorepeat dummy for triggering
     {
         // Periodic auras should be interrupted when aura triggers a spell which can't be cast
@@ -5330,14 +5361,23 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
 
         SpellCastResult castResult = m_spellInfo->CheckExplicitTarget(caster, m_targets.GetObjectTarget(), m_targets.GetItemTarget());
         if (castResult != SPELL_CAST_OK)
-            return castResult;
+        {
+            if ((!m_targets.GetObjectTarget() && !m_targets.GetUnitTarget()) ||
+                !TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
+            {
+                return castResult;
+            }
+        }
     }
 
     if (Unit* target = m_targets.GetUnitTarget())
     {
         SpellCastResult castResult = m_spellInfo->CheckTarget(m_caster, target, m_caster->GetTypeId() == TYPEID_GAMEOBJECT); // skip stealth checks for GO casts
         if (castResult != SPELL_CAST_OK)
-            return castResult;
+        {
+            if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
+                return castResult;
+        }
 
         if (target != m_caster)
         {
