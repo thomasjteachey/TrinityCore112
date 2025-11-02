@@ -1581,6 +1581,9 @@ void World::LoadConfigSettings(bool reload)
     // Specifies if IP addresses can be logged to the database
     m_bool_configs[CONFIG_ALLOW_LOGGING_IP_ADDRESSES_IN_DATABASE] = sConfigMgr->GetBoolDefault("AllowLoggingIPAddressesInDatabase", true, true);
 
+    // Force Free-For-All PvP state even if the realmlist game type is not set to 16 (FFA)
+    m_bool_configs[CONFIG_FORCE_FFA_PVP_REALM] = sConfigMgr->GetBoolDefault("ForceFFAPvP.Realm", false);
+
     // call ScriptMgr if we're reloading the configuration
     if (reload)
         sScriptMgr->OnConfigLoad(reload);
@@ -3570,12 +3573,13 @@ void World::LoadWorldStates()
 
 bool World::IsPvPRealm() const
 {
-    return (getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_PVP || getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_RPPVP || getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_FFA_PVP);
+    return getBoolConfig(CONFIG_FORCE_FFA_PVP_REALM) || getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_PVP
+        || getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_RPPVP || getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_FFA_PVP;
 }
 
 bool World::IsFFAPvPRealm() const
 {
-    return getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_FFA_PVP;
+    return getBoolConfig(CONFIG_FORCE_FFA_PVP_REALM) || getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_FFA_PVP;
 }
 
 // Setting a worldstate will save it to DB
