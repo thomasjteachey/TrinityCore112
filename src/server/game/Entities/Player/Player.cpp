@@ -537,7 +537,7 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
     SetGender(Gender(createInfo->Gender));
     SetPowerType(Powers(powertype), false);
     InitDisplayIds();
-    if (sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_PVP || sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_RPPVP)
+    if (sWorld->IsPvPRealm())
     {
         SetPvpFlag(UNIT_BYTE2_FLAG_PVP);
         SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);
@@ -2460,7 +2460,7 @@ void Player::SetGameMaster(bool on)
             pet->SetFaction(GetFaction());
 
         // restore FFA PvP Server state
-        if (sWorld->IsFFAPvPRealm())
+        if (IsRealmFFAPvPActive())
             SetPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
 
         // restore FFA PvP area state, remove not allowed for GM mounts
@@ -6853,8 +6853,11 @@ bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvpto
 
         if (Player* plrVictim = victim->ToPlayer())
         {
-            if (GetTeam() == plrVictim->GetTeam() && !sWorld->IsFFAPvPRealm())
-                return false;
+            if (GetTeam() == plrVictim->GetTeam())
+            {
+                if (!IsRealmFFAPvPActive() || !plrVictim->IsRealmFFAPvPActive())
+                    return false;
+            }
 
             uint8 k_level = GetLevel();
             uint8 k_grey = Trinity::XP::GetGrayLevel(k_level);
@@ -22173,12 +22176,27 @@ void Player::InitPvP()
         UpdatePvP(true, true);
 }
 
+bool Player::IsRealmFFAPvPActive() const
+{
+    if (!sWorld->IsFFAPvPRealm())
+        return false;
+
+    if (InBattleground())
+        return false;
+
+    if (Map const* map = FindMap())
+        if (map->IsBattlegroundOrArena())
+            return false;
+
+    return true;
+}
+
 void Player::UpdatePvPState(bool onlyFFA)
 {
     /// @todo should we always synchronize UNIT_FIELD_BYTES_2, 1 of controller and controlled?
     // no, we shouldn't, those are checked for affecting player by client
     if (!pvpInfo.IsInNoPvPArea && !IsGameMaster()
-        && (pvpInfo.IsInFFAPvPArea || sWorld->IsFFAPvPRealm()))
+        && (pvpInfo.IsInFFAPvPArea || IsRealmFFAPvPActive()))
     {
         if (!IsFFAPvP())
         {
@@ -26704,7 +26722,7 @@ void Player::SetIsSpectator(bool on)
 
             // restore FFA PvP Server state
             // Xinef: it will be removed if necessery in UpdateArea called in WorldPortOpcode
-            if (sWorld->IsFFAPvPRealm())
+            if (IsRealmFFAPvPActive())
             {
                 if (!HasByteFlag(UNIT_FIELD_BYTES_2, 1, UNIT_BYTE2_FLAG_FFA_PVP))
                 {

@@ -1553,6 +1553,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         PvPInfo pvpInfo;
         void InitPvP();
+        bool IsRealmFFAPvPActive() const;
         void UpdatePvPState(bool onlyFFA = false);
         void SetPvP(bool state) override;
         void UpdatePvP(bool state, bool override = false);
