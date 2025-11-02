@@ -2461,7 +2461,18 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
     // Base hit chance from attacker and victim levels
     int32 modHitChance;
     if (leveldif < 3)
+    {
         modHitChance = 97 - leveldif;
+
+        if (leveldif == 0)
+        {
+            if (Unit const* casterUnit = ToUnit())
+            {
+                if (casterUnit->GetTypeId() == TYPEID_PLAYER && victim->GetTypeId() == TYPEID_PLAYER && thisLevel == 60 && victim->GetLevelForTarget(this) == 60)
+                    modHitChance = 96;
+            }
+        }
+    }
     else
         modHitChance = 94 - (leveldif - 2) * lchance;
 
@@ -2532,7 +2543,7 @@ SpellMissInfo WorldObject::MagicSpellHitResult(Unit* victim, SpellInfo const* sp
 
         // resistance chance for binary spells, equals to average damage reduction of non-binary spell
         if (spellInfo->HasAttribute(SPELL_ATTR0_CU_BINARY_SPELL) && (spellInfo->GetSchoolMask() & SPELL_SCHOOL_MASK_MAGIC))
-            resist_chance += int32(Unit::CalculateAverageResistReduction(this, spellInfo->GetSchoolMask(), victim, spellInfo) * 10000.f); // 100 for spell calculations, and 100 for return value percentage
+            resist_chance += int32(Unit::CalculateAverageResistReduction(this, spellInfo->GetSchoolMask(), victim, spellInfo) * 10000.f);
     }
 
     // Roll chance
