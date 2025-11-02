@@ -561,7 +561,8 @@ GameType = 0
 #    ForceFFAPvP.Realm
 #        Description: Force Free-For-All PvP rules server-side regardless of the GameType advertised to the
 #                     realmlist. When enabled the realm continues to be shown to clients as a standard PvP
-#                     realm while internally behaving like GameType 16.
+#                     realm while internally behaving like GameType 16 outside battlegrounds, which continue
+#                     to function with normal PvP team restrictions.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 
