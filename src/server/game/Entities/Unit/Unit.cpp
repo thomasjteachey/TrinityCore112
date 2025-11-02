@@ -16,6 +16,7 @@
  */
 
 #include "Unit.h"
+#include <algorithm>
 #include <array>
 #include "AbstractFollower.h"
 #include "Battlefield.h"
@@ -1762,20 +1763,58 @@ void Unit::HandleEmoteCommand(Emote emoteId)
         return ignored;
     };
 
-    float resistReduction = 0.0f;
-    if (caster)
+    auto accumulateSpellPenetration = [schoolMask](Unit const* unit) -> float
     {
-        resistReduction += accumulateIgnoreResist(caster->ToUnit());
+        if (!unit)
+            return 0.0f;
 
-        if (Player const* owner = caster->GetSpellModOwner())
-            resistReduction += accumulateIgnoreResist(owner);
+        float penetration = unit->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask);
+        if (Player const* player = unit->ToPlayer())
+            penetration += player->GetSpellPenetrationItemMod();
+
+        return penetration;
+    };
+
+    float resistReduction = 0.0f;
+    float spellPenetration = 0.0f;
+
+    Unit const* unitCaster = caster ? caster->ToUnit() : nullptr;
+    Player const* owner = caster ? caster->GetSpellModOwner() : nullptr;
+
+    if (unitCaster)
+    {
+        resistReduction += accumulateIgnoreResist(unitCaster);
+        spellPenetration += accumulateSpellPenetration(unitCaster);
     }
 
+    if (owner && owner != unitCaster)
+    {
+        resistReduction += accumulateIgnoreResist(owner);
+        spellPenetration += accumulateSpellPenetration(owner);
+    }
+
+    victimResistance = std::max(victimResistance - spellPenetration, 0.0f);
     victimResistance = std::max(victimResistance - resistReduction, 0.0f);
 
-    static float const RESIST_SCALE = 300.0f;
+    float resistScale = 300.0f;
+    Unit const* scaleSource = nullptr;
+    if (owner)
+        scaleSource = owner;
+    else if (unitCaster)
+        scaleSource = unitCaster;
+
+    if (scaleSource)
+        resistScale = 5.0f * scaleSource->GetLevel();
+    else if (spellInfo && spellInfo->SpellLevel)
+        resistScale = 5.0f * std::max<uint32>(spellInfo->SpellLevel, 1u);
+    else if (victim)
+        resistScale = 5.0f * victim->GetLevel();
+
+    if (resistScale <= 0.0f)
+        resistScale = 1.0f;
+
     static float const RESIST_CAP = 0.75f;
-    return std::min(victimResistance / RESIST_SCALE, RESIST_CAP);
+    return std::min(victimResistance / resistScale, RESIST_CAP);
 }
 
 /*static*/ void Unit::CalcAbsorbResist(DamageInfo& damageInfo, Spell* spell /*= nullptr*/)
