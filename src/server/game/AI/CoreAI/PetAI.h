@@ -19,6 +19,7 @@
 #define TRINITY_PETAI_H
 
 #include "CreatureAI.h"
+#include "ObjectGuid.h"
 #include "Timer.h"
 
 class Creature;
@@ -70,6 +71,7 @@ class TC_GAME_API PetAI : public CreatureAI
         TimeTracker _tracker;
         GuidSet _allySet;
         uint32 _updateAlliesTimer;
+        ObjectGuid _lastCrowdControlledVictim;
 };
 
 #endif

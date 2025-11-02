@@ -43,7 +43,7 @@ int32 PetAI::Permissible(Creature const* creature)
     return PERMIT_BASE_NO;
 }
 
-PetAI::PetAI(Creature* creature) : CreatureAI(creature), _tracker(TIME_INTERVAL_LOOK)
+PetAI::PetAI(Creature* creature) : CreatureAI(creature), _tracker(TIME_INTERVAL_LOOK), _lastCrowdControlledVictim(ObjectGuid::Empty)
 {
     if (!me->GetCharmInfo())
         throw InvalidAIException("Creature doesn't have a valid charm info");
@@ -66,14 +66,23 @@ void PetAI::UpdateAI(uint32 diff)
 
     if (me->GetVictim() && me->EnsureVictim()->IsAlive())
     {
+        Unit* victim = me->EnsureVictim();
         // is only necessary to stop casting, the pet must not exit combat
         if (!me->GetCurrentSpell(CURRENT_CHANNELED_SPELL) && // ignore channeled spells (Pin, Seduction)
-            me->EnsureVictim()->HasBreakableByDamageCrowdControlAura(me))
+            victim->HasBreakableByDamageCrowdControlAura(me))
         {
-            me->InterruptNonMeleeSpells(false);
-            StopAttack();
-            return;
+            ObjectGuid victimGuid = victim->GetGUID();
+            if (_lastCrowdControlledVictim != victimGuid)
+            {
+                _lastCrowdControlledVictim = victimGuid;
+
+                me->InterruptNonMeleeSpells(false);
+                StopAttack();
+                return;
+            }
         }
+        else if (!_lastCrowdControlledVictim.IsEmpty() && _lastCrowdControlledVictim == victim->GetGUID())
+            _lastCrowdControlledVictim.Clear();
 
         if (NeedToStop())
         {
@@ -93,6 +102,8 @@ void PetAI::UpdateAI(uint32 diff)
     }
     else
     {
+        if (!_lastCrowdControlledVictim.IsEmpty())
+            _lastCrowdControlledVictim.Clear();
         if (me->HasReactState(REACT_AGGRESSIVE) || me->GetCharmInfo()->IsAtStay())
         {
             // Every update we need to check targets only in certain cases
@@ -268,6 +279,9 @@ void PetAI::_AttackStart(Unit* target)
     // Check all pet states to decide if we can attack this target
     if (!CanAttack(target))
         return;
+
+    if (target->HasBreakableByDamageCrowdControlAura(me) && me->GetCharmInfo()->IsCommandAttack())
+        _lastCrowdControlledVictim = target->GetGUID();
 
     // Only chase if not commanded to stay or if stay but commanded to attack
     DoAttack(target, (!me->GetCharmInfo()->HasCommandState(COMMAND_STAY) || me->GetCharmInfo()->IsCommandAttack()));
