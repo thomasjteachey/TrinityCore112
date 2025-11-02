@@ -537,7 +537,7 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
     SetGender(Gender(createInfo->Gender));
     SetPowerType(Powers(powertype), false);
     InitDisplayIds();
-    if (sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_PVP || sWorld->getIntConfig(CONFIG_GAME_TYPE) == REALM_TYPE_RPPVP)
+    if (sWorld->IsPvPRealm())
     {
         SetPvpFlag(UNIT_BYTE2_FLAG_PVP);
         SetUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED);

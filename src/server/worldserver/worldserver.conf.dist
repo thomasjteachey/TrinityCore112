@@ -558,6 +558,16 @@ PacketLogFile = ""
 GameType = 0
 
 #
+#    ForceFFAPvP.Realm
+#        Description: Force Free-For-All PvP rules server-side regardless of the GameType advertised to the
+#                     realmlist. When enabled the realm continues to be shown to clients as a standard PvP
+#                     realm while internally behaving like GameType 16.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+ForceFFAPvP.Realm = 0
+
+#
 #    RealmZone
 #        Description: Server realm zone. Set allowed alphabet in character, etc. names.
 #        Default      1  - (Development   - any language)
