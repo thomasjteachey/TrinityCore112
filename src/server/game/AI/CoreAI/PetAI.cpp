@@ -76,12 +76,9 @@ void PetAI::UpdateAI(uint32 diff)
             {
                 _lastCrowdControlledVictim = victimGuid;
 
-                if (!me->GetCharmInfo()->IsCommandAttack())
-                {
-                    me->InterruptNonMeleeSpells(false);
-                    StopAttack();
-                    return;
-                }
+                me->InterruptNonMeleeSpells(false);
+                StopAttack();
+                return;
             }
         }
         else if (!_lastCrowdControlledVictim.IsEmpty() && _lastCrowdControlledVictim == victim->GetGUID())
