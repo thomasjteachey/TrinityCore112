@@ -1763,15 +1763,48 @@ void Unit::HandleEmoteCommand(Emote emoteId)
     };
 
     float resistReduction = 0.0f;
+    Unit const* casterUnit = nullptr;
+    Player const* casterOwner = nullptr;
     if (caster)
     {
-        resistReduction += accumulateIgnoreResist(caster->ToUnit());
+        casterUnit = caster->ToUnit();
+        casterOwner = caster->GetSpellModOwner();
 
-        if (Player const* owner = caster->GetSpellModOwner())
-            resistReduction += accumulateIgnoreResist(owner);
+        if (casterUnit)
+            resistReduction += accumulateIgnoreResist(casterUnit);
+
+        if (casterOwner && (!casterUnit || casterUnit->ToPlayer() != casterOwner))
+            resistReduction += accumulateIgnoreResist(casterOwner);
     }
 
     victimResistance = std::max(victimResistance - resistReduction, 0.0f);
+
+    auto accumulateSpellPenetration = [schoolMask](Unit const* unit) -> float
+    {
+        if (!unit)
+            return 0.0f;
+
+        float penetration = 0.0f;
+
+        float auraPenetration = unit->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_TARGET_RESISTANCE, schoolMask);
+        if (auraPenetration < 0.0f)
+            penetration -= auraPenetration;
+
+        if (Player const* player = unit->ToPlayer())
+            penetration += float(player->GetSpellPenetrationItemMod());
+
+        return penetration;
+    };
+
+    float spellPenetration = 0.0f;
+    if (casterUnit)
+        spellPenetration += accumulateSpellPenetration(casterUnit);
+
+    if (casterOwner && (!casterUnit || casterUnit->ToPlayer() != casterOwner))
+        spellPenetration += accumulateSpellPenetration(casterOwner);
+
+    if (spellPenetration > 0.0f)
+        victimResistance = std::max(victimResistance - spellPenetration, 0.0f);
 
     static float const RESIST_SCALE = 300.0f;
     static float const RESIST_CAP = 0.75f;
