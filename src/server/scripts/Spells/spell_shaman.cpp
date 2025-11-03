@@ -1663,18 +1663,22 @@ class spell_sha_ghost_wolf_charge : public SpellScript
 {
     PrepareSpellScript(spell_sha_ghost_wolf_charge);
 
+    bool _chargeHandled = false;
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ SPELL_SHAMAN_GHOST_WOLF, SPELL_SHAMAN_SPIRIT_WALK_CHARGE_TRIGGER });
     }
 
-    void HandleDummy(SpellEffIndex /*effIndex*/)
+    void HandleCharge(Unit* caster, Unit* target)
     {
-        Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
+        if (_chargeHandled)
+            return;
 
         if (!caster || !target)
             return;
+
+        _chargeHandled = true;
 
         caster->RemoveAurasDueToSpell(SPELL_SHAMAN_GHOST_WOLF);
 
@@ -1717,9 +1721,23 @@ class spell_sha_ghost_wolf_charge : public SpellScript
             return;
     }
 
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        HandleCharge(GetCaster(), GetHitUnit());
+    }
+
+    void HandleBeforeHit(SpellMissInfo missInfo)
+    {
+        if (missInfo != SPELL_MISS_DODGE && missInfo != SPELL_MISS_PARRY)
+            return;
+
+        HandleCharge(GetCaster(), GetExplTargetUnit());
+    }
+
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(spell_sha_ghost_wolf_charge::HandleDummy, EFFECT_2, SPELL_EFFECT_DUMMY);
+        BeforeHit += BeforeSpellHitFn(spell_sha_ghost_wolf_charge::HandleBeforeHit);
     }
 };
 
