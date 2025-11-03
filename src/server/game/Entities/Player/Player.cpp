@@ -6599,6 +6599,22 @@ uint32 Player::TeamForRace(uint8 race)
     return ALLIANCE;
 }
 
+void Player::SetTeamId(TeamId teamId)
+{
+    switch (teamId)
+    {
+        case TEAM_HORDE:
+            m_team = HORDE;
+            break;
+        case TEAM_ALLIANCE:
+            m_team = ALLIANCE;
+            break;
+        default:
+            m_team = TEAM_OTHER;
+            break;
+    }
+}
+
 void Player::SetFactionForRace(uint8 race)
 {
     m_team = TeamForRace(race);

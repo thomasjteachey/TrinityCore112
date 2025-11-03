@@ -1581,6 +1581,8 @@ void World::LoadConfigSettings(bool reload)
     // Specifies if IP addresses can be logged to the database
     m_bool_configs[CONFIG_ALLOW_LOGGING_IP_ADDRESSES_IN_DATABASE] = sConfigMgr->GetBoolDefault("AllowLoggingIPAddressesInDatabase", true, true);
 
+    m_bool_configs[CONFIG_CROSSFACTION_BG_MINIMAP_COLOR_FIX] = sConfigMgr->GetBoolDefault("CrossFactionBG.MinimapColorFix", true);
+
     // Force Free-For-All PvP state even if the realmlist game type is not set to 16 (FFA)
     m_bool_configs[CONFIG_FORCE_FFA_PVP_REALM] = sConfigMgr->GetBoolDefault("ForceFFAPvP.Realm", false);
 

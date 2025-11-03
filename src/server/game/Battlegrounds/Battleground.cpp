@@ -22,6 +22,7 @@
 #include "ChatTextBuilder.h"
 #include "Creature.h"
 #include "CreatureTextMgr.h"
+#include "CrossFactionBG.h"
 #include "DatabaseEnv.h"
 #include "Formulas.h"
 #include "GameTime.h"
@@ -919,6 +920,14 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
     if (player)
     {
+        if (CrossFactionBG::IsMinimapColorFixEnabled())
+            CrossFactionBG::RestoreTeamAndFaction(player);
+        else
+        {
+            player->SetFactionForRace(player->GetRace());
+            player->UpdateObjectVisibility();
+        }
+
         // should remove spirit of redemption
         if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
@@ -1061,12 +1070,15 @@ void Battleground::AddPlayer(Player* player)
         player->ToggleAFK();
 
     uint32 team = player->GetBGTeam();
+    TeamId teamId = (team == HORDE) ? TEAM_HORDE : TEAM_ALLIANCE;
 
-    player->SetFactionForRace(RACE_HUMAN);
-
-    if (team == HORDE)
+    if (CrossFactionBG::IsMinimapColorFixEnabled())
+        CrossFactionBG::ApplyTeamAndFaction(player, teamId);
+    else
     {
-        player->SetFactionForRace(RACE_BLOODELF);
+        player->SetFactionForRace(RACE_HUMAN);
+        if (team == HORDE)
+            player->SetFactionForRace(RACE_BLOODELF);
     }
 
     BattlegroundPlayer bp;

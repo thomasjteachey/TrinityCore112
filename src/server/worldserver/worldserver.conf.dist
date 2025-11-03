@@ -2755,6 +2755,15 @@ Battleground.StoreStatistics.Enable = 0
 Battleground.TrackDeserters.Enable = 0
 
 #
+#    CrossFactionBG.MinimapColorFix
+#        Description: Spoof cross-faction battleground players to match their assigned team so
+#                     minimap and world map blips use the correct friendly/enemy colors.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+CrossFactionBG.MinimapColorFix = 1
+
+#
 #    Battleground.InvitationType
 #        Description: Set Battleground invitation type.
 #        Default:     0 - (Normal, Invite as much players to battlegrounds as queued,

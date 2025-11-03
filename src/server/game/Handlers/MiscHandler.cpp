@@ -21,6 +21,7 @@
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CrossFactionBG.h"
 #include "CharacterPackets.h"
 #include "Chat.h"
 #include "CinematicMgr.h"
@@ -355,6 +356,17 @@ void WorldSession::HandleLogoutRequestOpcode(WorldPackets::Character::LogoutRequ
 {
     if (ObjectGuid lguid = GetPlayer()->GetLootGUID())
         DoLootRelease(lguid);
+
+    if (GetPlayer()->InBattleground())
+    {
+        if (CrossFactionBG::IsMinimapColorFixEnabled())
+            CrossFactionBG::RestoreTeamAndFaction(GetPlayer());
+        else
+        {
+            GetPlayer()->SetFactionForRace(GetPlayer()->GetRace());
+            GetPlayer()->UpdateObjectVisibility();
+        }
+    }
 
     bool instantLogout = (GetPlayer()->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING) && !GetPlayer()->IsInCombat()) ||
                          GetPlayer()->IsInFlight() || HasPermission(rbac::RBAC_PERM_INSTANT_LOGOUT);

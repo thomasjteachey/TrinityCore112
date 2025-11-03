@@ -20,6 +20,7 @@
 #include "ArenaTeamMgr.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CrossFactionBG.h"
 #include "Chat.h"
 #include "Common.h"
 #include "Creature.h"
@@ -484,17 +485,15 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
         // set the destination team
         //ttopper we need to figure out teams before this point
         uint32 tmpTeam = ginfo.Team;
-        uint8 tmpRace = _player->GetRaceForDB();
+        TeamId teamId = (tmpTeam == HORDE) ? TEAM_HORDE : TEAM_ALLIANCE;
 
-        //get temporary horde race
-        //we created duplicates of each race in chrRaces and set them to horde faction
-        //the ids are the same except +100
-        //(all races start out as alliance in centurion)
-        //this is to make scoreboard entries appear red/blue when they should
-        _player->SetFactionForRace(RACE_HUMAN);
-        if (tmpTeam == HORDE)
+        if (CrossFactionBG::IsMinimapColorFixEnabled())
+            CrossFactionBG::ApplyTeamAndFaction(_player, teamId);
+        else
         {
-            _player->SetFactionForRace(RACE_BLOODELF);
+            _player->SetFactionForRace(RACE_HUMAN);
+            if (tmpTeam == HORDE)
+                _player->SetFactionForRace(RACE_BLOODELF);
         }
         _player->SetBGTeam(tmpTeam);
 
