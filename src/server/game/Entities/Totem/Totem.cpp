@@ -16,13 +16,15 @@
  */
 
 #include "Totem.h"
+#include "CombatManager.h"
 #include "Group.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "SpellHistory.h"
-#include "SpellMgr.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
+#include "ThreatManager.h"
 #include "TotemPackets.h"
 
 Totem::Totem(SummonPropertiesEntry const* properties, Unit* owner) : Minion(properties, owner, false)
@@ -146,6 +148,12 @@ void Totem::UnSummon(uint32 msTime)
                     target->RemoveAurasDueToSpell(GetSpell(), GetGUID());
             }
         }
+    }
+
+    if (Unit* owner = GetOwner())
+    {
+        if (!owner->GetCombatManager().HasPvPCombat() && owner->IsInCombat() && !owner->GetThreatManager().IsThreateningAnyone())
+            owner->GetCombatManager().EndAllPvECombat();
     }
 
     // any totem unsummon look like as totem kill, req. for proper animation
