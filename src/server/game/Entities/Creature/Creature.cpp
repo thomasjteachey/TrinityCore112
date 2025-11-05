@@ -661,6 +661,13 @@ bool Creature::UpdateEntry(uint32 entry, CreatureData const* data /*= nullptr*/,
     //We must update last scriptId or it looks like we reloaded a script, breaking some things such as gossip temporarily
     LastUsedScriptID = GetScriptId();
 
+    if (IsSpiritGuide() && sWorld->IsFFAPvPRealm())
+    {
+        // client will only send spirit guide query for units that can assist them
+        // for ffa pvp flagged players its only other ffa pvp flagged units
+        SetPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
+    }
+
     return true;
 }
 
