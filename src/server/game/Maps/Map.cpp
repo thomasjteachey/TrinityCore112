@@ -4726,20 +4726,23 @@ void Map::SendZoneWeather(uint32 zoneId, Player* player) const
 
 void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
 {
-    // WSG special-case: map 489 uses zone 3277 from game_weather
-    if (GetId() == 489)
+    // Special-case BG: for WSG, pull the weather for the actual zone the player is in
+    if (GetId() == 489) // Warsong Gulch map
     {
-        // method is const, helper isn?t
         Map* self = const_cast<Map*>(this);
-        if (Weather* wsg = self->GetOrGenerateZoneDefaultWeather(3277)) // 3277 = WSG zone
+
+        // this is the zone/area the player is *actually* standing in right now
+        uint32 zoneId = player->GetZoneId();
+
+        if (Weather* wz = self->GetOrGenerateZoneDefaultWeather(zoneId))
         {
-            wsg->SendWeatherUpdateToPlayer(player);
-            return; // we're done for WSG
+            wz->SendWeatherUpdateToPlayer(player);
+            return; // done
         }
-        // if DB didn?t have it, fall through to normal path
+        // if no row in DB for that zoneId, fall through to normal logic
     }
 
-    // normal path for every other map (your original code)
+    // --- normal path for everyone else (your original code) ---
     if (WeatherState weatherId = zoneDynamicInfo.WeatherId)
     {
         WorldPackets::Misc::Weather weather(weatherId, zoneDynamicInfo.Intensity);
@@ -4747,7 +4750,6 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
     }
     else if (zoneDynamicInfo.DefaultWeather)
     {
-        // DefaultWeather is a std::unique_ptr<Weather>
         zoneDynamicInfo.DefaultWeather->SendWeatherUpdateToPlayer(player);
     }
     else
@@ -4755,7 +4757,6 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
         Weather::SendFineWeatherUpdateToPlayer(player);
     }
 }
-
 
 void Map::SetZoneMusic(uint32 zoneId, uint32 musicId)
 {
