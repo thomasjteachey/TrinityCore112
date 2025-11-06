@@ -4726,23 +4726,47 @@ void Map::SendZoneWeather(uint32 zoneId, Player* player) const
 
 void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
 {
-    // Special-case BG: for WSG, pull the weather for the actual zone the player is in
+    // WSG: use the actual zone the player is in, and force it to what the DB says
     if (GetId() == 489) // Warsong Gulch map
     {
         Map* self = const_cast<Map*>(this);
 
-        // this is the zone/area the player is *actually* standing in right now
-        uint32 zoneId = player->GetZoneId();
-
+        uint32 zoneId = player->GetZoneId();          // your .gps showed 3277 here
         if (Weather* wz = self->GetOrGenerateZoneDefaultWeather(zoneId))
         {
+            // look up what the DB says for THIS zone
+            if (WeatherData const* wd = WeatherMgr::GetWeatherData(zoneId))
+            {
+                // same season math TC uses in Weather.cpp
+                time_t gtime = GameTime::GetGameTime();
+                tm lt;
+                localtime_r(&gtime, &lt);
+                uint32 season = ((lt.tm_yday - 78 + 365) / 91) % 4;
+
+                WeatherSeasonChances const& sc = wd->data[season];
+
+                // pick the most likely weather for this season
+                WeatherType toSet = WEATHER_TYPE_FINE;
+                if (sc.rainChance >= sc.snowChance && sc.rainChance >= sc.stormChance && sc.rainChance > 0)
+                    toSet = WEATHER_TYPE_RAIN;
+                else if (sc.stormChance >= sc.snowChance && sc.stormChance > 0)
+                    toSet = WEATHER_TYPE_STORM;
+                else if (sc.snowChance > 0)
+                    toSet = WEATHER_TYPE_SNOW;
+
+                // if DB actually wanted weather, force it at max grade
+                if (toSet != WEATHER_TYPE_FINE)
+                    wz->SetWeather(toSet, 0.9999f);
+            }
+
+            // send whatever we ended up with
             wz->SendWeatherUpdateToPlayer(player);
-            return; // done
+            return;
         }
-        // if no row in DB for that zoneId, fall through to normal logic
+        // if we couldn't get weather for that zone, fall through to normal path
     }
 
-    // --- normal path for everyone else (your original code) ---
+    // ---- normal path for non-WSG maps ----
     if (WeatherState weatherId = zoneDynamicInfo.WeatherId)
     {
         WorldPackets::Misc::Weather weather(weatherId, zoneDynamicInfo.Intensity);
@@ -4757,7 +4781,6 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
         Weather::SendFineWeatherUpdateToPlayer(player);
     }
 }
-
 void Map::SetZoneMusic(uint32 zoneId, uint32 musicId)
 {
     _zoneDynamicInfo[zoneId].MusicId = musicId;

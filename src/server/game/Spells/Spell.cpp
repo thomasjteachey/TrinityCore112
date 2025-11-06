@@ -5564,7 +5564,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                     if (unitCaster->IsInSanctuary() || target->IsInSanctuary())
                     {
                         // fix for duels
+                        bool duel = false;
                         Player* player = unitCaster->ToPlayer();
+                        Pet* pet = unitCaster->ToPet();
+                        if ((player && player->duel) || (pet && pet->GetOwner()->duel))
+                        {
+                            duel = true;
+                        }
                         if (!player || !player->duel || target != player->duel->Opponent)
                             return SPELL_FAILED_NOTHING_TO_DISPEL;
                     }
