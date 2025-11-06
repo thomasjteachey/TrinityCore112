@@ -4730,12 +4730,25 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
         WorldPackets::Misc::Weather weather(weatherId, zoneDynamicInfo.Intensity);
         player->SendDirectMessage(weather.Write());
     }
-    else if (zoneDynamicInfo.DefaultWeather)
-    {
-        zoneDynamicInfo.DefaultWeather->SendWeatherUpdateToPlayer(player);
-    }
     else
-        Weather::SendFineWeatherUpdateToPlayer(player);
+    {
+        // 1) start from whatever the zone already cached
+        Weather* weather = zoneDynamicInfo.DefaultWeather.get();
+
+        // 2) WSG hack: if we?re on map 489 and there was no cached weather,
+        //    force-load the WSG zone?s weather (3277) via the map?s helper
+        if (!weather && GetId() == 489)            // 489 = Warsong Gulch map
+        {
+            Map* self = const_cast<Map*>(this);    // function is const, helper isn?t
+            weather = self->GetOrGenerateZoneDefaultWeather(3277); // 3277 = WSG zone
+        }
+
+        // 3) finally send something
+        if (weather)
+            weather->SendWeatherUpdateToPlayer(player);
+        else
+            Weather::SendFineWeatherUpdateToPlayer(player);
+    }
 }
 
 void Map::SetZoneMusic(uint32 zoneId, uint32 musicId)
