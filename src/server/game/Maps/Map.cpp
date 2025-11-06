@@ -4723,8 +4723,19 @@ void Map::SendZoneWeather(uint32 zoneId, Player* player) const
     SendZoneWeather(itr->second, player);
 }
 
+
 void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
 {
+    // HARD OVERRIDE FOR WSG: always heavy rain
+    if (GetId() == 489) // Warsong Gulch map
+    {
+        // WEATHER_STATE_RAIN is usually 1 in TC 3.3.5 branches
+        WorldPackets::Misc::Weather pkt(WEATHER_STATE_HEAVY_RAIN, 1.0f); // 1.0f = max intensity
+        player->SendDirectMessage(pkt.Write());
+        return;
+    }
+
+    // normal path for every other map
     if (WeatherState weatherId = zoneDynamicInfo.WeatherId)
     {
         WorldPackets::Misc::Weather weather(weatherId, zoneDynamicInfo.Intensity);
@@ -4732,18 +4743,7 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
     }
     else
     {
-        // 1) start from whatever the zone already cached
         Weather* weather = zoneDynamicInfo.DefaultWeather.get();
-
-        // 2) WSG hack: if we?re on map 489 and there was no cached weather,
-        //    force-load the WSG zone?s weather (3277) via the map?s helper
-        if (!weather && GetId() == 489)            // 489 = Warsong Gulch map
-        {
-            Map* self = const_cast<Map*>(this);    // function is const, helper isn?t
-            weather = self->GetOrGenerateZoneDefaultWeather(3277); // 3277 = WSG zone
-        }
-
-        // 3) finally send something
         if (weather)
             weather->SendWeatherUpdateToPlayer(player);
         else
