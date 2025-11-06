@@ -4726,30 +4726,36 @@ void Map::SendZoneWeather(uint32 zoneId, Player* player) const
 
 void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
 {
-    // HARD OVERRIDE FOR WSG: always heavy rain
-    if (GetId() == 489) // Warsong Gulch map
+    // WSG special-case: map 489 uses zone 3277 from game_weather
+    if (GetId() == 489)
     {
-        // WEATHER_STATE_RAIN is usually 1 in TC 3.3.5 branches
-        WorldPackets::Misc::Weather pkt(WEATHER_STATE_HEAVY_RAIN, 1.0f); // 1.0f = max intensity
-        player->SendDirectMessage(pkt.Write());
-        return;
+        // method is const, helper isn?t
+        Map* self = const_cast<Map*>(this);
+        if (Weather* wsg = self->GetOrGenerateZoneDefaultWeather(3277)) // 3277 = WSG zone
+        {
+            wsg->SendWeatherUpdateToPlayer(player);
+            return; // we're done for WSG
+        }
+        // if DB didn?t have it, fall through to normal path
     }
 
-    // normal path for every other map
+    // normal path for every other map (your original code)
     if (WeatherState weatherId = zoneDynamicInfo.WeatherId)
     {
         WorldPackets::Misc::Weather weather(weatherId, zoneDynamicInfo.Intensity);
         player->SendDirectMessage(weather.Write());
     }
+    else if (zoneDynamicInfo.DefaultWeather)
+    {
+        // DefaultWeather is a std::unique_ptr<Weather>
+        zoneDynamicInfo.DefaultWeather->SendWeatherUpdateToPlayer(player);
+    }
     else
     {
-        Weather* weather = zoneDynamicInfo.DefaultWeather.get();
-        if (weather)
-            weather->SendWeatherUpdateToPlayer(player);
-        else
-            Weather::SendFineWeatherUpdateToPlayer(player);
+        Weather::SendFineWeatherUpdateToPlayer(player);
     }
 }
+
 
 void Map::SetZoneMusic(uint32 zoneId, uint32 musicId)
 {
