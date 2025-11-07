@@ -5411,40 +5411,83 @@ float Player::GetMeleeCritFromAgility() const
 
 void Player::GetDodgeFromAgility(float &diminishing, float &nondiminishing) const
 {
-    uint8 level = GetLevel();
-    uint32 pclass = GetClass();
+    diminishing = 0.0f;
+    nondiminishing = 0.0f;
 
-    // Table for base dodge values
-    const float dodge_base[MAX_CLASSES] =
+    uint8 level = GetLevel();
+    if (level < 1)
+        level = 1;
+
+    constexpr uint8 VanillaMaxLevel = 60;
+    if (level > VanillaMaxLevel)
+        level = VanillaMaxLevel;
+
+    uint32 playerClass = GetClass();
+    if (playerClass >= MAX_CLASSES)
+        return;
+
+    static constexpr float baseDodge[MAX_CLASSES] =
     {
-         0.036640f, // Warrior
-         0.034943f, // Paladin
-        -0.040873f, // Hunter
-         0.020957f, // Rogue
-         0.034178f, // Priest
-         0.036640f, // DK
-         0.021080f, // Shaman
-         0.036587f, // Mage
-         0.024211f, // Warlock
-         0.0f,      // ??
-         0.056097f  // Druid
+        0.0f,  // CLASS_NONE
+        0.0f,  // Warrior
+        0.75f, // Paladin
+        0.64f, // Hunter
+        0.0f,  // Rogue
+        3.0f,  // Priest
+        0.0f,  // Death Knight (not present in 1.12)
+        1.75f, // Shaman
+        3.25f, // Mage
+        2.0f,  // Warlock
+        0.0f,  // Unused
+        0.75f  // Druid
     };
 
-    if (level > GT_MAX_LEVEL)
-        level = GT_MAX_LEVEL;
-    float dodge = GetStat(STAT_AGILITY) / 20.f;
-    if (pclass == CLASS_ROGUE)
+    static constexpr float agilityPerDodgeLevel1[MAX_CLASSES] =
     {
-        dodge = GetStat(STAT_AGILITY) / 14.5f;
-    }
-    if (pclass == CLASS_HUNTER)
+        0.0f,  // CLASS_NONE
+        3.9f,  // Warrior
+        4.6f,  // Paladin
+        1.8f,  // Hunter
+        1.1f,  // Rogue
+        11.0f, // Priest
+        0.0f,  // Death Knight (not present in 1.12)
+        4.6f,  // Shaman
+        12.9f, // Mage
+        8.4f,  // Warlock
+        0.0f,  // Unused
+        4.6f   // Druid
+    };
+
+    static constexpr float agilityPerDodgeLevel60[MAX_CLASSES] =
     {
-        dodge = GetStat(STAT_AGILITY) / 26.f;
+        0.0f,   // CLASS_NONE
+        20.0f,  // Warrior
+        20.0f,  // Paladin
+        26.5f,  // Hunter
+        14.5f,  // Rogue
+        20.0f,  // Priest
+        0.0f,   // Death Knight (not present in 1.12)
+        20.0f,  // Shaman
+        20.0f,  // Mage
+        20.0f,  // Warlock
+        0.0f,   // Unused
+        20.0f   // Druid
+    };
+
+    float dodgeFromAgility = 0.0f;
+    float rateLevel1 = agilityPerDodgeLevel1[playerClass];
+    float rateLevel60 = agilityPerDodgeLevel60[playerClass];
+
+    if (rateLevel1 > 0.0f && rateLevel60 > 0.0f)
+    {
+        float rate = rateLevel1 * float(VanillaMaxLevel - level) / 59.0f +
+                     rateLevel60 * float(level - 1) / 59.0f;
+
+        if (rate > 0.0f)
+            dodgeFromAgility = GetStat(STAT_AGILITY) / rate;
     }
 
-    // calculate diminishing (green in char screen) and non-diminishing (white) contribution
-    nondiminishing = 100.f * dodge_base[pclass-1] + dodge;
-    //nondiminishing = 100.0f * (dodge_base[pclass-1] + base_agility * dodgeRatio->Data * crit_to_dodge[pclass-1]);
+    nondiminishing = baseDodge[playerClass] + dodgeFromAgility;
 }
 
 float Player::GetSpellCritFromIntellect() const
