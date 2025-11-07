@@ -5411,40 +5411,46 @@ float Player::GetMeleeCritFromAgility() const
 
 void Player::GetDodgeFromAgility(float &diminishing, float &nondiminishing) const
 {
-    uint8 level = GetLevel();
-    uint32 pclass = GetClass();
-
-    // Table for base dodge values
-    const float dodge_base[MAX_CLASSES] =
+    float valLevel1 = 0.0f;
+    float valLevel60 = 0.0f;
+    // critical
+    switch (GetClass())
     {
-         0.036640f, // Warrior
-         0.034943f, // Paladin
-        -0.040873f, // Hunter
-         0.020957f, // Rogue
-         0.034178f, // Priest
-         0.036640f, // DK
-         0.021080f, // Shaman
-         0.036587f, // Mage
-         0.024211f, // Warlock
-         0.0f,      // ??
-         0.056097f  // Druid
-    };
-
-    if (level > GT_MAX_LEVEL)
-        level = GT_MAX_LEVEL;
-    float dodge = GetStat(STAT_AGILITY) / 20.f;
-    if (pclass == CLASS_ROGUE)
-    {
-        dodge = GetStat(STAT_AGILITY) / 14.5f;
+    case CLASS_PALADIN:
+    case CLASS_SHAMAN:
+    case CLASS_DRUID:
+        valLevel1 = 4.6f;
+        valLevel60 = 20.0f;
+        break;
+    case CLASS_MAGE:
+        valLevel1 = 12.9f;
+        valLevel60 = 20.0f;
+        break;
+    case CLASS_ROGUE:
+        valLevel1 = 1.1f;
+        valLevel60 = 14.5f;
+        break;
+    case CLASS_HUNTER:
+        valLevel1 = 1.8f;
+        valLevel60 = 26.5f;
+        break;
+    case CLASS_PRIEST:
+        valLevel1 = 11.0f;
+        valLevel60 = 20.0f;
+        break;
+    case CLASS_WARLOCK:
+        valLevel1 = 8.4f;
+        valLevel60 = 20.0f;
+        break;
+    case CLASS_WARRIOR:
+        valLevel1 = 3.9f;
+        valLevel60 = 20.0f;
+        break;
+    default:
+        nondiminishing = 0.0f;
     }
-    if (pclass == CLASS_HUNTER)
-    {
-        dodge = GetStat(STAT_AGILITY) / 26.f;
-    }
-
-    // calculate diminishing (green in char screen) and non-diminishing (white) contribution
-    nondiminishing = 100.f * dodge_base[pclass-1] + dodge;
-    //nondiminishing = 100.0f * (dodge_base[pclass-1] + base_agility * dodgeRatio->Data * crit_to_dodge[pclass-1]);
+    float classrate = valLevel1 * float(60.0f - GetLevel()) / 59.0f + valLevel60 * float(GetLevel() - 1.0f) / 59.0f;
+    nondiminishing = GetStat(STAT_AGILITY) / classrate;
 }
 
 float Player::GetSpellCritFromIntellect() const
