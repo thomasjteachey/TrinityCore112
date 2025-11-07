@@ -429,6 +429,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
             case ARENA_TYPE_3v3:
                 maxPlayersPerTeam = 3;
                 break;
+            case ARENA_TYPE_4v4:
+                maxPlayersPerTeam = 4;
+                break;
             case ARENA_TYPE_5v5:
                 maxPlayersPerTeam = 5;
                 break;
@@ -766,6 +769,8 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
                     return BATTLEGROUND_QUEUE_2v2;
                 case ARENA_TYPE_3v3:
                     return BATTLEGROUND_QUEUE_3v3;
+                case ARENA_TYPE_4v4:
+                    return BATTLEGROUND_QUEUE_4v4;
                 case ARENA_TYPE_5v5:
                     return BATTLEGROUND_QUEUE_5v5;
                 default:
@@ -796,6 +801,7 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
             return BATTLEGROUND_RB;
         case BATTLEGROUND_QUEUE_2v2:
         case BATTLEGROUND_QUEUE_3v3:
+        case BATTLEGROUND_QUEUE_4v4:
         case BATTLEGROUND_QUEUE_5v5:
             return BATTLEGROUND_AA;
         default:
@@ -811,6 +817,8 @@ uint8 BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId bgQueueTypeId)
             return ARENA_TYPE_2v2;
         case BATTLEGROUND_QUEUE_3v3:
             return ARENA_TYPE_3v3;
+        case BATTLEGROUND_QUEUE_4v4:
+            return ARENA_TYPE_4v4;
         case BATTLEGROUND_QUEUE_5v5:
             return ARENA_TYPE_5v5;
         default:

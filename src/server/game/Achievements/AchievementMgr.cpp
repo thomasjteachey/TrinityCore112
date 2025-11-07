@@ -757,7 +757,7 @@ void AchievementMgr::CheckAllAchievementCriteria()
         UpdateAchievementCriteria(AchievementCriteriaTypes(i));
 }
 
-static const uint32 achievIdByArenaSlot[MAX_ARENA_SLOT] = { 1057, 1107, 1108 };
+static const uint32 achievIdByArenaSlot[MAX_ARENA_SLOT] = { 1057, 1107, 1108, 0 };
 
 /**
  * this function will be called whenever the user might have done a criteria relevant action
