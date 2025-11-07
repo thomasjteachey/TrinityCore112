@@ -696,6 +696,7 @@ MinPetName = 2
 #    Guild.CharterCost
 #    ArenaTeam.CharterCost.2v2
 #    ArenaTeam.CharterCost.3v3
+#    ArenaTeam.CharterCost.4v4
 #    ArenaTeam.CharterCost.5v5
 #        Description: Amount of money (in Copper) the petitions costs.
 #        Default:     1000 - (10 Silver)
@@ -706,6 +707,7 @@ MinPetName = 2
 Guild.CharterCost = 1000
 ArenaTeam.CharterCost.2v2 = 800000
 ArenaTeam.CharterCost.3v3 = 1200000
+ArenaTeam.CharterCost.4v4 = 1600000
 ArenaTeam.CharterCost.5v5 = 2000000
 
 #

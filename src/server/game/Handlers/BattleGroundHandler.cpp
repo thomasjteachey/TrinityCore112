@@ -579,7 +579,7 @@ void WorldSession::HandleBattlefieldStatusOpcode(WorldPacket & /*recvData*/)
         if (bgTypeId == _player->GetBattlegroundTypeId())
         {
             bg = _player->GetBattleground();
-            //i cannot check any variable from player class because player class doesn't know if player is in 2v2 / 3v3 or 5v5 arena
+            //i cannot check any variable from player class because player class doesn't know if player is in 2v2 / 3v3 / 4v4 or 5v5 arena
             //so i must use bg pointer to get that information
             if (bg && bg->GetArenaType() == arenaType)
             {
@@ -630,7 +630,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     TC_LOG_DEBUG("network", "WORLD: CMSG_BATTLEMASTER_JOIN_ARENA");
 
     ObjectGuid guid;                                        // arena Battlemaster guid
-    uint8 arenaslot;                                        // 2v2, 3v3 or 5v5
+    uint8 arenaslot;                                        // 2v2, 3v3, 4v4 or 5v5
     uint8 asGroup;                                          // asGroup
     uint8 isRated;                                          // isRated
     Group* grp = nullptr;
@@ -664,6 +664,9 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
             break;
         case 2:
             arenatype = ARENA_TYPE_5v5;
+            break;
+        case 3:
+            arenatype = ARENA_TYPE_4v4;
             break;
         default:
             TC_LOG_ERROR("network", "Unknown arena slot {} at HandleBattlemasterJoinArena()", arenaslot);
