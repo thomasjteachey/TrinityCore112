@@ -42,7 +42,8 @@ enum CharterItemIDs
     GUILD_CHARTER                                 = 5863,
     ARENA_TEAM_CHARTER_2v2                        = 23560,
     ARENA_TEAM_CHARTER_3v3                        = 23561,
-    ARENA_TEAM_CHARTER_5v5                        = 23562
+    ARENA_TEAM_CHARTER_5v5                        = 23562,
+    ARENA_TEAM_CHARTER_4v4                        = 23563
 };
 
 void WorldSession::HandlePetitionBuyOpcode(WorldPacket& recvData)
@@ -113,7 +114,13 @@ void WorldSession::HandlePetitionBuyOpcode(WorldPacket& recvData)
             return;
         }
 
-        switch (clientIndex)                                 // arenaSlot+1 as received from client (1 from 3 case)
+        if (clientIndex == 0 || clientIndex > MAX_ARENA_SLOT)
+        {
+            TC_LOG_DEBUG("network", "unknown selection at buy arena petition: {}", clientIndex);
+            return;
+        }
+
+        switch (clientIndex)                                 // arenaSlot+1 as received from client (1..4 case)
         {
             case 1:
                 charterid = ARENA_TEAM_CHARTER_2v2;
@@ -126,16 +133,24 @@ void WorldSession::HandlePetitionBuyOpcode(WorldPacket& recvData)
                 type = ARENA_TEAM_CHARTER_3v3_TYPE;
                 break;
             case 3:
+                charterid = ARENA_TEAM_CHARTER_4v4;
+                cost = sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_4v4);
+                type = ARENA_TEAM_CHARTER_4v4_TYPE;
+                break;
+            case 4:
                 charterid = ARENA_TEAM_CHARTER_5v5;
                 cost = sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_5v5);
                 type = ARENA_TEAM_CHARTER_5v5_TYPE;
                 break;
             default:
-                TC_LOG_DEBUG("network", "unknown selection at buy arena petition: {}", clientIndex);
                 return;
         }
 
-        if (_player->GetArenaTeamId(clientIndex - 1))        // arenaSlot+1 as received from client
+        uint8 slot = ArenaTeam::GetSlotByType(static_cast<uint32>(type));
+        if (slot >= MAX_ARENA_SLOT)
+            return;
+
+        if (_player->GetArenaTeamId(slot))
         {
             SendArenaTeamCommandResult(ERR_ARENA_TEAM_CREATE_S, name, "", ERR_ALREADY_IN_ARENA_TEAM);
             return;
@@ -638,7 +653,7 @@ void WorldSession::HandleTurnInPetitionOpcode(WorldPacket& recvData)
     }
     else
     {
-        // Check for valid arena bracket (2v2, 3v3, 5v5)
+        // Check for valid arena bracket (2v2, 3v3, 4v4, 5v5)
         uint8 slot = ArenaTeam::GetSlotByType(static_cast<uint32>(type));
         if (slot >= MAX_ARENA_SLOT)
             return;
@@ -774,7 +789,7 @@ void WorldSession::SendPetitionShowList(ObjectGuid guid)
     }
     else
     {
-        data << uint8(3);                                   // count
+        data << uint8(4);                                   // count
         // 2v2
         data << uint32(1);                                  // index
         data << uint32(ARENA_TEAM_CHARTER_2v2);             // charter entry
@@ -789,8 +804,15 @@ void WorldSession::SendPetitionShowList(ObjectGuid guid)
         data << uint32(sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_3v3)); // charter cost
         data << uint32(3);                                  // unknown
         data << uint32(3);                                  // required signs?
-        // 5v5
+        // 4v4
         data << uint32(3);                                  // index
+        data << uint32(ARENA_TEAM_CHARTER_4v4);             // charter entry
+        data << uint32(CHARTER_DISPLAY_ID);                 // charter display id
+        data << uint32(sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_4v4)); // charter cost
+        data << uint32(4);                                  // unknown
+        data << uint32(4);                                  // required signs?
+        // 5v5
+        data << uint32(4);                                  // index
         data << uint32(ARENA_TEAM_CHARTER_5v5);             // charter entry
         data << uint32(CHARTER_DISPLAY_ID);                 // charter display id
         data << uint32(sWorld->getIntConfig(CONFIG_CHARTER_COST_ARENA_5v5)); // charter cost

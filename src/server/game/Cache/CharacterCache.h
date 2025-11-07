@@ -18,6 +18,7 @@
 #ifndef CharacterCache_h__
 #define CharacterCache_h__
 
+#include "ArenaTeam.h"
 #include "Define.h"
 #include "ObjectGuid.h"
 #include "Optional.h"
@@ -33,7 +34,7 @@ struct CharacterCacheEntry
     uint8 Sex;
     uint8 Level;
     ObjectGuid::LowType GuildId;
-    uint32 ArenaTeamId[3];
+    uint32 ArenaTeamId[MAX_ARENA_SLOT];
 };
 
 class TC_GAME_API CharacterCache

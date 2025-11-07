@@ -108,6 +108,7 @@
 #include "WorldStatePackets.h"
 #include "ArenaSpectator.h"
 
+#include <array>
 #include <initializer_list>
 
 namespace
@@ -17204,7 +17205,7 @@ void Player::_LoadArenaTeamInfo(PreparedQueryResult result)
     // arenateamid, played_week, played_season, personal_rating
     memset((void*)&m_uint32Values[PLAYER_FIELD_ARENA_TEAM_INFO_1_1], 0, sizeof(uint32) * MAX_ARENA_SLOT * ARENA_TEAM_END);
 
-    uint16 personalRatingCache[] = {0, 0, 0};
+    std::array<uint16, MAX_ARENA_SLOT> personalRatingCache{};
 
     if (result)
     {
@@ -17222,7 +17223,7 @@ void Player::_LoadArenaTeamInfo(PreparedQueryResult result)
             }
 
             uint8 arenaSlot = arenaTeam->GetSlot();
-            ASSERT(arenaSlot < 3);
+            ASSERT(arenaSlot < MAX_ARENA_SLOT);
 
             personalRatingCache[arenaSlot] = fields[4].GetUInt16();
 
@@ -17236,7 +17237,7 @@ void Player::_LoadArenaTeamInfo(PreparedQueryResult result)
         while (result->NextRow());
     }
 
-    for (uint8 slot = 0; slot <= 2; ++slot)
+    for (uint8 slot = 0; slot < MAX_ARENA_SLOT; ++slot)
     {
         SetArenaTeamInfoField(slot, ARENA_TEAM_PERSONAL_RATING, uint32(personalRatingCache[slot]));
     }
@@ -23622,6 +23623,7 @@ bool Player::InBattlegroundQueue(bool ignoreArena) const
         if (m_bgBattlegroundQueueID[i].bgQueueTypeId != BATTLEGROUND_QUEUE_NONE && (!ignoreArena ||
             (m_bgBattlegroundQueueID[i].bgQueueTypeId != BATTLEGROUND_QUEUE_2v2 &&
             m_bgBattlegroundQueueID[i].bgQueueTypeId != BATTLEGROUND_QUEUE_3v3 &&
+            m_bgBattlegroundQueueID[i].bgQueueTypeId != BATTLEGROUND_QUEUE_4v4 &&
             m_bgBattlegroundQueueID[i].bgQueueTypeId != BATTLEGROUND_QUEUE_5v5)))
             return true;
     return false;
