@@ -33,7 +33,6 @@ TC_API_EXPORT EnumText EnumUtils<ArenaTeamTypes>::ToString(ArenaTeamTypes value)
     {
         case ARENA_TEAM_2v2: return { "ARENA_TEAM_2v2", "ARENA_TEAM_2v2", "" };
         case ARENA_TEAM_3v3: return { "ARENA_TEAM_3v3", "ARENA_TEAM_3v3", "" };
-        case ARENA_TEAM_4v4: return { "ARENA_TEAM_4v4", "ARENA_TEAM_4v4", "" };
         case ARENA_TEAM_5v5: return { "ARENA_TEAM_5v5", "ARENA_TEAM_5v5", "" };
         case ARENA_TEAM_4v4: return { "ARENA_TEAM_4v4", "ARENA_TEAM_4v4", "" };
         default: throw std::out_of_range("value");
