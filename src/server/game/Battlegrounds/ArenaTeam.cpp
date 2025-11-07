@@ -509,7 +509,7 @@ void ArenaTeam::Inspect(WorldSession* session, ObjectGuid guid)
 
     WorldPacket data(MSG_INSPECT_ARENA_TEAMS, 8+1+4*6);
     data << uint64(guid);                                   // player guid
-    data << uint8(GetSlot());                               // slot (0...2)
+    data << uint8(GetSlot());                               // slot (0...3)
     data << uint32(GetId());                                // arena team id
     data << uint32(Stats.Rating);                           // rating
     data << uint32(Stats.SeasonGames);                      // season played

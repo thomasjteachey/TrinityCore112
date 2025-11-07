@@ -1,0 +1,1 @@
+-- Existing 5v5 ratings continue to use slot 2; 4v4 data will occupy slot 3 automatically.
