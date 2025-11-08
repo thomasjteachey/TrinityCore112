@@ -2220,11 +2220,7 @@ void Player::Regenerate(Powers power)
     }
     if (power == POWER_ENERGY)
     {
-        uint32 amount = 20;              // whatever you regen
-        uint32 fakeSpellId = 70000;      // make a hidden spell in Spell.dbc with "don?t show" flags
-
-        // this is the same helper EnergizeBySpell uses, but we call it directly
-        SendEnergizeSpellLog(this, fakeSpellId, amount, POWER_ENERGY);
+        // Energy regeneration must always notify the client immediately to avoid stale button states
         SetPower(power, curValue, true);
     }
     else if (m_regenTimerCount >= 2000)
