@@ -668,7 +668,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
         case 3:
             arenatype = ARENA_TYPE_5v5;
             break;
-        case 3:
+        case 4:
             arenatype = ARENA_TYPE_4v4;
             break;
         default:
