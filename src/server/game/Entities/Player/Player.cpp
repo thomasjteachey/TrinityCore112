@@ -2221,8 +2221,7 @@ void Player::Regenerate(Powers power)
     if (power == POWER_ENERGY)
     {
         // Energy regeneration must always notify the client immediately to avoid stale button states
-        SetPower(power, curValue, true);
-        SetPower(power, curValue, true); //twice?
+        SetPower(power, curValue, false);
     }
     else if (m_regenTimerCount >= 2000)
         SetPower(power, curValue);
