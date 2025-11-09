@@ -20,7 +20,11 @@
 // The name of this function should match:
 // void Add${NameOfDirectory}Scripts()
 #include "BGReplay.cpp"
+
+void AddSC_custom_zone_group_rules();
+
 void AddCustomScripts()
 {
     AddBGReplayScripts();
+    AddSC_custom_zone_group_rules();
 }
