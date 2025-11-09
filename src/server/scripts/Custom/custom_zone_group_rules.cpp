@@ -180,7 +180,7 @@ class zone_group_rules_player : public PlayerScript
 public:
     zone_group_rules_player() : PlayerScript("zone_group_rules_player") { }
 
-    void OnLogin(Player* player) override
+    void OnLogin(Player* player, bool /*firstLogin*/) override
     {
         EnforceZoneRuleForPlayer(player);
     }
