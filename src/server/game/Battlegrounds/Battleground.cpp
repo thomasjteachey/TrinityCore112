@@ -797,25 +797,32 @@ void Battleground::EndBattleground(uint32 winner)
 
         if (isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
         {
-            stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_PVPSTATS_PLAYER);
             BattlegroundScoreMap::const_iterator score = PlayerScores.find(player->GetGUID().GetCounter());
+            if (score == PlayerScores.end())
+            {
+                TC_LOG_ERROR("bg.battleground", "Battleground::EndBattleground: Player {} is missing scoreboard data, skipping statistics save.", player->GetGUID().ToString());
+            }
+            else
+            {
+                stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_PVPSTATS_PLAYER);
 
-            stmt->setUInt32(0,  battlegroundId);
-            stmt->setUInt32(1,  player->GetGUID().GetCounter());
-            stmt->setBool  (2,  team == winner);
-            stmt->setUInt32(3,  score->second->GetKillingBlows());
-            stmt->setUInt32(4,  score->second->GetDeaths());
-            stmt->setUInt32(5,  score->second->GetHonorableKills());
-            stmt->setUInt32(6,  score->second->GetBonusHonor());
-            stmt->setUInt32(7,  score->second->GetDamageDone());
-            stmt->setUInt32(8,  score->second->GetHealingDone());
-            stmt->setUInt32(9,  score->second->GetAttr1());
-            stmt->setUInt32(10, score->second->GetAttr2());
-            stmt->setUInt32(11, score->second->GetAttr3());
-            stmt->setUInt32(12, score->second->GetAttr4());
-            stmt->setUInt32(13, score->second->GetAttr5());
+                stmt->setUInt32(0,  battlegroundId);
+                stmt->setUInt32(1,  player->GetGUID().GetCounter());
+                stmt->setBool  (2,  team == winner);
+                stmt->setUInt32(3,  score->second->GetKillingBlows());
+                stmt->setUInt32(4,  score->second->GetDeaths());
+                stmt->setUInt32(5,  score->second->GetHonorableKills());
+                stmt->setUInt32(6,  score->second->GetBonusHonor());
+                stmt->setUInt32(7,  score->second->GetDamageDone());
+                stmt->setUInt32(8,  score->second->GetHealingDone());
+                stmt->setUInt32(9,  score->second->GetAttr1());
+                stmt->setUInt32(10, score->second->GetAttr2());
+                stmt->setUInt32(11, score->second->GetAttr3());
+                stmt->setUInt32(12, score->second->GetAttr4());
+                stmt->setUInt32(13, score->second->GetAttr5());
 
-            CharacterDatabase.Execute(stmt);
+                CharacterDatabase.Execute(stmt);
+            }
         }
 
         // if we're arena
