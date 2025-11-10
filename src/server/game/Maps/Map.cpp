@@ -4724,49 +4724,65 @@ void Map::SendZoneWeather(uint32 zoneId, Player* player) const
 }
 
 
+
 void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
 {
-    // WSG: use the actual zone the player is in, and force it to what the DB says
-    if (GetId() == 489) // Warsong Gulch map
+    // WSG: use DB chances exactly
+    if (GetId() == 489) // Warsong Gulch
     {
         Map* self = const_cast<Map*>(this);
 
-        uint32 zoneId = player->GetZoneId();          // your .gps showed 3277 here
+        uint32 zoneId = player->GetZoneId(); // your .gps showed 3277
         if (Weather* wz = self->GetOrGenerateZoneDefaultWeather(zoneId))
         {
-            // look up what the DB says for THIS zone
             if (WeatherData const* wd = WeatherMgr::GetWeatherData(zoneId))
             {
-                // same season math TC uses in Weather.cpp
+                // work out the current season (same formula TC uses)
                 time_t gtime = GameTime::GetGameTime();
                 tm lt;
                 localtime_r(&gtime, &lt);
                 uint32 season = ((lt.tm_yday - 78 + 365) / 91) % 4;
 
                 WeatherSeasonChances const& sc = wd->data[season];
+                // sc.rainChance / sc.snowChance / sc.stormChance are 0..100
 
-                // pick the most likely weather for this season
+                // roll 0..99
+                uint32 roll = urand(0, 99);
+
                 WeatherType toSet = WEATHER_TYPE_FINE;
-                if (sc.rainChance >= sc.snowChance && sc.rainChance >= sc.stormChance && sc.rainChance > 0)
-                    toSet = WEATHER_TYPE_RAIN;
-                else if (sc.stormChance >= sc.snowChance && sc.stormChance > 0)
-                    toSet = WEATHER_TYPE_STORM;
-                else if (sc.snowChance > 0)
-                    toSet = WEATHER_TYPE_SNOW;
+                uint32 accum = sc.rainChance;
 
-                // if DB actually wanted weather, force it at max grade
+                if (roll < accum)
+                {
+                    toSet = WEATHER_TYPE_RAIN;
+                }
+                else
+                {
+                    accum += sc.snowChance;
+                    if (roll < accum)
+                    {
+                        toSet = WEATHER_TYPE_SNOW;
+                    }
+                    else
+                    {
+                        accum += sc.stormChance;
+                        if (roll < accum)
+                            toSet = WEATHER_TYPE_STORM;
+                        // else stay FINE
+                    }
+                }
+
                 if (toSet != WEATHER_TYPE_FINE)
-                    wz->SetWeather(toSet, 0.9999f);
+                    wz->SetWeather(toSet, 0.9999f); // max intensity so it's visible
             }
 
-            // send whatever we ended up with
             wz->SendWeatherUpdateToPlayer(player);
             return;
         }
-        // if we couldn't get weather for that zone, fall through to normal path
+        // if it couldn't get weather for that zone, fall through
     }
 
-    // ---- normal path for non-WSG maps ----
+    // ---- normal path for everyone else ----
     if (WeatherState weatherId = zoneDynamicInfo.WeatherId)
     {
         WorldPackets::Misc::Weather weather(weatherId, zoneDynamicInfo.Intensity);
