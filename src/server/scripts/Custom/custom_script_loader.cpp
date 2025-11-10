@@ -22,9 +22,11 @@
 #include "BGReplay.cpp"
 
 void AddSC_custom_zone_group_rules();
+void AddSC_mod_pvp_titles();
 
 void AddCustomScripts()
 {
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
+    AddSC_mod_pvp_titles();
 }
