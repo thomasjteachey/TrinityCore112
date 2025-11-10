@@ -68,7 +68,7 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
-    // Allow trap game objects to continue casting so immunity/resist feedback is handled during hit resolution.
+    // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
     bool TrapGameObjectCanIgnoreTargetFailure(WorldObject const* caster, SpellCastResult result)
     {
         if (result == SPELL_CAST_OK || !caster)
@@ -78,22 +78,7 @@ namespace
         if (!goCaster || goCaster->GetGoType() != GAMEOBJECT_TYPE_TRAP)
             return false;
 
-        switch (result)
-        {
-            case SPELL_FAILED_BAD_IMPLICIT_TARGETS:
-            case SPELL_FAILED_BAD_TARGETS:
-            case SPELL_FAILED_TARGET_AFFECTING_COMBAT:
-            case SPELL_FAILED_TARGET_AURASTATE:
-            case SPELL_FAILED_CANT_CAST_ON_TAPPED:
-            case SPELL_FAILED_IMMUNE:
-            case SPELL_FAILED_DAMAGE_IMMUNE:
-            case SPELL_FAILED_NOT_ON_DAMAGE_IMMUNE:
-                return true;
-            default:
-                break;
-        }
-
-        return false;
+        return true;
     }
 }
 
