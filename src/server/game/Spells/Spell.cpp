@@ -85,6 +85,9 @@ namespace
             case SPELL_FAILED_TARGET_AFFECTING_COMBAT:
             case SPELL_FAILED_TARGET_AURASTATE:
             case SPELL_FAILED_CANT_CAST_ON_TAPPED:
+            case SPELL_FAILED_IMMUNE:
+            case SPELL_FAILED_DAMAGE_IMMUNE:
+            case SPELL_FAILED_NOT_ON_DAMAGE_IMMUNE:
                 return true;
             default:
                 break;
