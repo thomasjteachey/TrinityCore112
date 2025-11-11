@@ -16,6 +16,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "Common.h"
 #include "Configuration/Config.h"
 #include "Chat.h"
 #include "DBCStores.h"
@@ -24,12 +25,6 @@
 
 namespace
 {
-struct PvPTitles
-{
-    uint32 RequiredKills;
-    uint32 TitleId;
-};
-
 uint32 GetRequiredKills(char const* configName, uint32 defaultValue)
 {
     int32 const configValue = sConfigMgr->GetIntDefault(configName, static_cast<int32>(defaultValue));
@@ -130,6 +125,109 @@ uint32 const TitleData[MAX_RANK][2] =
     { GRAND_MARSHAL,        HIGH_WARLORD       }
 };
 
+char const* const TitleNameData[MAX_RANK][2] =
+{
+    { "Private",              "Scout"           },
+    { "Corporal",             "Grunt"           },
+    { "Sergeant",             "Sergeant"        },
+    { "Master Sergeant",      "Senior Sergeant" },
+    { "Sergeant Major",       "First Sergeant"  },
+    { "Knight",               "Stone Guard"     },
+    { "Knight-Lieutenant",    "Blood Guard"     },
+    { "Knight-Captain",       "Legionnaire"     },
+    { "Knight-Champion",      "Centurion"       },
+    { "Lieutenant Commander", "Champion"        },
+    { "Commander",            "Lieutenant General" },
+    { "Marshal",              "General"         },
+    { "Field Marshal",        "Warlord"         },
+    { "Grand Marshal",        "High Warlord"    }
+};
+
+void EnsureTitleStringsPatched()
+{
+    static bool initialized = false;
+    if (initialized)
+        return;
+
+    initialized = true;
+
+    for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
+    {
+        for (size_t teamIndex = 0; teamIndex < 2; ++teamIndex)
+        {
+            uint32 const titleId = TitleData[rank][teamIndex];
+            if (!titleId)
+                continue;
+
+            if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(titleId))
+            {
+                if (char const* titleName = TitleNameData[rank][teamIndex])
+                {
+                    CharTitlesEntry* mutableEntry = const_cast<CharTitlesEntry*>(titleEntry);
+                    for (uint8 locale = 0; locale < TOTAL_LOCALES; ++locale)
+                    {
+                        mutableEntry->Name[locale] = titleName;
+                        mutableEntry->Name1[locale] = titleName;
+                    }
+                }
+            }
+        }
+    }
+}
+
+TeamId GetPlayerHomeTeamId(Player* player)
+{
+    switch (player->GetTeam())
+    {
+        case ALLIANCE:
+            return TEAM_ALLIANCE;
+        case HORDE:
+            return TEAM_HORDE;
+        default:
+            break;
+    }
+
+    TeamId const teamId = player->GetTeamId();
+    if (teamId == TEAM_ALLIANCE || teamId == TEAM_HORDE)
+        return teamId;
+
+    switch (Player::TeamForRace(player->GetRace()))
+    {
+        case ALLIANCE:
+            return TEAM_ALLIANCE;
+        case HORDE:
+            return TEAM_HORDE;
+        default:
+            break;
+    }
+
+    return TEAM_NEUTRAL;
+}
+
+void UpdateKnownTitle(Player* player, CharTitlesEntry const* titleEntry, bool remove)
+{
+    uint32 const fieldIndexOffset = titleEntry->MaskID / 32;
+    uint32 const flag = 1 << (titleEntry->MaskID % 32);
+
+    if (remove)
+    {
+        if (!player->HasFlag(PLAYER__FIELD_KNOWN_TITLES + fieldIndexOffset, flag))
+            return;
+
+        player->RemoveFlag(PLAYER__FIELD_KNOWN_TITLES + fieldIndexOffset, flag);
+
+        if (player->GetUInt32Value(PLAYER_CHOSEN_TITLE) == titleEntry->MaskID)
+            player->SetUInt32Value(PLAYER_CHOSEN_TITLE, 0);
+    }
+    else
+    {
+        if (player->HasFlag(PLAYER__FIELD_KNOWN_TITLES + fieldIndexOffset, flag))
+            return;
+
+        player->SetFlag(PLAYER__FIELD_KNOWN_TITLES + fieldIndexOffset, flag);
+    }
+}
+
 class PvPTitlesPlayerScript : public PlayerScript
 {
 public:
@@ -137,22 +235,26 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
+        EnsureTitleStringsPatched();
+
         if (!sConfigMgr->GetBoolDefault("PvPTitles.Enable", false))
             return;
 
         if (sConfigMgr->GetBoolDefault("PvPTitles.Announce", true))
             ChatHandler(player->GetSession()).SendSysMessage("This server is running the |cff4CFF00PvPTitles |rmodule.");
 
-        if (sConfigMgr->GetBoolDefault("PvPTitles.AwardTitlesOnLogin", false))
-            AwardEarnedTitles(player);
-
         int32 const cleanUpMode = sConfigMgr->GetIntDefault("PvPTitles.CleanUp", CLEAN_UP_NONE);
         if (cleanUpMode != CLEAN_UP_NONE)
             CleanUpTitles(cleanUpMode, player);
+
+        if (sConfigMgr->GetBoolDefault("PvPTitles.AwardTitlesOnLogin", false))
+            AwardEarnedTitles(player);
     }
 
     void OnPVPKill(Player* killer, Player* killed) override
     {
+        EnsureTitleStringsPatched();
+
         if (!sConfigMgr->GetBoolDefault("PvPTitles.Enable", false))
             return;
 
@@ -165,80 +267,91 @@ public:
 private:
     void AwardEarnedTitles(Player* player)
     {
-        TeamId const teamId = player->GetTeamId();
-        if (teamId != TEAM_ALLIANCE && teamId != TEAM_HORDE)
-            return;
-
-        size_t const teamIndex = static_cast<size_t>(teamId);
         uint32 const kills = player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
 
-        PvPTitles const pvpTitlesList[MAX_RANK] =
+        ForEachConfiguredTitle(player, [player, kills](uint8 rank, size_t teamIndex, CharTitlesEntry const* titleEntry, uint32 requiredKills)
         {
-            { GetRequiredKills("PvPTitles.Rank_1", RANK_ONE_HK_COUNT),       TitleData[RANK_ONE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_2", RANK_TWO_HK_COUNT),       TitleData[RANK_TWO][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_3", RANK_THREE_HK_COUNT),     TitleData[RANK_THREE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_4", RANK_FOUR_HK_COUNT),      TitleData[RANK_FOUR][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_5", RANK_FIVE_HK_COUNT),      TitleData[RANK_FIVE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_6", RANK_SIX_HK_COUNT),       TitleData[RANK_SIX][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_7", RANK_SEVEN_HK_COUNT),     TitleData[RANK_SEVEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_8", RANK_EIGHT_HK_COUNT),     TitleData[RANK_EIGHT][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_9", RANK_NINE_HK_COUNT),      TitleData[RANK_NINE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_10", RANK_TEN_HK_COUNT),      TitleData[RANK_TEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_11", RANK_ELEVEN_HK_COUNT),   TitleData[RANK_ELEVEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_12", RANK_TWELVE_HK_COUNT),   TitleData[RANK_TWELVE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_13", RANK_THIRTEEN_HK_COUNT), TitleData[RANK_THIRTEEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_14", RANK_FOURTEEN_HK_COUNT), TitleData[RANK_FOURTEEN][teamIndex] }
-        };
+            if (kills < requiredKills || player->HasTitle(titleEntry))
+                return;
 
-        for (PvPTitles const& title : pvpTitlesList)
-        {
-            if (kills < title.RequiredKills || player->HasTitle(title.TitleId))
-                continue;
+            UpdateKnownTitle(player, titleEntry, false);
 
-            if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(title.TitleId))
-                player->SetTitle(titleEntry);
-        }
+            if (WorldSession* session = player->GetSession())
+            {
+                if (char const* titleName = TitleNameData[rank][teamIndex])
+                    ChatHandler(session).PSendSysMessage("You have earned the title '%s'.", titleName);
+            }
+        });
     }
 
     void CleanUpTitles(int32 mode, Player* player)
     {
-        TeamId const teamId = player->GetTeamId();
+        uint32 const kills = player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
+
+        ForEachConfiguredTitle(player, [player, kills, mode](uint8 /*rank*/, size_t /*teamIndex*/, CharTitlesEntry const* titleEntry, uint32 requiredKills)
+        {
+            if (!player->HasTitle(titleEntry))
+                return;
+
+            if (mode == CLEAN_UP_REMOVE_ALL || (mode == CLEAN_UP_REMOVE_INVALID && kills < requiredKills))
+                UpdateKnownTitle(player, titleEntry, true);
+        });
+    }
+
+    template <typename Func>
+    void ForEachConfiguredTitle(Player* player, Func&& func)
+    {
+        TeamId const teamId = GetPlayerHomeTeamId(player);
         if (teamId != TEAM_ALLIANCE && teamId != TEAM_HORDE)
             return;
 
         size_t const teamIndex = static_cast<size_t>(teamId);
-
-        PvPTitles const pvpTitlesList[MAX_RANK] =
+        static char const* const RankConfigKeys[MAX_RANK] =
         {
-            { GetRequiredKills("PvPTitles.Rank_1", RANK_ONE_HK_COUNT),       TitleData[RANK_ONE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_2", RANK_TWO_HK_COUNT),       TitleData[RANK_TWO][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_3", RANK_THREE_HK_COUNT),     TitleData[RANK_THREE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_4", RANK_FOUR_HK_COUNT),      TitleData[RANK_FOUR][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_5", RANK_FIVE_HK_COUNT),      TitleData[RANK_FIVE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_6", RANK_SIX_HK_COUNT),       TitleData[RANK_SIX][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_7", RANK_SEVEN_HK_COUNT),     TitleData[RANK_SEVEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_8", RANK_EIGHT_HK_COUNT),     TitleData[RANK_EIGHT][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_9", RANK_NINE_HK_COUNT),      TitleData[RANK_NINE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_10", RANK_TEN_HK_COUNT),      TitleData[RANK_TEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_11", RANK_ELEVEN_HK_COUNT),   TitleData[RANK_ELEVEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_12", RANK_TWELVE_HK_COUNT),   TitleData[RANK_TWELVE][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_13", RANK_THIRTEEN_HK_COUNT), TitleData[RANK_THIRTEEN][teamIndex] },
-            { GetRequiredKills("PvPTitles.Rank_14", RANK_FOURTEEN_HK_COUNT), TitleData[RANK_FOURTEEN][teamIndex] }
+            "PvPTitles.Rank_1",
+            "PvPTitles.Rank_2",
+            "PvPTitles.Rank_3",
+            "PvPTitles.Rank_4",
+            "PvPTitles.Rank_5",
+            "PvPTitles.Rank_6",
+            "PvPTitles.Rank_7",
+            "PvPTitles.Rank_8",
+            "PvPTitles.Rank_9",
+            "PvPTitles.Rank_10",
+            "PvPTitles.Rank_11",
+            "PvPTitles.Rank_12",
+            "PvPTitles.Rank_13",
+            "PvPTitles.Rank_14"
         };
 
-        uint32 const kills = player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
-
-        for (PvPTitles const& title : pvpTitlesList)
+        static uint32 const RankDefaultKills[MAX_RANK] =
         {
-            if (!player->HasTitle(title.TitleId))
+            RANK_ONE_HK_COUNT,
+            RANK_TWO_HK_COUNT,
+            RANK_THREE_HK_COUNT,
+            RANK_FOUR_HK_COUNT,
+            RANK_FIVE_HK_COUNT,
+            RANK_SIX_HK_COUNT,
+            RANK_SEVEN_HK_COUNT,
+            RANK_EIGHT_HK_COUNT,
+            RANK_NINE_HK_COUNT,
+            RANK_TEN_HK_COUNT,
+            RANK_ELEVEN_HK_COUNT,
+            RANK_TWELVE_HK_COUNT,
+            RANK_THIRTEEN_HK_COUNT,
+            RANK_FOURTEEN_HK_COUNT
+        };
+
+        for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
+        {
+            uint32 const titleId = TitleData[rank][teamIndex];
+            if (!titleId)
                 continue;
 
-            if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(title.TitleId))
+            if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(titleId))
             {
-                if (mode == CLEAN_UP_REMOVE_ALL)
-                    player->SetTitle(titleEntry, true);
-                else if (mode == CLEAN_UP_REMOVE_INVALID && kills < title.RequiredKills)
-                    player->SetTitle(titleEntry, true);
+                uint32 const requiredKills = GetRequiredKills(RankConfigKeys[rank], RankDefaultKills[rank]);
+                func(rank, teamIndex, titleEntry, requiredKills);
             }
         }
     }
@@ -247,6 +360,7 @@ private:
 
 void AddSC_mod_pvp_titles()
 {
+    EnsureTitleStringsPatched();
     new PvPTitlesPlayerScript();
 }
 
