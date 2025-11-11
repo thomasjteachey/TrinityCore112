@@ -88,6 +88,8 @@ public:
 
         //ignore packet when no bg or casual games
         if (bg == nullptr || bg->IsReplay()) return;
+        if (!bg->isArena())
+            return;
         //ignore packets until arena started
         if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
         //record packets from 1 player of each team
@@ -129,6 +131,10 @@ public:
 
     void OnBattlegroundEnd(Battleground* bg, uint32 winner) override
     {
+        // Only record arena matches
+        if (!bg->isArena())
+            return;
+
         //save replay when a bg ends
         if (!bg->IsReplay()) {
             saveReplay(bg);
@@ -137,6 +143,9 @@ public:
     }
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 diff) override {
+
+        if (!bg->isArena())
+            return;
 
         if (!bg->IsReplay()) return;
         int32 startDelayTime = bg->GetStartDelayTime();
