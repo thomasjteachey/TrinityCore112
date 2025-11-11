@@ -21,7 +21,9 @@
 #include "Chat.h"
 #include "DBCStores.h"
 #include "Player.h"
-#include "SharedDefines.h"
+
+#include <array>
+#include <vector>
 
 namespace
 {
@@ -143,6 +145,79 @@ char const* const TitleNameData[MAX_RANK][2] =
     { "Grand Marshal",        "High Warlord"    }
 };
 
+char const* const RankConfigKeys[MAX_RANK] =
+{
+    "PvPTitles.Rank_1",
+    "PvPTitles.Rank_2",
+    "PvPTitles.Rank_3",
+    "PvPTitles.Rank_4",
+    "PvPTitles.Rank_5",
+    "PvPTitles.Rank_6",
+    "PvPTitles.Rank_7",
+    "PvPTitles.Rank_8",
+    "PvPTitles.Rank_9",
+    "PvPTitles.Rank_10",
+    "PvPTitles.Rank_11",
+    "PvPTitles.Rank_12",
+    "PvPTitles.Rank_13",
+    "PvPTitles.Rank_14"
+};
+
+uint32 const RankDefaultKills[MAX_RANK] =
+{
+    RANK_ONE_HK_COUNT,
+    RANK_TWO_HK_COUNT,
+    RANK_THREE_HK_COUNT,
+    RANK_FOUR_HK_COUNT,
+    RANK_FIVE_HK_COUNT,
+    RANK_SIX_HK_COUNT,
+    RANK_SEVEN_HK_COUNT,
+    RANK_EIGHT_HK_COUNT,
+    RANK_NINE_HK_COUNT,
+    RANK_TEN_HK_COUNT,
+    RANK_ELEVEN_HK_COUNT,
+    RANK_TWELVE_HK_COUNT,
+    RANK_THIRTEEN_HK_COUNT,
+    RANK_FOURTEEN_HK_COUNT
+};
+
+using RankThresholdArray = std::array<uint32, MAX_RANK>;
+
+RankThresholdArray GetConfiguredKillThresholds()
+{
+    RankThresholdArray thresholds{};
+    for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
+        thresholds[rank] = GetRequiredKills(RankConfigKeys[rank], RankDefaultKills[rank]);
+
+    return thresholds;
+}
+
+uint8 GetHighestEligibleRank(uint32 kills, RankThresholdArray const& thresholds)
+{
+    uint8 highestRank = MAX_RANK;
+    for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
+    {
+        if (kills >= thresholds[rank])
+            highestRank = rank;
+    }
+
+    return highestRank;
+}
+
+template <typename Func>
+void ForEachRankTitle(uint8 rank, Func&& func)
+{
+    for (size_t teamIndex = 0; teamIndex < 2; ++teamIndex)
+    {
+        uint32 const titleId = TitleData[rank][teamIndex];
+        if (!titleId)
+            continue;
+
+        if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(titleId))
+            func(teamIndex, titleEntry, TitleNameData[rank][teamIndex]);
+    }
+}
+
 void EnsureTitleStringsPatched()
 {
     static bool initialized = false;
@@ -175,35 +250,6 @@ void EnsureTitleStringsPatched()
     }
 }
 
-TeamId GetPlayerHomeTeamId(Player* player)
-{
-    switch (player->GetTeam())
-    {
-        case ALLIANCE:
-            return TEAM_ALLIANCE;
-        case HORDE:
-            return TEAM_HORDE;
-        default:
-            break;
-    }
-
-    TeamId const teamId = player->GetTeamId();
-    if (teamId == TEAM_ALLIANCE || teamId == TEAM_HORDE)
-        return teamId;
-
-    switch (Player::TeamForRace(player->GetRace()))
-    {
-        case ALLIANCE:
-            return TEAM_ALLIANCE;
-        case HORDE:
-            return TEAM_HORDE;
-        default:
-            break;
-    }
-
-    return TEAM_NEUTRAL;
-}
-
 void UpdateKnownTitle(Player* player, CharTitlesEntry const* titleEntry, bool remove)
 {
     uint32 const fieldIndexOffset = titleEntry->MaskID / 32;
@@ -225,6 +271,23 @@ void UpdateKnownTitle(Player* player, CharTitlesEntry const* titleEntry, bool re
             return;
 
         player->SetFlag(PLAYER__FIELD_KNOWN_TITLES + fieldIndexOffset, flag);
+    }
+}
+
+void RemoveTitlesBelowRank(Player* player, uint8 highestRank)
+{
+    if (highestRank >= MAX_RANK)
+        return;
+
+    for (uint8 rank = RANK_ONE; rank < highestRank; ++rank)
+    {
+        ForEachRankTitle(rank, [player](size_t /*teamIndex*/, CharTitlesEntry const* titleEntry, char const* /*titleName*/)
+        {
+            if (!player->HasTitle(titleEntry))
+                return;
+
+            UpdateKnownTitle(player, titleEntry, true);
+        });
     }
 }
 
@@ -268,92 +331,75 @@ private:
     void AwardEarnedTitles(Player* player)
     {
         uint32 const kills = player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
+        RankThresholdArray const thresholds = GetConfiguredKillThresholds();
+        uint8 const highestEligibleRank = GetHighestEligibleRank(kills, thresholds);
+        bool const removeLower = sConfigMgr->GetBoolDefault("PvPTitles.RemoveLowerTitles", false);
 
-        ForEachConfiguredTitle(player, [player, kills](uint8 rank, size_t teamIndex, CharTitlesEntry const* titleEntry, uint32 requiredKills)
+        for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
         {
-            if (kills < requiredKills || player->HasTitle(titleEntry))
-                return;
+            if (kills < thresholds[rank])
+                continue;
 
-            UpdateKnownTitle(player, titleEntry, false);
+            std::vector<char const*> newlyAwarded;
+            newlyAwarded.reserve(2);
 
-            if (WorldSession* session = player->GetSession())
+            ForEachRankTitle(rank, [player, &newlyAwarded](size_t /*teamIndex*/, CharTitlesEntry const* titleEntry, char const* titleName)
             {
-                if (char const* titleName = TitleNameData[rank][teamIndex])
-                    ChatHandler(session).PSendSysMessage("You have earned the title '%s'.", titleName);
+                if (player->HasTitle(titleEntry))
+                    return;
+
+                UpdateKnownTitle(player, titleEntry, false);
+
+                if (titleName)
+                    newlyAwarded.push_back(titleName);
+            });
+
+            if (!newlyAwarded.empty())
+            {
+                if (WorldSession* session = player->GetSession())
+                {
+                    if (newlyAwarded.size() == 1)
+                        ChatHandler(session).PSendSysMessage("You have earned the title '%s'.", newlyAwarded[0]);
+                    else
+                        ChatHandler(session).PSendSysMessage("You have earned the titles '%s' and '%s'.", newlyAwarded[0], newlyAwarded[1]);
+                }
             }
-        });
+        }
+
+        if (removeLower && highestEligibleRank < MAX_RANK)
+            RemoveTitlesBelowRank(player, highestEligibleRank);
     }
 
     void CleanUpTitles(int32 mode, Player* player)
     {
         uint32 const kills = player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
 
-        ForEachConfiguredTitle(player, [player, kills, mode](uint8 /*rank*/, size_t /*teamIndex*/, CharTitlesEntry const* titleEntry, uint32 requiredKills)
-        {
-            if (!player->HasTitle(titleEntry))
-                return;
-
-            if (mode == CLEAN_UP_REMOVE_ALL || (mode == CLEAN_UP_REMOVE_INVALID && kills < requiredKills))
-                UpdateKnownTitle(player, titleEntry, true);
-        });
-    }
-
-    template <typename Func>
-    void ForEachConfiguredTitle(Player* player, Func&& func)
-    {
-        TeamId const teamId = GetPlayerHomeTeamId(player);
-        if (teamId != TEAM_ALLIANCE && teamId != TEAM_HORDE)
-            return;
-
-        size_t const teamIndex = static_cast<size_t>(teamId);
-        static char const* const RankConfigKeys[MAX_RANK] =
-        {
-            "PvPTitles.Rank_1",
-            "PvPTitles.Rank_2",
-            "PvPTitles.Rank_3",
-            "PvPTitles.Rank_4",
-            "PvPTitles.Rank_5",
-            "PvPTitles.Rank_6",
-            "PvPTitles.Rank_7",
-            "PvPTitles.Rank_8",
-            "PvPTitles.Rank_9",
-            "PvPTitles.Rank_10",
-            "PvPTitles.Rank_11",
-            "PvPTitles.Rank_12",
-            "PvPTitles.Rank_13",
-            "PvPTitles.Rank_14"
-        };
-
-        static uint32 const RankDefaultKills[MAX_RANK] =
-        {
-            RANK_ONE_HK_COUNT,
-            RANK_TWO_HK_COUNT,
-            RANK_THREE_HK_COUNT,
-            RANK_FOUR_HK_COUNT,
-            RANK_FIVE_HK_COUNT,
-            RANK_SIX_HK_COUNT,
-            RANK_SEVEN_HK_COUNT,
-            RANK_EIGHT_HK_COUNT,
-            RANK_NINE_HK_COUNT,
-            RANK_TEN_HK_COUNT,
-            RANK_ELEVEN_HK_COUNT,
-            RANK_TWELVE_HK_COUNT,
-            RANK_THIRTEEN_HK_COUNT,
-            RANK_FOURTEEN_HK_COUNT
-        };
+        RankThresholdArray const thresholds = GetConfiguredKillThresholds();
+        bool const removeLower = sConfigMgr->GetBoolDefault("PvPTitles.RemoveLowerTitles", false);
+        uint8 const highestEligibleRank = GetHighestEligibleRank(kills, thresholds);
 
         for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
         {
-            uint32 const titleId = TitleData[rank][teamIndex];
-            if (!titleId)
-                continue;
+            bool const meetsRequirement = kills >= thresholds[rank];
 
-            if (CharTitlesEntry const* titleEntry = sCharTitlesStore.LookupEntry(titleId))
+            ForEachRankTitle(rank, [player, mode, meetsRequirement](size_t /*teamIndex*/, CharTitlesEntry const* titleEntry, char const* /*titleName*/)
             {
-                uint32 const requiredKills = GetRequiredKills(RankConfigKeys[rank], RankDefaultKills[rank]);
-                func(rank, teamIndex, titleEntry, requiredKills);
-            }
+                if (!player->HasTitle(titleEntry))
+                    return;
+
+                bool remove = false;
+                if (mode == CLEAN_UP_REMOVE_ALL)
+                    remove = true;
+                else if (mode == CLEAN_UP_REMOVE_INVALID && !meetsRequirement)
+                    remove = true;
+
+                if (remove)
+                    UpdateKnownTitle(player, titleEntry, true);
+            });
         }
+
+        if (removeLower && highestEligibleRank < MAX_RANK)
+            RemoveTitlesBelowRank(player, highestEligibleRank);
     }
 };
 } // namespace

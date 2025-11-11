@@ -4240,6 +4240,14 @@ PvPTitles.AwardTitlesOnLogin = 0
 #
 PvPTitles.CleanUp = 0
 #
+#    PvPTitles.RemoveLowerTitles
+#       Description: Remove all lower-rank PvP titles once a player qualifies for a higher
+#                    rank. Applies when titles are awarded and when cleanup runs.
+#       Default:     0 - (Disabled)
+#                    1 - (Enabled)
+#
+PvPTitles.RemoveLowerTitles = 0
+#
 #    PvPTitles.Rank_X
 #       Description: Required lifetime honorable kills for each PvP rank (Alliance/Horde share the
 #                    same thresholds). Adjust these values to customise how quickly players earn
