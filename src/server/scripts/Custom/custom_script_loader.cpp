@@ -23,10 +23,12 @@
 
 void AddSC_custom_zone_group_rules();
 void AddSC_mod_pvp_titles();
+void AddSC_custom_diremaul_beads();
 
 void AddCustomScripts()
 {
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_mod_pvp_titles();
+    AddSC_custom_diremaul_beads();
 }
