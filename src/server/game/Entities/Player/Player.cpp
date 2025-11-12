@@ -7150,7 +7150,18 @@ void Player::UpdateArea(uint32 newArea)
 
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
-    pvpInfo.IsInFFAPvPArea = area && (area->Flags & AREA_FLAG_ARENA);
+
+    bool isFFAArea = false;
+    for (AreaTableEntry const* currentArea = area; currentArea; currentArea = currentArea->ParentAreaID ? sAreaTableStore.LookupEntry(currentArea->ParentAreaID) : nullptr)
+    {
+        if (currentArea->Flags & AREA_FLAG_ARENA)
+        {
+            isFFAArea = true;
+            break;
+        }
+    }
+
+    pvpInfo.IsInFFAPvPArea = isFFAArea;
     UpdatePvPState(true);
 
     // check if we were in ffa arena and we left
