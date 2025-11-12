@@ -32,6 +32,8 @@
 #include <cctype>
 #include <charconv>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <shared_mutex>
 #include <unordered_set>
 #include <vector>
