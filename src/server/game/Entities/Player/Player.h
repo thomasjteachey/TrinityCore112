@@ -1753,6 +1753,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void LeftChannel(Channel* c);
         void CleanupChannels();
         void UpdateLocalChannels(uint32 newZone);
+        void JoinWorldChannelIfNeeded();
         void LeaveLFGChannel();
 
         typedef std::list<Channel*> JoinedChannelsList;
