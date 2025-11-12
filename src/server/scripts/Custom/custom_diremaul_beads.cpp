@@ -41,6 +41,7 @@
 
 namespace DireMaulBeads
 {
+    static constexpr uint32 KalimdorMapId = 1;
     static constexpr uint32 DefaultOgreBeadItemId = 21982;
     static constexpr uint32 DefaultOgreBeadAuraId = 90002;
     static constexpr char const* DefaultAreaIdList = "495,496,498,2557,3217";
@@ -119,7 +120,7 @@ namespace DireMaulBeads
         if (!player)
             return false;
 
-        if (player->GetMapId() != MAP_KALIMDOR)
+        if (player->GetMapId() != KalimdorMapId)
             return false;
 
         if (s_DireMaulAreaIds.empty())
