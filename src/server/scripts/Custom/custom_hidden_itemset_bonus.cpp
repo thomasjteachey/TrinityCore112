@@ -16,12 +16,15 @@
  */
 
 #include "ScriptMgr.h"
+#include "Chat.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "Log.h"
 #include "Player.h"
+#include "RBAC.h"
 
 #include <map>
+#include <vector>
 
 struct HiddenItemsetBonus
 {
@@ -143,7 +146,34 @@ void hidden_itemset_bonus_player::Recalc(Player* player)
     }
 }
 
+class hidden_itemset_bonus_command : public CommandScript
+{
+public:
+    hidden_itemset_bonus_command() : CommandScript("hidden_itemset_bonus_command") { }
+
+    std::vector<ChatCommand> GetCommands() const override
+    {
+        static std::vector<ChatCommand> hiddenItemsetCommandTable =
+        {
+            { "reload", rbac::RBAC_PERM_COMMAND_GM, true, &HandleReload, "" },
+        };
+        static std::vector<ChatCommand> commandTable =
+        {
+            { "hiddenitemset", rbac::RBAC_PERM_COMMAND_GM, true, nullptr, "", hiddenItemsetCommandTable },
+        };
+        return commandTable;
+    }
+
+    static bool HandleReload(ChatHandler* handler, char const*)
+    {
+        LoadHiddenItemsetBonuses();
+        handler->SendSysMessage("Hidden itemset bonuses reloaded.");
+        return true;
+    }
+};
+
 void AddSC_custom_hidden_itemset_bonus()
 {
     new hidden_itemset_bonus_player();
+    new hidden_itemset_bonus_command();
 }
