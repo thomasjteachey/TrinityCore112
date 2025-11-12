@@ -31,6 +31,11 @@
 #include "Player.h"
 #include "WorldPacket.h"
 
+namespace DireMaulBeads
+{
+    void OnCorpseLooted(Corpse const* corpse);
+}
+
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_AUTOSTORE_LOOT_ITEM");
@@ -303,7 +308,7 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
                 loot->roundRobinPlayer.Clear();
         }
     }
-    else if (lguid.IsCorpse())        // ONLY remove insignia at BG
+    else if (lguid.IsCorpse())        // ONLY remove insignia at BG or Dire Maul beads
     {
         Corpse* corpse = ObjectAccessor::GetCorpse(*player, lguid);
         if (!corpse || !corpse->IsWithinDistInMap(_player, INTERACTION_DISTANCE))
@@ -315,6 +320,7 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
         {
             loot->clear();
             corpse->RemoveFlag(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_DYNFLAG_LOOTABLE);
+            DireMaulBeads::OnCorpseLooted(corpse);
         }
     }
     else if (lguid.IsItem())

@@ -684,6 +684,13 @@ void World::LoadConfigSettings(bool reload)
     m_bool_configs[CONFIG_PRESERVE_CUSTOM_CHANNELS] = sConfigMgr->GetBoolDefault("PreserveCustomChannels", false);
     m_int_configs[CONFIG_PRESERVE_CUSTOM_CHANNEL_DURATION] = sConfigMgr->GetIntDefault("PreserveCustomChannelDuration", 14);
     m_int_configs[CONFIG_PRESERVE_CUSTOM_CHANNEL_INTERVAL] = sConfigMgr->GetIntDefault("PreserveCustomChannelInterval", 5);
+    m_bool_configs[CONFIG_CHANNEL_AUTOJOIN_WORLD] = sConfigMgr->GetBoolDefault("Channel.World.Enable", false);
+    SetWorldChatChannelName(sConfigMgr->GetStringDefault("Channel.World.Name", "World"));
+    if (m_bool_configs[CONFIG_CHANNEL_AUTOJOIN_WORLD] && GetWorldChatChannelName().empty())
+    {
+        TC_LOG_ERROR("server.loading", "Channel.World.Enable is set but Channel.World.Name is empty. Disabling world chat auto-join.");
+        m_bool_configs[CONFIG_CHANNEL_AUTOJOIN_WORLD] = false;
+    }
     m_bool_configs[CONFIG_GRID_UNLOAD] = sConfigMgr->GetBoolDefault("GridUnload", true);
     m_bool_configs[CONFIG_BASEMAP_LOAD_GRIDS] = sConfigMgr->GetBoolDefault("BaseMapLoadAllGrids", false);
     if (m_bool_configs[CONFIG_BASEMAP_LOAD_GRIDS] && m_bool_configs[CONFIG_GRID_UNLOAD])

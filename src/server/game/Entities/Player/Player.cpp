@@ -8730,7 +8730,7 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
 
         loot = &bones->loot;
 
-        if (loot->loot_type == LOOT_NONE)
+        if (!direMaulLoot && loot->loot_type == LOOT_NONE)
         {
             uint32 pLevel = bones->loot.gold;
             bones->loot.clear();
@@ -8750,7 +8750,9 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             bones->loot.gold = uint32(urand(50, 150) * 0.016f * std::pow(float(pLevel) / 5.76f, 2.5f) * sWorld->getRate(RATE_DROP_MONEY));
         }
 
-        if (bones->lootRecipient != this)
+        if (direMaulLoot)
+            permission = ALL_PERMISSION;
+        else if (bones->lootRecipient != this)
             permission = NONE_PERMISSION;
         else
             permission = OWNER_PERMISSION;
