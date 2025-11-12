@@ -238,7 +238,7 @@ namespace DireMaulBeads
             lootItem.itemid = beadItemId;
             lootItem.itemIndex = static_cast<uint32>(loot.items.size());
             lootItem.count = stack;
-            lootItem.freeforall = true;
+            lootItem.freeforall = false;
             lootItem.follow_loot_rules = false;
 
             loot.items.push_back(lootItem);
