@@ -18,12 +18,14 @@
 #include "ScriptMgr.h"
 #include "Corpse.h"
 #include "Loot.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
 #include "SpellAuraEffects.h"
 #include <algorithm>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -77,35 +79,29 @@ void UpdateBeadAura(Player* player)
         aura->SetStackAmount(stacks);
 }
 
-std::unordered_map<ObjectGuid, uint32> s_PendingBeadLoot;
-
-void ApplyPendingBeadsToCorpse(Player* player)
+struct PendingBeadLoot
 {
-    if (!player)
-        return;
+    uint32 BeadCount = 0;
+};
 
-    auto pending = s_PendingBeadLoot.find(player->GetGUID());
-    if (pending == s_PendingBeadLoot.end())
-        return;
+std::unordered_map<ObjectGuid, PendingBeadLoot> s_PendingBeadLoot;
+
+bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
+{
+    if (!player || !beadCount)
+        return false;
 
     Corpse* corpse = player->GetCorpse();
     if (!corpse)
-        return;
+        return false;
 
-    uint32 beadCount = pending->second;
-    s_PendingBeadLoot.erase(pending);
-
-    if (!beadCount)
-        return;
-
-    corpse->SetFlag(CORPSE_FIELD_FLAGS, CORPSE_FLAG_LOOTABLE);
-    corpse->SetFlag(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_DYNFLAG_LOOTABLE);
+    corpse->SetUInt32Value(CORPSE_FIELD_FLAGS, corpse->GetUInt32Value(CORPSE_FIELD_FLAGS) | CORPSE_FLAG_LOOTABLE);
+    corpse->SetUInt32Value(CORPSE_FIELD_DYNAMIC_FLAGS, corpse->GetUInt32Value(CORPSE_FIELD_DYNAMIC_FLAGS) | CORPSE_DYNFLAG_LOOTABLE);
     corpse->lootRecipient = nullptr;
 
     Loot& loot = corpse->loot;
     loot.clear();
     loot.loot_type = LOOT_CORPSE;
-    loot.unlootedCount = 0;
     loot.lootOwnerGUID.Clear();
     loot.roundRobinPlayer.Clear();
 
@@ -125,6 +121,24 @@ void ApplyPendingBeadsToCorpse(Player* player)
         ++loot.unlootedCount;
         remaining -= stack;
     }
+
+    return true;
+}
+
+bool TryApplyPendingBeads(Player* player)
+{
+    if (!player)
+        return false;
+
+    auto const pending = s_PendingBeadLoot.find(player->GetGUID());
+    if (pending == s_PendingBeadLoot.end())
+        return false;
+
+    if (!ApplyPendingBeadsToCorpse(player, pending->second.BeadCount))
+        return false;
+
+    s_PendingBeadLoot.erase(pending);
+    return true;
 }
 }
 
@@ -174,7 +188,9 @@ public:
             return;
 
         victim->DestroyItemCount(OGRE_BEAD_ITEM, beadCount, true);
-        s_PendingBeadLoot[victim->GetGUID()] = beadCount;
+        s_PendingBeadLoot[victim->GetGUID()] = { beadCount };
+
+        TryApplyPendingBeads(victim);
 
         UpdateBeadAura(victim);
         UpdateBeadAura(killer);
@@ -185,7 +201,8 @@ public:
         if (!player)
             return;
 
-        s_PendingBeadLoot.erase(player->GetGUID());
+        if (!TryApplyPendingBeads(player))
+            s_PendingBeadLoot.erase(player->GetGUID());
         player->RemoveAura(OGRE_BEAD_AURA);
     }
 };
@@ -200,8 +217,36 @@ public:
         if (!player)
             return;
 
-        ApplyPendingBeadsToCorpse(player);
+        TryApplyPendingBeads(player);
         UpdateBeadAura(player);
+    }
+};
+
+class diremaul_beads_world : public WorldScript
+{
+public:
+    diremaul_beads_world() : WorldScript("diremaul_beads_world") { }
+
+    void OnUpdate(uint32 /*diff*/) override
+    {
+        if (s_PendingBeadLoot.empty())
+            return;
+
+        std::vector<ObjectGuid> toRemove;
+        toRemove.reserve(s_PendingBeadLoot.size());
+
+        for (auto const& entry : s_PendingBeadLoot)
+        {
+            Player* player = ObjectAccessor::FindPlayer(entry.first);
+            if (!player)
+                continue;
+
+            if (ApplyPendingBeadsToCorpse(player, entry.second.BeadCount))
+                toRemove.push_back(entry.first);
+        }
+
+        for (ObjectGuid const& guid : toRemove)
+            s_PendingBeadLoot.erase(guid);
     }
 };
 
@@ -209,4 +254,5 @@ void AddSC_custom_diremaul_beads()
 {
     new diremaul_beads_player();
     new diremaul_beads_corpse();
+    new diremaul_beads_world();
 }
