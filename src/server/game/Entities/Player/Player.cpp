@@ -7188,7 +7188,38 @@ void Player::UpdateArea(uint32 newArea)
 
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
-    pvpInfo.IsInFFAPvPArea = area && (area->Flags & AREA_FLAG_ARENA);
+
+    bool isFFAArea = false;
+    // Walk the area hierarchy in case the arena flag is defined on a parent zone.
+    for (AreaTableEntry const* currentArea = area; currentArea;)
+    {
+        if (currentArea->Flags & AREA_FLAG_ARENA)
+        {
+            isFFAArea = true;
+            break;
+        }
+
+        if (!currentArea->ParentAreaID)
+            break;
+
+        currentArea = sAreaTableStore.LookupEntry(currentArea->ParentAreaID);
+    }
+
+    if (!isFFAArea)
+    {
+        static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul (Dire Maul arena)
+
+        for (uint32 customArea : customFFAAreas)
+        {
+            if (newArea == customArea || m_zoneUpdateId == customArea)
+            {
+                isFFAArea = true;
+                break;
+            }
+        }
+    }
+
+    pvpInfo.IsInFFAPvPArea = isFFAArea;
     UpdatePvPState(true);
 
     // check if we were in ffa arena and we left
