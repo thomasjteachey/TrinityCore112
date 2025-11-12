@@ -117,6 +117,11 @@ namespace DireMaulBeads
     void OnItemStored(Player* player, uint32 itemId, uint32 count);
 }
 
+namespace HiddenSets
+{
+    void OnEquipmentChanged(Player* player);
+}
+
 namespace
 {
     bool IsBattlegroundEquipChangeAllowed(uint8 slot)
@@ -12466,6 +12471,9 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
 
         ApplyEquipCooldown(pItem2);
 
+        if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+            HiddenSets::OnEquipmentChanged(this);
+
         return pItem2;
     }
 
@@ -12475,6 +12483,9 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
     // only for full equip instead adding to stack
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_ITEM, pItem->GetEntry());
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM, slot, pItem->GetEntry());
+
+    if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+        HiddenSets::OnEquipmentChanged(this);
 
     return pItem;
 }
@@ -12500,6 +12511,9 @@ void Player::QuickEquipItem(uint16 pos, Item* pItem)
 
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_ITEM, pItem->GetEntry());
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM, slot, pItem->GetEntry());
+
+        if (slot < EQUIPMENT_SLOT_END)
+            HiddenSets::OnEquipmentChanged(this);
     }
 }
 
@@ -12619,6 +12633,8 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
                 SetVisibleItemSlot(slot, nullptr);
                 if (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND)
                     CheckTitanGripPenalty();
+
+                HiddenSets::OnEquipmentChanged(this);
             }
         }
         else if (Bag* pBag = GetBagByPos(bag))
@@ -12747,6 +12763,8 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
 
                 // equipment visual show
                 SetVisibleItemSlot(slot, nullptr);
+
+                HiddenSets::OnEquipmentChanged(this);
             }
 
             m_items[slot] = nullptr;

@@ -113,6 +113,14 @@ void RecalcHiddenSets(Player* player)
 }
 } // namespace
 
+namespace HiddenSets
+{
+void OnEquipmentChanged(Player* player)
+{
+    RecalcHiddenSets(player);
+}
+} // namespace HiddenSets
+
 void LoadHiddenSets()
 {
     s_HiddenSets.clear();
@@ -163,17 +171,7 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        RecalcHiddenSets(player);
-    }
-
-    void OnEquip(Player* player, Item* /*item*/, uint8 /*bag*/, uint8 /*slot*/, bool /*update*/) override
-    {
-        RecalcHiddenSets(player);
-    }
-
-    void OnUnequip(Player* player, Item* /*item*/, uint8 /*bag*/, uint8 /*slot*/, bool /*update*/) override
-    {
-        RecalcHiddenSets(player);
+        HiddenSets::OnEquipmentChanged(player);
     }
 };
 
@@ -206,7 +204,7 @@ public:
             HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
             for (auto const& playerEntry : players)
                 if (Player* player = playerEntry.second)
-                    RecalcHiddenSets(player);
+                    HiddenSets::OnEquipmentChanged(player);
         }
 
         handler->SendSysMessage("Hidden sets reloaded.");
