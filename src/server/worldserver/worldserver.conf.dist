@@ -2113,6 +2113,19 @@ PartyLevelReq = 1
 PreserveCustomChannels = 1
 
 #
+#    Channel.World.Enable
+#        Description: Automatically join newly created characters to the configured world chat channel on their first login.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Channel.World.Name
+#        Description: Name of the world chat channel that new characters join when Channel.World.Enable is enabled.
+#        Default:     "World"
+
+Channel.World.Enable = 0
+Channel.World.Name = "World"
+
+#
 #    PreserveCustomChannelInterval
 #        Description: Interval (in minutes) at which custom channel data is saved to the database
 #        Default:     5 minutes
