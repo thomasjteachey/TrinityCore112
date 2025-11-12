@@ -238,7 +238,7 @@ namespace DireMaulBeads
             lootItem.itemid = beadItemId;
             lootItem.itemIndex = static_cast<uint32>(loot.items.size());
             lootItem.count = stack;
-            lootItem.freeforall = true;
+            lootItem.freeforall = false;
             lootItem.follow_loot_rules = false;
 
             loot.items.push_back(lootItem);
@@ -276,6 +276,17 @@ namespace DireMaulBeads
 
         victim->DestroyItemCount(beadItemId, beadCount, true);
         UpdateBeadAura(victim);
+    }
+
+    void OnItemStored(Player* player, uint32 itemId, uint32 count)
+    {
+        if (!player || !count)
+            return;
+
+        if (!GetOgreBeadItemId() || itemId != GetOgreBeadItemId())
+            return;
+
+        UpdateBeadAura(player);
     }
 
     void OnItemLooted(Player* player, uint32 itemId)

@@ -114,6 +114,7 @@
 namespace DireMaulBeads
 {
     void OnItemLooted(Player* player, uint32 itemId);
+    void OnItemStored(Player* player, uint32 itemId, uint32 count);
 }
 
 namespace
@@ -12219,6 +12220,9 @@ Item* Player::StoreNewItem(ItemPosCountVec const& dest, uint32 item, bool update
             CharacterDatabase.Execute(stmt);
         }
     }
+    if (pItem)
+        DireMaulBeads::OnItemStored(this, item, count);
+
     return pItem;
 }
 
