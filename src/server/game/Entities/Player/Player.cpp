@@ -5163,6 +5163,8 @@ void Player::CleanupChannels()
 
 void Player::UpdateLocalChannels(uint32 newZone)
 {
+    JoinWorldChannelIfNeeded();
+
     if (GetSession()->PlayerLoading() && !IsBeingTeleportedFar())
         return;                                              // The client handles it automatically after loading, but not after teleporting
 
@@ -5230,6 +5232,44 @@ void Player::UpdateLocalChannels(uint32 newZone)
             cMgr->LeftChannel(removeChannel->GetChannelId(), removeChannel->GetZoneEntry());    // Delete if empty
         }
     }
+}
+
+void Player::JoinWorldChannelIfNeeded()
+{
+    if (!sWorld->getBoolConfig(CONFIG_CHANNEL_AUTOJOIN_WORLD))
+        return;
+
+    std::string const& worldChannelName = sWorld->GetWorldChatChannelName();
+    if (worldChannelName.empty())
+        return;
+
+    ChannelMgr* channelMgr = ChannelMgr::forTeam(GetTeam());
+    if (!channelMgr)
+    {
+        TC_LOG_ERROR("chat.system",
+            "Unable to resolve channel manager for world chat auto-join (team: {}).", GetTeam());
+        return;
+    }
+
+    Channel* worldChannel = channelMgr->GetCustomChannel(worldChannelName);
+    if (!worldChannel)
+    {
+        worldChannel = channelMgr->CreateCustomChannel(worldChannelName);
+        if (!worldChannel)
+        {
+            TC_LOG_ERROR("chat.system",
+                "Unable to create configured world chat channel '{}' for player {} ({}).",
+                worldChannelName, GetName(), GetGUID().ToString());
+            return;
+        }
+    }
+
+    worldChannel->SetOwnership(false);
+    worldChannel->SetOwner(ObjectGuid::Empty);
+    worldChannel->SetDirty();
+
+    if (!worldChannel->IsOn(GetGUID()))
+        worldChannel->JoinChannel(this);
 }
 
 void Player::LeaveLFGChannel()
@@ -7148,7 +7188,38 @@ void Player::UpdateArea(uint32 newArea)
 
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
-    pvpInfo.IsInFFAPvPArea = area && (area->Flags & AREA_FLAG_ARENA);
+
+    bool isFFAArea = false;
+    // Walk the area hierarchy in case the arena flag is defined on a parent zone.
+    for (AreaTableEntry const* currentArea = area; currentArea;)
+    {
+        if (currentArea->Flags & AREA_FLAG_ARENA)
+        {
+            isFFAArea = true;
+            break;
+        }
+
+        if (!currentArea->ParentAreaID)
+            break;
+
+        currentArea = sAreaTableStore.LookupEntry(currentArea->ParentAreaID);
+    }
+
+    if (!isFFAArea)
+    {
+        static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul (Dire Maul arena)
+
+        for (uint32 customArea : customFFAAreas)
+        {
+            if (newArea == customArea || m_zoneUpdateId == customArea)
+            {
+                isFFAArea = true;
+                break;
+            }
+        }
+    }
+
+    pvpInfo.IsInFFAPvPArea = isFFAArea;
     UpdatePvPState(true);
 
     // check if we were in ffa arena and we left
