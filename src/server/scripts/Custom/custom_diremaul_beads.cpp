@@ -143,9 +143,15 @@ namespace DireMaulBeads
         if (!auraId)
             return;
 
+        uint32 const mapId = player->GetMapId();
+        uint32 const areaId = player->GetAreaId();
+        uint32 const zoneId = player->GetZoneId();
+
         if (!IsInOutdoorDireMaul(player))
         {
             player->RemoveAura(auraId);
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - outside configured area (map {}, zone {}, area {})",
+                auraId, player->GetName(), mapId, zoneId, areaId);
             return;
         }
 
@@ -153,6 +159,8 @@ namespace DireMaulBeads
         if (!beadItemId)
         {
             player->RemoveAura(auraId);
+            TC_LOG_WARN("scripts", "DireMaulBeads: skipping aura {} for {} - bead item id is 0 (map {}, zone {}, area {})",
+                auraId, player->GetName(), mapId, zoneId, areaId);
             return;
         }
 
@@ -160,6 +168,8 @@ namespace DireMaulBeads
         if (!beadCount)
         {
             player->RemoveAura(auraId);
+            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - no beads (map {}, zone {}, area {}, item {})",
+                auraId, player->GetName(), mapId, zoneId, areaId, beadItemId);
             return;
         }
 
@@ -169,6 +179,9 @@ namespace DireMaulBeads
             aura->SetStackAmount(stacks);
         else if (Aura* aura = player->AddAura(auraId, player))
             aura->SetStackAmount(stacks);
+        else
+            TC_LOG_WARN("scripts", "DireMaulBeads: failed to apply aura {} for {} despite {} beads (map {}, zone {}, area {})",
+                auraId, player->GetName(), beadCount, mapId, zoneId, areaId);
     }
 
     uint32 GetBeadChestGameObjectId()
