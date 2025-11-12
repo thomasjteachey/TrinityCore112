@@ -119,7 +119,7 @@ namespace DireMaulBeads
         if (!player)
             return false;
 
-        if (player->GetMapId() != 1)
+        if (player->GetMapId() != MAP_KALIMDOR)
             return false;
 
         if (s_DireMaulAreaIds.empty())
@@ -204,6 +204,7 @@ namespace DireMaulBeads
         Loot& loot = chest->loot;
         loot.clear();
         loot.loot_type = LOOT_CORPSE;
+        loot.lootOwnerGUID = player->GetGUID();
 
         uint32 remaining = beadCount;
         while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
@@ -222,7 +223,8 @@ namespace DireMaulBeads
             remaining -= stack;
         }
 
-        chest->SetLootState(GO_READY);
+        chest->SetLootRecipient(player);
+        chest->SetLootState(GO_ACTIVATED, player);
         return chest;
     }
 
