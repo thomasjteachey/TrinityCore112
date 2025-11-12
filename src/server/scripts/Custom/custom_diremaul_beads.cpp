@@ -77,7 +77,55 @@ void UpdateBeadAura(Player* player)
         aura->SetStackAmount(stacks);
 }
 
-std::unordered_map<ObjectGuid, uint32, ObjectGuid::Hash> s_PendingBeadLoot;
+std::unordered_map<ObjectGuid, uint32> s_PendingBeadLoot;
+
+void ApplyPendingBeadsToCorpse(Player* player)
+{
+    if (!player)
+        return;
+
+    auto pending = s_PendingBeadLoot.find(player->GetGUID());
+    if (pending == s_PendingBeadLoot.end())
+        return;
+
+    Corpse* corpse = player->GetCorpse();
+    if (!corpse)
+        return;
+
+    uint32 beadCount = pending->second;
+    s_PendingBeadLoot.erase(pending);
+
+    if (!beadCount)
+        return;
+
+    corpse->SetFlag(CORPSE_FIELD_FLAGS, CORPSE_FLAG_LOOTABLE);
+    corpse->SetFlag(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_DYNFLAG_LOOTABLE);
+    corpse->lootRecipient = nullptr;
+
+    Loot& loot = corpse->loot;
+    loot.clear();
+    loot.loot_type = LOOT_CORPSE;
+    loot.unlootedCount = 0;
+    loot.lootOwnerGUID.Clear();
+    loot.roundRobinPlayer.Clear();
+
+    uint32 remaining = beadCount;
+    while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
+    {
+        uint8 const stack = static_cast<uint8>(std::min<uint32>(remaining, 255));
+
+        LootItem lootItem;
+        lootItem.itemid = OGRE_BEAD_ITEM;
+        lootItem.count = stack;
+        lootItem.itemIndex = static_cast<uint32>(loot.items.size());
+        lootItem.freeforall = true;
+        lootItem.follow_loot_rules = false;
+
+        loot.items.push_back(lootItem);
+        ++loot.unlootedCount;
+        remaining -= stack;
+    }
+}
 }
 
 class diremaul_beads_player : public PlayerScript
@@ -132,15 +180,6 @@ public:
         UpdateBeadAura(killer);
     }
 
-    void OnPlayerRepop(Player* player) override
-    {
-        if (!player)
-            return;
-
-        s_PendingBeadLoot.erase(player->GetGUID());
-        UpdateBeadAura(player);
-    }
-
     void OnLogout(Player* player) override
     {
         if (!player)
@@ -156,47 +195,13 @@ class diremaul_beads_corpse : public PlayerScript
 public:
     diremaul_beads_corpse() : PlayerScript("diremaul_beads_corpse") { }
 
-    void OnCreateCorpse(Player* player, Corpse* corpse) override
+    void OnPlayerRepop(Player* player) override
     {
-        if (!player || !corpse)
+        if (!player)
             return;
 
-        auto pending = s_PendingBeadLoot.find(player->GetGUID());
-        if (pending == s_PendingBeadLoot.end())
-            return;
-
-        uint32 beadCount = pending->second;
-        s_PendingBeadLoot.erase(pending);
-
-        if (!beadCount)
-            return;
-
-        corpse->SetFlag(CORPSE_FIELD_FLAGS, CORPSE_FLAG_LOOTABLE);
-        corpse->SetFlag(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_DYNFLAG_LOOTABLE);
-
-        Loot& loot = corpse->loot;
-        loot.clear();
-        loot.loot_type = LOOT_CORPSE;
-        loot.unlootedCount = 0;
-        loot.lootOwnerGUID.Clear();
-        loot.roundRobinPlayer.Clear();
-
-        uint32 remaining = beadCount;
-        while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
-        {
-            uint8 const stack = static_cast<uint8>(std::min<uint32>(remaining, 255));
-
-            LootItem lootItem;
-            lootItem.itemid = OGRE_BEAD_ITEM;
-            lootItem.count = stack;
-            lootItem.itemIndex = static_cast<uint32>(loot.items.size());
-            lootItem.freeforall = true;
-            lootItem.follow_loot_rules = false;
-
-            loot.items.push_back(lootItem);
-            ++loot.unlootedCount;
-            remaining -= stack;
-        }
+        ApplyPendingBeadsToCorpse(player);
+        UpdateBeadAura(player);
     }
 };
 
