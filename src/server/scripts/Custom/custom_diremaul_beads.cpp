@@ -28,6 +28,7 @@
 #include "QuestDef.h"
 #include "SharedDefines.h"
 #include "SpellAuraEffects.h"
+#include "UpdateFields.h"
 #include "Util.h"
 #include <algorithm>
 #include <cctype>
@@ -151,7 +152,7 @@ namespace DireMaulBeads
         if (!IsInOutdoorDireMaul(player))
         {
             player->RemoveAura(auraId);
-            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - outside configured area (map {}, zone {}, area {})",
+            TC_LOG_ERROR("scripts", "DireMaulBeads: skipping aura {} for {} - outside configured area (map {}, zone {}, area {})",
                 auraId, player->GetName(), mapId, zoneId, areaId);
             return;
         }
@@ -160,7 +161,7 @@ namespace DireMaulBeads
         if (!beadItemId)
         {
             player->RemoveAura(auraId);
-            TC_LOG_WARN("scripts", "DireMaulBeads: skipping aura {} for {} - bead item id is 0 (map {}, zone {}, area {})",
+            TC_LOG_ERROR("scripts", "DireMaulBeads: skipping aura {} for {} - bead item id is 0 (map {}, zone {}, area {})",
                 auraId, player->GetName(), mapId, zoneId, areaId);
             return;
         }
@@ -169,20 +170,28 @@ namespace DireMaulBeads
         if (!beadCount)
         {
             player->RemoveAura(auraId);
-            TC_LOG_DEBUG("scripts", "DireMaulBeads: skipping aura {} for {} - no beads (map {}, zone {}, area {}, item {})",
+            TC_LOG_ERROR("scripts", "DireMaulBeads: skipping aura {} for {} - no beads (map {}, zone {}, area {}, item {})",
                 auraId, player->GetName(), mapId, zoneId, areaId, beadItemId);
             return;
         }
 
         uint8 const stacks = beadCount > 255 ? 255 : static_cast<uint8>(beadCount);
 
-        if (Aura* aura = player->GetAura(auraId))
-            aura->SetStackAmount(stacks);
-        else if (Aura* aura = player->AddAura(auraId, player))
+        Aura* aura = player->GetAura(auraId);
+        if (aura)
             aura->SetStackAmount(stacks);
         else
-            TC_LOG_WARN("scripts", "DireMaulBeads: failed to apply aura {} for {} despite {} beads (map {}, zone {}, area {})",
+            aura = player->AddAura(auraId, player);
+
+        if (!aura)
+        {
+            TC_LOG_ERROR("scripts", "DireMaulBeads: failed to apply aura {} for {} despite {} beads (map {}, zone {}, area {})",
                 auraId, player->GetName(), beadCount, mapId, zoneId, areaId);
+            return;
+        }
+
+        TC_LOG_INFO("scripts", "DireMaulBeads: applied aura {} ({} stacks) for {} (map {}, zone {}, area {})",
+            auraId, stacks, player->GetName(), mapId, zoneId, areaId);
     }
 
     uint32 GetBeadChestGameObjectId()
@@ -218,7 +227,7 @@ namespace DireMaulBeads
         Loot& loot = chest->loot;
         loot.clear();
         loot.loot_type = LOOT_CORPSE;
-        loot.lootOwnerGUID = player->GetGUID();
+        loot.lootOwnerGUID.Clear();
 
         uint32 remaining = beadCount;
         while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
@@ -237,8 +246,11 @@ namespace DireMaulBeads
             remaining -= stack;
         }
 
-        chest->SetLootRecipient(player);
-        chest->SetLootState(GO_ACTIVATED, player);
+        chest->SetLootRecipient(nullptr);
+        chest->SetLootState(GO_READY);
+        chest->SetGoState(GO_STATE_READY);
+        chest->ForceValuesUpdateAtIndex(GAMEOBJECT_DYNAMIC);
+        chest->ForceValuesUpdateAtIndex(GAMEOBJECT_FLAGS);
         return chest;
     }
 
