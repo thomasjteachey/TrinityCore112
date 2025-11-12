@@ -111,6 +111,12 @@
 #include <array>
 #include <initializer_list>
 
+namespace DireMaulBeads
+{
+    bool IsLootableCorpse(Corpse const* corpse);
+    void OnCorpseLooted(Corpse const* corpse);
+}
+
 namespace
 {
 bool IsBattlegroundEquipChangeAllowed(uint8 slot)
@@ -8707,11 +8713,19 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             }
         }
     }
-    else if (guid.IsCorpse())                          // remove insignia
+    else if (guid.IsCorpse())                          // remove insignia / Dire Maul beads
     {
         Corpse* bones = ObjectAccessor::GetCorpse(*this, guid);
 
-        if (!bones || !(loot_type == LOOT_CORPSE || loot_type == LOOT_INSIGNIA) || bones->GetType() != CORPSE_BONES)
+        if (!bones || !(loot_type == LOOT_CORPSE || loot_type == LOOT_INSIGNIA))
+        {
+            SendLootRelease(guid);
+            return;
+        }
+
+        bool const direMaulLoot = DireMaulBeads::IsLootableCorpse(bones);
+
+        if (!direMaulLoot && bones->GetType() != CORPSE_BONES)
         {
             SendLootRelease(guid);
             return;
@@ -8719,7 +8733,7 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
 
         loot = &bones->loot;
 
-        if (loot->loot_type == LOOT_NONE)
+        if (!direMaulLoot && loot->loot_type == LOOT_NONE)
         {
             uint32 pLevel = bones->loot.gold;
             bones->loot.clear();
@@ -8739,7 +8753,9 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             bones->loot.gold = uint32(urand(50, 150) * 0.016f * std::pow(float(pLevel) / 5.76f, 2.5f) * sWorld->getRate(RATE_DROP_MONEY));
         }
 
-        if (bones->lootRecipient != this)
+        if (direMaulLoot)
+            permission = ALL_PERMISSION;
+        else if (bones->lootRecipient != this)
             permission = NONE_PERMISSION;
         else
             permission = OWNER_PERMISSION;

@@ -24,26 +24,71 @@
 #include "QuestDef.h"
 #include "SharedDefines.h"
 #include "SpellAuraEffects.h"
+#include "Util.h"
 #include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <string>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-namespace
+namespace DireMaulBeads
 {
 static constexpr uint32 DefaultOgreBeadItemId = 21982;
 static constexpr uint32 DefaultOgreBeadAuraId = 90002;
+static constexpr char const* DefaultAreaIdList = "495,496,498,2557,3217";
 
 uint32 s_OgreBeadItemId = DefaultOgreBeadItemId;
 uint32 s_OgreBeadAuraId = DefaultOgreBeadAuraId;
+std::unordered_set<uint32> s_DireMaulAreaIds;
+
+struct PendingBeadLoot
+{
+    uint32 BeadCount = 0;
+};
+
+std::unordered_map<ObjectGuid, PendingBeadLoot> s_PendingBeadLoot;
+std::unordered_set<ObjectGuid> s_ActiveBeadCorpses;
+
+namespace
+{
+uint32 GetMapAreaId(std::string_view token)
+{
+    while (!token.empty() && std::isspace(static_cast<unsigned char>(token.front())))
+        token.remove_prefix(1);
+
+    while (!token.empty() && std::isspace(static_cast<unsigned char>(token.back())))
+        token.remove_suffix(1);
+
+    if (token.empty())
+        return 0;
+
+    uint32 value = 0;
+    std::from_chars_result const result = std::from_chars(token.data(), token.data() + token.size(), value);
+    if (result.ec != std::errc())
+        return 0;
+
+    return value;
+}
+}
 
 void LoadDireMaulBeadConfig()
 {
     int32 const configuredItemId = sConfigMgr->GetIntDefault("DireMaulBeads.ItemId", static_cast<int32>(DefaultOgreBeadItemId));
     int32 const configuredAuraId = sConfigMgr->GetIntDefault("DireMaulBeads.AuraId", static_cast<int32>(DefaultOgreBeadAuraId));
+    std::string const configuredAreaList = sConfigMgr->GetStringDefault("DireMaulBeads.AreaIds", DefaultAreaIdList);
 
     s_OgreBeadItemId = configuredItemId > 0 ? static_cast<uint32>(configuredItemId) : 0u;
     s_OgreBeadAuraId = configuredAuraId > 0 ? static_cast<uint32>(configuredAuraId) : 0u;
+
+    s_DireMaulAreaIds.clear();
+    for (std::string_view token : Trinity::Tokenize(configuredAreaList, ',', false))
+    {
+        if (uint32 const value = GetMapAreaId(token))
+            s_DireMaulAreaIds.insert(value);
+    }
 }
 
 uint32 GetOgreBeadItemId()
@@ -64,17 +109,45 @@ bool IsInOutdoorDireMaul(Player* player)
     if (player->GetMapId() != 1)
         return false;
 
-    switch (player->GetAreaId())
-    {
-        case 495: // Dire Maul
-        case 496: // Broken Commons
-        case 498: // The Maul
-            return true;
-        default:
-            break;
-    }
+    if (s_DireMaulAreaIds.empty())
+        return false;
+
+    uint32 const areaId = player->GetAreaId();
+    uint32 const zoneId = player->GetZoneId();
+
+    if (s_DireMaulAreaIds.contains(areaId) || s_DireMaulAreaIds.contains(zoneId))
+        return true;
 
     return false;
+}
+
+void RegisterCorpse(Corpse* corpse)
+{
+    if (!corpse)
+        return;
+
+    s_ActiveBeadCorpses.insert(corpse->GetGUID());
+}
+
+void UnregisterCorpse(ObjectGuid const& guid)
+{
+    s_ActiveBeadCorpses.erase(guid);
+}
+
+bool IsLootableCorpse(Corpse const* corpse)
+{
+    if (!corpse)
+        return false;
+
+    return s_ActiveBeadCorpses.contains(corpse->GetGUID());
+}
+
+void OnCorpseLooted(Corpse const* corpse)
+{
+    if (!corpse)
+        return;
+
+    UnregisterCorpse(corpse->GetGUID());
 }
 
 void UpdateBeadAura(Player* player)
@@ -114,13 +187,6 @@ void UpdateBeadAura(Player* player)
         aura->SetStackAmount(stacks);
 }
 
-struct PendingBeadLoot
-{
-    uint32 BeadCount = 0;
-};
-
-std::unordered_map<ObjectGuid, PendingBeadLoot> s_PendingBeadLoot;
-
 bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
 {
     if (!player || !beadCount)
@@ -143,6 +209,7 @@ bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
     loot.loot_type = LOOT_CORPSE;
     loot.lootOwnerGUID.Clear();
     loot.roundRobinPlayer.Clear();
+    loot.gold = 0;
 
     uint32 remaining = beadCount;
     while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
@@ -160,6 +227,8 @@ bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
         ++loot.unlootedCount;
         remaining -= stack;
     }
+
+    RegisterCorpse(corpse);
 
     return true;
 }
@@ -180,6 +249,8 @@ bool TryApplyPendingBeads(Player* player)
     return true;
 }
 }
+
+using namespace DireMaulBeads;
 
 class diremaul_beads_player : public PlayerScript
 {
@@ -298,6 +369,7 @@ public:
     {
         uint32 const previousAuraId = GetOgreBeadAuraId();
         uint32 const previousItemId = GetOgreBeadItemId();
+        auto const previousAreas = s_DireMaulAreaIds;
 
         LoadDireMaulBeadConfig();
 
@@ -305,7 +377,15 @@ public:
         uint32 const itemId = GetOgreBeadItemId();
 
         if (!itemId || itemId != previousItemId)
+        {
             s_PendingBeadLoot.clear();
+            s_ActiveBeadCorpses.clear();
+        }
+        else if (s_DireMaulAreaIds != previousAreas)
+            s_ActiveBeadCorpses.clear();
+
+        if (!auraId || !itemId)
+            s_ActiveBeadCorpses.clear();
 
         std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
         HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
@@ -327,7 +407,7 @@ public:
 
 void AddSC_custom_diremaul_beads()
 {
-    LoadDireMaulBeadConfig();
+    DireMaulBeads::LoadDireMaulBeadConfig();
     new diremaul_beads_player();
     new diremaul_beads_corpse();
     new diremaul_beads_world();

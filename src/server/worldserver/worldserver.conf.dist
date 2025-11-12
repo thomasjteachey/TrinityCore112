@@ -3169,9 +3169,15 @@ CharDelete.KeepDays = 30
 #        Description: Spell entry used for the visible bead-tracking aura.
 #                     Set to 0 to disable the aura display.
 #        Default:     90002
+#
+#    DireMaulBeads.AreaIds
+#        Description: Comma-separated list of area or zone IDs that should count as the outdoor Dire Maul ruins.
+#                     Players must be on map 1 (Kalimdor) and inside one of these IDs for beads to transfer/track.
+#        Default:     495,496,498,2557,3217
 
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
+DireMaulBeads.AreaIds = 495,496,498,2557,3217
 
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)
