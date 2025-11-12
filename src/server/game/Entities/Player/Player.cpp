@@ -8722,9 +8722,7 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             return;
         }
 
-        bool const direMaulLoot = DireMaulBeads::IsLootableCorpse(bones);
-
-        if (!direMaulLoot && bones->GetType() != CORPSE_BONES)
+        if (bones->GetType() != CORPSE_BONES)
         {
             SendLootRelease(guid);
             return;
