@@ -21,12 +21,16 @@
 // void Add${NameOfDirectory}Scripts()
 #include "BGReplay.cpp"
 
+void LoadHiddenSets();
+void AddSC_custom_hidden_sets();
 void AddSC_custom_zone_group_rules();
 void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
 
 void AddCustomScripts()
 {
+    LoadHiddenSets();
+    AddSC_custom_hidden_sets();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_mod_pvp_titles();
