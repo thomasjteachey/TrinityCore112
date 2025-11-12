@@ -3160,6 +3160,19 @@ CharDelete.KeepDays = 30
 ###################################################################################################
 # CUSTOM SERVER OPTIONS
 #
+#    DireMaulBeads.ItemId
+#        Description: Item entry that represents the Dire Maul ogre beads.
+#                     Set to 0 to disable bead tracking/loot distribution.
+#        Default:     21982
+#
+#    DireMaulBeads.AuraId
+#        Description: Spell entry used for the visible bead-tracking aura.
+#                     Set to 0 to disable the aura display.
+#        Default:     90002
+
+DireMaulBeads.ItemId = 21982
+DireMaulBeads.AuraId = 90002
+
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)
 #        Default:     0 - (Do not allow)
