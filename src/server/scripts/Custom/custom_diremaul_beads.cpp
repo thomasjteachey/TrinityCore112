@@ -17,9 +17,12 @@
 
 #include "ScriptMgr.h"
 #include "Configuration/Config.h"
-#include "Corpse.h"
+#include "Creature.h"
+#include "Duration.h"
+#include "GameObject.h"
 #include "Loot.h"
 #include "ObjectAccessor.h"
+#include "Map.h"
 #include "Player.h"
 #include "QuestDef.h"
 #include "SharedDefines.h"
@@ -30,7 +33,6 @@
 #include <charconv>
 #include <string>
 #include <shared_mutex>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -39,18 +41,14 @@ namespace DireMaulBeads
 static constexpr uint32 DefaultOgreBeadItemId = 21982;
 static constexpr uint32 DefaultOgreBeadAuraId = 90002;
 static constexpr char const* DefaultAreaIdList = "495,496,498,2557,3217";
+static constexpr uint32 DefaultChestGameObjectId = 0;
+static constexpr uint32 DefaultChestDespawnSeconds = 300;
 
 uint32 s_OgreBeadItemId = DefaultOgreBeadItemId;
 uint32 s_OgreBeadAuraId = DefaultOgreBeadAuraId;
 std::unordered_set<uint32> s_DireMaulAreaIds;
-
-struct PendingBeadLoot
-{
-    uint32 BeadCount = 0;
-};
-
-std::unordered_map<ObjectGuid, PendingBeadLoot> s_PendingBeadLoot;
-std::unordered_set<ObjectGuid> s_ActiveBeadCorpses;
+uint32 s_BeadChestGameObjectId = DefaultChestGameObjectId;
+uint32 s_BeadChestDespawnSeconds = DefaultChestDespawnSeconds;
 
 namespace
 {
@@ -79,9 +77,13 @@ void LoadDireMaulBeadConfig()
     int32 const configuredItemId = sConfigMgr->GetIntDefault("DireMaulBeads.ItemId", static_cast<int32>(DefaultOgreBeadItemId));
     int32 const configuredAuraId = sConfigMgr->GetIntDefault("DireMaulBeads.AuraId", static_cast<int32>(DefaultOgreBeadAuraId));
     std::string const configuredAreaList = sConfigMgr->GetStringDefault("DireMaulBeads.AreaIds", DefaultAreaIdList);
+    int32 const configuredChestId = sConfigMgr->GetIntDefault("DireMaulBeads.ChestGameObjectId", static_cast<int32>(DefaultChestGameObjectId));
+    int32 const configuredChestDespawn = sConfigMgr->GetIntDefault("DireMaulBeads.ChestDespawnSeconds", static_cast<int32>(DefaultChestDespawnSeconds));
 
     s_OgreBeadItemId = configuredItemId > 0 ? static_cast<uint32>(configuredItemId) : 0u;
     s_OgreBeadAuraId = configuredAuraId > 0 ? static_cast<uint32>(configuredAuraId) : 0u;
+    s_BeadChestGameObjectId = configuredChestId > 0 ? static_cast<uint32>(configuredChestId) : 0u;
+    s_BeadChestDespawnSeconds = configuredChestDespawn >= 0 ? static_cast<uint32>(configuredChestDespawn) : DefaultChestDespawnSeconds;
 
     s_DireMaulAreaIds.clear();
     for (std::string_view token : Trinity::Tokenize(configuredAreaList, ',', false))
@@ -121,35 +123,6 @@ bool IsInOutdoorDireMaul(Player* player)
     return false;
 }
 
-void RegisterCorpse(Corpse* corpse)
-{
-    if (!corpse)
-        return;
-
-    s_ActiveBeadCorpses.insert(corpse->GetGUID());
-}
-
-void UnregisterCorpse(ObjectGuid const& guid)
-{
-    s_ActiveBeadCorpses.erase(guid);
-}
-
-bool IsLootableCorpse(Corpse const* corpse)
-{
-    if (!corpse)
-        return false;
-
-    return s_ActiveBeadCorpses.contains(corpse->GetGUID());
-}
-
-void OnCorpseLooted(Corpse const* corpse)
-{
-    if (!corpse)
-        return;
-
-    UnregisterCorpse(corpse->GetGUID());
-}
-
 void UpdateBeadAura(Player* player)
 {
     if (!player)
@@ -187,29 +160,36 @@ void UpdateBeadAura(Player* player)
         aura->SetStackAmount(stacks);
 }
 
-bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
+uint32 GetBeadChestGameObjectId()
+{
+    return s_BeadChestGameObjectId;
+}
+
+Seconds GetChestDespawnDuration()
+{
+    return Seconds(s_BeadChestDespawnSeconds);
+}
+
+GameObject* SpawnBeadChest(Player* player, uint32 beadCount)
 {
     if (!player || !beadCount)
-        return false;
+        return nullptr;
 
     uint32 const beadItemId = GetOgreBeadItemId();
-    if (!beadItemId)
-        return false;
+    uint32 const chestEntry = GetBeadChestGameObjectId();
+    if (!beadItemId || !chestEntry)
+        return nullptr;
 
-    Corpse* corpse = player->GetCorpse();
-    if (!corpse)
-        return false;
+    GameObject* chest = player->SummonGameObject(chestEntry, player->GetPosition(), QuaternionData(), GetChestDespawnDuration());
+    if (!chest)
+        return nullptr;
 
-    corpse->SetUInt32Value(CORPSE_FIELD_FLAGS, corpse->GetUInt32Value(CORPSE_FIELD_FLAGS) | CORPSE_FLAG_LOOTABLE);
-    corpse->SetUInt32Value(CORPSE_FIELD_DYNAMIC_FLAGS, corpse->GetUInt32Value(CORPSE_FIELD_DYNAMIC_FLAGS) | CORPSE_DYNFLAG_LOOTABLE);
-    corpse->lootRecipient = nullptr;
+    player->RemoveGameObject(chest, false);
+    chest->SetOwnerGUID(ObjectGuid::Empty);
 
-    Loot& loot = corpse->loot;
+    Loot& loot = chest->loot;
     loot.clear();
     loot.loot_type = LOOT_CORPSE;
-    loot.lootOwnerGUID.Clear();
-    loot.roundRobinPlayer.Clear();
-    loot.gold = 0;
 
     uint32 remaining = beadCount;
     while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
@@ -218,8 +198,8 @@ bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
 
         LootItem lootItem;
         lootItem.itemid = beadItemId;
-        lootItem.count = stack;
         lootItem.itemIndex = static_cast<uint32>(loot.items.size());
+        lootItem.count = stack;
         lootItem.freeforall = true;
         lootItem.follow_loot_rules = false;
 
@@ -228,25 +208,43 @@ bool ApplyPendingBeadsToCorpse(Player* player, uint32 beadCount)
         remaining -= stack;
     }
 
-    RegisterCorpse(corpse);
-
-    return true;
+    chest->SetLootState(GO_READY);
+    return chest;
 }
 
-bool TryApplyPendingBeads(Player* player)
+void DropBeadChest(Player* victim)
+{
+    if (!victim)
+        return;
+
+    if (!IsInOutdoorDireMaul(victim))
+        return;
+
+    uint32 const beadItemId = GetOgreBeadItemId();
+    uint32 const chestEntry = GetBeadChestGameObjectId();
+    if (!beadItemId || !chestEntry)
+        return;
+
+    uint32 const beadCount = victim->GetItemCount(beadItemId, false);
+    if (!beadCount)
+        return;
+
+    if (!SpawnBeadChest(victim, beadCount))
+        return;
+
+    victim->DestroyItemCount(beadItemId, beadCount, true);
+    UpdateBeadAura(victim);
+}
+
+void OnItemLooted(Player* player, uint32 itemId)
 {
     if (!player)
-        return false;
+        return;
 
-    auto const pending = s_PendingBeadLoot.find(player->GetGUID());
-    if (pending == s_PendingBeadLoot.end())
-        return false;
+    if (!GetOgreBeadItemId() || itemId != GetOgreBeadItemId())
+        return;
 
-    if (!ApplyPendingBeadsToCorpse(player, pending->second.BeadCount))
-        return false;
-
-    s_PendingBeadLoot.erase(pending);
-    return true;
+    UpdateBeadAura(player);
 }
 }
 
@@ -290,24 +288,13 @@ public:
         if (killer == victim)
             return;
 
-        uint32 const beadItemId = GetOgreBeadItemId();
-        if (!beadItemId)
-            return;
-
-        if (!IsInOutdoorDireMaul(victim))
-            return;
-
-        uint32 const beadCount = victim->GetItemCount(beadItemId, false);
-        if (!beadCount)
-            return;
-
-        victim->DestroyItemCount(beadItemId, beadCount, true);
-        s_PendingBeadLoot[victim->GetGUID()] = { beadCount };
-
-        TryApplyPendingBeads(victim);
-
-        UpdateBeadAura(victim);
+        DropBeadChest(victim);
         UpdateBeadAura(killer);
+    }
+
+    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* victim) override
+    {
+        DropBeadChest(victim);
     }
 
     void OnLogout(Player* player) override
@@ -315,25 +302,12 @@ public:
         if (!player)
             return;
 
-        if (!TryApplyPendingBeads(player))
-            s_PendingBeadLoot.erase(player->GetGUID());
-
         if (uint32 const auraId = GetOgreBeadAuraId())
             player->RemoveAura(auraId);
     }
-};
-
-class diremaul_beads_corpse : public PlayerScript
-{
-public:
-    diremaul_beads_corpse() : PlayerScript("diremaul_beads_corpse") { }
 
     void OnPlayerRepop(Player* player) override
     {
-        if (!player)
-            return;
-
-        TryApplyPendingBeads(player);
         UpdateBeadAura(player);
     }
 };
@@ -343,49 +317,14 @@ class diremaul_beads_world : public WorldScript
 public:
     diremaul_beads_world() : WorldScript("diremaul_beads_world") { }
 
-    void OnUpdate(uint32 /*diff*/) override
-    {
-        if (s_PendingBeadLoot.empty())
-            return;
-
-        std::vector<ObjectGuid> toRemove;
-        toRemove.reserve(s_PendingBeadLoot.size());
-
-        for (auto const& entry : s_PendingBeadLoot)
-        {
-            Player* player = ObjectAccessor::FindPlayer(entry.first);
-            if (!player)
-                continue;
-
-            if (ApplyPendingBeadsToCorpse(player, entry.second.BeadCount))
-                toRemove.push_back(entry.first);
-        }
-
-        for (ObjectGuid const& guid : toRemove)
-            s_PendingBeadLoot.erase(guid);
-    }
-
     void OnConfigLoad(bool /*reload*/) override
     {
         uint32 const previousAuraId = GetOgreBeadAuraId();
-        uint32 const previousItemId = GetOgreBeadItemId();
-        auto const previousAreas = s_DireMaulAreaIds;
-
         LoadDireMaulBeadConfig();
 
         uint32 const auraId = GetOgreBeadAuraId();
         uint32 const itemId = GetOgreBeadItemId();
-
-        if (!itemId || itemId != previousItemId)
-        {
-            s_PendingBeadLoot.clear();
-            s_ActiveBeadCorpses.clear();
-        }
-        else if (s_DireMaulAreaIds != previousAreas)
-            s_ActiveBeadCorpses.clear();
-
-        if (!auraId || !itemId)
-            s_ActiveBeadCorpses.clear();
+        uint32 const chestId = GetBeadChestGameObjectId();
 
         std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
         HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
@@ -396,10 +335,10 @@ public:
                 if (previousAuraId && previousAuraId != auraId)
                     player->RemoveAura(previousAuraId);
 
-                if (!auraId || !itemId)
-                    continue;
-
-                UpdateBeadAura(player);
+                if (auraId && itemId && chestId)
+                    UpdateBeadAura(player);
+                else if (auraId && (!itemId || !chestId))
+                    player->RemoveAura(auraId);
             }
         }
     }
@@ -409,6 +348,5 @@ void AddSC_custom_diremaul_beads()
 {
     DireMaulBeads::LoadDireMaulBeadConfig();
     new diremaul_beads_player();
-    new diremaul_beads_corpse();
     new diremaul_beads_world();
 }

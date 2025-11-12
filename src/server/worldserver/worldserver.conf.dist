@@ -3174,10 +3174,22 @@ CharDelete.KeepDays = 30
 #        Description: Comma-separated list of area or zone IDs that should count as the outdoor Dire Maul ruins.
 #                     Players must be on map 1 (Kalimdor) and inside one of these IDs for beads to transfer/track.
 #        Default:     495,496,498,2557,3217
+#
+#    DireMaulBeads.ChestGameObjectId
+#        Description: GameObject entry used for the temporary chest that drops the collected beads.
+#                     Set to 0 to disable bead drops (players keep their beads on death).
+#        Default:     0
+#
+#    DireMaulBeads.ChestDespawnSeconds
+#        Description: Lifetime, in seconds, for the spawned bead chest before it despawns automatically.
+#                     A value of 0 means the chest persists until removed by core logic (e.g. manual cleanup).
+#        Default:     300
 
 DireMaulBeads.ItemId = 21982
 DireMaulBeads.AuraId = 90002
 DireMaulBeads.AreaIds = 495,496,498,2557,3217
+DireMaulBeads.ChestGameObjectId = 0
+DireMaulBeads.ChestDespawnSeconds = 300
 
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)

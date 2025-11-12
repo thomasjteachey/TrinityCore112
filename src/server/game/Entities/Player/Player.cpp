@@ -113,8 +113,7 @@
 
 namespace DireMaulBeads
 {
-    bool IsLootableCorpse(Corpse const* corpse);
-    void OnCorpseLooted(Corpse const* corpse);
+    void OnItemLooted(Player* player, uint32 itemId);
 }
 
 namespace
@@ -25246,6 +25245,7 @@ void Player::StoreLootItem(uint8 lootSlot, Loot* loot)
         --loot->unlootedCount;
 
         SendNewItem(newitem, uint32(item->count), false, false, true);
+        DireMaulBeads::OnItemLooted(this, item->itemid);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM, item->itemid, item->count);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_TYPE, loot->loot_type, item->count);
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LOOT_EPIC_ITEM, item->itemid, item->count);
