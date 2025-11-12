@@ -31,11 +31,6 @@
 #include "Player.h"
 #include "WorldPacket.h"
 
-namespace DireMaulBeads
-{
-    void OnCorpseLooted(Corpse const* corpse);
-}
-
 void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
 {
     TC_LOG_DEBUG("network", "WORLD: CMSG_AUTOSTORE_LOOT_ITEM");
@@ -117,54 +112,54 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
 
     switch (guid.GetHigh())
     {
-        case HighGuid::GameObject:
+    case HighGuid::GameObject:
+    {
+        GameObject* go = GetPlayer()->GetMap()->GetGameObject(guid);
+
+        // do not check distance for GO if player is the owner of it (ex. fishing bobber)
+        if (go && ((go->GetOwnerGUID() == player->GetGUID() || go->IsWithinDistInMap(player))))
+            loot = &go->loot;
+
+        break;
+    }
+    case HighGuid::Corpse:                               // remove insignia ONLY in BG
+    {
+        Corpse* bones = ObjectAccessor::GetCorpse(*player, guid);
+
+        if (bones && bones->IsWithinDistInMap(player, INTERACTION_DISTANCE))
         {
-            GameObject* go = GetPlayer()->GetMap()->GetGameObject(guid);
-
-            // do not check distance for GO if player is the owner of it (ex. fishing bobber)
-            if (go && ((go->GetOwnerGUID() == player->GetGUID() || go->IsWithinDistInMap(player))))
-                loot = &go->loot;
-
-            break;
+            loot = &bones->loot;
+            shareMoney = false;
         }
-        case HighGuid::Corpse:                               // remove insignia ONLY in BG
-        {
-            Corpse* bones = ObjectAccessor::GetCorpse(*player, guid);
 
-            if (bones && bones->IsWithinDistInMap(player, INTERACTION_DISTANCE))
-            {
-                loot = &bones->loot;
+        break;
+    }
+    case HighGuid::Item:
+    {
+        if (Item* item = player->GetItemByGuid(guid))
+        {
+            loot = &item->loot;
+            shareMoney = false;
+        }
+        break;
+    }
+    case HighGuid::Unit:
+    case HighGuid::Vehicle:
+    {
+        Creature* creature = player->GetMap()->GetCreature(guid);
+        bool lootAllowed = creature && creature->IsAlive() == (player->GetClass() == CLASS_ROGUE && creature->loot.loot_type == LOOT_PICKPOCKETING);
+        if (lootAllowed && creature->IsWithinDistInMap(player, INTERACTION_DISTANCE))
+        {
+            loot = &creature->loot;
+            if (creature->IsAlive())
                 shareMoney = false;
-            }
-
-            break;
         }
-        case HighGuid::Item:
-        {
-            if (Item* item = player->GetItemByGuid(guid))
-            {
-                loot = &item->loot;
-                shareMoney = false;
-            }
-            break;
-        }
-        case HighGuid::Unit:
-        case HighGuid::Vehicle:
-        {
-            Creature* creature = player->GetMap()->GetCreature(guid);
-            bool lootAllowed = creature && creature->IsAlive() == (player->GetClass() == CLASS_ROGUE && creature->loot.loot_type == LOOT_PICKPOCKETING);
-            if (lootAllowed && creature->IsWithinDistInMap(player, INTERACTION_DISTANCE))
-            {
-                loot = &creature->loot;
-                if (creature->IsAlive())
-                    shareMoney = false;
-            }
-            else
-                player->SendLootError(guid, lootAllowed ? LOOT_ERROR_TOO_FAR : LOOT_ERROR_DIDNT_KILL);
-            break;
-        }
-        default:
-            return;                                         // unlootable type
+        else
+            player->SendLootError(guid, lootAllowed ? LOOT_ERROR_TOO_FAR : LOOT_ERROR_DIDNT_KILL);
+        break;
+    }
+    default:
+        return;                                         // unlootable type
     }
 
     if (loot)
@@ -257,8 +252,8 @@ void WorldSession::HandleLootReleaseOpcode(WorldPacket& recvData)
 
 void WorldSession::DoLootRelease(ObjectGuid lguid)
 {
-    Player  *player = GetPlayer();
-    Loot    *loot;
+    Player* player = GetPlayer();
+    Loot* loot;
 
     player->SetLootGUID(ObjectGuid::Empty);
     player->SendLootRelease(lguid);
@@ -308,7 +303,7 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
                 loot->roundRobinPlayer.Clear();
         }
     }
-    else if (lguid.IsCorpse())        // ONLY remove insignia at BG or Dire Maul beads
+    else if (lguid.IsCorpse())        // ONLY remove insignia at BG
     {
         Corpse* corpse = ObjectAccessor::GetCorpse(*player, lguid);
         if (!corpse || !corpse->IsWithinDistInMap(_player, INTERACTION_DISTANCE))
@@ -320,7 +315,6 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
         {
             loot->clear();
             corpse->RemoveFlag(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_DYNFLAG_LOOTABLE);
-            DireMaulBeads::OnCorpseLooted(corpse);
         }
     }
     else if (lguid.IsItem())
