@@ -95,6 +95,7 @@ enum WorldBoolConfigs : uint32
     CONFIG_STATS_SAVE_ONLY_ON_LOGOUT,
     CONFIG_ALLOW_TWO_SIDE_INTERACTION_CALENDAR,
     CONFIG_ALLOW_TWO_SIDE_INTERACTION_CHANNEL,
+    CONFIG_CHANNEL_AUTOJOIN_WORLD,
     CONFIG_ALLOW_TWO_SIDE_INTERACTION_GROUP,
     CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD,
     CONFIG_ALLOW_TWO_SIDE_INTERACTION_AUCTION,
@@ -647,6 +648,9 @@ class TC_GAME_API World
         /// Get the string for new characters (first login)
         std::string const& GetNewCharString() const { return m_newCharString; }
 
+        void SetWorldChatChannelName(std::string const& name) { m_worldChatChannelName = name; }
+        std::string const& GetWorldChatChannelName() const { return m_worldChatChannelName; }
+
         LocaleConstant GetDefaultDbcLocale() const { return m_defaultDbcLocale; }
 
         /// Get the path where data (dbc, maps) are stored on disk
@@ -833,6 +837,7 @@ class TC_GAME_API World
         uint32 m_MaxPlayerCount;
 
         std::string m_newCharString;
+        std::string m_worldChatChannelName;
 
         float rate_values[MAX_RATES];
         uint32 m_int_configs[INT_CONFIG_VALUE_COUNT];
