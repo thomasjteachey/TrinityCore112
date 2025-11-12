@@ -284,18 +284,18 @@ public:
 
     void OnPVPKill(Player* killer, Player* victim) override
     {
-        if (!killer || !victim)
+        if (!victim)
             return;
 
-        if (killer == victim)
-            return;
+        DropBeadChest(victim);
 
-        UpdateBeadAura(killer);
+        if (killer && killer != victim)
+            UpdateBeadAura(killer);
     }
 
-    void OnPlayerDeath(Player* player) override
+    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* victim) override
     {
-        DropBeadChest(player);
+        DropBeadChest(victim);
     }
 
     void OnLogout(Player* player) override
