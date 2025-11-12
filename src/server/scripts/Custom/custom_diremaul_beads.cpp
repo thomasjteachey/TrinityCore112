@@ -290,13 +290,12 @@ public:
         if (killer == victim)
             return;
 
-        DropBeadChest(victim);
         UpdateBeadAura(killer);
     }
 
-    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* victim) override
+    void OnPlayerDeath(Player* player) override
     {
-        DropBeadChest(victim);
+        DropBeadChest(player);
     }
 
     void OnLogout(Player* player) override

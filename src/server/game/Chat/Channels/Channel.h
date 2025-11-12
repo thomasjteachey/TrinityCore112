@@ -165,6 +165,8 @@ class TC_GAME_API Channel
         bool IsAnnounce() const { return _announceEnabled; }
         void SetAnnounce(bool announce) { _announceEnabled = announce; }
 
+        bool IsOn(ObjectGuid who) const { return _playersStore.find(who) != _playersStore.end(); }
+
         // will be saved to DB on next channel save interval
         void SetDirty() { _isDirty = true; }
         void UpdateChannelInDB();
@@ -222,7 +224,6 @@ class TC_GAME_API Channel
         template<class Builder>
         void SendToOne(Builder& builder, ObjectGuid who) const;
 
-        bool IsOn(ObjectGuid who) const { return _playersStore.find(who) != _playersStore.end(); }
         bool IsBanned(ObjectGuid guid) const { return _bannedStore.find(guid) != _bannedStore.end(); }
 
         uint8 GetPlayerFlags(ObjectGuid guid) const
