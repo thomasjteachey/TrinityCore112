@@ -278,6 +278,17 @@ namespace DireMaulBeads
         UpdateBeadAura(victim);
     }
 
+    void OnItemStored(Player* player, uint32 itemId, uint32 count)
+    {
+        if (!player || !count)
+            return;
+
+        if (!GetOgreBeadItemId() || itemId != GetOgreBeadItemId())
+            return;
+
+        UpdateBeadAura(player);
+    }
+
     void OnItemLooted(Player* player, uint32 itemId)
     {
         if (!player)
