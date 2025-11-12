@@ -18,6 +18,8 @@
 #include "WorldSession.h"
 #include "ArenaTeamMgr.h"
 #include "CalendarMgr.h"
+#include "Channel.h"
+#include "ChannelMgr.h"
 #include "CharacterCache.h"
 #include "CharacterPackets.h"
 #include "Chat.h"
@@ -1025,6 +1027,41 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
                     break;
             }
             repMgr.SendState(nullptr);
+        }
+
+        if (sWorld->getBoolConfig(CONFIG_CHANNEL_AUTOJOIN_WORLD))
+        {
+            std::string const& worldChannelName = sWorld->GetWorldChatChannelName();
+            if (!worldChannelName.empty())
+            {
+                if (ChannelMgr* channelMgr = ChannelMgr::forTeam(pCurrChar->GetTeam()))
+                {
+                    Channel* worldChannel = channelMgr->GetCustomChannel(worldChannelName);
+                    if (!worldChannel)
+                    {
+                        worldChannel = channelMgr->CreateCustomChannel(worldChannelName);
+                        if (!worldChannel)
+                        {
+                            TC_LOG_ERROR("chat.system",
+                                "Unable to create configured world chat channel '{}' for player {} ({}).",
+                                worldChannelName, pCurrChar->GetName(), pCurrChar->GetGUID().ToString());
+                        }
+                    }
+
+                    if (worldChannel)
+                    {
+                        worldChannel->SetOwnership(false);
+                        worldChannel->SetOwner(ObjectGuid::Empty);
+                        worldChannel->SetDirty();
+
+                        if (!worldChannel->IsOn(pCurrChar->GetGUID()))
+                            worldChannel->JoinChannel(pCurrChar);
+                    }
+                }
+                else
+                    TC_LOG_ERROR("chat.system",
+                        "Unable to resolve channel manager for world chat auto-join (team: {}).", pCurrChar->GetTeam());
+            }
         }
     }
 
