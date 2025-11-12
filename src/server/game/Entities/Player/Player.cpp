@@ -5163,6 +5163,8 @@ void Player::CleanupChannels()
 
 void Player::UpdateLocalChannels(uint32 newZone)
 {
+    JoinWorldChannelIfNeeded();
+
     if (GetSession()->PlayerLoading() && !IsBeingTeleportedFar())
         return;                                              // The client handles it automatically after loading, but not after teleporting
 
@@ -5230,6 +5232,44 @@ void Player::UpdateLocalChannels(uint32 newZone)
             cMgr->LeftChannel(removeChannel->GetChannelId(), removeChannel->GetZoneEntry());    // Delete if empty
         }
     }
+}
+
+void Player::JoinWorldChannelIfNeeded()
+{
+    if (!sWorld->getBoolConfig(CONFIG_CHANNEL_AUTOJOIN_WORLD))
+        return;
+
+    std::string const& worldChannelName = sWorld->GetWorldChatChannelName();
+    if (worldChannelName.empty())
+        return;
+
+    ChannelMgr* channelMgr = ChannelMgr::forTeam(GetTeam());
+    if (!channelMgr)
+    {
+        TC_LOG_ERROR("chat.system",
+            "Unable to resolve channel manager for world chat auto-join (team: {}).", GetTeam());
+        return;
+    }
+
+    Channel* worldChannel = channelMgr->GetCustomChannel(worldChannelName);
+    if (!worldChannel)
+    {
+        worldChannel = channelMgr->CreateCustomChannel(worldChannelName);
+        if (!worldChannel)
+        {
+            TC_LOG_ERROR("chat.system",
+                "Unable to create configured world chat channel '{}' for player {} ({}).",
+                worldChannelName, GetName(), GetGUID().ToString());
+            return;
+        }
+    }
+
+    worldChannel->SetOwnership(false);
+    worldChannel->SetOwner(ObjectGuid::Empty);
+    worldChannel->SetDirty();
+
+    if (!worldChannel->IsOn(GetGUID()))
+        worldChannel->JoinChannel(this);
 }
 
 void Player::LeaveLFGChannel()
