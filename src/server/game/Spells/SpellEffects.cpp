@@ -2692,27 +2692,62 @@ void Spell::EffectDistract()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 
+    constexpr uint32 DistractDisableStopAura = 82669;
+    ObjectGuid casterGuid;
+    bool hasDistractOverride = false;
+    if (WorldObject* casterObject = GetCaster())
+    {
+        if (Unit* caster = casterObject->ToUnit())
+        {
+            hasDistractOverride = caster->HasAura(DistractDisableStopAura);
+            if (hasDistractOverride)
+                casterGuid = caster->GetGUID();
+        }
+        else
+        {
+            TC_LOG_ERROR("spells", "Spell::EffectDistract: caster '{}' is not a Unit, cannot check aura {} for run override.",
+                casterObject->GetGUID().ToString(), DistractDisableStopAura);
+        }
+    }
+
+    auto LogOverrideFailure = [&](char const* reason)
+    {
+        if (hasDistractOverride)
+        {
+            std::string targetGuid = unitTarget ? unitTarget->GetGUID().ToString() : std::string("<none>");
+            std::string casterString = casterGuid.IsEmpty() ? std::string("<unknown>") : casterGuid.ToString();
+            TC_LOG_ERROR("spells", "Spell::EffectDistract: caster '{}' with aura {} could not keep '{}' running: {}.",
+                casterString, DistractDisableStopAura, targetGuid, reason);
+        }
+    };
+
     // Check for possible target
     if (!unitTarget || unitTarget->IsEngaged())
+    {
+        LogOverrideFailure(unitTarget ? "target is already engaged" : "target is null");
         return;
+    }
 
     // target must be OK to do this
     if (unitTarget->HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED | UNIT_STATE_FLEEING | UNIT_STATE_TAUNTED))
+    {
+        LogOverrideFailure("target is crowd controlled");
         return;
+    }
 
     float orientation = unitTarget->GetAbsoluteAngle(destTarget);
-    if (WorldObject* casterObject = GetCaster())
-        if (Unit* caster = casterObject->ToUnit())
+    if (hasDistractOverride)
+    {
+        if (unitTarget->GetTypeId() == TYPEID_PLAYER)
         {
-            constexpr uint32 DistractDisableStopAura = 82669;
-            if (caster->HasAura(DistractDisableStopAura) && unitTarget->GetTypeId() == TYPEID_PLAYER)
-            {
-                unitTarget->SetFacingTo(orientation);
-                TC_LOG_DEBUG("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
-                    caster->GetGUID().ToString(), unitTarget->GetGUID().ToString(), DistractDisableStopAura);
-                return;
-            }
+            unitTarget->SetFacingTo(orientation);
+            TC_LOG_DEBUG("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
+                casterGuid.ToString(), unitTarget->GetGUID().ToString(), DistractDisableStopAura);
+            return;
         }
+
+        LogOverrideFailure("target is not a player");
+    }
 
     unitTarget->GetMotionMaster()->MoveDistract(damage * IN_MILLISECONDS, orientation);
 }
