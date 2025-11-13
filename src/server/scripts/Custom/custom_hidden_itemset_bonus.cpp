@@ -24,6 +24,7 @@
 #include "Player.h"
 #include "RBAC.h"
 #include "SpellMgr.h"
+#include "SpellInfo.h"
 
 #include <list>
 #include <map>
