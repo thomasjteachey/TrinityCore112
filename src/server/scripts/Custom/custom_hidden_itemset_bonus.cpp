@@ -28,6 +28,8 @@
 #include <set>
 #include <shared_mutex>
 
+void LoadHiddenItemsetBonuses();
+
 namespace
 {
 struct HiddenItemsetBonus
