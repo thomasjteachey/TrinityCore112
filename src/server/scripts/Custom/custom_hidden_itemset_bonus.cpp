@@ -20,111 +20,258 @@
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
+#include "SpellMgr.h"
+#include "SpellInfo.h"
 
+#include <list>
 #include <map>
+#include <set>
+#include <shared_mutex>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
+void LoadHiddenItemsetBonuses();
+
+namespace
+{
 struct HiddenItemsetBonus
 {
     uint32 itemsetId;
     uint8 requiredCount;
     uint32 spellId;
+    std::vector<uint32> learnedSpells;
+    std::vector<uint32> summonedEntries;
 };
 
-static std::map<uint32, HiddenItemsetBonus> s_HiddenItemsetBonuses;
+using HiddenItemsetBonusMap = std::map<uint32, HiddenItemsetBonus>;
 
-void LoadHiddenItemsetBonuses()
+HiddenItemsetBonusMap s_HiddenItemsetBonuses;
+std::set<uint32> s_AllHiddenItemsetBonusSpells;
+std::unordered_map<uint32, std::vector<uint32>> s_KnownHiddenItemsetBonusLearns;
+std::unordered_map<uint32, uint32> s_KnownHiddenItemsetSpellIds;
+std::unordered_map<uint32, std::vector<uint32>> s_KnownHiddenItemsetBonusSummons;
+using PlayerActiveItemsetMap = std::unordered_map<uint64, std::unordered_set<uint32>>;
+PlayerActiveItemsetMap s_PlayerActiveHiddenItemsets;
+
+struct LearnedSpellRefState
 {
-    s_HiddenItemsetBonuses.clear();
+    uint32 refCount = 0;
+    bool originallyKnown = false;
+};
 
-    QueryResult result = WorldDatabase.Query(
-        "SELECT itemset_id, required_count, spell_to_apply FROM custom_hidden_itemset_bonus"
-    );
-    if (!result)
-    {
-        TC_LOG_INFO("server.custom", "Loaded 0 hidden itemset bonuses.");
-        return;
-    }
+using PlayerLearnedSpellRefMap = std::unordered_map<uint32, LearnedSpellRefState>;
+std::unordered_map<uint64, PlayerLearnedSpellRefMap> s_PlayerLearnedSpellRefs;
+bool IsHiddenBonusActive(Player* player, uint32 itemsetId)
+{
+    if (!player)
+        return false;
 
-    do
-    {
-        Field* f = result->Fetch();
+    auto itr = s_PlayerActiveHiddenItemsets.find(player->GetGUID().GetRawValue());
+    if (itr == s_PlayerActiveHiddenItemsets.end())
+        return false;
 
-        HiddenItemsetBonus b;
-        b.itemsetId     = f[0].GetUInt32();
-        b.requiredCount = f[1].GetUInt8();
-        b.spellId       = f[2].GetUInt32();
-
-        s_HiddenItemsetBonuses[b.itemsetId] = b;
-    }
-    while (result->NextRow());
-
-    TC_LOG_INFO("server.custom", "Loaded {} hidden itemset bonuses.", s_HiddenItemsetBonuses.size());
+    return itr->second.find(itemsetId) != itr->second.end();
 }
 
-class hidden_itemset_bonus_player : public PlayerScript
+void MarkHiddenBonusActive(Player* player, uint32 itemsetId)
 {
-public:
-    hidden_itemset_bonus_player() : PlayerScript("hidden_itemset_bonus_player") { }
+    if (!player)
+        return;
 
-    void OnLogin(Player* player, bool) override
-    {
-        Recalc(player);
-    }
+    s_PlayerActiveHiddenItemsets[player->GetGUID().GetRawValue()].insert(itemsetId);
+}
 
-    void OnEquip(Player* player, Item*, uint8, uint8, bool) override
-    {
-        Recalc(player);
-    }
-
-    void OnUnequip(Player* player, Item*, uint8, uint8, bool) override
-    {
-        Recalc(player);
-    }
-
-private:
-    void Recalc(Player* player);
-};
-
-void hidden_itemset_bonus_player::Recalc(Player* player)
+void MarkHiddenBonusInactive(Player* player, uint32 itemsetId)
 {
-    // 1) Count equipped items per itemset
-    std::map<uint32, uint8> equippedCounts;
+    if (!player)
+        return;
 
-    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    auto itr = s_PlayerActiveHiddenItemsets.find(player->GetGUID().GetRawValue());
+    if (itr == s_PlayerActiveHiddenItemsets.end())
+        return;
+
+    itr->second.erase(itemsetId);
+    if (itr->second.empty())
+        s_PlayerActiveHiddenItemsets.erase(itr);
+}
+void AddLearnedSpellRefs(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.learnedSpells.empty())
+        return;
+
+    uint64 guid = player->GetGUID().GetRawValue();
+    PlayerLearnedSpellRefMap& playerRefs = s_PlayerLearnedSpellRefs[guid];
+
+    for (uint32 learnedSpell : bonus.learnedSpells)
     {
-        Item* it = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        if (!it)
+        LearnedSpellRefState& state = playerRefs[learnedSpell];
+        if (state.refCount == 0)
+            state.originallyKnown = player->HasSpell(learnedSpell);
+
+        state.refCount += 1;
+    }
+}
+
+void EnsureOriginalSpellsRestored(Player* player, uint32 learnedSpell, LearnedSpellRefState const& state)
+{
+    if (!player)
+        return;
+
+    if (state.originallyKnown)
+    {
+        if (!player->HasSpell(learnedSpell))
+            player->LearnSpell(learnedSpell, false);
+    }
+    else
+    {
+        if (player->HasSpell(learnedSpell))
+            player->RemoveSpell(learnedSpell, false, false);
+    }
+}
+
+void RemoveLearnedSpellRefs(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.learnedSpells.empty())
+        return;
+
+    uint64 guid = player->GetGUID().GetRawValue();
+    auto playerItr = s_PlayerLearnedSpellRefs.find(guid);
+    if (playerItr == s_PlayerLearnedSpellRefs.end())
+        return;
+
+    PlayerLearnedSpellRefMap& playerRefs = playerItr->second;
+
+    for (uint32 learnedSpell : bonus.learnedSpells)
+    {
+        auto stateItr = playerRefs.find(learnedSpell);
+        if (stateItr == playerRefs.end())
             continue;
 
-        ItemTemplate const* proto = it->GetTemplate();
-        if (!proto)
+        LearnedSpellRefState& state = stateItr->second;
+        if (state.refCount == 0)
+        {
+            playerRefs.erase(stateItr);
             continue;
+        }
 
-        uint32 itemsetId = proto->ItemSet;
-        if (!itemsetId)
-            continue;
-
-        equippedCounts[itemsetId] += 1;
+        state.refCount -= 1;
+        if (state.refCount == 0)
+        {
+            EnsureOriginalSpellsRestored(player, learnedSpell, state);
+            playerRefs.erase(stateItr);
+        }
     }
 
-    // 2) For each configured hidden bonus, decide what to do
+    if (playerRefs.empty())
+        s_PlayerLearnedSpellRefs.erase(playerItr);
+}
+
+void RemoveLearnedSpellRefs(Player* player, uint32 spellId)
+{
+    auto learnsItr = s_KnownHiddenItemsetBonusLearns.find(spellId);
+    if (learnsItr == s_KnownHiddenItemsetBonusLearns.end() || learnsItr->second.empty())
+        return;
+
+    HiddenItemsetBonus dummy;
+    dummy.spellId = spellId;
+    dummy.learnedSpells = learnsItr->second;
+    RemoveLearnedSpellRefs(player, dummy);
+}
+
+void UnsummonHiddenBonusCreatures(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.summonedEntries.empty())
+        return;
+
+    for (uint32 entry : bonus.summonedEntries)
+        player->RemoveAllMinionsByEntry(entry);
+}
+
+void UnsummonHiddenBonusCreatures(Player* player, uint32 spellId)
+{
+    auto summonsItr = s_KnownHiddenItemsetBonusSummons.find(spellId);
+    if (summonsItr == s_KnownHiddenItemsetBonusSummons.end() || summonsItr->second.empty())
+        return;
+
+    HiddenItemsetBonus dummy;
+    dummy.spellId = spellId;
+    dummy.summonedEntries = summonsItr->second;
+    UnsummonHiddenBonusCreatures(player, dummy);
+}
+
+void EnsureHiddenBonusLearns(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.learnedSpells.empty())
+        return;
+
+    for (uint32 learnedSpell : bonus.learnedSpells)
+    {
+        if (!player->HasSpell(learnedSpell))
+            player->LearnSpell(learnedSpell, false);
+    }
+}
+
+void EnsureHiddenBonusSummons(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.summonedEntries.empty())
+        return;
+
+    bool needsSummon = false;
+
+    for (uint32 entry : bonus.summonedEntries)
+    {
+        std::list<Creature*> minions;
+        player->GetAllMinionsByEntry(minions, entry);
+        if (minions.empty())
+        {
+            needsSummon = true;
+            break;
+        }
+    }
+
+    if (!needsSummon)
+        return;
+
+    UnsummonHiddenBonusCreatures(player, bonus);
+    player->CastSpell(player, bonus.spellId, true);
+}
+
+void RecalcHiddenItemsetBonuses(Player* player)
+{
+    if (!player)
+        return;
+
+    std::set<uint32> validSpells;
+
     for (auto const& kv : s_HiddenItemsetBonuses)
     {
         uint32 itemsetId = kv.first;
         HiddenItemsetBonus const& bonus = kv.second;
 
-        uint8 have = 0;
-        auto it = equippedCounts.find(itemsetId);
-        if (it != equippedCounts.end())
-            have = it->second;
+        validSpells.insert(bonus.spellId);
+
+        uint8 have = player->GetEquippedItemSetCount(itemsetId);
 
         bool hasAura = player->HasAura(bonus.spellId);
 
-        if (have >= bonus.requiredCount)
+        bool shouldBeActive = have >= bonus.requiredCount;
+        bool isActive = IsHiddenBonusActive(player, itemsetId);
+
+        if (shouldBeActive)
         {
+            if (!isActive)
+            {
+                MarkHiddenBonusActive(player, itemsetId);
+                AddLearnedSpellRefs(player, bonus);
+            }
+
+            EnsureHiddenBonusLearns(player, bonus);
+            EnsureHiddenBonusSummons(player, bonus);
+
             if (!hasAura)
             {
                 player->AddAura(bonus.spellId, player);
@@ -142,35 +289,186 @@ void hidden_itemset_bonus_player::Recalc(Player* player)
                     "hidden_itemset: player {} lost hidden bonus for itemset {} (spell {}).",
                     player->GetGUID().ToString(), itemsetId, bonus.spellId);
             }
+
+            UnsummonHiddenBonusCreatures(player, bonus);
+
+            if (isActive)
+            {
+                RemoveLearnedSpellRefs(player, bonus);
+                MarkHiddenBonusInactive(player, itemsetId);
+            }
         }
     }
+
+    for (uint32 spellId : s_AllHiddenItemsetBonusSpells)
+    {
+        if (validSpells.find(spellId) != validSpells.end())
+            continue;
+
+        if (player->HasAura(spellId))
+            player->RemoveAura(spellId);
+
+        RemoveLearnedSpellRefs(player, spellId);
+        UnsummonHiddenBonusCreatures(player, spellId);
+    }
+
+    auto activeItr = s_PlayerActiveHiddenItemsets.find(player->GetGUID().GetRawValue());
+    if (activeItr != s_PlayerActiveHiddenItemsets.end())
+    {
+        for (auto it = activeItr->second.begin(); it != activeItr->second.end();)
+        {
+            uint32 activeItemset = *it;
+            if (s_HiddenItemsetBonuses.find(activeItemset) != s_HiddenItemsetBonuses.end())
+            {
+                ++it;
+                continue;
+            }
+
+            auto spellItr = s_KnownHiddenItemsetSpellIds.find(activeItemset);
+            if (spellItr != s_KnownHiddenItemsetSpellIds.end())
+            {
+                uint32 spellId = spellItr->second;
+                if (player->HasAura(spellId))
+                    player->RemoveAura(spellId);
+
+                HiddenItemsetBonus cleanup;
+                cleanup.spellId = spellId;
+                auto learnsItr = s_KnownHiddenItemsetBonusLearns.find(spellId);
+                if (learnsItr != s_KnownHiddenItemsetBonusLearns.end())
+                    cleanup.learnedSpells = learnsItr->second;
+
+                auto summonsItr = s_KnownHiddenItemsetBonusSummons.find(spellId);
+                if (summonsItr != s_KnownHiddenItemsetBonusSummons.end())
+                    cleanup.summonedEntries = summonsItr->second;
+
+                UnsummonHiddenBonusCreatures(player, cleanup);
+                RemoveLearnedSpellRefs(player, cleanup);
+            }
+
+            it = activeItr->second.erase(it);
+        }
+
+        if (activeItr->second.empty())
+            s_PlayerActiveHiddenItemsets.erase(activeItr);
+    }
 }
+
+class hidden_itemset_bonus_player : public PlayerScript
+{
+public:
+    hidden_itemset_bonus_player() : PlayerScript("hidden_itemset_bonus_player") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        RecalcHiddenItemsetBonuses(player);
+    }
+
+    void OnPlayerResurrect(Player* player) override
+    {
+        RecalcHiddenItemsetBonuses(player);
+    }
+};
+
+using namespace Trinity::ChatCommands;
 
 class hidden_itemset_bonus_command : public CommandScript
 {
 public:
     hidden_itemset_bonus_command() : CommandScript("hidden_itemset_bonus_command") { }
 
-    std::vector<ChatCommand> GetCommands() const override
+    ChatCommandTable GetCommands() const override
     {
-        static std::vector<ChatCommand> hiddenItemsetCommandTable =
+        static ChatCommandTable reloadCommandTable =
         {
-            { "reload", rbac::RBAC_PERM_COMMAND_GM, true, &HandleReload, "" },
+            { "reload", HandleReload, rbac::RBAC_PERM_COMMAND_GM, Console::Yes }
         };
-        static std::vector<ChatCommand> commandTable =
+
+        static ChatCommandTable commandTable =
         {
-            { "hiddenitemset", rbac::RBAC_PERM_COMMAND_GM, true, nullptr, "", hiddenItemsetCommandTable },
+            { "hiddenitemset", reloadCommandTable }
         };
+
         return commandTable;
     }
 
-    static bool HandleReload(ChatHandler* handler, char const*)
+    static bool HandleReload(ChatHandler* handler)
     {
         LoadHiddenItemsetBonuses();
+
+        {
+            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+            HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+            for (auto const& playerEntry : players)
+                if (Player* player = playerEntry.second)
+                    RecalcHiddenItemsetBonuses(player);
+        }
+
         handler->SendSysMessage("Hidden itemset bonuses reloaded.");
         return true;
     }
 };
+} // namespace
+
+void LoadHiddenItemsetBonuses()
+{
+    s_HiddenItemsetBonuses.clear();
+
+    QueryResult result = WorldDatabase.Query(
+        "SELECT itemset_id, required_count, spell_to_apply FROM custom_hidden_itemset_bonus"
+    );
+    if (!result)
+    {
+        TC_LOG_INFO("server.custom", "Loaded 0 hidden itemset bonuses.");
+        return;
+    }
+
+    std::set<uint32> currentSpells;
+
+    do
+    {
+        Field* f = result->Fetch();
+
+        HiddenItemsetBonus b;
+        b.itemsetId     = f[0].GetUInt32();
+        b.requiredCount = f[1].GetUInt8();
+        b.spellId       = f[2].GetUInt32();
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(b.spellId);
+        if (!spellInfo)
+        {
+            TC_LOG_ERROR("server.custom", "hidden_itemset: unknown spell {} for itemset {}.", b.spellId, b.itemsetId);
+            continue;
+        }
+
+        for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
+        {
+            if (effectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effectInfo.TriggerSpell)
+                b.learnedSpells.push_back(effectInfo.TriggerSpell);
+
+            if ((effectInfo.IsEffect(SPELL_EFFECT_SUMMON) || effectInfo.IsEffect(SPELL_EFFECT_SUMMON_PET)) && effectInfo.MiscValue > 0)
+                b.summonedEntries.push_back(effectInfo.MiscValue);
+        }
+
+        s_HiddenItemsetBonuses[b.itemsetId] = b;
+        currentSpells.insert(b.spellId);
+        s_KnownHiddenItemsetBonusLearns[b.spellId] = b.learnedSpells;
+        s_KnownHiddenItemsetSpellIds[b.itemsetId] = b.spellId;
+        s_KnownHiddenItemsetBonusSummons[b.spellId] = b.summonedEntries;
+    }
+    while (result->NextRow());
+
+    s_AllHiddenItemsetBonusSpells.insert(currentSpells.begin(), currentSpells.end());
+
+    TC_LOG_INFO("server.custom", "Loaded {} hidden itemset bonuses.", s_HiddenItemsetBonuses.size());
+}
+
+namespace HiddenSets
+{
+void OnEquipmentChanged(Player* player)
+{
+    RecalcHiddenItemsetBonuses(player);
+}
+}
 
 void AddSC_custom_hidden_itemset_bonus()
 {

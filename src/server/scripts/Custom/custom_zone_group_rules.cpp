@@ -22,11 +22,17 @@
 #include "ObjectGuid.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "Chat.h"
+#include "StringFormat.h"
+#include "WorldPacket.h"
 
 #include <unordered_map>
 
 namespace
 {
+    uint32 constexpr ChromieEntry = 27915;
+    char const* const ChromieName = "Chromie";
+
     struct ZoneAreaKey
     {
         uint32 zoneId = 0;
@@ -160,8 +166,50 @@ static void EnforceZoneRuleForPlayer(Player* player)
     if (groupCount < rule.minMembers || groupCount > rule.maxMembers)
     {
         if (!player->IsBeingTeleported())
+        {
             player->TeleportTo(rule.tpMap, rule.tpX, rule.tpY, rule.tpZ, rule.tpO);
+
+            std::string requirementText;
+            if (rule.minMembers == rule.maxMembers)
+            {
+                requirementText = Trinity::StringFormat("This zone only allows groups of {} adventurer{}.",
+                    rule.minMembers, rule.minMembers == 1 ? "" : "s");
+            }
+            else if (rule.minMembers == 0)
+            {
+                requirementText = Trinity::StringFormat("This zone only allows groups of up to {} adventurer{}.",
+                    rule.maxMembers, rule.maxMembers == 1 ? "" : "s");
+            }
+            else if (rule.maxMembers == 0)
+            {
+                requirementText = Trinity::StringFormat("This zone only allows groups of at least {} adventurer{}.",
+                    rule.minMembers, rule.minMembers == 1 ? "" : "s");
+            }
+            else
+            {
+                requirementText = Trinity::StringFormat("This zone only allows groups of {} to {} adventurers.",
+                    rule.minMembers, rule.maxMembers);
+            }
+
+            std::string message = Trinity::StringFormat("Spacetime is fragile! {} I've sent you back to safety.", requirementText);
+
+            WorldPacket data;
+            ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Unit>(ChromieEntry, 1);
+            ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message,
+                0, ChromieName, player->GetName());
+            player->SendDirectMessage(&data);
+        }
     }
+}
+
+static void EnforceZoneRuleForGroup(Group* group)
+{
+    if (!group)
+        return;
+
+    for (GroupReference* reference = group->GetFirstMember(); reference; reference = reference->next())
+        if (Player* member = reference->GetSource())
+            EnforceZoneRuleForPlayer(member);
 }
 
 class zone_group_rules_world : public WorldScript
@@ -201,16 +249,20 @@ class zone_group_rules_group : public GroupScript
 public:
     zone_group_rules_group() : GroupScript("zone_group_rules_group") { }
 
-    void OnAddMember(Group* /*group*/, ObjectGuid guid) override
+    void OnAddMember(Group* group, ObjectGuid guid) override
     {
         if (Player* player = ObjectAccessor::FindPlayer(guid))
             EnforceZoneRuleForPlayer(player);
+
+        EnforceZoneRuleForGroup(group);
     }
 
-    void OnInviteMember(Group* /*group*/, ObjectGuid guid) override
+    void OnInviteMember(Group* group, ObjectGuid guid) override
     {
         if (Player* player = ObjectAccessor::FindPlayer(guid))
             EnforceZoneRuleForPlayer(player);
+
+        EnforceZoneRuleForGroup(group);
     }
 };
 

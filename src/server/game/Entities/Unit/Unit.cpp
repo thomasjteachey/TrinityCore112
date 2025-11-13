@@ -9077,6 +9077,8 @@ bool Unit::IsInDisallowedMountForm() const
     if (GetDisplayId() == GetNativeDisplayId())
         return false;
 
+
+
     CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(GetDisplayId());
     if (!display)
         return true;
@@ -9087,6 +9089,10 @@ bool Unit::IsInDisallowedMountForm() const
 
     CreatureModelDataEntry const* model = sCreatureModelDataStore.LookupEntry(display->ModelID);
     ChrRacesEntry const* race = sChrRacesStore.LookupEntry(displayExtra->DisplayRaceID);
+
+
+    if (display->ModelID == 14406)
+        return false;
 
     if (model && !(model->HasFlag(CREATURE_MODEL_DATA_FLAGS_CAN_MOUNT)))
         if (race && !(race->HasFlag(CHRRACES_FLAGS_CAN_MOUNT)))
