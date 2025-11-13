@@ -3218,6 +3218,14 @@ DireMaulBeads.ChestDespawnSeconds = 300
 AllowTrackBothResources = 0
 
 #
+#    DistractDisableStopAura
+#        Description: Spell ID of an aura on the Distract caster that prevents players from stopping when hit by Distract.
+#                     Set to 0 to keep the default Distract behavior for all casters.
+#        Default:     0
+
+DistractDisableStopAura = 0
+
+#
 #    PlayerStart.AllReputation
 #        Description: Players will start with most of the high level reputations that are needed
 #                     for items, mounts etc.
