@@ -395,7 +395,7 @@ void Spell::EffectSchoolDMG()
                     break;
 
                 // Shield Slam
-                if ((m_spellInfo->SpellFamilyFlags[1] & 0x200) && m_spellInfo->GetCategory() == 1209)
+                if (m_spellInfo->Id == 23925 || m_spellInfo->Id == 23924 || m_spellInfo->Id == 23923 || m_spellInfo->Id == 23922)
                 {
                     uint8 level = unitCaster->GetLevel();
                     uint32 block_value = unitCaster->GetShieldBlockValue(uint32(float(level) * 24.5f), uint32(float(level) * 34.5f));
