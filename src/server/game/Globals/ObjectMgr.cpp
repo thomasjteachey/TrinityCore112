@@ -489,12 +489,14 @@ void ObjectMgr::LoadCreatureTemplates()
         // 59
         "RegenHealth,"
         // 60
-        "mechanic_immune_mask,"
+        "DisableLootTag,"
         // 61
-        "spell_school_immune_mask,"
+        "mechanic_immune_mask,"
         // 62
-        "flags_extra,"
+        "spell_school_immune_mask,"
         // 63
+        "flags_extra,"
+        // 64
         "ScriptName"
         " FROM creature_template ct"
         " LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId");
@@ -611,10 +613,11 @@ void ObjectMgr::LoadCreatureTemplate(Field* fields)
 
     creatureTemplate.movementId            = fields[58].GetUInt32();
     creatureTemplate.RegenHealth           = fields[59].GetBool();
-    creatureTemplate.MechanicImmuneMask    = fields[60].GetUInt32();
-    creatureTemplate.SpellSchoolImmuneMask = fields[61].GetUInt32();
-    creatureTemplate.flags_extra           = fields[62].GetUInt32();
-    creatureTemplate.ScriptID              = GetScriptId(fields[63].GetString());
+    creatureTemplate.DisableLootTag        = fields[60].GetBool();
+    creatureTemplate.MechanicImmuneMask    = fields[61].GetUInt32();
+    creatureTemplate.SpellSchoolImmuneMask = fields[62].GetUInt32();
+    creatureTemplate.flags_extra           = fields[63].GetUInt32();
+    creatureTemplate.ScriptID              = GetScriptId(fields[64].GetString());
 }
 
 void ObjectMgr::LoadCreatureTemplateResistances()
@@ -963,6 +966,14 @@ void ObjectMgr::CheckCreatureTemplate(CreatureTemplate const* cInfo)
                 cInfo->Entry, cInfo->RegenHealth, diff + 1, cInfo->DifficultyEntry[diff], difficultyInfo->RegenHealth);
             TC_LOG_ERROR("sql.sql", "Possible FIX: UPDATE `creature_template` SET `RegenHealth`={} WHERE `entry`={};",
                 cInfo->RegenHealth, cInfo->DifficultyEntry[diff]);
+        }
+
+        if (cInfo->DisableLootTag != difficultyInfo->DisableLootTag)
+        {
+            TC_LOG_ERROR("sql.sql", "Creature (Entry: {}, DisableLootTag: {}) has different `DisableLootTag` in difficulty {} mode (Entry: {}, DisableLootTag: {}).",
+                cInfo->Entry, cInfo->DisableLootTag, diff + 1, cInfo->DifficultyEntry[diff], difficultyInfo->DisableLootTag);
+            TC_LOG_ERROR("sql.sql", "Possible FIX: UPDATE `creature_template` SET `DisableLootTag`={} WHERE `entry`={};",
+                cInfo->DisableLootTag, cInfo->DifficultyEntry[diff]);
         }
 
         differenceMask = cInfo->MechanicImmuneMask & (~difficultyInfo->MechanicImmuneMask);

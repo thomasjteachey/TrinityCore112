@@ -713,6 +713,7 @@ CREATE TABLE `creature_template` (
   `RacialLeader` tinyint unsigned NOT NULL DEFAULT '0',
   `movementId` int unsigned NOT NULL DEFAULT '0',
   `RegenHealth` tinyint unsigned NOT NULL DEFAULT '1',
+  `DisableLootTag` tinyint unsigned NOT NULL DEFAULT '0',
   `mechanic_immune_mask` int unsigned NOT NULL DEFAULT '0',
   `spell_school_immune_mask` int unsigned NOT NULL DEFAULT '0',
   `flags_extra` int unsigned NOT NULL DEFAULT '0',
