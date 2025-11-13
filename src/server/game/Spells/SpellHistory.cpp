@@ -768,6 +768,17 @@ void SpellHistory::SendClearCooldowns(std::vector<int32> const& cooldowns) const
     {
         for (int32 spell : cooldowns)
         {
+            if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(uint32(spell)))
+            {
+                if (spellInfo->GetCategory())
+                {
+                    WorldPacket event(SMSG_COOLDOWN_EVENT, 4 + 8);
+                    event << uint32(spell);
+                    event << uint64(_owner->GetGUID());
+                    playerOwner->SendDirectMessage(&event);
+                }
+            }
+
             WorldPacket data(SMSG_CLEAR_COOLDOWN, 4 + 8);
             data << uint32(spell);
             data << uint64(_owner->GetGUID());
