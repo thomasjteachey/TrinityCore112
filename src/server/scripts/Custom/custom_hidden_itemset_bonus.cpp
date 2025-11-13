@@ -25,6 +25,7 @@
 #include "RBAC.h"
 #include "SpellMgr.h"
 
+#include <list>
 #include <map>
 #include <set>
 #include <shared_mutex>
@@ -42,6 +43,7 @@ struct HiddenItemsetBonus
     uint8 requiredCount;
     uint32 spellId;
     std::vector<uint32> learnedSpells;
+    std::vector<uint32> summonedEntries;
 };
 
 using HiddenItemsetBonusMap = std::map<uint32, HiddenItemsetBonus>;
@@ -50,6 +52,7 @@ HiddenItemsetBonusMap s_HiddenItemsetBonuses;
 std::set<uint32> s_AllHiddenItemsetBonusSpells;
 std::unordered_map<uint32, std::vector<uint32>> s_KnownHiddenItemsetBonusLearns;
 std::unordered_map<uint32, uint32> s_KnownHiddenItemsetSpellIds;
+std::unordered_map<uint32, std::vector<uint32>> s_KnownHiddenItemsetBonusSummons;
 using PlayerActiveItemsetMap = std::unordered_map<uint64, std::unordered_set<uint32>>;
 PlayerActiveItemsetMap s_PlayerActiveHiddenItemsets;
 
@@ -178,6 +181,52 @@ void RemoveLearnedSpellRefs(Player* player, uint32 spellId)
     RemoveLearnedSpellRefs(player, dummy);
 }
 
+void UnsummonHiddenBonusCreatures(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.summonedEntries.empty())
+        return;
+
+    for (uint32 entry : bonus.summonedEntries)
+        player->RemoveAllMinionsByEntry(entry);
+}
+
+void UnsummonHiddenBonusCreatures(Player* player, uint32 spellId)
+{
+    auto summonsItr = s_KnownHiddenItemsetBonusSummons.find(spellId);
+    if (summonsItr == s_KnownHiddenItemsetBonusSummons.end() || summonsItr->second.empty())
+        return;
+
+    HiddenItemsetBonus dummy;
+    dummy.spellId = spellId;
+    dummy.summonedEntries = summonsItr->second;
+    UnsummonHiddenBonusCreatures(player, dummy);
+}
+
+void EnsureHiddenBonusSummons(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.summonedEntries.empty())
+        return;
+
+    bool needsSummon = false;
+
+    for (uint32 entry : bonus.summonedEntries)
+    {
+        std::list<Creature*> minions;
+        player->GetAllMinionsByEntry(minions, entry);
+        if (minions.empty())
+        {
+            needsSummon = true;
+            break;
+        }
+    }
+
+    if (!needsSummon)
+        return;
+
+    UnsummonHiddenBonusCreatures(player, bonus);
+    player->CastSpell(player, bonus.spellId, true);
+}
+
 void RecalcHiddenItemsetBonuses(Player* player)
 {
     if (!player)
@@ -207,6 +256,8 @@ void RecalcHiddenItemsetBonuses(Player* player)
                 AddLearnedSpellRefs(player, bonus);
             }
 
+            EnsureHiddenBonusSummons(player, bonus);
+
             if (!hasAura)
             {
                 player->AddAura(bonus.spellId, player);
@@ -225,6 +276,8 @@ void RecalcHiddenItemsetBonuses(Player* player)
                     player->GetGUID().ToString(), itemsetId, bonus.spellId);
             }
 
+            UnsummonHiddenBonusCreatures(player, bonus);
+
             if (isActive)
             {
                 RemoveLearnedSpellRefs(player, bonus);
@@ -235,11 +288,14 @@ void RecalcHiddenItemsetBonuses(Player* player)
 
     for (uint32 spellId : s_AllHiddenItemsetBonusSpells)
     {
-        if (validSpells.find(spellId) == validSpells.end() && player->HasAura(spellId))
-        {
+        if (validSpells.find(spellId) != validSpells.end())
+            continue;
+
+        if (player->HasAura(spellId))
             player->RemoveAura(spellId);
-            RemoveLearnedSpellRefs(player, spellId);
-        }
+
+        RemoveLearnedSpellRefs(player, spellId);
+        UnsummonHiddenBonusCreatures(player, spellId);
     }
 
     auto activeItr = s_PlayerActiveHiddenItemsets.find(player->GetGUID().GetRawValue());
@@ -267,6 +323,11 @@ void RecalcHiddenItemsetBonuses(Player* player)
                 if (learnsItr != s_KnownHiddenItemsetBonusLearns.end())
                     cleanup.learnedSpells = learnsItr->second;
 
+                auto summonsItr = s_KnownHiddenItemsetBonusSummons.find(spellId);
+                if (summonsItr != s_KnownHiddenItemsetBonusSummons.end())
+                    cleanup.summonedEntries = summonsItr->second;
+
+                UnsummonHiddenBonusCreatures(player, cleanup);
                 RemoveLearnedSpellRefs(player, cleanup);
             }
 
@@ -369,12 +430,16 @@ void LoadHiddenItemsetBonuses()
         {
             if (effectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effectInfo.TriggerSpell)
                 b.learnedSpells.push_back(effectInfo.TriggerSpell);
+
+            if ((effectInfo.IsEffect(SPELL_EFFECT_SUMMON) || effectInfo.IsEffect(SPELL_EFFECT_SUMMON_PET)) && effectInfo.MiscValue > 0)
+                b.summonedEntries.push_back(effectInfo.MiscValue);
         }
 
         s_HiddenItemsetBonuses[b.itemsetId] = b;
         currentSpells.insert(b.spellId);
         s_KnownHiddenItemsetBonusLearns[b.spellId] = b.learnedSpells;
         s_KnownHiddenItemsetSpellIds[b.itemsetId] = b.spellId;
+        s_KnownHiddenItemsetBonusSummons[b.spellId] = b.summonedEntries;
     }
     while (result->NextRow());
 
