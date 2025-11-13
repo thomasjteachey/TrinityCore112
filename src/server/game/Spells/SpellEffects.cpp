@@ -36,6 +36,7 @@
 #include "LootMgr.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -2692,15 +2693,127 @@ void Spell::EffectDistract()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 
+    constexpr uint32 DistractDisableStopAura = 82669;
+    ObjectGuid casterGuid;
+    bool hasDistractOverride = false;
+    Unit* casterUnit = nullptr;
+    if (WorldObject* casterObject = GetCaster())
+    {
+        if ((casterUnit = casterObject->ToUnit()))
+        {
+            hasDistractOverride = casterUnit->HasAura(DistractDisableStopAura);
+            if (hasDistractOverride)
+            {
+                casterGuid = casterUnit->GetGUID();
+                if (unitTarget)
+                {
+                    TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' with aura {} is distracting '{}' (spell {}, damage {}, targetEngaged={}, targetMoving={}, targetStopped={}).",
+                        casterGuid.ToString(), DistractDisableStopAura, unitTarget->GetGUID().ToString(), m_spellInfo->Id, damage,
+                        unitTarget->IsEngaged(), unitTarget->isMoving(), unitTarget->IsStopped());
+                }
+                else
+                {
+                    TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' with aura {} triggered spell {} with no unit target.",
+                        casterGuid.ToString(), DistractDisableStopAura, m_spellInfo->Id);
+                }
+            }
+            else if (unitTarget)
+            {
+                TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' does not have aura {} when distracting '{}' (spell {}).",
+                    casterUnit->GetGUID().ToString(), DistractDisableStopAura, unitTarget->GetGUID().ToString(), m_spellInfo->Id);
+            }
+        }
+        else
+        {
+            TC_LOG_ERROR("spells", "Spell::EffectDistract: caster '{}' is not a Unit, cannot check aura {} for run override.",
+                casterObject->GetGUID().ToString(), DistractDisableStopAura);
+        }
+    }
+
+    auto LogOverrideFailure = [&](char const* reason)
+    {
+        if (hasDistractOverride)
+        {
+            std::string targetGuid = unitTarget ? unitTarget->GetGUID().ToString() : std::string("<none>");
+            std::string casterString = casterGuid.IsEmpty() ? std::string("<unknown>") : casterGuid.ToString();
+            TC_LOG_ERROR("spells", "Spell::EffectDistract: caster '{}' with aura {} could not keep '{}' running: {}.",
+                casterString, DistractDisableStopAura, targetGuid, reason);
+        }
+    };
+
+    auto HasActiveSpline = [](Unit const* unit) -> bool
+    {
+        return unit && unit->movespline && unit->movespline->Initialized() && !unit->movespline->Finalized();
+    };
+
+    auto LogOverrideState = [&](char const* stage, float desiredOrientation)
+    {
+        if (!hasDistractOverride || !unitTarget)
+            return;
+
+        bool splineActive = HasActiveSpline(unitTarget);
+        TC_LOG_INFO("spells", "Spell::EffectDistract: override stage '{}' for caster '{}' -> target '{}' (moveFlags=0x{:X}, extraMoveFlags=0x{:X}, isMoving={}, isStopped={}, splineActive={}, currentOrientation={:.3f}, desiredOrientation={:.3f}).",
+            stage, casterGuid.ToString(), unitTarget->GetGUID().ToString(), unitTarget->GetUnitMovementFlags(),
+            unitTarget->GetExtraUnitMovementFlags(), unitTarget->isMoving(), unitTarget->IsStopped(), splineActive,
+            unitTarget->GetOrientation(), desiredOrientation);
+    };
+
     // Check for possible target
     if (!unitTarget || unitTarget->IsEngaged())
+    {
+        LogOverrideFailure(unitTarget ? "target is already engaged" : "target is null");
         return;
+    }
 
     // target must be OK to do this
     if (unitTarget->HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED | UNIT_STATE_FLEEING | UNIT_STATE_TAUNTED))
+    {
+        LogOverrideFailure("target is crowd controlled");
         return;
+    }
 
-    unitTarget->GetMotionMaster()->MoveDistract(damage * IN_MILLISECONDS, unitTarget->GetAbsoluteAngle(destTarget));
+    float orientation = unitTarget->GetAbsoluteAngle(destTarget);
+    if (hasDistractOverride)
+    {
+        if (unitTarget->GetTypeId() == TYPEID_PLAYER)
+        {
+            LogOverrideState("before orientation update", orientation);
+
+            bool hadActiveSpline = HasActiveSpline(unitTarget);
+            bool wasStopped = unitTarget->IsStopped();
+
+            unitTarget->UpdateOrientation(orientation);
+            unitTarget->SendMovementFlagUpdate(true);
+
+            LogOverrideState("after orientation update", orientation);
+
+            bool hasActiveSpline = HasActiveSpline(unitTarget);
+            bool isStopped = unitTarget->IsStopped();
+            if (hadActiveSpline != hasActiveSpline)
+            {
+                TC_LOG_WARN("spells", "Spell::EffectDistract: orientation update unexpectedly toggled spline activity for player '{}' (caster '{}', previousSpline={}, newSpline={}).",
+                    unitTarget->GetGUID().ToString(), casterGuid.ToString(), hadActiveSpline, hasActiveSpline);
+            }
+
+            if (wasStopped != isStopped)
+            {
+                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' stop state changed from {} to {} after orientation update (caster '{}').",
+                    unitTarget->GetGUID().ToString(), wasStopped, isStopped, casterGuid.ToString());
+            }
+            else
+            {
+                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' retained stop state {} after orientation update (caster '{}').",
+                    unitTarget->GetGUID().ToString(), isStopped, casterGuid.ToString());
+            }
+            TC_LOG_INFO("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
+                casterGuid.ToString(), unitTarget->GetGUID().ToString(), DistractDisableStopAura);
+            return;
+        }
+
+        LogOverrideFailure("target is not a player");
+    }
+
+    unitTarget->GetMotionMaster()->MoveDistract(damage * IN_MILLISECONDS, orientation);
 }
 
 void Spell::EffectPickPocket()
