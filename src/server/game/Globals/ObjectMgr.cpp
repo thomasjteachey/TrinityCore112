@@ -369,93 +369,93 @@ void ObjectMgr::LoadCreatureTemplates()
 
     QueryResult result = WorldDatabase.Query(
         //  0
-        "SELECT entry,"
+        "SELECT ct.entry,"
         //  1
-        "difficulty_entry_1,"
+        "ct.difficulty_entry_1,"
         //  2
-        "difficulty_entry_2,"
+        "ct.difficulty_entry_2,"
         //  3
-        "difficulty_entry_3,"
+        "ct.difficulty_entry_3,"
         //  4
-        "KillCredit1,"
+        "ct.KillCredit1,"
         //  5
-        "KillCredit2,"
+        "ct.KillCredit2,"
         //  6
-        "modelid1,"
+        "ct.modelid1,"
         //  7
-        "modelid2,"
+        "ct.modelid2,"
         //  8
-        "modelid3,"
+        "ct.modelid3,"
         //  9
-        "modelid4,"
+        "ct.modelid4,"
         // 10
-        "name,"
+        "ct.name,"
         // 11
-        "subname,"
+        "ct.subname,"
         // 12
-        "IconName,"
+        "ct.IconName,"
         // 13
-        "gossip_menu_id,"
+        "ct.gossip_menu_id,"
         // 14
-        "minlevel,"
+        "ct.minlevel,"
         // 15
-        "maxlevel,"
+        "ct.maxlevel,"
         // 16
-        "exp,"
+        "ct.exp,"
         // 17
-        "faction,"
+        "ct.faction,"
         // 18
-        "npcflag,"
+        "ct.npcflag,"
         // 19
-        "speed_walk,"
+        "ct.speed_walk,"
         // 20
-        "speed_run,"
+        "ct.speed_run,"
         // 21
-        "scale,"
+        "ct.scale,"
         // 22
-        "`rank`,"
+        "ct.`rank`,"
         // 23
-        "dmgschool,"
+        "ct.dmgschool,"
         // 24
-        "BaseAttackTime,"
+        "ct.BaseAttackTime,"
         // 25
-        "RangeAttackTime,"
+        "ct.RangeAttackTime,"
         // 26
-        "BaseVariance,"
+        "ct.BaseVariance,"
         // 27
-        "RangeVariance,"
+        "ct.RangeVariance,"
         // 28
-        "unit_class,"
+        "ct.unit_class,"
         // 29
-        "unit_flags,"
+        "ct.unit_flags,"
         // 30
-        "unit_flags2,"
+        "ct.unit_flags2,"
         // 31
-        "dynamicflags,"
+        "ct.dynamicflags,"
         // 32
-        "family,"
+        "ct.family,"
         // 33
-        "type,"
+        "ct.type,"
         // 34
-        "type_flags,"
+        "ct.type_flags,"
         // 35
-        "lootid,"
+        "ct.lootid,"
         // 36
-        "pickpocketloot,"
+        "ct.pickpocketloot,"
         // 37
-        "skinloot,"
+        "ct.skinloot,"
         // 38
-        "PetSpellDataId,"
+        "ct.PetSpellDataId,"
         // 39
-        "VehicleId,"
+        "ct.VehicleId,"
         // 40
-        "mingold,"
+        "ct.mingold,"
         // 41
-        "maxgold,"
+        "ct.maxgold,"
         // 42
-        "AIName,"
+        "ct.AIName,"
         // 43
-        "MovementType,"
+        "ct.MovementType,"
         // 44
         "ctm.Ground,"
         // 45
@@ -471,33 +471,36 @@ void ObjectMgr::LoadCreatureTemplates()
         // 50
         "ctm.InteractionPauseTimer,"
         // 51
-        "HoverHeight,"
+        "ct.HoverHeight,"
         // 52
-        "HealthModifier,"
+        "ct.HealthModifier,"
         // 53
-        "ManaModifier,"
+        "ct.ManaModifier,"
         // 54
-        "ArmorModifier,"
+        "ct.ArmorModifier,"
         // 55
-        "DamageModifier,"
+        "ct.DamageModifier,"
         // 56
-        "ExperienceModifier,"
+        "ct.ExperienceModifier,"
         // 57
-        "RacialLeader,"
+        "ct.RacialLeader,"
         // 58
-        "movementId,"
+        "ct.movementId,"
         // 59
-        "RegenHealth,"
+        "ct.RegenHealth,"
         // 60
-        "mechanic_immune_mask,"
+        "IFNULL(ctl.DisableLootTag, 0) AS DisableLootTag,"
         // 61
-        "spell_school_immune_mask,"
+        "ct.mechanic_immune_mask,"
         // 62
-        "flags_extra,"
+        "ct.spell_school_immune_mask,"
         // 63
-        "ScriptName"
+        "ct.flags_extra,"
+        // 64
+        "ct.ScriptName"
         " FROM creature_template ct"
-        " LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId");
+        " LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId"
+        " LEFT JOIN creature_template_loot_flags ctl ON ct.entry = ctl.Entry");
 
     if (!result)
     {
@@ -611,10 +614,11 @@ void ObjectMgr::LoadCreatureTemplate(Field* fields)
 
     creatureTemplate.movementId            = fields[58].GetUInt32();
     creatureTemplate.RegenHealth           = fields[59].GetBool();
-    creatureTemplate.MechanicImmuneMask    = fields[60].GetUInt32();
-    creatureTemplate.SpellSchoolImmuneMask = fields[61].GetUInt32();
-    creatureTemplate.flags_extra           = fields[62].GetUInt32();
-    creatureTemplate.ScriptID              = GetScriptId(fields[63].GetString());
+    creatureTemplate.DisableLootTag        = fields[60].GetBool();
+    creatureTemplate.MechanicImmuneMask    = fields[61].GetUInt32();
+    creatureTemplate.SpellSchoolImmuneMask = fields[62].GetUInt32();
+    creatureTemplate.flags_extra           = fields[63].GetUInt32();
+    creatureTemplate.ScriptID              = GetScriptId(fields[64].GetString());
 }
 
 void ObjectMgr::LoadCreatureTemplateResistances()
@@ -963,6 +967,14 @@ void ObjectMgr::CheckCreatureTemplate(CreatureTemplate const* cInfo)
                 cInfo->Entry, cInfo->RegenHealth, diff + 1, cInfo->DifficultyEntry[diff], difficultyInfo->RegenHealth);
             TC_LOG_ERROR("sql.sql", "Possible FIX: UPDATE `creature_template` SET `RegenHealth`={} WHERE `entry`={};",
                 cInfo->RegenHealth, cInfo->DifficultyEntry[diff]);
+        }
+
+        if (cInfo->DisableLootTag != difficultyInfo->DisableLootTag)
+        {
+            TC_LOG_ERROR("sql.sql", "Creature (Entry: {}, DisableLootTag: {}) has different `DisableLootTag` in difficulty {} mode (Entry: {}, DisableLootTag: {}).",
+                cInfo->Entry, cInfo->DisableLootTag, diff + 1, cInfo->DifficultyEntry[diff], difficultyInfo->DisableLootTag);
+            TC_LOG_ERROR("sql.sql", "Possible FIX: REPLACE INTO `creature_template_loot_flags` (`Entry`, `DisableLootTag`) VALUES ({}, {});",
+                cInfo->DifficultyEntry[diff], cInfo->DisableLootTag);
         }
 
         differenceMask = cInfo->MechanicImmuneMask & (~difficultyInfo->MechanicImmuneMask);

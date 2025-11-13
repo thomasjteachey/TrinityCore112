@@ -347,6 +347,7 @@ struct TC_GAME_API CreatureTemplate
     bool    RacialLeader;
     uint32  movementId;
     bool    RegenHealth;
+    bool    DisableLootTag;
     uint32  MechanicImmuneMask;
     uint32  SpellSchoolImmuneMask;
     uint32  flags_extra;
