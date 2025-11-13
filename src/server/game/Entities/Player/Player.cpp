@@ -8880,7 +8880,8 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             // the player whose group may loot the corpse
             Player* recipient = creature->GetLootRecipient();
             Group* recipientGroup = creature->GetLootRecipientGroup();
-            if (!recipient && !recipientGroup)
+            bool disableLootTagging = creature->GetCreatureTemplate()->DisableLootTag;
+            if (!recipient && !recipientGroup && !disableLootTagging)
             {
                 SendLootError(guid, LOOT_ERROR_DIDNT_KILL);
                 return;
@@ -8889,22 +8890,25 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             if (loot->loot_type == LOOT_NONE)
             {
                 // for creature, loot is filled when creature is killed.
-                if (Group* group = creature->GetLootRecipientGroup())
+                if (!disableLootTagging)
                 {
-                    switch (group->GetLootMethod())
+                    if (Group* group = creature->GetLootRecipientGroup())
                     {
-                    case GROUP_LOOT:
-                        // GroupLoot: rolls items over threshold. Items with quality < threshold, round robin
-                        group->GroupLoot(loot, creature);
-                        break;
-                    case NEED_BEFORE_GREED:
-                        group->NeedBeforeGreed(loot, creature);
-                        break;
-                    case MASTER_LOOT:
-                        group->MasterLoot(loot, creature);
-                        break;
-                    default:
-                        break;
+                        switch (group->GetLootMethod())
+                        {
+                        case GROUP_LOOT:
+                            // GroupLoot: rolls items over threshold. Items with quality < threshold, round robin
+                            group->GroupLoot(loot, creature);
+                            break;
+                        case NEED_BEFORE_GREED:
+                            group->NeedBeforeGreed(loot, creature);
+                            break;
+                        case MASTER_LOOT:
+                            group->MasterLoot(loot, creature);
+                            break;
+                        default:
+                            break;
+                        }
                     }
                 }
             }
@@ -8927,7 +8931,9 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             // set group rights only for loot_type != LOOT_SKINNING
             else
             {
-                if (creature->GetLootRecipientGroup())
+                if (disableLootTagging)
+                    permission = ALL_PERMISSION;
+                else if (creature->GetLootRecipientGroup())
                 {
                     Group* group = GetGroup();
                     if (group == creature->GetLootRecipientGroup())
