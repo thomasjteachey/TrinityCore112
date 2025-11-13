@@ -1583,9 +1583,6 @@ void World::LoadConfigSettings(bool reload)
     // Whether to use LoS from game objects
     m_bool_configs[CONFIG_CHECK_GOBJECT_LOS] = sConfigMgr->GetBoolDefault("CheckGameObjectLoS", true);
 
-    // Spell customizations
-    m_int_configs[CONFIG_DISTRACT_DISABLE_STOP_AURA] = sConfigMgr->GetIntDefault("DistractDisableStopAura", 0);
-
     // Anti movement cheat measure. Time each client have to acknowledge a movement change until they are kicked
     m_int_configs[CONFIG_PENDING_MOVE_CHANGES_TIMEOUT] = sConfigMgr->GetIntDefault("AntiCheat.PendingMoveChangesTimeoutTime", 0);
 

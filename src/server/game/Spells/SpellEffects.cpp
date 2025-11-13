@@ -2703,12 +2703,12 @@ void Spell::EffectDistract()
     float orientation = unitTarget->GetAbsoluteAngle(destTarget);
     if (Unit* caster = GetCaster())
     {
-        uint32 auraId = sWorld->getIntConfig(CONFIG_DISTRACT_DISABLE_STOP_AURA);
-        if (auraId && caster->HasAura(auraId) && unitTarget->GetTypeId() == TYPEID_PLAYER)
+        constexpr uint32 DistractDisableStopAura = 82669;
+        if (caster->HasAura(DistractDisableStopAura) && unitTarget->GetTypeId() == TYPEID_PLAYER)
         {
             unitTarget->SetFacingTo(orientation);
             TC_LOG_DEBUG("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
-                caster->GetGUID().ToString(), unitTarget->GetGUID().ToString(), auraId);
+                caster->GetGUID().ToString(), unitTarget->GetGUID().ToString(), DistractDisableStopAura);
             return;
         }
     }
