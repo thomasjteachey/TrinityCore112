@@ -49,25 +49,6 @@ void RecalcHiddenItemsetBonuses(Player* player)
     if (!player)
         return;
 
-    std::map<uint32, uint8> equippedCounts;
-
-    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
-    {
-        Item* it = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-        if (!it)
-            continue;
-
-        ItemTemplate const* proto = it->GetTemplate();
-        if (!proto)
-            continue;
-
-        uint32 itemsetId = proto->ItemSet;
-        if (!itemsetId)
-            continue;
-
-        equippedCounts[itemsetId] += 1;
-    }
-
     std::set<uint32> validSpells;
 
     for (auto const& kv : s_HiddenItemsetBonuses)
@@ -77,10 +58,7 @@ void RecalcHiddenItemsetBonuses(Player* player)
 
         validSpells.insert(bonus.spellId);
 
-        uint8 have = 0;
-        auto it = equippedCounts.find(itemsetId);
-        if (it != equippedCounts.end())
-            have = it->second;
+        uint8 have = player->GetEquippedItemSetCount(itemsetId);
 
         bool hasAura = player->HasAura(bonus.spellId);
 
@@ -119,6 +97,11 @@ public:
     hidden_itemset_bonus_player() : PlayerScript("hidden_itemset_bonus_player") { }
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        RecalcHiddenItemsetBonuses(player);
+    }
+
+    void OnPlayerResurrect(Player* player) override
     {
         RecalcHiddenItemsetBonuses(player);
     }
