@@ -910,6 +910,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
     friend void AddItemToUpdateQueueOf(Item* item, Player* player);
     friend void RemoveItemFromUpdateQueueOf(Item* item, Player* player);
     public:
+        uint8 GetEquippedItemSetCount(uint32 itemsetId) const;
         explicit Player(WorldSession* session);
         ~Player();
 

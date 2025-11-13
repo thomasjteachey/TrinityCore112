@@ -718,6 +718,9 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player presses release when he died
         virtual void OnPlayerRepop(Player* player);
 
+        // Called whenever a player is fully resurrected (after CastAllObtainSpells)
+        virtual void OnPlayerResurrect(Player* player);
+
         // Called when a player completes a movie
         virtual void OnMovieComplete(Player* player, uint32 movieId);
 
@@ -1038,6 +1041,7 @@ class TC_GAME_API ScriptMgr
         void OnQuestStatusChange(Player* player, uint32 questId);
         void OnMovieComplete(Player* player, uint32 movieId);
         void OnPlayerRepop(Player* player);
+        void OnPlayerResurrect(Player* player);
 
     public: /* AccountScript */
 
