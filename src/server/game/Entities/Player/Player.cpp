@@ -18213,8 +18213,13 @@ bool Player::isAllowedToLoot(Creature const* creature) const
     if (!loot->hasItemForAll() && !loot->hasItemFor(this)) // no loot in creature for this player
         return false;
 
+    bool disableLootTagging = creature->GetCreatureTemplate()->DisableLootTag;
+
     if (loot->loot_type == LOOT_SKINNING)
-        return creature->GetLootRecipientGUID() == GetGUID();
+        return disableLootTagging || creature->GetLootRecipientGUID() == GetGUID();
+
+    if (disableLootTagging)
+        return true;
 
     Group const* thisGroup = GetGroup();
     if (!thisGroup)
