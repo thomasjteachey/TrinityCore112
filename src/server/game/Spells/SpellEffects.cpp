@@ -2700,7 +2700,20 @@ void Spell::EffectDistract()
     if (unitTarget->HasUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_STUNNED | UNIT_STATE_FLEEING | UNIT_STATE_TAUNTED))
         return;
 
-    unitTarget->GetMotionMaster()->MoveDistract(damage * IN_MILLISECONDS, unitTarget->GetAbsoluteAngle(destTarget));
+    float orientation = unitTarget->GetAbsoluteAngle(destTarget);
+    if (Unit* caster = GetCaster())
+    {
+        constexpr uint32 DistractDisableStopAura = 82669;
+        if (caster->HasAura(DistractDisableStopAura) && unitTarget->GetTypeId() == TYPEID_PLAYER)
+        {
+            unitTarget->SetFacingTo(orientation);
+            TC_LOG_DEBUG("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
+                caster->GetGUID().ToString(), unitTarget->GetGUID().ToString(), DistractDisableStopAura);
+            return;
+        }
+    }
+
+    unitTarget->GetMotionMaster()->MoveDistract(damage * IN_MILLISECONDS, orientation);
 }
 
 void Spell::EffectPickPocket()
