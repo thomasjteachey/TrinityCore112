@@ -1989,6 +1989,11 @@ void ScriptMgr::OnPlayerRepop(Player* player)
     FOREACH_SCRIPT(PlayerScript)->OnPlayerRepop(player);
 }
 
+void ScriptMgr::OnPlayerResurrect(Player* player)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnPlayerResurrect(player);
+}
+
 void ScriptMgr::OnQuestObjectiveProgress(Player* player, Quest const* quest, uint32 objectiveIndex, uint16 progress)
 {
     FOREACH_SCRIPT(PlayerScript)->OnQuestObjectiveProgress(player, quest, objectiveIndex, progress);
@@ -2712,6 +2717,10 @@ void PlayerScript::OnQuestStatusChange(Player* /*player*/, uint32 /*questId*/)
 }
 
 void PlayerScript::OnPlayerRepop(Player* /*player*/)
+{
+}
+
+void PlayerScript::OnPlayerResurrect(Player* /*player*/)
 {
 }
 
