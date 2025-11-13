@@ -203,6 +203,18 @@ void UnsummonHiddenBonusCreatures(Player* player, uint32 spellId)
     UnsummonHiddenBonusCreatures(player, dummy);
 }
 
+void EnsureHiddenBonusLearns(Player* player, HiddenItemsetBonus const& bonus)
+{
+    if (!player || bonus.learnedSpells.empty())
+        return;
+
+    for (uint32 learnedSpell : bonus.learnedSpells)
+    {
+        if (!player->HasSpell(learnedSpell))
+            player->LearnSpell(learnedSpell, false);
+    }
+}
+
 void EnsureHiddenBonusSummons(Player* player, HiddenItemsetBonus const& bonus)
 {
     if (!player || bonus.summonedEntries.empty())
@@ -257,6 +269,7 @@ void RecalcHiddenItemsetBonuses(Player* player)
                 AddLearnedSpellRefs(player, bonus);
             }
 
+            EnsureHiddenBonusLearns(player, bonus);
             EnsureHiddenBonusSummons(player, bonus);
 
             if (!hasAura)
