@@ -148,6 +148,20 @@ void Loot::clear()
     i_LootValidatorRefManager.clearReferences();
 }
 
+void Loot::MakeLootPublic()
+{
+    lootOwnerGUID.Clear();
+    roundRobinPlayer.Clear();
+}
+
+void Loot::PreparePublicViewer(Player* player)
+{
+    if (!player)
+        return;
+
+    FillNotNormalLootFor(player, true);
+}
+
 // Inserts the item into the loot (called by LootTemplate processors)
 void Loot::AddItem(LootStoreItem const& item)
 {
