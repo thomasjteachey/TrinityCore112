@@ -2777,29 +2777,32 @@ void Spell::EffectDistract()
     {
         if (unitTarget->GetTypeId() == TYPEID_PLAYER)
         {
-            LogOverrideState("before SetFacingTo", orientation);
+            LogOverrideState("before orientation update", orientation);
 
             bool hadActiveSpline = HasActiveSpline(unitTarget);
             bool wasStopped = unitTarget->IsStopped();
-            unitTarget->SetFacingTo(orientation);
 
-            LogOverrideState("after SetFacingTo", orientation);
+            unitTarget->UpdateOrientation(orientation);
+            unitTarget->SendMovementFlagUpdate(true);
+
+            LogOverrideState("after orientation update", orientation);
 
             bool hasActiveSpline = HasActiveSpline(unitTarget);
             bool isStopped = unitTarget->IsStopped();
-            if (!hadActiveSpline && hasActiveSpline)
+            if (hadActiveSpline != hasActiveSpline)
             {
-                TC_LOG_ERROR("spells", "Spell::EffectDistract: SetFacingTo created a spline for player '{}' (caster '{}'), which indicates the forced rotation is interrupting their movement (wasStopped={}, isStoppedNow={}, previousSpline={}, newSpline={}).",
-                    unitTarget->GetGUID().ToString(), casterGuid.ToString(), wasStopped, isStopped, hadActiveSpline, hasActiveSpline);
+                TC_LOG_WARN("spells", "Spell::EffectDistract: orientation update unexpectedly toggled spline activity for player '{}' (caster '{}', previousSpline={}, newSpline={}).",
+                    unitTarget->GetGUID().ToString(), casterGuid.ToString(), hadActiveSpline, hasActiveSpline);
             }
-            else if (wasStopped != isStopped)
+
+            if (wasStopped != isStopped)
             {
-                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' stop state changed from {} to {} after SetFacingTo (caster '{}').",
+                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' stop state changed from {} to {} after orientation update (caster '{}').",
                     unitTarget->GetGUID().ToString(), wasStopped, isStopped, casterGuid.ToString());
             }
             else
             {
-                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' retained stop state {} after SetFacingTo (caster '{}').",
+                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' retained stop state {} after orientation update (caster '{}').",
                     unitTarget->GetGUID().ToString(), isStopped, casterGuid.ToString());
             }
             TC_LOG_INFO("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
