@@ -2707,9 +2707,9 @@ void Spell::EffectDistract()
                 casterGuid = casterUnit->GetGUID();
                 if (unitTarget)
                 {
-                    TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' with aura {} is distracting '{}' (spell {}, damage {}, targetEngaged={}, targetUnitState=0x{:X}).",
+                    TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' with aura {} is distracting '{}' (spell {}, damage {}, targetEngaged={}, targetMoving={}, targetStopped={}).",
                         casterGuid.ToString(), DistractDisableStopAura, unitTarget->GetGUID().ToString(), m_spellInfo->Id, damage,
-                        unitTarget->IsEngaged(), unitTarget->GetUnitState());
+                        unitTarget->IsEngaged(), unitTarget->isMoving(), unitTarget->IsStopped());
                 }
                 else
                 {
