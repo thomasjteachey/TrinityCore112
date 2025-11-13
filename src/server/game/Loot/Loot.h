@@ -243,6 +243,8 @@ struct TC_GAME_API Loot
     void NotifyMoneyRemoved();
     void AddLooter(ObjectGuid GUID) { PlayersLooting.insert(GUID); }
     void RemoveLooter(ObjectGuid GUID) { PlayersLooting.erase(GUID); }
+    void MakeLootPublic();
+    void PreparePublicViewer(Player* player);
 
     void generateMoneyLoot(uint32 minAmount, uint32 maxAmount);
     bool FillLoot(uint32 lootId, LootStore const& store, Player* lootOwner, bool personal, bool noEmptyError = false, uint16 lootMode = LOOT_MODE_DEFAULT);

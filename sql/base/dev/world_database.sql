@@ -786,6 +786,20 @@ CREATE TABLE `creature_template_movement` (
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
+-- Table structure for table `creature_template_loot_flags`
+--
+
+DROP TABLE IF EXISTS `creature_template_loot_flags`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `creature_template_loot_flags` (
+  `Entry` int unsigned NOT NULL,
+  `DisableLootTag` tinyint unsigned NOT NULL DEFAULT '0',
+  PRIMARY KEY (`Entry`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `creature_template_resistance`
 --
 

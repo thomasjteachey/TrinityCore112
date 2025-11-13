@@ -8895,6 +8895,9 @@ void Player::SendLoot(ObjectGuid guid, LootType loot_type)
             Player* recipient = creature->GetLootRecipient();
             Group* recipientGroup = creature->GetLootRecipientGroup();
             bool disableLootTagging = creature->GetCreatureTemplate()->DisableLootTag;
+
+            if (disableLootTagging)
+                loot->PreparePublicViewer(this);
             if (!recipient && !recipientGroup && !disableLootTagging)
             {
                 SendLootError(guid, LOOT_ERROR_DIDNT_KILL);

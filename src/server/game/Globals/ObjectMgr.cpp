@@ -489,7 +489,7 @@ void ObjectMgr::LoadCreatureTemplates()
         // 59
         "RegenHealth,"
         // 60
-        "DisableLootTag,"
+        "IFNULL(ctl.DisableLootTag, 0) AS DisableLootTag,"
         // 61
         "mechanic_immune_mask,"
         // 62
@@ -499,7 +499,8 @@ void ObjectMgr::LoadCreatureTemplates()
         // 64
         "ScriptName"
         " FROM creature_template ct"
-        " LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId");
+        " LEFT JOIN creature_template_movement ctm ON ct.entry = ctm.CreatureId"
+        " LEFT JOIN creature_template_loot_flags ctl ON ct.entry = ctl.Entry");
 
     if (!result)
     {
@@ -972,8 +973,8 @@ void ObjectMgr::CheckCreatureTemplate(CreatureTemplate const* cInfo)
         {
             TC_LOG_ERROR("sql.sql", "Creature (Entry: {}, DisableLootTag: {}) has different `DisableLootTag` in difficulty {} mode (Entry: {}, DisableLootTag: {}).",
                 cInfo->Entry, cInfo->DisableLootTag, diff + 1, cInfo->DifficultyEntry[diff], difficultyInfo->DisableLootTag);
-            TC_LOG_ERROR("sql.sql", "Possible FIX: UPDATE `creature_template` SET `DisableLootTag`={} WHERE `entry`={};",
-                cInfo->DisableLootTag, cInfo->DifficultyEntry[diff]);
+            TC_LOG_ERROR("sql.sql", "Possible FIX: REPLACE INTO `creature_template_loot_flags` (`Entry`, `DisableLootTag`) VALUES ({}, {});",
+                cInfo->DifficultyEntry[diff], cInfo->DisableLootTag);
         }
 
         differenceMask = cInfo->MechanicImmuneMask & (~difficultyInfo->MechanicImmuneMask);
