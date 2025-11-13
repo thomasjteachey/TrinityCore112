@@ -172,26 +172,26 @@ static void EnforceZoneRuleForPlayer(Player* player)
             std::string requirementText;
             if (rule.minMembers == rule.maxMembers)
             {
-                requirementText = Trinity::StringFormat("This timeline only allows groups of {} adventurer{}.",
+                requirementText = Trinity::StringFormat("This zone only allows groups of {} adventurer{}.",
                     rule.minMembers, rule.minMembers == 1 ? "" : "s");
             }
             else if (rule.minMembers == 0)
             {
-                requirementText = Trinity::StringFormat("This timeline only allows groups of up to {} adventurer{}.",
+                requirementText = Trinity::StringFormat("This zone only allows groups of up to {} adventurer{}.",
                     rule.maxMembers, rule.maxMembers == 1 ? "" : "s");
             }
             else if (rule.maxMembers == 0)
             {
-                requirementText = Trinity::StringFormat("This timeline only allows groups of at least {} adventurer{}.",
+                requirementText = Trinity::StringFormat("This zone only allows groups of at least {} adventurer{}.",
                     rule.minMembers, rule.minMembers == 1 ? "" : "s");
             }
             else
             {
-                requirementText = Trinity::StringFormat("This timeline only allows groups of {} to {} adventurers.",
+                requirementText = Trinity::StringFormat("This zone only allows groups of {} to {} adventurers.",
                     rule.minMembers, rule.maxMembers);
             }
 
-            std::string message = Trinity::StringFormat("Time is fragile! {} I've sent you back to safety.", requirementText);
+            std::string message = Trinity::StringFormat("Spacetime is fragile! {} I've sent you back to safety.", requirementText);
 
             WorldPacket data;
             ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Unit>(ChromieEntry, 1);
