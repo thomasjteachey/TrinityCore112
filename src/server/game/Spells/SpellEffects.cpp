@@ -36,6 +36,7 @@
 #include "LootMgr.h"
 #include "MiscPackets.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
@@ -2695,13 +2696,32 @@ void Spell::EffectDistract()
     constexpr uint32 DistractDisableStopAura = 82669;
     ObjectGuid casterGuid;
     bool hasDistractOverride = false;
+    Unit* casterUnit = nullptr;
     if (WorldObject* casterObject = GetCaster())
     {
-        if (Unit* caster = casterObject->ToUnit())
+        if ((casterUnit = casterObject->ToUnit()))
         {
-            hasDistractOverride = caster->HasAura(DistractDisableStopAura);
+            hasDistractOverride = casterUnit->HasAura(DistractDisableStopAura);
             if (hasDistractOverride)
-                casterGuid = caster->GetGUID();
+            {
+                casterGuid = casterUnit->GetGUID();
+                if (unitTarget)
+                {
+                    TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' with aura {} is distracting '{}' (spell {}, damage {}, targetEngaged={}, targetUnitState=0x{:X}).",
+                        casterGuid.ToString(), DistractDisableStopAura, unitTarget->GetGUID().ToString(), m_spellInfo->Id, damage,
+                        unitTarget->IsEngaged(), unitTarget->GetUnitState());
+                }
+                else
+                {
+                    TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' with aura {} triggered spell {} with no unit target.",
+                        casterGuid.ToString(), DistractDisableStopAura, m_spellInfo->Id);
+                }
+            }
+            else if (unitTarget)
+            {
+                TC_LOG_INFO("spells", "Spell::EffectDistract: caster '{}' does not have aura {} when distracting '{}' (spell {}).",
+                    casterUnit->GetGUID().ToString(), DistractDisableStopAura, unitTarget->GetGUID().ToString(), m_spellInfo->Id);
+            }
         }
         else
         {
@@ -2719,6 +2739,23 @@ void Spell::EffectDistract()
             TC_LOG_ERROR("spells", "Spell::EffectDistract: caster '{}' with aura {} could not keep '{}' running: {}.",
                 casterString, DistractDisableStopAura, targetGuid, reason);
         }
+    };
+
+    auto HasActiveSpline = [](Unit const* unit) -> bool
+    {
+        return unit && unit->movespline && unit->movespline->Initialized() && !unit->movespline->Finalized();
+    };
+
+    auto LogOverrideState = [&](char const* stage, float desiredOrientation)
+    {
+        if (!hasDistractOverride || !unitTarget)
+            return;
+
+        bool splineActive = HasActiveSpline(unitTarget);
+        TC_LOG_INFO("spells", "Spell::EffectDistract: override stage '{}' for caster '{}' -> target '{}' (moveFlags=0x{:X}, extraMoveFlags=0x{:X}, isMoving={}, isStopped={}, splineActive={}, currentOrientation={:.3f}, desiredOrientation={:.3f}).",
+            stage, casterGuid.ToString(), unitTarget->GetGUID().ToString(), unitTarget->GetUnitMovementFlags(),
+            unitTarget->GetExtraUnitMovementFlags(), unitTarget->isMoving(), unitTarget->IsStopped(), splineActive,
+            unitTarget->GetOrientation(), desiredOrientation);
     };
 
     // Check for possible target
@@ -2740,8 +2777,32 @@ void Spell::EffectDistract()
     {
         if (unitTarget->GetTypeId() == TYPEID_PLAYER)
         {
+            LogOverrideState("before SetFacingTo", orientation);
+
+            bool hadActiveSpline = HasActiveSpline(unitTarget);
+            bool wasStopped = unitTarget->IsStopped();
             unitTarget->SetFacingTo(orientation);
-            TC_LOG_DEBUG("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
+
+            LogOverrideState("after SetFacingTo", orientation);
+
+            bool hasActiveSpline = HasActiveSpline(unitTarget);
+            bool isStopped = unitTarget->IsStopped();
+            if (!hadActiveSpline && hasActiveSpline)
+            {
+                TC_LOG_ERROR("spells", "Spell::EffectDistract: SetFacingTo created a spline for player '{}' (caster '{}'), which indicates the forced rotation is interrupting their movement (wasStopped={}, isStoppedNow={}, previousSpline={}, newSpline={}).",
+                    unitTarget->GetGUID().ToString(), casterGuid.ToString(), wasStopped, isStopped, hadActiveSpline, hasActiveSpline);
+            }
+            else if (wasStopped != isStopped)
+            {
+                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' stop state changed from {} to {} after SetFacingTo (caster '{}').",
+                    unitTarget->GetGUID().ToString(), wasStopped, isStopped, casterGuid.ToString());
+            }
+            else
+            {
+                TC_LOG_INFO("spells", "Spell::EffectDistract: player '{}' retained stop state {} after SetFacingTo (caster '{}').",
+                    unitTarget->GetGUID().ToString(), isStopped, casterGuid.ToString());
+            }
+            TC_LOG_INFO("spells", "Spell::EffectDistract: '{}' prevented stopping player '{}' because of aura {}.",
                 casterGuid.ToString(), unitTarget->GetGUID().ToString(), DistractDisableStopAura);
             return;
         }
