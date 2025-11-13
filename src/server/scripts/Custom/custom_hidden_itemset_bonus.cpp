@@ -20,12 +20,16 @@
 #include "DatabaseEnv.h"
 #include "Item.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
 
 #include <map>
-#include <vector>
+#include <set>
+#include <shared_mutex>
 
+namespace
+{
 struct HiddenItemsetBonus
 {
     uint32 itemsetId;
@@ -33,64 +37,16 @@ struct HiddenItemsetBonus
     uint32 spellId;
 };
 
-static std::map<uint32, HiddenItemsetBonus> s_HiddenItemsetBonuses;
+using HiddenItemsetBonusMap = std::map<uint32, HiddenItemsetBonus>;
 
-void LoadHiddenItemsetBonuses()
+HiddenItemsetBonusMap s_HiddenItemsetBonuses;
+std::set<uint32> s_AllHiddenItemsetBonusSpells;
+
+void RecalcHiddenItemsetBonuses(Player* player)
 {
-    s_HiddenItemsetBonuses.clear();
-
-    QueryResult result = WorldDatabase.Query(
-        "SELECT itemset_id, required_count, spell_to_apply FROM custom_hidden_itemset_bonus"
-    );
-    if (!result)
-    {
-        TC_LOG_INFO("server.custom", "Loaded 0 hidden itemset bonuses.");
+    if (!player)
         return;
-    }
 
-    do
-    {
-        Field* f = result->Fetch();
-
-        HiddenItemsetBonus b;
-        b.itemsetId     = f[0].GetUInt32();
-        b.requiredCount = f[1].GetUInt8();
-        b.spellId       = f[2].GetUInt32();
-
-        s_HiddenItemsetBonuses[b.itemsetId] = b;
-    }
-    while (result->NextRow());
-
-    TC_LOG_INFO("server.custom", "Loaded {} hidden itemset bonuses.", s_HiddenItemsetBonuses.size());
-}
-
-class hidden_itemset_bonus_player : public PlayerScript
-{
-public:
-    hidden_itemset_bonus_player() : PlayerScript("hidden_itemset_bonus_player") { }
-
-    void OnLogin(Player* player, bool) override
-    {
-        Recalc(player);
-    }
-
-    void OnEquip(Player* player, Item*, uint8, uint8, bool) override
-    {
-        Recalc(player);
-    }
-
-    void OnUnequip(Player* player, Item*, uint8, uint8, bool) override
-    {
-        Recalc(player);
-    }
-
-private:
-    void Recalc(Player* player);
-};
-
-void hidden_itemset_bonus_player::Recalc(Player* player)
-{
-    // 1) Count equipped items per itemset
     std::map<uint32, uint8> equippedCounts;
 
     for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
@@ -110,11 +66,14 @@ void hidden_itemset_bonus_player::Recalc(Player* player)
         equippedCounts[itemsetId] += 1;
     }
 
-    // 2) For each configured hidden bonus, decide what to do
+    std::set<uint32> validSpells;
+
     for (auto const& kv : s_HiddenItemsetBonuses)
     {
         uint32 itemsetId = kv.first;
         HiddenItemsetBonus const& bonus = kv.second;
+
+        validSpells.insert(bonus.spellId);
 
         uint8 have = 0;
         auto it = equippedCounts.find(itemsetId);
@@ -144,33 +103,106 @@ void hidden_itemset_bonus_player::Recalc(Player* player)
             }
         }
     }
+
+    for (uint32 spellId : s_AllHiddenItemsetBonusSpells)
+    {
+        if (validSpells.find(spellId) == validSpells.end() && player->HasAura(spellId))
+            player->RemoveAura(spellId);
+    }
 }
+
+class hidden_itemset_bonus_player : public PlayerScript
+{
+public:
+    hidden_itemset_bonus_player() : PlayerScript("hidden_itemset_bonus_player") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        RecalcHiddenItemsetBonuses(player);
+    }
+};
+
+using namespace Trinity::ChatCommands;
 
 class hidden_itemset_bonus_command : public CommandScript
 {
 public:
     hidden_itemset_bonus_command() : CommandScript("hidden_itemset_bonus_command") { }
 
-    std::vector<ChatCommand> GetCommands() const override
+    ChatCommandTable GetCommands() const override
     {
-        static std::vector<ChatCommand> hiddenItemsetCommandTable =
+        static ChatCommandTable reloadCommandTable =
         {
-            { "reload", rbac::RBAC_PERM_COMMAND_GM, true, &HandleReload, "" },
+            { "reload", HandleReload, rbac::RBAC_PERM_COMMAND_GM, Console::Yes }
         };
-        static std::vector<ChatCommand> commandTable =
+
+        static ChatCommandTable commandTable =
         {
-            { "hiddenitemset", rbac::RBAC_PERM_COMMAND_GM, true, nullptr, "", hiddenItemsetCommandTable },
+            { "hiddenitemset", reloadCommandTable }
         };
+
         return commandTable;
     }
 
-    static bool HandleReload(ChatHandler* handler, char const*)
+    static bool HandleReload(ChatHandler* handler)
     {
         LoadHiddenItemsetBonuses();
+
+        {
+            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+            HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+            for (auto const& playerEntry : players)
+                if (Player* player = playerEntry.second)
+                    RecalcHiddenItemsetBonuses(player);
+        }
+
         handler->SendSysMessage("Hidden itemset bonuses reloaded.");
         return true;
     }
 };
+} // namespace
+
+void LoadHiddenItemsetBonuses()
+{
+    s_HiddenItemsetBonuses.clear();
+
+    QueryResult result = WorldDatabase.Query(
+        "SELECT itemset_id, required_count, spell_to_apply FROM custom_hidden_itemset_bonus"
+    );
+    if (!result)
+    {
+        TC_LOG_INFO("server.custom", "Loaded 0 hidden itemset bonuses.");
+        return;
+    }
+
+    std::set<uint32> currentSpells;
+
+    do
+    {
+        Field* f = result->Fetch();
+
+        HiddenItemsetBonus b;
+        b.itemsetId     = f[0].GetUInt32();
+        b.requiredCount = f[1].GetUInt8();
+        b.spellId       = f[2].GetUInt32();
+
+        s_HiddenItemsetBonuses[b.itemsetId] = b;
+        currentSpells.insert(b.spellId);
+    }
+    while (result->NextRow());
+
+    s_AllHiddenItemsetBonusSpells.insert(currentSpells.begin(), currentSpells.end());
+
+    TC_LOG_INFO("server.custom", "Loaded {} hidden itemset bonuses.", s_HiddenItemsetBonuses.size());
+}
+
+namespace HiddenSets
+{
+void OnEquipmentChanged(Player* player)
+{
+    RecalcHiddenItemsetBonuses(player);
+}
+}
 
 void AddSC_custom_hidden_itemset_bonus()
 {
