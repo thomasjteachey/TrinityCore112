@@ -31,7 +31,7 @@
 namespace
 {
     uint32 constexpr ChromieEntry = 27915;
-    char const* constexpr ChromieName = "Chromie";
+    char const* const ChromieName = "Chromie";
 
     struct ZoneAreaKey
     {
