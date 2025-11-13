@@ -479,6 +479,17 @@ Player::~Player()
     sWorld->DecreasePlayerCount();
 }
 
+uint8 Player::GetEquippedItemSetCount(uint32 itemsetId) const
+{
+    for (ItemSetEffect const* effect : ItemSetEff)
+    {
+        if (effect && effect->setid == itemsetId)
+            return uint8(effect->item_count);
+    }
+
+    return 0;
+}
+
 void Player::CleanupsBeforeDelete(bool finalCleanup)
 {
     TradeCancel(false);
@@ -4678,6 +4689,9 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
 
     // recast lost by death auras of any items held in the inventory
     CastAllObtainSpells();
+
+    // Allow scripts to reapply custom effects tied to equipment or other logic
+    sScriptMgr->OnPlayerResurrect(this);
 
     if (!applySickness)
         return;
