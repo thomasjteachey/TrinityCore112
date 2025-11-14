@@ -21,8 +21,8 @@
 // void Add${NameOfDirectory}Scripts()
 #include "BGReplay.cpp"
 
-void LoadHiddenSets();
-void AddSC_custom_hidden_sets();
+void LoadHiddenItemsetBonuses();
+void AddSC_custom_hidden_itemset_bonus();
 void AddSC_custom_zone_group_rules();
 void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
@@ -30,8 +30,8 @@ void AddSC_custom_gurubashi_arena();
 
 void AddCustomScripts()
 {
-    LoadHiddenSets();
-    AddSC_custom_hidden_sets();
+    LoadHiddenItemsetBonuses();
+    AddSC_custom_hidden_itemset_bonus();
     AddBGReplayScripts();
     AddSC_custom_zone_group_rules();
     AddSC_mod_pvp_titles();

@@ -17,10 +17,12 @@
 
 #include "Spell.h"
 #include <algorithm>
+#include "AccountMgr.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
 #include "CellImpl.h"
+#include "Chat.h"
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
@@ -44,6 +46,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SmartEnum.h"
 #include "SharedDefines.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -79,6 +82,57 @@ namespace
             return false;
 
         return true;
+    }
+
+    void WhisperTrapFailureToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
+    {
+        if (!caster || !spellInfo || result == SPELL_CAST_OK)
+            return;
+
+        GameObject const* trapCaster = caster->ToGameObject();
+        if (!trapCaster || trapCaster->GetGoType() != GAMEOBJECT_TYPE_TRAP)
+            return;
+
+        Unit* owner = trapCaster->GetOwner();
+        if (!owner)
+            return;
+
+        Player* ownerPlayer = owner->ToPlayer();
+        if (!ownerPlayer)
+            return;
+
+        WorldSession* session = ownerPlayer->GetSession();
+        if (!session || AccountMgr::IsPlayerAccount(session->GetSecurity()))
+            return;
+
+        std::string targetName;
+        if (WorldObject const* target = targets.GetObjectTarget())
+        {
+            targetName = target->GetName();
+            if (targetName.empty())
+                targetName = target->GetGUID().ToString();
+        }
+        else if (Unit const* unitTarget = targets.GetUnitTarget())
+        {
+            targetName = unitTarget->GetName();
+            if (targetName.empty())
+                targetName = unitTarget->GetGUID().ToString();
+        }
+
+        if (targetName.empty())
+            targetName = "<no target>";
+
+        char const* spellName = spellInfo->SpellName[DEFAULT_LOCALE];
+        if (!spellName || !*spellName)
+            spellName = "Unknown spell";
+
+        char const* resultText = EnumUtils::ToConstant(result);
+
+        ChatHandler handler(session);
+        if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
+            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s (custom error %u).", spellName, spellInfo->Id, targetName.c_str(), resultText, customError);
+        else
+            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s.", spellName, spellInfo->Id, targetName.c_str(), resultText);
     }
 }
 
@@ -5350,11 +5404,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         SpellCastResult castResult = m_spellInfo->CheckExplicitTarget(caster, m_targets.GetObjectTarget(), m_targets.GetItemTarget());
         if (castResult != SPELL_CAST_OK)
         {
-            if ((!m_targets.GetObjectTarget() && !m_targets.GetUnitTarget()) ||
-                !TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
-            {
+            if (!m_targets.GetObjectTarget() && !m_targets.GetUnitTarget())
                 return castResult;
-            }
+
+            if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
+                return castResult;
+
+            WhisperTrapFailureToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
         }
     }
 
@@ -5365,6 +5421,8 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
                 return castResult;
+
+            WhisperTrapFailureToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
         }
 
         if (target != m_caster)
