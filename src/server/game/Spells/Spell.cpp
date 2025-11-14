@@ -17,6 +17,7 @@
 
 #include "Spell.h"
 #include <algorithm>
+#include <sstream>
 #include "AccountMgr.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
@@ -92,12 +93,12 @@ namespace
         return IsTrapGameObject(caster);
     }
 
-    void WhisperTrapDebugToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
+    void SendTrapDebugServerMessageToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
     {
         if (!caster || !spellInfo)
             return;
 
-        if (result == SPELL_CAST_OK && !sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS))
+        if (result == SPELL_CAST_OK)
             return;
 
         if (!IsTrapGameObject(caster))
@@ -142,64 +143,13 @@ namespace
 
         char const* resultText = EnumUtils::ToConstant(result);
 
-        ChatHandler handler(session);
-        if (result == SPELL_CAST_OK)
-            handler.PSendSysMessage("[Trap Debug] %s (%u) succeeded for %s.", spellName, spellInfo->Id, targetName.c_str());
-        else if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
-            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s (custom error %u).", spellName, spellInfo->Id, targetName.c_str(), resultText, customError);
-        else
-            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s.", spellName, spellInfo->Id, targetName.c_str(), resultText);
-    }
-
-    void WhisperTrapFailureToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
-    {
-        if (!caster || !spellInfo || result == SPELL_CAST_OK)
-            return;
-
-        GameObject const* trapCaster = caster->ToGameObject();
-        if (!trapCaster || trapCaster->GetGoType() != GAMEOBJECT_TYPE_TRAP)
-            return;
-
-        Unit* owner = trapCaster->GetOwner();
-        if (!owner)
-            return;
-
-        Player* ownerPlayer = owner->ToPlayer();
-        if (!ownerPlayer)
-            return;
-
-        WorldSession* session = ownerPlayer->GetSession();
-        if (!session || AccountMgr::IsPlayerAccount(session->GetSecurity()))
-            return;
-
-        std::string targetName;
-        if (WorldObject const* target = targets.GetObjectTarget())
-        {
-            targetName = target->GetName();
-            if (targetName.empty())
-                targetName = target->GetGUID().ToString();
-        }
-        else if (Unit const* unitTarget = targets.GetUnitTarget())
-        {
-            targetName = unitTarget->GetName();
-            if (targetName.empty())
-                targetName = unitTarget->GetGUID().ToString();
-        }
-
-        if (targetName.empty())
-            targetName = "<no target>";
-
-        char const* spellName = spellInfo->SpellName[DEFAULT_LOCALE];
-        if (!spellName || !*spellName)
-            spellName = "Unknown spell";
-
-        char const* resultText = EnumUtils::ToConstant(result);
-
-        ChatHandler handler(session);
+        std::ostringstream message;
         if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
-            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s (custom error %u).", spellName, spellInfo->Id, targetName.c_str(), resultText, customError);
+            message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << " (custom error " << customError << ").";
         else
-            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s.", spellName, spellInfo->Id, targetName.c_str(), resultText);
+            message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << ".";
+
+        sWorld->SendServerMessage(SERVER_MSG_STRING, message.str(), ownerPlayer);
     }
 }
 
@@ -5479,12 +5429,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
                 return castResult;
 
-            WhisperTrapDebugToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
-        }
-        else if (trapSuccessDebugPending)
-        {
-            WhisperTrapDebugToOwner(m_caster, m_spellInfo, m_targets, SPELL_CAST_OK, SPELL_CUSTOM_ERROR_NONE);
-            trapSuccessDebugPending = false;
+            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
         }
     }
 
@@ -5496,12 +5441,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
                 return castResult;
 
-            WhisperTrapDebugToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
-        }
-        else if (trapSuccessDebugPending)
-        {
-            WhisperTrapDebugToOwner(m_caster, m_spellInfo, m_targets, SPELL_CAST_OK, SPELL_CUSTOM_ERROR_NONE);
-            trapSuccessDebugPending = false;
+            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
         }
 
         if (target != m_caster)
