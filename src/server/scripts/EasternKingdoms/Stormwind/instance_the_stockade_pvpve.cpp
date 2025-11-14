@@ -182,7 +182,7 @@ public:
             {
                 if (Player* player = ObjectAccessor::FindPlayer(guid))
                 {
-                    if (player->GetMap() == instance)
+                    if (player->GetMap() == static_cast<Map*>(instance))
                         return player;
                 }
             }
