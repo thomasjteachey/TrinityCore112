@@ -17,8 +17,11 @@
 
 #include "Group.h"
 #include "GroupReference.h"
+#include "Map.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "ScriptedCreature.h"
+#include "ScriptedGossip.h"
 #include "WorldSession.h"
 
 #include "mod_pvpve_dungeon.h"
@@ -36,7 +39,7 @@ void SendLeaderError(Player* player, char const* text)
     if (!player)
         return;
 
-    player->PlayerTalkClass->SendCloseGossip();
+    CloseGossipMenuFor(player);
     if (WorldSession* session = player->GetSession())
         session->SendNotification("%s", text);
 }
@@ -58,104 +61,115 @@ class npc_pvpve_dungeon_queue : public CreatureScript
 public:
     npc_pvpve_dungeon_queue() : CreatureScript("npc_pvpve_dungeon_queue") { }
 
-    bool OnGossipHello(Player* player, Creature* creature) override
+    struct npc_pvpve_dungeon_queueAI : public ScriptedAI
     {
-        if (!player || !creature)
+        npc_pvpve_dungeon_queueAI(Creature* creature) : ScriptedAI(creature) { }
+
+        bool OnGossipHello(Player* player) override
+        {
+            if (!player)
+                return false;
+
+            ClearGossipMenuFor(player);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Queue for Stockades PvPvE", GOSSIP_SENDER_MAIN, ACTION_QUEUE);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
+            SendGossipMenuFor(player, player->GetGossipTextId(me), me);
+            return true;
+        }
+
+        bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
+        {
+            if (!player)
+                return false;
+
+            uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+            switch (action)
+            {
+                case ACTION_QUEUE:
+                    HandleQueue(player);
+                    return true;
+                case ACTION_CLOSE:
+                    CloseGossipMenuFor(player);
+                    return true;
+                default:
+                    break;
+            }
+
             return false;
+        }
 
-        player->PlayerTalkClass->ClearMenus();
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Queue for Stockades PvPvE", GOSSIP_SENDER_MAIN, ACTION_QUEUE);
-        player->ADD_GOSSIP_ITEM(GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
-        player->SendGossipMenu(player->GetGossipTextId(creature), creature->GetGUID());
-        return true;
-    }
+    private:
+        void HandleQueue(Player* player)
+        {
+            if (!player)
+                return;
 
-    bool OnGossipSelect(Player* player, Creature* creature, uint32 sender, uint32 action) override
+            Group* group = player->GetGroup();
+            if (!group)
+            {
+                SendLeaderError(player, "You must be in a party to queue for the Stockades PvPvE event.");
+                return;
+            }
+
+            if (!group->IsLeader(player->GetGUID()))
+            {
+                SendLeaderError(player, "Only the party leader can queue for the Stockades PvPvE event.");
+                return;
+            }
+
+            if (group->GetMembersCount() != 2)
+            {
+                SendLeaderError(player, "Exactly two party members are required for this queue.");
+                return;
+            }
+
+            std::vector<ObjectGuid> memberGuids;
+            memberGuids.reserve(2);
+
+            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+            {
+                Player* member = ref->GetSource();
+                if (!member || !member->IsInWorld())
+                {
+                    SendLeaderError(player, "All party members must be online to join the queue.");
+                    return;
+                }
+
+                if (!member->IsAlive())
+                {
+                    SendLeaderError(player, "All party members must be alive to join the queue.");
+                    return;
+                }
+
+                if (member->GetMap() && member->GetMap()->Instanceable())
+                {
+                    SendLeaderError(player, "Party members must leave instances before queueing.");
+                    return;
+                }
+
+                memberGuids.push_back(member->GetGUID());
+            }
+
+            if (memberGuids.size() != 2)
+            {
+                SendLeaderError(player, "Unable to determine party members. Please try again.");
+                return;
+            }
+
+            if (!PvpveDungeonMgr::instance()->QueueTeam(STOCKADES_TEMPLATE_ID, memberGuids))
+            {
+                SendLeaderError(player, "Failed to join the queue. Please try again shortly.");
+                return;
+            }
+
+            BroadcastToGroup(group, "You have joined the Stockades PvPvE queue!");
+            CloseGossipMenuFor(player);
+        }
+    };
+
+    CreatureAI* GetAI(Creature* creature) const override
     {
-        if (sender != GOSSIP_SENDER_MAIN)
-            return false;
-
-        switch (action)
-        {
-            case ACTION_QUEUE:
-                HandleQueue(player);
-                return true;
-            case ACTION_CLOSE:
-                player->PlayerTalkClass->SendCloseGossip();
-                return true;
-            default:
-                break;
-        }
-
-        return false;
-    }
-
-private:
-    void HandleQueue(Player* player)
-    {
-        if (!player)
-            return;
-
-        Group* group = player->GetGroup();
-        if (!group)
-        {
-            SendLeaderError(player, "You must be in a party to queue for the Stockades PvPvE event.");
-            return;
-        }
-
-        if (!group->IsLeader(player->GetGUID()))
-        {
-            SendLeaderError(player, "Only the party leader can queue for the Stockades PvPvE event.");
-            return;
-        }
-
-        if (group->GetMembersCount() != 2)
-        {
-            SendLeaderError(player, "Exactly two party members are required for this queue.");
-            return;
-        }
-
-        std::vector<ObjectGuid> memberGuids;
-        memberGuids.reserve(2);
-
-        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-        {
-            Player* member = ref->GetSource();
-            if (!member || !member->IsInWorld())
-            {
-                SendLeaderError(player, "All party members must be online to join the queue.");
-                return;
-            }
-
-            if (!member->IsAlive())
-            {
-                SendLeaderError(player, "All party members must be alive to join the queue.");
-                return;
-            }
-
-            if (member->GetMap() && member->GetMap()->Instanceable())
-            {
-                SendLeaderError(player, "Party members must leave instances before queueing.");
-                return;
-            }
-
-            memberGuids.push_back(member->GetGUID());
-        }
-
-        if (memberGuids.size() != 2)
-        {
-            SendLeaderError(player, "Unable to determine party members. Please try again.");
-            return;
-        }
-
-        if (!PvpveDungeonMgr::instance()->QueueTeam(STOCKADES_TEMPLATE_ID, memberGuids))
-        {
-            SendLeaderError(player, "Failed to join the queue. Please try again shortly.");
-            return;
-        }
-
-        BroadcastToGroup(group, "You have joined the Stockades PvPvE queue!");
-        player->PlayerTalkClass->SendCloseGossip();
+        return new npc_pvpve_dungeon_queueAI(creature);
     }
 };
 
