@@ -28,7 +28,7 @@
 #include "SharedDefines.h"
 #include "StringFormat.h"
 
-#include "mod_pvpve_dungeon.h"
+#include "../../Custom/mod_pvpve_dungeon.h"
 
 #include <string>
 
