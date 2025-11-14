@@ -21,6 +21,7 @@
 #include "DatabaseEnv.h"
 #include "Group.h"
 #include "GroupMgr.h"
+#include "InstanceScript.h"
 #include "Log.h"
 #include "MapInstanced.h"
 #include "MapManager.h"
@@ -41,6 +42,7 @@ char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, Posit
     "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
 
 constexpr uint32 kPvpveFfaAuraSpellId = 0;
+constexpr uint32 kPvpveFfaPlayerFlag = PLAYER_FLAGS_UNK7;
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
@@ -874,8 +876,8 @@ void ApplyPvpveFfaState(Player* player)
         return;
     }
 
-    if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP))
-        player->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP);
+    if (!player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
+        player->SetFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
 }
 
 void ClearPvpveFfaState(Player* player)
@@ -889,6 +891,6 @@ void ClearPvpveFfaState(Player* player)
         return;
     }
 
-    if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP))
-        player->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP);
+    if (player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
+        player->RemoveFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
 }
