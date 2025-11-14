@@ -17,16 +17,20 @@
 
 #include "mod_pvpve_dungeon.h"
 
+#include "Duration.h"
 #include "DatabaseEnv.h"
 #include "Group.h"
 #include "GroupMgr.h"
 #include "Log.h"
+#include "MapInstanced.h"
+#include "MapManager.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 
 #include <algorithm>
 #include <ctime>
+#include <string>
 
 namespace
 {
@@ -53,6 +57,35 @@ std::vector<SpawnPoint> const* PvpveDungeonMgr::GetSpawnPoints(uint32 templateId
         return nullptr;
 
     return &itr->second;
+}
+
+bool PvpveDungeonMgr::IsPlayerInPvpveRun(ObjectGuid const& guid) const
+{
+    return _playerToRun.find(guid) != _playerToRun.end();
+}
+
+bool PvpveDungeonMgr::IsPlayerInPvpveRun(Player const* player) const
+{
+    return player && IsPlayerInPvpveRun(player->GetGUID());
+}
+
+void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript)
+{
+    if (!player || !instanceScript)
+        return;
+
+    auto runItr = _playerToRun.find(player->GetGUID());
+    if (runItr == _playerToRun.end())
+        return;
+
+    PvpveDungeonRun* run = GetRun(runItr->second);
+    if (!run)
+        return;
+
+    if (!run->InstanceMap)
+        run->InstanceMap = player->GetMap();
+
+    run->InstanceScript = instanceScript;
 }
 
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()
@@ -229,69 +262,72 @@ void PvpveDungeonMgr::CancelQueue(uint64 teamId)
 
 void PvpveDungeonMgr::Update(uint32 /*diff*/)
 {
-    if (_queue.empty())
-        return;
-
-    // TrinityCore executes world updates on a single thread; no explicit locking needed here.
-    std::vector<uint64> queuedIds;
-    queuedIds.reserve(_queue.size());
-    for (auto const& entry : _queue)
-        queuedIds.push_back(entry.first);
-
-    for (uint64 teamId : queuedIds)
+    if (!_queue.empty())
     {
-        auto queueItr = _queue.find(teamId);
-        if (queueItr == _queue.end())
-            continue;
+        // TrinityCore executes world updates on a single thread; no explicit locking needed here.
+        std::vector<uint64> queuedIds;
+        queuedIds.reserve(_queue.size());
+        for (auto const& entry : _queue)
+            queuedIds.push_back(entry.first);
 
-        auto teamItr = _teams.find(teamId);
-        if (teamItr == _teams.end())
+        for (uint64 teamId : queuedIds)
         {
-            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: dropping non-existent team {} from queue.", teamId);
-            _queue.erase(queueItr);
-            continue;
-        }
-
-        DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(teamItr->second.TemplateId);
-        if (!dungeonTemplate || !dungeonTemplate->Enabled)
-        {
-            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: template {} not available for team {}.", teamItr->second.TemplateId, teamId);
-            _queue.erase(queueItr);
-            continue;
-        }
-
-        PvpveDungeonRun* selectedRun = nullptr;
-        for (auto& runPair : _runs)
-        {
-            PvpveDungeonRun& candidate = runPair.second;
-            if (candidate.TemplateId != dungeonTemplate->Id)
+            auto queueItr = _queue.find(teamId);
+            if (queueItr == _queue.end())
                 continue;
 
-            if (candidate.Completed)
-                continue;
-
-            if (candidate.Teams.size() < dungeonTemplate->MaxTeams)
+            auto teamItr = _teams.find(teamId);
+            if (teamItr == _teams.end())
             {
-                selectedRun = &candidate;
-                break;
+                TC_LOG_WARN("server.custom", "PvpveDungeonMgr: dropping non-existent team {} from queue.", teamId);
+                _queue.erase(queueItr);
+                continue;
             }
-        }
 
-        if (!selectedRun)
-        {
-            PvpveDungeonRun newRun;
-            newRun.Id = _nextRunId++;
-            newRun.TemplateId = dungeonTemplate->Id;
-            newRun.CreatedTime = std::time(nullptr);
-            auto [runItr, inserted] = _runs.emplace(newRun.Id, std::move(newRun));
-            selectedRun = &runItr->second;
-            if (inserted)
-                TC_LOG_INFO("server.custom", "PvpveDungeonMgr: created new run {} for template {}.", selectedRun->Id, dungeonTemplate->Id);
-        }
+            DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(teamItr->second.TemplateId);
+            if (!dungeonTemplate || !dungeonTemplate->Enabled)
+            {
+                TC_LOG_WARN("server.custom", "PvpveDungeonMgr: template {} not available for team {}.", teamItr->second.TemplateId, teamId);
+                _queue.erase(queueItr);
+                continue;
+            }
 
-        AssignTeamToRun(*selectedRun, queueItr->second);
-        _queue.erase(queueItr);
+            PvpveDungeonRun* selectedRun = nullptr;
+            for (auto& runPair : _runs)
+            {
+                PvpveDungeonRun& candidate = runPair.second;
+                if (candidate.TemplateId != dungeonTemplate->Id)
+                    continue;
+
+                if (candidate.Completed)
+                    continue;
+
+                if (candidate.Teams.size() < dungeonTemplate->MaxTeams)
+                {
+                    selectedRun = &candidate;
+                    break;
+                }
+            }
+
+            if (!selectedRun)
+            {
+                PvpveDungeonRun newRun;
+                newRun.Id = _nextRunId++;
+                newRun.TemplateId = dungeonTemplate->Id;
+                newRun.CreatedTime = std::time(nullptr);
+                auto [runItr, inserted] = _runs.emplace(newRun.Id, std::move(newRun));
+                selectedRun = &runItr->second;
+                if (inserted)
+                    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: created new run {} for template {}.", selectedRun->Id, dungeonTemplate->Id);
+            }
+
+            AssignTeamToRun(*selectedRun, queueItr->second);
+            _queue.erase(queueItr);
+        }
     }
+
+    for (auto& runPair : _runs)
+        EvaluateRunState(runPair.second);
 }
 
 void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued)
@@ -410,29 +446,394 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     _teams[team.Id] = std::move(team);
 }
 
+PvpveDungeonRun* PvpveDungeonMgr::GetRun(uint64 runId)
+{
+    auto itr = _runs.find(runId);
+    if (itr == _runs.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+PvpveTeam* PvpveDungeonMgr::GetTeam(uint64 teamId)
+{
+    auto itr = _teams.find(teamId);
+    if (itr == _teams.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+PvpveDungeonRun* PvpveDungeonMgr::GetRunForPlayer(ObjectGuid const& guid)
+{
+    auto itr = _playerToRun.find(guid);
+    if (itr == _playerToRun.end())
+        return nullptr;
+
+    return GetRun(itr->second);
+}
+
 uint8 PvpveDungeonMgr::PickSpawnIndex(uint32 templateId)
 {
     TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO pick spawn index for template {}.", templateId);
     return 0;
 }
 
-void PvpveDungeonMgr::OnInstanceCreated(Map* /*map*/)
+void PvpveDungeonMgr::OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId)
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO handle instance creation.");
+    if (!instanceId)
+        return;
+
+    PvpveDungeonRun* run = GetRun(runId);
+    if (!run || run->TemplateId != templateId)
+        return;
+
+    if (run->InstanceId == instanceId)
+        return;
+
+    if (run->InstanceId && run->InstanceId != instanceId)
+    {
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} already tracked with instance {} (new {}).", run->Id, run->InstanceId, instanceId);
+        return;
+    }
+
+    run->InstanceId = instanceId;
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: tracking instance {} for run {}.", run->InstanceId, run->Id);
 }
 
-void PvpveDungeonMgr::OnPlayerEliminated(Player* /*player*/)
+bool PvpveDungeonMgr::TeamHasActiveMembers(PvpveTeam const& team, DungeonTemplate const* dungeonTemplate) const
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO handle player elimination.");
+    if (!dungeonTemplate)
+        return false;
+
+    for (ObjectGuid const& memberGuid : team.Members)
+    {
+        Player* member = ObjectAccessor::FindPlayer(memberGuid);
+        if (!member)
+            continue;
+
+        if (member->GetMapId() != dungeonTemplate->MapId)
+            continue;
+
+        if (!member->IsAlive())
+            continue;
+
+        return true;
+    }
+
+    return false;
 }
 
-void PvpveDungeonMgr::OnPlayerLeftMap(Player* /*player*/)
+void PvpveDungeonMgr::EvaluateRunState(PvpveDungeonRun& run)
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO handle player leaving map.");
+    if (run.Completed || run.Finished)
+        return;
+
+    if (run.Teams.empty())
+        return;
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
+    if (!dungeonTemplate)
+        return;
+
+    uint32 activeTeams = 0;
+    for (uint64 teamId : run.Teams)
+    {
+        PvpveTeam* team = GetTeam(teamId);
+        if (!team)
+            continue;
+
+        if (!TeamHasActiveMembers(*team, dungeonTemplate))
+        {
+            if (!team->Eliminated)
+            {
+                team->Eliminated = true;
+                TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (no active members).", team->Id, run.Id);
+            }
+
+            continue;
+        }
+
+        if (!team->Eliminated)
+            ++activeTeams;
+    }
+
+    bool shouldFinish = false;
+    if (run.Teams.size() > 1 && activeTeams <= 1)
+        shouldFinish = true;
+    else if (run.Teams.size() == 1 && activeTeams == 0)
+        shouldFinish = true;
+
+    if (shouldFinish)
+        FinishRun(run);
+}
+
+void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+
+    auto runItr = _playerToRun.find(guid);
+    if (runItr == _playerToRun.end())
+        return;
+
+    PvpveDungeonRun* run = GetRun(runItr->second);
+    if (!run)
+        return;
+
+    auto teamItr = _playerToTeam.find(guid);
+    if (teamItr == _playerToTeam.end())
+        return;
+
+    PvpveTeam* team = GetTeam(teamItr->second);
+    if (!team || team->Eliminated)
+        return;
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId);
+    if (!dungeonTemplate)
+        return;
+
+    if (TeamHasActiveMembers(*team, dungeonTemplate))
+        return;
+
+    team->Eliminated = true;
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (triggered by player {}).", team->Id, run->Id, guid.ToString());
+
+    EvaluateRunState(*run);
+}
+
+void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
+{
+    if (!player)
+        return;
+
+    if (!IsPlayerInPvpveRun(player))
+        return;
+
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: player {} left PvPvE map, checking elimination state.", player->GetGUID().ToString());
+    OnPlayerEliminated(player);
+}
+
+void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
+{
+    if (run.Finished)
+        return;
+
+    run.Finished = true;
+    run.Completed = true;
+
+    std::vector<uint64> winningTeams;
+    winningTeams.reserve(run.Teams.size());
+    for (uint64 teamId : run.Teams)
+    {
+        PvpveTeam* team = GetTeam(teamId);
+        if (team && !team->Eliminated)
+            winningTeams.push_back(teamId);
+    }
+
+    if (winningTeams.empty())
+    {
+        TC_LOG_INFO("server.custom", "PvpveDungeonMgr: run {} ended with no surviving teams.", run.Id);
+    }
+    else
+    {
+        std::string winnersList;
+        for (uint64 id : winningTeams)
+        {
+            if (!winnersList.empty())
+                winnersList += ", ";
+            winnersList += std::to_string(id);
+        }
+
+        TC_LOG_INFO("server.custom", "PvpveDungeonMgr: run {} finished. Winning teams: {}.", run.Id, winnersList);
+    }
+    PvpveDungeonInstance* instanceScript = run.InstanceScript;
+    if (!instanceScript)
+    {
+        DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
+        if (dungeonTemplate && run.InstanceId)
+        {
+            if (Map* map = sMapMgr->FindMap(dungeonTemplate->MapId, run.InstanceId))
+            {
+                if (InstanceMap* instanceMap = map->ToInstanceMap())
+                    instanceScript = dynamic_cast<PvpveDungeonInstance*>(instanceMap->GetInstanceScript());
+            }
+        }
+    }
+
+    if (instanceScript)
+    {
+        for (uint64 teamId : winningTeams)
+        {
+            if (PvpveTeam* team = GetTeam(teamId))
+                instanceScript->OnPvpveRunFinished(run.Id, *team);
+        }
+    }
+
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO distribute rewards for run {}.", run.Id);
 }
 
 namespace
 {
+struct TeleportDestination
+{
+    uint32 MapId;
+    float X;
+    float Y;
+    float Z;
+    float O;
+};
+
+TeleportDestination const kAllianceTeleportDestination{ 0, -8833.38f, 628.62f, 94.0066f, 1.0646f };
+TeleportDestination const kHordeTeleportDestination{ 1, 1633.33f, -4439.09f, 15.999f, 5.3178f };
+
+class PvpveDungeonPlayerScript : public PlayerScript
+{
+public:
+    PvpveDungeonPlayerScript() : PlayerScript("pvpve_dungeon_player") { }
+
+    void OnPVPKill(Player* /*killer*/, Player* killed) override
+    {
+        HandlePlayerDeath(killed);
+    }
+
+    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
+    {
+        HandlePlayerDeath(killed);
+    }
+
+    void OnPlayerRepop(Player* player) override
+    {
+        if (!player)
+            return;
+
+        if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+        {
+            ClearPendingState(player->GetGUID());
+            return;
+        }
+
+        if (MarkPlayerEliminated(player))
+            sPvpveDungeonMgr->OnPlayerEliminated(player);
+
+        ScheduleTeleportOut(player);
+    }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(guid);
+        if (!run)
+        {
+            ClearPendingState(guid);
+            return;
+        }
+
+        DungeonTemplate const* dungeonTemplate = sPvpveDungeonMgr->GetDungeonTemplate(run->TemplateId);
+        if (!dungeonTemplate)
+        {
+            ClearPendingState(guid);
+            return;
+        }
+
+        if (player->GetMapId() != dungeonTemplate->MapId)
+        {
+            sPvpveDungeonMgr->OnPlayerLeftMap(player);
+            ClearPendingState(guid);
+        }
+    }
+
+private:
+    void HandlePlayerDeath(Player* player)
+    {
+        if (!player)
+            return;
+
+        if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+        {
+            ClearPendingState(player->GetGUID());
+            return;
+        }
+
+        bool const firstElimination = MarkPlayerEliminated(player);
+        if (firstElimination)
+            sPvpveDungeonMgr->OnPlayerEliminated(player);
+
+        ForceRelease(player);
+        ScheduleTeleportOut(player);
+    }
+
+    bool MarkPlayerEliminated(Player* player)
+    {
+        if (!player)
+            return false;
+
+        return _eliminatedPlayers.insert(player->GetGUID()).second;
+    }
+
+    void ForceRelease(Player* player)
+    {
+        if (!player)
+            return;
+
+        if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            player->RepopAtGraveyard();
+    }
+
+    TeleportDestination GetTeleportLocation(Player const* player) const
+    {
+        if (!player)
+            return kAllianceTeleportDestination;
+
+        return player->GetTeamId() == TEAM_ALLIANCE ? kAllianceTeleportDestination : kHordeTeleportDestination;
+    }
+
+    void ScheduleTeleportOut(Player* player)
+    {
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        if (!_pendingTeleport.insert(guid).second)
+            return;
+
+        player->m_Events.AddEventAtOffset([this, guid]()
+        {
+            _pendingTeleport.erase(guid);
+
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            if (!player)
+                return;
+
+            if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+            {
+                ClearPendingState(guid);
+                return;
+            }
+
+            if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                player->RepopAtGraveyard();
+
+            TeleportDestination const destination = GetTeleportLocation(player);
+            player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
+        }, 1s);
+    }
+
+    void ClearPendingState(ObjectGuid const& guid)
+    {
+        _eliminatedPlayers.erase(guid);
+        _pendingTeleport.erase(guid);
+    }
+
+    GuidSet _eliminatedPlayers;
+    GuidSet _pendingTeleport;
+};
+
 struct PvpveDungeonWorldScript : WorldScript
 {
     PvpveDungeonWorldScript() : WorldScript("pvpve_dungeon_world") { }
@@ -453,6 +854,7 @@ void AddSC_npc_pvpve_dungeon_queue();
 
 void AddSC_custom_pvpve_dungeon()
 {
+    new PvpveDungeonPlayerScript();
     new PvpveDungeonWorldScript();
     AddSC_npc_pvpve_dungeon_queue();
 }
