@@ -73,20 +73,16 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
-    bool IsTrapGameObject(WorldObject const* caster)
+    bool IsTrapGameObject(GameObject const* caster)
     {
         if (!caster)
             return false;
 
-        GameObject const* goCaster = caster->ToGameObject();
-        if (!goCaster)
-            return false;
-
-        return goCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
+        return caster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
     }
 
     // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
-    bool TrapGameObjectCanIgnoreTargetFailure(WorldObject const* caster, SpellCastResult result)
+    bool TrapGameObjectCanIgnoreTargetFailure(GameObject const* caster, SpellCastResult result)
     {
         if (result == SPELL_CAST_OK)
             return false;
@@ -94,19 +90,15 @@ namespace
         return IsTrapGameObject(caster);
     }
 
-    void SendTrapDebugServerMessageToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
+    void SendTrapDebugServerMessageToOwner(GameObject const* trapCaster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
     {
-        if (!caster || !spellInfo)
+        if (!trapCaster || !spellInfo)
             return;
 
         if (result == SPELL_CAST_OK)
             return;
 
-        if (!IsTrapGameObject(caster))
-            return;
-
-        GameObject const* trapCaster = caster->ToGameObject();
-        if (!trapCaster)
+        if (!IsTrapGameObject(trapCaster))
             return;
 
         Unit* owner = trapCaster->GetOwner();
@@ -685,6 +677,9 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
         if (m_originalCaster && !m_originalCaster->IsInWorld())
             m_originalCaster = nullptr;
     }
+
+    m_triggeringGameObjectGUID.Clear();
+    m_triggeringGameObject = nullptr;
 
     m_spellState = SPELL_STATE_NULL;
     _triggeredCastFlags = triggerFlags;
@@ -5299,7 +5294,8 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
 
 SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint32* param2 /*= nullptr*/)
 {
-    bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS) && IsTrapGameObject(m_caster);
+    GameObject const* trapCaster = GetTrapGameObject();
+    bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS) && IsTrapGameObject(trapCaster);
 
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
@@ -5479,9 +5475,9 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     {
         // Check explicit target for m_originalCaster - todo: get rid of such workarounds
         WorldObject* caster = m_caster;
-        // in case of gameobjects like traps, we need the gameobject itself to check target validity
-        // otherwise, if originalCaster is far away and cannot detect the target, the trap would not hit the target
-        if (m_originalCaster && !caster->ToGameObject())
+        if (GameObject* trapCasterForTarget = GetTrapGameObject())
+            caster = trapCasterForTarget;
+        else if (m_originalCaster && !caster->ToGameObject())
             caster = m_originalCaster;
 
         SpellCastResult castResult = m_spellInfo->CheckExplicitTarget(caster, m_targets.GetObjectTarget(), m_targets.GetItemTarget());
@@ -5490,29 +5486,30 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             if (!m_targets.GetObjectTarget() && !m_targets.GetUnitTarget())
                 return castResult;
 
-            if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
+            if (!TrapGameObjectCanIgnoreTargetFailure(trapCaster, castResult))
                 return castResult;
 
-            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
+            SendTrapDebugServerMessageToOwner(trapCaster, m_spellInfo, m_targets, castResult, m_customError);
         }
     }
 
     if (Unit* target = m_targets.GetUnitTarget())
     {
-        SpellCastResult castResult = m_spellInfo->CheckTarget(m_caster, target, m_caster->GetTypeId() == TYPEID_GAMEOBJECT); // skip stealth checks for GO casts
+        WorldObject const* casterForTargetCheck = trapCaster ? static_cast<WorldObject const*>(trapCaster) : m_caster;
+        SpellCastResult castResult = m_spellInfo->CheckTarget(casterForTargetCheck, target, trapCaster != nullptr); // skip stealth checks for GO casts
         if (castResult != SPELL_CAST_OK)
         {
-            if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
+            if (!TrapGameObjectCanIgnoreTargetFailure(trapCaster, castResult))
                 return castResult;
 
-            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
+            SendTrapDebugServerMessageToOwner(trapCaster, m_spellInfo, m_targets, castResult, m_customError);
         }
 
-        if (target != m_caster)
+        if (target != casterForTargetCheck)
         {
             // Must be behind the target
             if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET)
-                && target->HasInArc(static_cast<float>(M_PI), m_caster))
+                && target->HasInArc(static_cast<float>(M_PI), casterForTargetCheck))
             {
                 //pounce
                 bool pounceOk = false;
@@ -5530,11 +5527,11 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
             }
 
             // Target must be facing you
-            if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER) && !target->HasInArc(static_cast<float>(M_PI), m_caster))
+            if (m_spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER) && !target->HasInArc(static_cast<float>(M_PI), casterForTargetCheck))
                 return SPELL_FAILED_NOT_INFRONT;
 
             // Ignore LOS for gameobjects casts
-            if (m_caster->GetTypeId() != TYPEID_GAMEOBJECT)
+            if (!trapCaster)
             {
                 WorldObject* losTarget = m_caster;
                 if (IsTriggered() && m_triggeredByAuraSpell)
@@ -6773,6 +6770,10 @@ SpellCastResult Spell::CheckRange(bool strict) const
     minRange *= minRange;
     maxRange *= maxRange;
 
+    WorldObject const* rangeCaster = m_caster;
+    if (GameObject const* goCaster = GetAssociatedGameObject())
+        rangeCaster = goCaster;
+
     Unit* target = m_targets.GetUnitTarget();
     if (!target && GetSpellInfo()->GetEffect(EFFECT_0).TargetA.GetTarget() == TARGET_UNIT_PET)
     {
@@ -6782,16 +6783,16 @@ SpellCastResult Spell::CheckRange(bool strict) const
             target = p->GetPet();
         }
     }
-    if (target && target != m_caster)
+    if (target && target != rangeCaster)
     {
-        if (m_caster->GetExactDistSq(target) > maxRange)
+        if (rangeCaster->GetExactDistSq(target) > maxRange)
             return SPELL_FAILED_OUT_OF_RANGE;
 
-        if (minRange > 0.0f && m_caster->GetExactDistSq(target) < minRange)
+        if (minRange > 0.0f && rangeCaster->GetExactDistSq(target) < minRange)
             return SPELL_FAILED_OUT_OF_RANGE;
 
-        if (m_caster->GetTypeId() == TYPEID_PLAYER &&
-            (m_spellInfo->FacingCasterFlags & SPELL_FACING_FLAG_INFRONT) && !m_caster->HasInArc(static_cast<float>(M_PI), target))
+        if (rangeCaster->GetTypeId() == TYPEID_PLAYER &&
+            (m_spellInfo->FacingCasterFlags & SPELL_FACING_FLAG_INFRONT) && !rangeCaster->HasInArc(static_cast<float>(M_PI), target))
             return SPELL_FAILED_UNIT_NOT_INFRONT;
     }
 
@@ -6803,9 +6804,9 @@ SpellCastResult Spell::CheckRange(bool strict) const
 
     if (m_targets.HasDst() && !m_targets.HasTraj())
     {
-        if (m_caster->GetExactDistSq(m_targets.GetDstPos()) > maxRange)
+        if (rangeCaster->GetExactDistSq(m_targets.GetDstPos()) > maxRange)
             return SPELL_FAILED_OUT_OF_RANGE;
-        if (minRange > 0.0f && m_caster->GetExactDistSq(m_targets.GetDstPos()) < minRange)
+        if (minRange > 0.0f && rangeCaster->GetExactDistSq(m_targets.GetDstPos()) < minRange)
             return SPELL_FAILED_OUT_OF_RANGE;
     }
 
@@ -7591,6 +7592,15 @@ bool Spell::UpdatePointers()
 
     m_targets.Update(m_caster);
 
+    if (m_triggeringGameObjectGUID)
+    {
+        m_triggeringGameObject = ObjectAccessor::GetGameObject(*m_caster, m_triggeringGameObjectGUID);
+        if (m_triggeringGameObject && !m_triggeringGameObject->IsInWorld())
+            m_triggeringGameObject = nullptr;
+    }
+    else
+        m_triggeringGameObject = nullptr;
+
     // further actions done only for dest targets
     if (!m_targets.HasDst())
         return true;
@@ -7657,7 +7667,7 @@ bool Spell::CheckEffectTarget(Unit const* target, SpellEffectInfo const& spellEf
         return true;
 
     // check if gameobject ignores LOS
-    if (GameObject const* gobCaster = m_caster->ToGameObject())
+    if (GameObject const* gobCaster = GetAssociatedGameObject())
         if (gobCaster->GetGOInfo()->IsIgnoringLOSChecks())
             return true;
 
@@ -8145,6 +8155,37 @@ void Spell::SetSpellValue(SpellValueMod mod, int32 value)
             m_spellValue->CriticalChance = value / 100.0f; // @todo ugly /100 remove when basepoints are double
             break;
     }
+}
+
+void Spell::SetTriggeringGameObject(ObjectGuid const& guid)
+{
+    m_triggeringGameObjectGUID = guid;
+    if (!guid)
+    {
+        m_triggeringGameObject = nullptr;
+        return;
+    }
+
+    m_triggeringGameObject = ObjectAccessor::GetGameObject(*m_caster, guid);
+    if (m_triggeringGameObject && !m_triggeringGameObject->IsInWorld())
+        m_triggeringGameObject = nullptr;
+}
+
+GameObject* Spell::GetAssociatedGameObject() const
+{
+    if (GameObject* goCaster = m_caster->ToGameObject())
+        return goCaster;
+
+    return m_triggeringGameObject;
+}
+
+GameObject* Spell::GetTrapGameObject() const
+{
+    if (GameObject* goCaster = GetAssociatedGameObject())
+        if (goCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP)
+            return goCaster;
+
+    return nullptr;
 }
 
 void Spell::PrepareTargetProcessing()
