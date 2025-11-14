@@ -45,7 +45,7 @@ char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, Posit
     "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
 
 constexpr uint32 kPvpveFfaAuraSpellId = 0;
-constexpr uint32 kPvpveFfaPlayerFlag = PLAYER_FLAGS_FFA_PVP;
+constexpr uint32 kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
@@ -1157,8 +1157,8 @@ void ApplyPvpveFfaState(Player* player)
         return;
     }
 
-    if (!player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
-        player->SetFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
+    if (!player->HasPvpFlag(kPvpveFfaPvpFlag))
+        player->SetPvpFlag(kPvpveFfaPvpFlag);
 }
 
 void ClearPvpveFfaState(Player* player)
@@ -1172,6 +1172,6 @@ void ClearPvpveFfaState(Player* player)
         return;
     }
 
-    if (player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
-        player->RemoveFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
+    if (player->HasPvpFlag(kPvpveFfaPvpFlag))
+        player->RemovePvpFlag(kPvpveFfaPvpFlag);
 }
