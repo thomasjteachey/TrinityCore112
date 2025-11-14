@@ -47,27 +47,6 @@
 #include "WorldPacket.h"
 #include <numeric>
 
-namespace
-{
-bool IsNaturesGraspAura(uint32 spellId)
-{
-    switch (spellId)
-    {
-        case 16689:
-        case 16810:
-        case 16811:
-        case 16812:
-        case 16813:
-        case 17329:
-        case 27009:
-        case 53312:
-            return true;
-        default:
-            return false;
-    }
-}
-}
-
 //
 // EFFECT HANDLER NOTES
 //
