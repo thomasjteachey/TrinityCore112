@@ -49,6 +49,7 @@
 #include "ScriptMgr.h"
 #include "SmartEnum.h"
 #include "SharedDefines.h"
+#include "StringFormat.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -150,6 +151,56 @@ namespace
             message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << ".";
 
         sWorld->SendServerMessage(SERVER_MSG_STRING, message.str(), ownerPlayer);
+    }
+
+    char const* GetNaturesGraspMissReason(SpellMissInfo missInfo)
+    {
+        switch (missInfo)
+        {
+            case SPELL_MISS_MISS: return "missed";
+            case SPELL_MISS_RESIST: return "was resisted";
+            case SPELL_MISS_DODGE: return "was dodged";
+            case SPELL_MISS_PARRY: return "was parried";
+            case SPELL_MISS_BLOCK: return "was blocked";
+            case SPELL_MISS_EVADE: return "evaded";
+            case SPELL_MISS_IMMUNE:
+            case SPELL_MISS_IMMUNE2: return "was immune";
+            case SPELL_MISS_DEFLECT: return "was deflected";
+            case SPELL_MISS_ABSORB: return "was absorbed";
+            case SPELL_MISS_REFLECT: return "was reflected";
+            default:
+                break;
+        }
+
+        return nullptr;
+    }
+
+    void ReportNaturesGraspMiss(Spell* spell, SpellMissInfo missInfo, Unit* target)
+    {
+        if (missInfo == SPELL_MISS_NONE || !target)
+            return;
+
+        SpellInfo const* triggeredByAura = spell->GetTriggeredByAuraSpell();
+        if (!triggeredByAura || !IsNaturesGraspAura(triggeredByAura->Id))
+            return;
+
+        Player* playerCaster = spell->GetCaster() ? spell->GetCaster()->ToPlayer() : nullptr;
+        if (!playerCaster)
+            return;
+
+        WorldSession* session = playerCaster->GetSession();
+        if (!session || session->GetSecurity() <= SEC_PLAYER)
+            return;
+
+        if (char const* reason = GetNaturesGraspMissReason(missInfo))
+        {
+            std::string targetName = target->GetName();
+            if (targetName.empty())
+                targetName = "target";
+
+            std::string const message = Trinity::StringFormat("Nature's Grasp failed on {}: {}", targetName, reason);
+            sWorld->SendServerMessage(SERVER_MSG_STRING, message, playerCaster);
+        }
     }
 }
 
@@ -2431,6 +2482,13 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
             unit->SetInCombatWith(spell->m_originalCaster);
     }
 
+    bool reportedNaturesGraspFailure = false;
+    if (MissCondition != SPELL_MISS_NONE)
+    {
+        ReportNaturesGraspMiss(spell, MissCondition, unit);
+        reportedNaturesGraspFailure = true;
+    }
+
     spell->CallScriptBeforeHitHandlers(MissCondition);
 
     _enablePVP = false; // need to check PvP state before spell effects, but act on it afterwards
@@ -2444,6 +2502,12 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
         SpellMissInfo missInfo = spell->PreprocessSpellHit(_spellHitTarget, ScaleAura, *this);
         if (missInfo != SPELL_MISS_NONE)
         {
+            if (!reportedNaturesGraspFailure)
+            {
+                ReportNaturesGraspMiss(spell, missInfo, unit);
+                reportedNaturesGraspFailure = true;
+            }
+
             if (missInfo != SPELL_MISS_MISS)
                 spell->m_caster->SendSpellMiss(unit, spell->m_spellInfo->Id, missInfo);
             spell->m_damage = 0;
