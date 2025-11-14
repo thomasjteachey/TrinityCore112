@@ -133,6 +133,71 @@ void PvpveDungeonMgr::LoadConfigFromDB()
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: loaded spawn point data for {} templates.", _spawns.size());
 }
 
+bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids)
+{
+    if (memberGuids.empty())
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: cannot queue empty team for template {}.", templateId);
+        return false;
+    }
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(templateId);
+    if (!dungeonTemplate || !dungeonTemplate->Enabled)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: template {} is not available for queueing.", templateId);
+        return false;
+    }
+
+    if (dungeonTemplate->MinPlayers && memberGuids.size() < dungeonTemplate->MinPlayers)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: team has too few members ({}) for template {} (min {}).",
+            memberGuids.size(), templateId, uint32(dungeonTemplate->MinPlayers));
+        return false;
+    }
+
+    if (dungeonTemplate->MaxPlayers && memberGuids.size() > dungeonTemplate->MaxPlayers)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: team has too many members ({}) for template {} (max {}).",
+            memberGuids.size(), templateId, uint32(dungeonTemplate->MaxPlayers));
+        return false;
+    }
+
+    for (ObjectGuid const& guid : memberGuids)
+    {
+        if (!guid)
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: refusing to queue team for template {} with invalid member GUID.", templateId);
+            return false;
+        }
+
+        if (_playerToTeam.find(guid) != _playerToTeam.end())
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} is already assigned to a PvPvE team.", guid.ToString());
+            return false;
+        }
+    }
+
+    PvpveTeam team;
+    team.Id = _nextTeamId++;
+    team.TemplateId = templateId;
+    team.Members = memberGuids;
+    team.CreatedTime = std::time(nullptr);
+    team.Ready = true;
+
+    auto [teamItr, inserted] = _teams.emplace(team.Id, std::move(team));
+    if (!inserted)
+    {
+        TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: failed to store team {} for template {}.", team.Id, templateId);
+        return false;
+    }
+
+    for (ObjectGuid const& guid : memberGuids)
+        _playerToTeam[guid] = teamItr->first;
+
+    QueueTeam(teamItr->first);
+    return true;
+}
+
 void PvpveDungeonMgr::QueueTeam(uint64 teamId)
 {
     auto teamItr = _teams.find(teamId);
@@ -384,7 +449,10 @@ struct PvpveDungeonWorldScript : WorldScript
 };
 }
 
+void AddSC_npc_pvpve_dungeon_queue();
+
 void AddSC_custom_pvpve_dungeon()
 {
     new PvpveDungeonWorldScript();
+    AddSC_npc_pvpve_dungeon_queue();
 }

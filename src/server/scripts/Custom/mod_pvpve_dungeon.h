@@ -88,6 +88,7 @@ public:
     uint64 CreateTeam(std::vector<Player*> const& players, uint32 templateId);
     void RemoveTeam(uint64 teamId);
     void QueueTeam(uint64 teamId);
+    bool QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids);
     void CancelQueue(uint64 teamId);
 
     void Update(uint32 diff);
