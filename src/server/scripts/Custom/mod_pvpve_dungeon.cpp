@@ -91,6 +91,10 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
         run->InstanceMap = player->GetMap();
 
     run->InstanceScript = instanceScript;
+
+    // Allow PvPvE participants to remain inside the dungeon without being
+    // ejected for not being in the instance owner’s party.
+    player->m_InstanceValid = true;
 }
 
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()
@@ -1085,6 +1089,10 @@ void ApplyPvpveFfaState(Player* player)
     if (!player)
         return;
 
+    player->pvpInfo.IsInFFAPvPArea = true;
+    player->UpdatePvPState();
+    player->SetPvP(true);
+
     if (kPvpveFfaAuraSpellId)
     {
         if (!player->HasAura(kPvpveFfaAuraSpellId))
@@ -1101,6 +1109,9 @@ void ClearPvpveFfaState(Player* player)
 {
     if (!player)
         return;
+
+    player->pvpInfo.IsInFFAPvPArea = false;
+    player->UpdatePvPState();
 
     if (kPvpveFfaAuraSpellId)
     {
