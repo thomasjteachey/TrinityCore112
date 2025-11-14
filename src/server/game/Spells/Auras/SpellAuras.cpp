@@ -37,6 +37,7 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 #include <iomanip>
 #include <sstream>
 
@@ -2095,7 +2096,11 @@ void Aura::LogHeartbeatRemoval(Unit* target, AuraRemoveMode removeMode) const
         return;
 
     Player* casterPlayer = caster->ToPlayer();
-    if (!casterPlayer || !casterPlayer->IsGameMaster())
+    if (!casterPlayer)
+        return;
+
+    WorldSession* casterSession = casterPlayer->GetSession();
+    if (!casterSession || casterSession->GetSecurity() < SEC_GAMEMASTER)
         return;
 
     float totalSeconds = m_maxDuration > 0 ? float(m_maxDuration) / IN_MILLISECONDS : 0.0f;
