@@ -3566,6 +3566,8 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
     aura->HandleAuraSpecificMods(aurApp, caster, false, false);
 
+    aura->LogHeartbeatRemoval(this, removeMode);
+
     if (Player* player = ToPlayer())
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
