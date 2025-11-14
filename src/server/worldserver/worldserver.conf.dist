@@ -3204,6 +3204,27 @@ DireMaulBeads.AreaIds = 495,496,498,2557,3217
 DireMaulBeads.ChestGameObjectId = 0
 DireMaulBeads.ChestDespawnSeconds = 300
 
+#    StockadesPvPvE.ChestGameObjectId
+#        Description: GameObject entry to summon when a Stockades PvPvE run finishes.
+#                     Set to 0 to disable automatic chest spawning.
+#        Default:     0
+#
+#    StockadesPvPvE.ChestDespawnSeconds
+#        Description: Lifetime, in seconds, for the Stockades PvPvE reward chest.
+#        Default:     300
+#
+#    StockadesPvPvE.ChestSpawnX / StockadesPvPvE.ChestSpawnY / StockadesPvPvE.ChestSpawnZ
+#    StockadesPvPvE.ChestSpawnO
+#        Description: Coordinates and facing used for the Stockades PvPvE reward chest.
+#        Default:     71.879 / -15.478 / -20.215 / 0.0
+
+StockadesPvPvE.ChestGameObjectId = 0
+StockadesPvPvE.ChestDespawnSeconds = 300
+StockadesPvPvE.ChestSpawnX = 71.879
+StockadesPvPvE.ChestSpawnY = -15.478
+StockadesPvPvE.ChestSpawnZ = -20.215
+StockadesPvPvE.ChestSpawnO = 0.0
+
 #     AllowTrackBothResources
 #        Description: Allows players to track herbs and minerals at the same time (if they have the skills)
 #        Default:     0 - (Do not allow)
