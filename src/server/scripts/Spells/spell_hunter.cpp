@@ -705,7 +705,11 @@ class spell_hun_masters_call : public SpellScript
 
     SpellCastResult DoCheckCast()
     {
-        Guardian* pet = GetCaster()->ToPlayer()->GetGuardianPet();
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return SPELL_FAILED_ERROR;
+
+        Guardian* pet = player->GetGuardianPet();
         ASSERT(pet); // checked in Spell::CheckCast
 
         if (!pet->IsPet() || !pet->IsAlive())
@@ -1593,7 +1597,11 @@ class spell_hun_outmaneuver : public SpellScript
 
     SpellCastResult DoCheckCast()
     {
-        Guardian* pet = GetCaster()->ToPlayer()->GetGuardianPet();
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return SPELL_FAILED_ERROR;
+
+        Guardian* pet = player->GetGuardianPet();
         ASSERT(pet); // checked in Spell::CheckCast
 
         if (!pet->IsPet() || !pet->IsAlive())
@@ -1611,6 +1619,11 @@ class spell_hun_outmaneuver : public SpellScript
 
         if (!pet->IsWithinLOSInMap(GetCaster()))
             return SPELL_FAILED_LINE_OF_SIGHT;
+
+        float const playerZ = player->GetPositionZ();
+        float const petZ = pet->GetPositionZ();
+        if (petZ - playerZ > 20.0f || playerZ - petZ > 20.0f)
+            return SPELL_FAILED_NOPATH;
 
         return SPELL_CAST_OK;
     }
