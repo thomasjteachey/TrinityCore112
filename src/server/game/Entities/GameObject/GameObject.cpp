@@ -783,7 +783,7 @@ void GameObject::Update(uint32 diff)
                             {
                                 if (Player* playerOwner = owner->ToPlayer())
                                 {
-                                    if (playerOwner->getClass() == CLASS_HUNTER)
+                                    if (playerOwner->GetClass() == CLASS_HUNTER)
                                     {
                                         TriggerCastFlags triggerFlags = TriggerCastFlags(TRIGGERED_IGNORE_CASTER_AURAS
                                             | TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_IGNORE_GCD
