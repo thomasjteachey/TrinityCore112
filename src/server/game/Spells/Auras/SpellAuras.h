@@ -294,9 +294,12 @@ class TC_GAME_API Aura
         AuraEffect* m_effects[MAX_SPELL_EFFECTS];
         ApplicationMap m_applications;
 
+        void LogHeartbeatRemoval(Unit* target, AuraRemoveMode removeMode) const;
+
         float m_heartbeatResistChance = 0;                      // Chance to break this spell due to heartbeat resistance
         int32 m_heartbeatDurationCap;                    // Heartbeat resistance periodic interval
         int32 m_heartbeatResistTimer;                       // Timer for heartbeat resistance
+        float m_heartbeatResistRoll = 0.0f;                  // Cached heartbeat roll (0-1)
 
         bool m_isRemoved:1;
         bool m_isSingleTarget:1;                        // true if it's a single target spell and registered at caster - can change at spell steal for example
