@@ -39,6 +39,8 @@ char const* const kTemplateQuery = "SELECT Id, MapId, Enabled, MinLevel, MaxLeve
 
 char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, PositionY, PositionZ, Orientation "
     "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
+
+constexpr uint32 kPvpveFfaAuraSpellId = 0;
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
@@ -857,4 +859,36 @@ void AddSC_custom_pvpve_dungeon()
     new PvpveDungeonPlayerScript();
     new PvpveDungeonWorldScript();
     AddSC_npc_pvpve_dungeon_queue();
+}
+
+void ApplyPvpveFfaState(Player* player)
+{
+    if (!player)
+        return;
+
+    if (kPvpveFfaAuraSpellId)
+    {
+        if (!player->HasAura(kPvpveFfaAuraSpellId))
+            player->AddAura(kPvpveFfaAuraSpellId, player);
+
+        return;
+    }
+
+    if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP))
+        player->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP);
+}
+
+void ClearPvpveFfaState(Player* player)
+{
+    if (!player)
+        return;
+
+    if (kPvpveFfaAuraSpellId)
+    {
+        player->RemoveAura(kPvpveFfaAuraSpellId);
+        return;
+    }
+
+    if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP))
+        player->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_FFA_PVP);
 }
