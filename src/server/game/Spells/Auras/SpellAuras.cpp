@@ -37,6 +37,8 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <iomanip>
+#include <sstream>
 
 AuraCreateInfo::AuraCreateInfo(SpellInfo const* spellInfo, uint8 auraEffMask, WorldObject* owner) :
     _spellInfo(spellInfo), _auraEffectMask(auraEffMask), _owner(owner)
@@ -2088,6 +2090,14 @@ void Aura::LogHeartbeatRemoval(Unit* target, AuraRemoveMode removeMode) const
     if (m_heartbeatResistChance <= 0.0f || !target)
         return;
 
+    Unit* caster = GetCaster();
+    if (!caster)
+        return;
+
+    Player* casterPlayer = caster->ToPlayer();
+    if (!casterPlayer || !casterPlayer->IsGameMaster())
+        return;
+
     float totalSeconds = m_maxDuration > 0 ? float(m_maxDuration) / IN_MILLISECONDS : 0.0f;
     float elapsedMilliseconds = float(m_maxDuration - m_duration);
     if (elapsedMilliseconds < 0.0f)
@@ -2102,17 +2112,15 @@ void Aura::LogHeartbeatRemoval(Unit* target, AuraRemoveMode removeMode) const
     if (roll > 1.0f)
         roll = 1.0f;
 
-    TC_LOG_INFO("server.combat",
-        "Heartbeat resist aura '{}' removed from '{}' (mode {}). Duration {:.2f}/{:.2f}s ({:.2f}% effectiveness, {:.2f}s left). Roll {:.2f}/100 (chance {}%).",
-        GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()],
-        target->GetName(),
-        uint32(removeMode),
-        elapsedSeconds,
-        totalSeconds,
-        effectiveness,
-        secondsRemaining,
-        roll * 100.0f,
-        m_heartbeatResistChance);
+    std::ostringstream message;
+    message.setf(std::ios::fixed, std::ios::floatfield);
+    message << std::setprecision(2)
+        << "Heartbeat resist aura '" << GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()]
+        << "' removed from '" << target->GetName() << "' (mode " << uint32(removeMode) << "). Duration "
+        << elapsedSeconds << "/" << totalSeconds << "s (" << effectiveness << "% effectiveness, "
+        << secondsRemaining << "s left). Roll " << roll * 100.0f << "/100 (chance " << m_heartbeatResistChance << "%).";
+
+    target->Whisper(message.str(), LANG_UNIVERSAL, casterPlayer);
 }
 
 void Aura::SetHeartbeatResist(uint32 chance, int32 originalDuration, uint32 drLevel, DiminishingGroup drGroup)
