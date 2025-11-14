@@ -448,6 +448,8 @@ class TC_GAME_API Spell
 
         WorldObject* GetCaster() const { return m_caster; }
         Unit* GetOriginalCaster() const { return m_originalCaster; }
+        GameObject* GetAssociatedGameObject() const;
+        GameObject* GetTrapGameObject() const;
         SpellInfo const* GetSpellInfo() const { return m_spellInfo; }
         SpellInfo const* GetTriggeredByAuraSpell() const { return m_triggeredByAuraSpell; }
         int32 GetPowerCost() const { return m_powerCost; }
@@ -457,6 +459,7 @@ class TC_GAME_API Spell
         void CleanupTargetList();
 
         void SetSpellValue(SpellValueMod mod, int32 value);
+        void SetTriggeringGameObject(ObjectGuid const& guid);
 
         Spell** m_selfContainer;                            // pointer to our spell container (if applicable)
 
@@ -479,6 +482,8 @@ class TC_GAME_API Spell
         ObjectGuid m_originalCasterGUID;                    // real source of cast (aura caster/etc), used for spell targets selection
                                                             // e.g. damage around area spell trigered by victim aura and damage enemies of aura caster
         Unit* m_originalCaster;                             // cached pointer for m_originalCaster, updated at Spell::UpdatePointers()
+        ObjectGuid m_triggeringGameObjectGUID;
+        GameObject* m_triggeringGameObject;
 
         // Spell data
         SpellSchoolMask m_spellSchoolMask;                  // Spell school (can be overwrite for some spells (wand shoot for example)

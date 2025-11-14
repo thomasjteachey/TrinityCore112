@@ -776,14 +776,38 @@ void GameObject::Update(uint32 diff)
                         // Trap spells should still activate even if their owner is in a state
                         // that normally prevents casting (for example Feign Death).  Ignore
                         // caster aura checks so trap triggers are not cancelled by owner state.
-                        CastSpellExtraArgs args(TRIGGERED_IGNORE_CASTER_AURAS);
-                        args.SetOriginalCaster(GetOwnerGUID());
                         if (goInfo->trap.spellId)
                         {
-                            if (CastSpell(target, goInfo->trap.spellId, args) != SPELL_CAST_OK)
+                            bool castSucceeded = false;
+                            if (Unit* owner = GetOwner())
                             {
-                                SetLootState(GO_READY);
-                                break;
+                                if (Player* playerOwner = owner->ToPlayer())
+                                {
+                                    if (playerOwner->GetClass() == CLASS_HUNTER)
+                                    {
+                                        TriggerCastFlags triggerFlags = TriggerCastFlags(TRIGGERED_IGNORE_CASTER_AURAS
+                                            | TRIGGERED_IGNORE_CAST_IN_PROGRESS | TRIGGERED_IGNORE_GCD
+                                            | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
+                                            | TRIGGERED_IGNORE_CAST_ITEM | TRIGGERED_IGNORE_SHAPESHIFT
+                                            | TRIGGERED_IGNORE_CASTER_AURASTATE | TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE
+                                            | TRIGGERED_IGNORE_SET_FACING);
+                                        CastSpellExtraArgs args(triggerFlags);
+                                        args.SetTriggeringGameObject(GetGUID());
+                                        if (owner->CastSpell(target, goInfo->trap.spellId, args) == SPELL_CAST_OK)
+                                            castSucceeded = true;
+                                    }
+                                }
+                            }
+
+                            if (!castSucceeded)
+                            {
+                                CastSpellExtraArgs args(TRIGGERED_IGNORE_CASTER_AURAS);
+                                args.SetOriginalCaster(GetOwnerGUID());
+                                if (CastSpell(target, goInfo->trap.spellId, args) != SPELL_CAST_OK)
+                                {
+                                    SetLootState(GO_READY);
+                                    break;
+                                }
                             }
                         }
 

@@ -346,6 +346,7 @@ struct TC_GAME_API CastSpellExtraArgs
     CastSpellExtraArgs& SetCastItem(Item* item) { CastItem = item; return *this; }
     CastSpellExtraArgs& SetTriggeringAura(AuraEffect const* triggeringAura) { TriggeringAura = triggeringAura; return *this; }
     CastSpellExtraArgs& SetOriginalCaster(ObjectGuid const& guid) { OriginalCaster = guid; return *this; }
+    CastSpellExtraArgs& SetTriggeringGameObject(ObjectGuid const& guid) { TriggeringGameObjectGUID = guid; return *this; }
     CastSpellExtraArgs& AddSpellMod(SpellValueMod mod, int32 val) { SpellValueOverrides.AddMod(mod, val); return *this; }
     CastSpellExtraArgs& AddSpellBP0(int32 val) { return AddSpellMod(SPELLVALUE_BASE_POINT0, val); } // because i don't want to type SPELLVALUE_BASE_POINT0 300 times
     CastSpellExtraArgs& AddSpellBP1(int32 val) { return AddSpellMod(SPELLVALUE_BASE_POINT1, val); } // because i don't want to type SPELLVALUE_BASE_POINT0 300 times
@@ -355,6 +356,7 @@ struct TC_GAME_API CastSpellExtraArgs
     Item* CastItem = nullptr;
     AuraEffect const* TriggeringAura = nullptr;
     ObjectGuid OriginalCaster = ObjectGuid::Empty;
+    ObjectGuid TriggeringGameObjectGUID = ObjectGuid::Empty;
     struct
     {
         friend struct CastSpellExtraArgs;
