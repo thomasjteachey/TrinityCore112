@@ -107,6 +107,7 @@ public:
     void OnPlayerEnterDungeon(Player* player);
     void OnPlayerLeaveDungeon(Player* player);
     void OnPlayerDeath(Player* player);
+    void OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId);
     void OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript);
     bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
     bool IsPlayerInPvpveRun(Player const* player) const;
@@ -125,7 +126,6 @@ private:
     uint8 PickSpawnIndex(uint32 templateId);
     void CleanupRun(uint64 runId);
     void CleanupPlayer(ObjectGuid const& guid);
-    void OnInstanceCreated(Map* map);
     void OnPlayerEliminated(Player* player);
     void OnPlayerLeftMap(Player* player);
     void EvaluateRunState(PvpveDungeonRun& run);

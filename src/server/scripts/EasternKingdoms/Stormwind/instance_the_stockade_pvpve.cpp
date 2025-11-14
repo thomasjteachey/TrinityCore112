@@ -124,6 +124,9 @@ public:
             if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
                 return;
 
+            if (PvpveDungeonRun* run = PvpveDungeonMgr::instance()->GetRunForPlayer(player->GetGUID()))
+                PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
+
             player->SetPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
             sPvpveDungeonMgr->OnPlayerEnteredInstance(player, this);
         }
