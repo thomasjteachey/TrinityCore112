@@ -95,6 +95,7 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
     // Allow PvPvE participants to remain inside the dungeon without being
     // ejected for not being in the instance owner’s party.
     player->m_InstanceValid = true;
+    player->SetInstanceValidityOverride(true);
 }
 
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()
@@ -478,6 +479,7 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
             continue;
         }
 
+        player->SetInstanceValidityOverride(true);
         if (instanceSave)
             player->BindToInstance(instanceSave, false);
 
@@ -681,6 +683,9 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
 
     if (!IsPlayerInPvpveRun(player))
         return;
+
+    ClearPvpveFfaState(player);
+    player->SetInstanceValidityOverride(false);
 
     ObjectGuid const guid = player->GetGUID();
     auto runItr = _playerToRun.find(guid);
@@ -957,6 +962,15 @@ public:
             sPvpveDungeonMgr->OnPlayerLeftMap(player);
             ClearPendingState(guid);
         }
+    }
+
+    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    {
+        if (!player)
+            return;
+
+        if (sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+            ApplyPvpveFfaState(player);
     }
 
     void OnLogout(Player* player) override
