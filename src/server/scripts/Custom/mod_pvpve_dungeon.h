@@ -19,10 +19,12 @@ struct DungeonTemplate
 {
     uint32 Id = 0;
     uint32 MapId = 0;
-    uint8 Difficulty = 0;
-    uint32 TimeLimit = 0;
-    uint32 MinPlayers = 0;
-    uint32 MaxPlayers = 0;
+    bool Enabled = false;
+    uint8 MinLevel = 1;
+    uint8 MaxLevel = 60;
+    uint8 MaxTeams = 1;
+    uint8 MinPlayers = 0;
+    uint8 MaxPlayers = 0;
 };
 
 struct SpawnPoint
@@ -56,6 +58,7 @@ struct PvpveDungeonRun
     bool Completed = false;
     std::vector<ObjectGuid> Players;
     std::map<ObjectGuid, uint8> PlayerSpawns;
+    std::vector<uint64> Teams;
 };
 
 struct QueuedTeam
@@ -71,8 +74,7 @@ class PvpveDungeonMgr
 public:
     static PvpveDungeonMgr* Instance();
 
-    void LoadDungeonTemplates();
-    void LoadSpawnPoints();
+    void LoadConfigFromDB();
 
     const DungeonTemplate* GetDungeonTemplate(uint32 templateId) const;
     const std::vector<SpawnPoint>* GetSpawnPoints(uint32 templateId) const;
@@ -80,6 +82,7 @@ public:
     uint64 CreateTeam(std::vector<Player*> const& players, uint32 templateId);
     void RemoveTeam(uint64 teamId);
     void QueueTeam(uint64 teamId);
+    void CancelQueue(uint64 teamId);
 
     void Update(uint32 diff);
 
@@ -94,13 +97,16 @@ public:
     void Reset();
 
 private:
-    PvpveDungeonMgr() = default;
+    PvpveDungeonMgr();
 
     void StartNextRun();
-    void AssignPlayersToRun(PvpveDungeonRun& run, PvpveTeam& team);
-    uint8 GetNextSpawnIndex(uint32 templateId);
+    void AssignTeamToRun(PvpveDungeonRun& run, PvpveTeam& team);
+    uint8 PickSpawnIndex(uint32 templateId);
     void CleanupRun(uint64 runId);
     void CleanupPlayer(ObjectGuid const& guid);
+    void OnInstanceCreated(Map* map);
+    void OnPlayerEliminated(Player* player);
+    void OnPlayerLeftMap(Player* player);
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
