@@ -48,11 +48,20 @@ struct PvpveTeam
     bool Eliminated = false;
 };
 
+class PvpveDungeonInstance
+{
+public:
+    virtual ~PvpveDungeonInstance() = default;
+    virtual void OnPvpveRunFinished(uint32 runId, PvpveTeam const& winningTeam) = 0;
+};
+
 struct PvpveDungeonRun
 {
     uint64 Id = 0;
     uint32 TemplateId = 0;
     Map* InstanceMap = nullptr;
+    uint32 InstanceId = 0;
+    PvpveDungeonInstance* InstanceScript = nullptr;
     ObjectGuid GroupGuid;
     time_t CreatedTime = 0;
     time_t StartTime = 0;
@@ -98,6 +107,7 @@ public:
     void OnPlayerEnterDungeon(Player* player);
     void OnPlayerLeaveDungeon(Player* player);
     void OnPlayerDeath(Player* player);
+    void OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript);
     bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
     bool IsPlayerInPvpveRun(Player const* player) const;
 

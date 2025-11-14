@@ -67,6 +67,31 @@ bool PvpveDungeonMgr::IsPlayerInPvpveRun(Player const* player) const
     return player && IsPlayerInPvpveRun(player->GetGUID());
 }
 
+void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript)
+{
+    if (!player || !instanceScript)
+        return;
+
+    auto runItr = _playerToRun.find(player->GetGUID());
+    if (runItr == _playerToRun.end())
+        return;
+
+    PvpveDungeonRun* run = GetRun(runItr->second);
+    if (!run)
+        return;
+
+    if (!run->InstanceId)
+    {
+        run->InstanceId = player->GetInstanceId();
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: tracking instance {} for run {}.", run->InstanceId, run->Id);
+    }
+
+    if (!run->InstanceMap)
+        run->InstanceMap = player->GetMap();
+
+    run->InstanceScript = instanceScript;
+}
+
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()
 {
     static PvpveDungeonMgr instance;
@@ -611,8 +636,16 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
 
         TC_LOG_INFO("server.custom", "PvpveDungeonMgr: run {} finished. Winning teams: {}.", run.Id, winnersList);
     }
+    if (run.InstanceScript)
+    {
+        for (uint64 teamId : winningTeams)
+        {
+            if (PvpveTeam* team = GetTeam(teamId))
+                run.InstanceScript->OnPvpveRunFinished(run.Id, *team);
+        }
+    }
 
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO notify instance scripts and distribute rewards for run {}.", run.Id);
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO distribute rewards for run {}.", run.Id);
 }
 
 namespace
