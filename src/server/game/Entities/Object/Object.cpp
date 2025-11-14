@@ -2639,20 +2639,45 @@ void WorldObject::SendSpellMiss(Unit* target, uint32 spellID, SpellMissInfo miss
         return;
     }
 
+    Player* controllingPlayer = nullptr;
+    if (Unit const* unitCaster = ToUnit())
+        controllingPlayer = unitCaster->GetCharmerOrOwnerPlayerOrPlayerItself();
+    else if (GameObject const* gameObjectCaster = ToGameObject())
+    {
+        if (Unit* owner = gameObjectCaster->GetOwner())
+            controllingPlayer = owner->GetCharmerOrOwnerPlayerOrPlayerItself();
+    }
+
+    auto const broadcastViaTarget = [&data, target](Player* extraRecipient)
+    {
+        target->SendMessageToSet(&data, true);
+
+        if (Player* playerTarget = target->ToPlayer())
+        {
+            playerTarget->SendDirectMessage(&data);
+
+            if (extraRecipient == playerTarget)
+                extraRecipient = nullptr;
+        }
+
+        if (extraRecipient)
+            extraRecipient->SendDirectMessage(&data);
+    };
+
     if (GameObject const* gameObjectCaster = ToGameObject())
     {
         if (gameObjectCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP)
         {
             // Traps despawn the moment they trigger, so they might no longer be in the world when miss feedback is sent.
             // In that case broadcast the result around the target so players nearby still get the feedback text.
-            target->SendMessageToSet(&data, true);
+            broadcastViaTarget(controllingPlayer);
             return;
         }
     }
 
     // If we reach this point we are no longer in world (for example destroyed spell caster).
     // Fallback to broadcasting the packet around the target so it still receives the feedback text.
-    target->SendMessageToSet(&data, true);
+    broadcastViaTarget(controllingPlayer);
 }
 
 FactionTemplateEntry const* WorldObject::GetFactionTemplateEntry() const
