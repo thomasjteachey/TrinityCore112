@@ -1457,6 +1457,7 @@ void World::LoadConfigSettings(bool reload)
         m_int_configs[CONFIG_PVP_TOKEN_COUNT] = 1;
 
     m_bool_configs[CONFIG_ALLOW_TRACK_BOTH_RESOURCES] = sConfigMgr->GetBoolDefault("AllowTrackBothResources", false);
+    m_bool_configs[CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS] = sConfigMgr->GetBoolDefault("Trap.DebugWhisperOnSuccess", false);
     m_bool_configs[CONFIG_NO_RESET_TALENT_COST] = sConfigMgr->GetBoolDefault("NoResetTalentsCost", false);
     m_bool_configs[CONFIG_SHOW_KICK_IN_WORLD] = sConfigMgr->GetBoolDefault("ShowKickInWorld", false);
     m_bool_configs[CONFIG_SHOW_MUTE_IN_WORLD] = sConfigMgr->GetBoolDefault("ShowMuteInWorld", false);
