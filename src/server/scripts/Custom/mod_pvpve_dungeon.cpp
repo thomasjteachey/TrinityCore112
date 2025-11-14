@@ -19,18 +19,20 @@
 
 #include "Duration.h"
 #include "DatabaseEnv.h"
-#include "Group.h"
-#include "GroupMgr.h"
+#include "InstanceSaveMgr.h"
 #include "InstanceScript.h"
 #include "Log.h"
 #include "MapInstanced.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Group.h"
+#include "Random.h"
 #include "ScriptMgr.h"
 
 #include <algorithm>
 #include <ctime>
+#include <set>
 #include <string>
 
 namespace
@@ -42,7 +44,7 @@ char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, Posit
     "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
 
 constexpr uint32 kPvpveFfaAuraSpellId = 0;
-constexpr uint32 kPvpveFfaPlayerFlag = PLAYER_FLAGS_UNK7;
+constexpr UnitPVPStateFlags kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
@@ -435,7 +437,16 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         return;
     }
 
-    uint8 spawnIndex = PickSpawnIndex(run.TemplateId);
+    uint32 const runInstanceId = run.InstanceId ? run.InstanceId : (run.InstanceMap ? run.InstanceMap->GetInstanceId() : 0u);
+    InstanceSave* instanceSave = nullptr;
+    if (runInstanceId)
+    {
+        instanceSave = sInstanceSaveMgr->GetInstanceSave(runInstanceId);
+        if (!instanceSave)
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} is tracking instance {} but no InstanceSave exists yet.", run.Id, runInstanceId);
+    }
+
+    uint8 spawnIndex = PickSpawnIndex(run);
     auto spawnItr = std::find_if(spawnList->begin(), spawnList->end(), [spawnIndex](SpawnPoint const& spawn)
     {
         return spawn.Index == spawnIndex;
@@ -455,53 +466,6 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     team.CreatedTime = std::time(nullptr);
     team.Ready = queued.Ready;
 
-    Group* group = nullptr;
-    if (!run.GroupGuid.IsEmpty())
-        group = sGroupMgr->GetGroupByGUID(run.GroupGuid.GetCounter());
-
-    Player* leader = nullptr;
-    for (ObjectGuid const& guid : team.Members)
-    {
-        leader = ObjectAccessor::FindPlayer(guid);
-        if (leader)
-            break;
-    }
-
-    if (!leader)
-    {
-        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: unable to find an online leader for team {} in run {}.", team.Id, run.Id);
-        return;
-    }
-
-    if (!group)
-    {
-        group = new Group();
-        if (!group->Create(leader))
-        {
-            TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: failed to create raid group for run {} (team {}).", run.Id, team.Id);
-            delete group;
-            return;
-        }
-
-        group->ConvertToRaid();
-        sGroupMgr->AddGroup(group);
-        run.GroupGuid = group->GetGUID();
-    }
-    else if (!group->isRaidGroup())
-        group->ConvertToRaid();
-
-    auto addToRaid = [group, runId = run.Id](Player* player) -> bool
-    {
-        if (group->IsMember(player->GetGUID()))
-            return true;
-
-        if (group->AddMember(player))
-            return true;
-
-        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: failed to add player {} to raid for run {}.", player->GetGUID().ToString(), runId);
-        return false;
-    };
-
     for (ObjectGuid const& memberGuid : team.Members)
     {
         Player* player = ObjectAccessor::FindPlayer(memberGuid);
@@ -511,8 +475,15 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
             continue;
         }
 
-        if (!addToRaid(player))
-            continue;
+        if (Group* group = player->GetGroup())
+        {
+            TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: removing player {} from group {} before entering run {}.",
+                memberGuid.ToString(), group->GetGUID().ToString(), run.Id);
+            Player::RemoveFromGroup(group, memberGuid, GROUP_REMOVEMETHOD_KICK);
+        }
+
+        if (instanceSave)
+            player->BindToInstance(instanceSave, false);
 
         if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
@@ -563,10 +534,30 @@ PvpveDungeonRun* PvpveDungeonMgr::GetRunForPlayer(ObjectGuid const& guid)
     return GetRun(itr->second);
 }
 
-uint8 PvpveDungeonMgr::PickSpawnIndex(uint32 templateId)
+uint8 PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run)
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO pick spawn index for template {}.", templateId);
-    return 0;
+    auto spawnList = GetSpawnPoints(run.TemplateId);
+    if (!spawnList || spawnList->empty())
+        return 0;
+
+    std::set<uint8> usedIndices;
+    for (uint64 teamId : run.Teams)
+    {
+        if (PvpveTeam* team = GetTeam(teamId))
+            usedIndices.insert(team->SpawnIndex);
+    }
+
+    for (SpawnPoint const& spawn : *spawnList)
+    {
+        if (!usedIndices.count(spawn.Index))
+            return spawn.Index;
+    }
+
+    uint32 randomIdx = urand(0, spawnList->size() - 1);
+    uint8 fallback = (*spawnList)[randomIdx].Index;
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: reusing spawn index {} for template {} due to exhausted slots.",
+        uint32(fallback), run.TemplateId);
+    return fallback;
 }
 
 void PvpveDungeonMgr::OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId)
@@ -648,14 +639,7 @@ void PvpveDungeonMgr::EvaluateRunState(PvpveDungeonRun& run)
             ++activeTeams;
     }
 
-    bool shouldFinish = false;
-    if (run.Teams.size() > 1 && activeTeams <= 1)
-        shouldFinish = true;
-    else if (run.Teams.size() == 1 && activeTeams == 0)
-        shouldFinish = true;
-
-    if (shouldFinish)
-        FinishRun(run);
+    // Runs now finish when the instance boss is defeated; elimination merely tracks team status.
 }
 
 void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
@@ -728,7 +712,42 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     EvaluateRunState(*run);
 }
 
-void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
+void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
+{
+    PvpveDungeonRun* run = GetRun(runId);
+    if (!run)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: ignoring boss defeat for unknown run {}.", runId);
+        return;
+    }
+
+    if (run->Finished)
+    {
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} already finished; boss defeat notification ignored.", runId);
+        return;
+    }
+
+    run->BossDefeated = true;
+
+    uint64 preferredWinner = 0;
+    if (!creditGuid.IsEmpty())
+    {
+        auto teamItr = _playerToTeam.find(creditGuid);
+        if (teamItr != _playerToTeam.end())
+        {
+            if (PvpveTeam* team = GetTeam(teamItr->second))
+            {
+                if (!team->Eliminated)
+                    preferredWinner = team->Id;
+            }
+        }
+    }
+
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: boss defeated for run {} (credit team: {}).", runId, preferredWinner);
+    FinishRun(*run, preferredWinner);
+}
+
+void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
 {
     if (run.Finished)
         return;
@@ -738,11 +757,25 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
 
     std::vector<uint64> winningTeams;
     winningTeams.reserve(run.Teams.size());
-    for (uint64 teamId : run.Teams)
+    if (preferredWinner)
     {
-        PvpveTeam* team = GetTeam(teamId);
-        if (team && !team->Eliminated)
-            winningTeams.push_back(teamId);
+        if (PvpveTeam* team = GetTeam(preferredWinner))
+        {
+            if (!team->Eliminated)
+                winningTeams.push_back(preferredWinner);
+        }
+        else
+            preferredWinner = 0;
+    }
+
+    if (winningTeams.empty())
+    {
+        for (uint64 teamId : run.Teams)
+        {
+            PvpveTeam* team = GetTeam(teamId);
+            if (team && !team->Eliminated)
+                winningTeams.push_back(teamId);
+        }
     }
 
     if (winningTeams.empty())
@@ -820,10 +853,17 @@ void PvpveDungeonMgr::CheckRunRuntime(PvpveDungeonRun& run, time_t now)
 
     uint32 const elapsed = uint32(now - run.StartTime);
     if (elapsed < dungeonTemplate->MaxRuntimeSecs)
+    {
+        run.TimeoutWarningSent = false;
         return;
+    }
 
-    TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s). Finishing run.", run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
-    FinishRun(run);
+    if (!run.TimeoutWarningSent)
+    {
+        run.TimeoutWarningSent = true;
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s) but will remain active until the boss is defeated.",
+            run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
+    }
 }
 
 uint32 PvpveDungeonMgr::CountActiveRuns() const
@@ -1061,8 +1101,8 @@ void ApplyPvpveFfaState(Player* player)
         return;
     }
 
-    if (!player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
-        player->SetFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
+    if (!player->HasPvpFlag(kPvpveFfaPvpFlag))
+        player->SetPvpFlag(kPvpveFfaPvpFlag);
 }
 
 void ClearPvpveFfaState(Player* player)
@@ -1076,6 +1116,6 @@ void ClearPvpveFfaState(Player* player)
         return;
     }
 
-    if (player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
-        player->RemoveFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
+    if (player->HasPvpFlag(kPvpveFfaPvpFlag))
+        player->RemovePvpFlag(kPvpveFfaPvpFlag);
 }
