@@ -45,7 +45,7 @@ char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, Posit
     "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
 
 constexpr uint32 kPvpveFfaAuraSpellId = 0;
-constexpr uint32 kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
+constexpr UnitPVPStateFlags kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
