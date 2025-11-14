@@ -35,7 +35,7 @@
 
 namespace
 {
-char const* const kTemplateQuery = "SELECT Id, MapId, Enabled, MinLevel, MaxLevel, MaxTeams, MinPlayersPerTeam, MaxPlayersPerTeam "
+char const* const kTemplateQuery = "SELECT Id, MapId, Enabled, MinLevel, MaxLevel, MaxTeams, MinPlayersPerTeam, MaxPlayersPerTeam, MaxRuntimeSecs "
     "FROM pvpve_dungeon_template";
 
 char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, PositionY, PositionZ, Orientation "
@@ -109,6 +109,8 @@ PvpveDungeonMgr::PvpveDungeonMgr()
     _playerToTeam.clear();
     _templates.clear();
     _spawns.clear();
+    _queuedPlayers.clear();
+    _lastStatsLog = 0;
 }
 
 void PvpveDungeonMgr::LoadConfigFromDB()
@@ -136,6 +138,7 @@ void PvpveDungeonMgr::LoadConfigFromDB()
             entry.MaxTeams = std::max<uint8>(1, fields[5].GetUInt8());
             entry.MinPlayers = fields[6].GetUInt8();
             entry.MaxPlayers = fields[7].GetUInt8();
+            entry.MaxRuntimeSecs = fields[8].GetUInt32();
 
             _templates[entry.Id] = entry;
         }
@@ -207,6 +210,18 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
             return false;
         }
 
+        if (_playerToRun.find(guid) != _playerToRun.end())
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} is already participating in a PvPvE run.", guid.ToString());
+            return false;
+        }
+
+        if (_queuedPlayers.find(guid) != _queuedPlayers.end())
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} is already queued for a PvPvE run.", guid.ToString());
+            return false;
+        }
+
         if (_playerToTeam.find(guid) != _playerToTeam.end())
         {
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} is already assigned to a PvPvE team.", guid.ToString());
@@ -228,20 +243,54 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
         return false;
     }
 
+    uint64 const teamId = teamItr->first;
     for (ObjectGuid const& guid : memberGuids)
-        _playerToTeam[guid] = teamItr->first;
+        _playerToTeam[guid] = teamId;
 
-    QueueTeam(teamItr->first);
+    if (!QueueTeam(teamId))
+    {
+        for (ObjectGuid const& guid : memberGuids)
+            _playerToTeam.erase(guid);
+
+        _teams.erase(teamItr);
+        return false;
+    }
+
     return true;
 }
 
-void PvpveDungeonMgr::QueueTeam(uint64 teamId)
+bool PvpveDungeonMgr::QueueTeam(uint64 teamId)
 {
     auto teamItr = _teams.find(teamId);
     if (teamItr == _teams.end())
     {
         TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: unable to queue unknown team {}.", teamId);
-        return;
+        return false;
+    }
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(teamItr->second.TemplateId);
+    if (!dungeonTemplate || !dungeonTemplate->Enabled)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: template {} not available for team {}.", teamItr->second.TemplateId, teamId);
+        return false;
+    }
+
+    for (ObjectGuid const& guid : teamItr->second.Members)
+    {
+        if (!guid)
+            continue;
+
+        if (_playerToRun.find(guid) != _playerToRun.end())
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: cannot queue team {}; player {} already in an active run.", teamId, guid.ToString());
+            return false;
+        }
+
+        if (_queuedPlayers.find(guid) != _queuedPlayers.end())
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: cannot queue team {}; player {} already queued.", teamId, guid.ToString());
+            return false;
+        }
     }
 
     QueuedTeam queued;
@@ -251,21 +300,38 @@ void PvpveDungeonMgr::QueueTeam(uint64 teamId)
     queued.Members = teamItr->second.Members;
     queued.Ready = teamItr->second.Ready;
 
-    auto [itr, inserted] = _queue.insert_or_assign(teamId, queued);
-    if (inserted)
-        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: queued team {} for template {}.", teamId, queued.TemplateId);
+    auto queueItr = _queue.find(teamId);
+    if (queueItr != _queue.end())
+    {
+        UntrackQueuedMembers(queueItr->second.Members);
+        queueItr->second = queued;
+    }
     else
-        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: updated queue entry for team {}.", teamId);
+    {
+        queueItr = _queue.emplace(teamId, queued).first;
+    }
+
+    TrackQueuedMembers(queueItr->second.Members);
+
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: queued team {} for template {} (queue size: {}).", teamId, queued.TemplateId, _queue.size());
+    return true;
 }
 
 void PvpveDungeonMgr::CancelQueue(uint64 teamId)
 {
-    if (_queue.erase(teamId))
-        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: removed team {} from the queue.", teamId);
+    auto queueItr = _queue.find(teamId);
+    if (queueItr == _queue.end())
+        return;
+
+    UntrackQueuedMembers(queueItr->second.Members);
+    _queue.erase(queueItr);
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: removed team {} from the queue (queue size: {}).", teamId, _queue.size());
 }
 
 void PvpveDungeonMgr::Update(uint32 /*diff*/)
 {
+    time_t const now = std::time(nullptr);
+
     if (!_queue.empty())
     {
         // TrinityCore executes world updates on a single thread; no explicit locking needed here.
@@ -284,6 +350,7 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
             if (teamItr == _teams.end())
             {
                 TC_LOG_WARN("server.custom", "PvpveDungeonMgr: dropping non-existent team {} from queue.", teamId);
+                UntrackQueuedMembers(queueItr->second.Members);
                 _queue.erase(queueItr);
                 continue;
             }
@@ -292,6 +359,7 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
             if (!dungeonTemplate || !dungeonTemplate->Enabled)
             {
                 TC_LOG_WARN("server.custom", "PvpveDungeonMgr: template {} not available for team {}.", teamItr->second.TemplateId, teamId);
+                UntrackQueuedMembers(queueItr->second.Members);
                 _queue.erase(queueItr);
                 continue;
             }
@@ -331,7 +399,16 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
     }
 
     for (auto& runPair : _runs)
+    {
         EvaluateRunState(runPair.second);
+        CheckRunRuntime(runPair.second, now);
+    }
+
+    if (now != _lastStatsLog)
+    {
+        _lastStatsLog = now;
+        LogQueueStats(now);
+    }
 }
 
 void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued)
@@ -341,6 +418,8 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         TC_LOG_WARN("server.custom", "PvpveDungeonMgr: queued team {} has no members for run {}.", queued.TeamId, run.Id);
         return;
     }
+
+    UntrackQueuedMembers(queued.Members);
 
     DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
     if (!dungeonTemplate)
@@ -448,6 +527,13 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
 
     run.Teams.push_back(team.Id);
     _teams[team.Id] = std::move(team);
+
+    if (!run.StartTime)
+    {
+        run.StartTime = std::time(nullptr);
+        run.Active = true;
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} started at {} (template {}).", run.Id, uint64(run.StartTime), run.TemplateId);
+    }
 }
 
 PvpveDungeonRun* PvpveDungeonMgr::GetRun(uint64 runId)
@@ -616,8 +702,30 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     if (!IsPlayerInPvpveRun(player))
         return;
 
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: player {} left PvPvE map, checking elimination state.", player->GetGUID().ToString());
+    ObjectGuid const guid = player->GetGUID();
+    auto runItr = _playerToRun.find(guid);
+    if (runItr == _playerToRun.end())
+        return;
+
+    PvpveDungeonRun* run = GetRun(runItr->second);
+    if (!run)
+    {
+        _playerToRun.erase(runItr);
+        return;
+    }
+
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: player {} left PvPvE map, treating as elimination in run {}.", guid.ToString(), run->Id);
+
     OnPlayerEliminated(player);
+
+    auto playerListItr = std::find(run->Players.begin(), run->Players.end(), guid);
+    if (playerListItr != run->Players.end())
+        run->Players.erase(playerListItr);
+
+    run->PlayerSpawns.erase(guid);
+    _playerToRun.erase(runItr);
+
+    EvaluateRunState(*run);
 }
 
 void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
@@ -677,6 +785,68 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
     }
 
     TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO distribute rewards for run {}.", run.Id);
+}
+
+void PvpveDungeonMgr::TrackQueuedMembers(std::vector<ObjectGuid> const& members)
+{
+    for (ObjectGuid const& guid : members)
+    {
+        if (!guid)
+            continue;
+
+        _queuedPlayers.insert(guid);
+    }
+}
+
+void PvpveDungeonMgr::UntrackQueuedMembers(std::vector<ObjectGuid> const& members)
+{
+    for (ObjectGuid const& guid : members)
+    {
+        if (!guid)
+            continue;
+
+        _queuedPlayers.erase(guid);
+    }
+}
+
+void PvpveDungeonMgr::CheckRunRuntime(PvpveDungeonRun& run, time_t now)
+{
+    if (!run.StartTime || run.Finished)
+        return;
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
+    if (!dungeonTemplate || !dungeonTemplate->MaxRuntimeSecs)
+        return;
+
+    uint32 const elapsed = uint32(now - run.StartTime);
+    if (elapsed < dungeonTemplate->MaxRuntimeSecs)
+        return;
+
+    TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s). Finishing run.", run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
+    FinishRun(run);
+}
+
+uint32 PvpveDungeonMgr::CountActiveRuns() const
+{
+    uint32 count = 0;
+    for (auto const& runPair : _runs)
+    {
+        if (!runPair.second.Finished)
+            ++count;
+    }
+
+    return count;
+}
+
+void PvpveDungeonMgr::LogQueueStats(time_t now) const
+{
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: status @{} queueTeams={} queuedPlayers={} runs={} activeRuns={}", now, _queue.size(), _queuedPlayers.size(), _runs.size(), CountActiveRuns());
+
+    for (auto const& runPair : _runs)
+    {
+        PvpveDungeonRun const& run = runPair.second;
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} template {} teams={} players={} completed={} finished={} startTime={}", run.Id, run.TemplateId, run.Teams.size(), run.Players.size(), run.Completed, run.Finished, uint64(run.StartTime));
+    }
 }
 
 namespace
@@ -751,6 +921,18 @@ public:
             sPvpveDungeonMgr->OnPlayerLeftMap(player);
             ClearPendingState(guid);
         }
+    }
+
+    void OnLogout(Player* player) override
+    {
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        if (sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+            sPvpveDungeonMgr->OnPlayerLeftMap(player);
+
+        ClearPendingState(guid);
     }
 
 private:

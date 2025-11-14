@@ -7,6 +7,7 @@
 #include <ctime>
 #include <map>
 #include <vector>
+#include <set>
 
 class Player;
 class Map;
@@ -26,6 +27,7 @@ struct DungeonTemplate
     uint8 MaxTeams = 1;
     uint8 MinPlayers = 0;
     uint8 MaxPlayers = 0;
+    uint32 MaxRuntimeSecs = 0;
 };
 
 struct SpawnPoint
@@ -99,7 +101,7 @@ public:
 
     uint64 CreateTeam(std::vector<Player*> const& players, uint32 templateId);
     void RemoveTeam(uint64 teamId);
-    void QueueTeam(uint64 teamId);
+    bool QueueTeam(uint64 teamId);
     bool QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids);
     void CancelQueue(uint64 teamId);
 
@@ -132,6 +134,11 @@ private:
     void EvaluateRunState(PvpveDungeonRun& run);
     bool TeamHasActiveMembers(PvpveTeam const& team, DungeonTemplate const* dungeonTemplate) const;
     void FinishRun(PvpveDungeonRun& run);
+    void TrackQueuedMembers(std::vector<ObjectGuid> const& members);
+    void UntrackQueuedMembers(std::vector<ObjectGuid> const& members);
+    void CheckRunRuntime(PvpveDungeonRun& run, time_t now);
+    void LogQueueStats(time_t now) const;
+    uint32 CountActiveRuns() const;
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
@@ -148,8 +155,10 @@ private:
     PlayerTeamMap _playerToTeam;
     TemplateContainer _templates;
     SpawnContainer _spawns;
+    GuidSet _queuedPlayers;
     uint64 _nextRunId = 1;
     uint64 _nextTeamId = 1;
+    time_t _lastStatsLog = 0;
 
     friend class PvpveDungeonPlayerScript;
 };

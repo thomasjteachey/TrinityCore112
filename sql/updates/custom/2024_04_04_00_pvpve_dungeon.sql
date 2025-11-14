@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS `pvpve_dungeon_template` (
   `MaxTeams` TINYINT UNSIGNED NOT NULL DEFAULT 1,
   `MinPlayersPerTeam` TINYINT UNSIGNED NOT NULL DEFAULT 1,
   `MaxPlayersPerTeam` TINYINT UNSIGNED NOT NULL DEFAULT 5,
+  `MaxRuntimeSecs` INT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (`Id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
@@ -26,9 +27,9 @@ CREATE TABLE IF NOT EXISTS `pvpve_dungeon_spawn` (
   CONSTRAINT `FK_pvpve_dungeon_spawn_template` FOREIGN KEY (`TemplateId`) REFERENCES `pvpve_dungeon_template` (`Id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-INSERT INTO `pvpve_dungeon_template` (`Id`, `MapId`, `Name`, `Enabled`, `MinLevel`, `MaxLevel`, `MaxTeams`, `MinPlayersPerTeam`, `MaxPlayersPerTeam`)
+INSERT INTO `pvpve_dungeon_template` (`Id`, `MapId`, `Name`, `Enabled`, `MinLevel`, `MaxLevel`, `MaxTeams`, `MinPlayersPerTeam`, `MaxPlayersPerTeam`, `MaxRuntimeSecs`)
 VALUES
-  (1, 34, 'Stockades PvPvE Brawl', 1, 20, 30, 3, 3, 5)
+  (1, 34, 'Stockades PvPvE Brawl', 1, 20, 30, 3, 3, 5, 900)
 ON DUPLICATE KEY UPDATE
   `MapId` = VALUES(`MapId`),
   `Name` = VALUES(`Name`),
@@ -37,7 +38,8 @@ ON DUPLICATE KEY UPDATE
   `MaxLevel` = VALUES(`MaxLevel`),
   `MaxTeams` = VALUES(`MaxTeams`),
   `MinPlayersPerTeam` = VALUES(`MinPlayersPerTeam`),
-  `MaxPlayersPerTeam` = VALUES(`MaxPlayersPerTeam`);
+  `MaxPlayersPerTeam` = VALUES(`MaxPlayersPerTeam`),
+  `MaxRuntimeSecs` = VALUES(`MaxRuntimeSecs`);
 
 INSERT INTO `pvpve_dungeon_spawn` (`TemplateId`, `SpawnIndex`, `CreatureEntry`, `MapId`, `PositionX`, `PositionY`, `PositionZ`, `Orientation`, `RespawnSeconds`)
 VALUES
