@@ -477,6 +477,9 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         if (instanceSave)
             player->BindToInstance(instanceSave, false);
 
+        if (instanceSave)
+            player->BindToInstance(instanceSave, false);
+
         if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
 
