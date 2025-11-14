@@ -34,15 +34,39 @@
 #include "Player.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
+#include "SmartEnum.h"
 #include "Spell.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "StringFormat.h"
 #include "ThreatManager.h"
 #include "Unit.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include <numeric>
+
+namespace
+{
+bool IsNaturesGraspAura(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 16689:
+        case 16810:
+        case 16811:
+        case 16812:
+        case 16813:
+        case 17329:
+        case 27009:
+        case 53312:
+            return true;
+        default:
+            return false;
+    }
+}
+}
 
 //
 // EFFECT HANDLER NOTES
@@ -5709,7 +5733,19 @@ void AuraEffect::HandleProcTriggerSpellAuraProc(AuraApplication* aurApp, ProcEve
     if (SpellInfo const* triggeredSpellInfo = sSpellMgr->GetSpellInfo(triggerSpellId))
     {
         TC_LOG_DEBUG("spells.aura.effect", "AuraEffect::HandleProcTriggerSpellAuraProc: Triggering spell {} from aura {} proc", triggeredSpellInfo->Id, GetId());
-        triggerCaster->CastSpell(triggerTarget, triggeredSpellInfo->Id, this);
+        SpellCastResult const castResult = triggerCaster->CastSpell(triggerTarget, triggeredSpellInfo->Id, this);
+
+        if (castResult != SPELL_CAST_OK && IsNaturesGraspAura(GetId()))
+        {
+            if (Player* playerCaster = triggerCaster->ToPlayer())
+                if (WorldSession* session = playerCaster->GetSession())
+                    if (session->GetSecurity() > SEC_PLAYER)
+                    {
+                        EnumText const reasonText = EnumUtils::ToString(castResult);
+                        std::string const message = Trinity::StringFormat("Nature's Grasp failed: {}", reasonText.Title);
+                        sWorld->SendServerMessage(SERVER_MSG_STRING, message, playerCaster);
+                    }
+        }
     }
     else
         TC_LOG_ERROR("spells.aura.effect.nospell","AuraEffect::HandleProcTriggerSpellAuraProc: Spell {} has non-existent spell {} in EffectTriggered[{}] and is therefore not triggered.", GetId(), triggerSpellId, GetEffIndex());

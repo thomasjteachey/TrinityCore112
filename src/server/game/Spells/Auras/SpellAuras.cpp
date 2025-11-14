@@ -17,6 +17,7 @@
 
 #include "Common.h"
 #include "CellImpl.h"
+#include "Chat.h"
 #include "Config.h"
 #include "DynamicObject.h"
 #include "GridNotifiersImpl.h"
@@ -37,6 +38,9 @@
 #include "Vehicle.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
+#include <iomanip>
+#include <sstream>
 
 AuraCreateInfo::AuraCreateInfo(SpellInfo const* spellInfo, uint8 auraEffMask, WorldObject* owner) :
     _spellInfo(spellInfo), _auraEffectMask(auraEffMask), _owner(owner)
@@ -436,6 +440,7 @@ m_procCooldown(TimePoint::min())
     m_heartbeatResistChance = 0;
     m_heartbeatDurationCap = 0;
     m_heartbeatResistTimer = 0;
+    m_heartbeatResistRoll = 0.0f;
     m_maxDuration = CalcMaxDuration(createInfo.Caster);
     m_duration = m_maxDuration;
     m_procCharges = CalcMaxCharges(createInfo.Caster);
@@ -2082,6 +2087,47 @@ double inverse_of_normal_cdf(const double p, const double mu, const double sigma
     return mu + sigma * val;
 }
 
+void Aura::LogHeartbeatRemoval(Unit* target, AuraRemoveMode removeMode) const
+{
+    if (m_heartbeatResistChance <= 0.0f || !target)
+        return;
+
+    Unit* caster = GetCaster();
+    if (!caster)
+        return;
+
+    Player* casterPlayer = caster->ToPlayer();
+    if (!casterPlayer)
+        return;
+
+    WorldSession* casterSession = casterPlayer->GetSession();
+    if (!casterSession || casterSession->GetSecurity() < SEC_GAMEMASTER)
+        return;
+
+    int32 heartbeatBase = m_heartbeatDurationBase > 0 ? m_heartbeatDurationBase : m_heartbeatDurationCap;
+    float heartbeatTotalSeconds = heartbeatBase > 0 ? float(heartbeatBase) / IN_MILLISECONDS : 0.0f;
+    int32 heartbeatRemainingMs = std::max(m_heartbeatDurationCap, 0);
+    float heartbeatRemainingSeconds = heartbeatRemainingMs > 0 ? float(heartbeatRemainingMs) / IN_MILLISECONDS : 0.0f;
+    float heartbeatElapsedSeconds = std::max(heartbeatTotalSeconds - heartbeatRemainingSeconds, 0.0f);
+    float heartbeatConsumedPct = heartbeatTotalSeconds > 0.0f ? (heartbeatElapsedSeconds / heartbeatTotalSeconds) * 100.0f : 0.0f;
+
+    float roll = m_heartbeatResistRoll;
+    if (roll < 0.0f)
+        roll = 0.0f;
+    if (roll > 1.0f)
+        roll = 1.0f;
+
+    std::ostringstream message;
+    message.setf(std::ios::fixed, std::ios::floatfield);
+    message << std::setprecision(2)
+        << "Heartbeat resist aura '" << GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()]
+        << "' removed from '" << target->GetName() << "' (mode " << uint32(removeMode) << "). Heartbeat duration "
+        << heartbeatElapsedSeconds << "/" << heartbeatTotalSeconds << "s (" << heartbeatConsumedPct << "% consumed, "
+        << heartbeatRemainingSeconds << "s left). Roll " << roll * 100.0f << "/100 (chance " << m_heartbeatResistChance << "%).";
+
+    ChatHandler(casterSession).PSendSysMessage("%s", message.str().c_str());
+}
+
 void Aura::SetHeartbeatResist(uint32 chance, int32 originalDuration, uint32 drLevel, DiminishingGroup drGroup)
 {
     // NOTE: This is an experimental approximation of heartbeat resist mechanics, more research is required
@@ -2104,12 +2150,9 @@ void Aura::SetHeartbeatResist(uint32 chance, int32 originalDuration, uint32 drLe
     }
 
     m_heartbeatDurationCap = inverse_of_normal_cdf(probability, 15160, 4713);
+    m_heartbeatDurationBase = m_heartbeatDurationCap;
 
-    std::string str = "heartbeat duration " + std::to_string(m_heartbeatDurationCap) + " roll (out of 100): " + std::to_string((int)(probability * 100.f)) + " "
-        + "Spell[" + this->GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()] + "] Unit[" + this->GetUnitOwner()->GetName()
-        + "] DRLevel[" + std::to_string(drLevel) + "] DRGroup[" + std::to_string(drGroup) + "].";
-
-    //sWorld->SendServerMessage(SERVER_MSG_STRING, str.c_str());
+    m_heartbeatResistRoll = probability;
 }
 
 void Aura::UpdateHeartbeatResist(uint32 diff, Unit* target)
