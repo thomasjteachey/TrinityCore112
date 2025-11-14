@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Creature.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "Item.h"
@@ -64,7 +65,7 @@ bool IsPlayerInArena(Player* player)
     if (player->GetAreaId() == GURUBASHI_ARENA_AREA_ID)
         return true;
 
-    if (player->GetDistance2d(ChestSpawnPosition) > ARENA_RADIUS)
+    if (player->GetDistance2d(ChestSpawnPosition.GetPositionX(), ChestSpawnPosition.GetPositionY()) > ARENA_RADIUS)
         return false;
 
     return std::fabs(player->GetPositionZ() - ChestSpawnPosition.GetPositionZ()) <= MAX_HEIGHT_DELTA;
