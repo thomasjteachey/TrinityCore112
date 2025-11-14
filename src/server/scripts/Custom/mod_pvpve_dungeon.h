@@ -11,7 +11,6 @@
 
 class Player;
 class Map;
-class Group;
 class Creature;
 class WorldPacket;
 class WorldSession;
@@ -65,7 +64,6 @@ struct PvpveDungeonRun
     Map* InstanceMap = nullptr;
     uint32 InstanceId = 0;
     PvpveDungeonInstance* InstanceScript = nullptr;
-    ObjectGuid GroupGuid;
     time_t CreatedTime = 0;
     time_t StartTime = 0;
     bool Active = false;

@@ -19,8 +19,6 @@
 
 #include "Duration.h"
 #include "DatabaseEnv.h"
-#include "Group.h"
-#include "GroupMgr.h"
 #include "InstanceSaveMgr.h"
 #include "InstanceScript.h"
 #include "Log.h"
@@ -467,65 +465,6 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     team.CreatedTime = std::time(nullptr);
     team.Ready = queued.Ready;
 
-    Group* group = nullptr;
-    if (!run.GroupGuid.IsEmpty())
-        group = sGroupMgr->GetGroupByGUID(run.GroupGuid.GetCounter());
-
-    auto removeFromExistingGroup = [](Player* player)
-    {
-        if (!player)
-            return;
-
-        if (Group* currentGroup = player->GetGroup())
-            Player::RemoveFromGroup(currentGroup, player->GetGUID(), GROUP_REMOVEMETHOD_DEFAULT);
-    };
-
-    Player* leader = nullptr;
-    for (ObjectGuid const& guid : team.Members)
-    {
-        leader = ObjectAccessor::FindPlayer(guid);
-        if (leader)
-            break;
-    }
-
-    if (!leader)
-    {
-        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: unable to find an online leader for team {} in run {}.", team.Id, run.Id);
-        return;
-    }
-
-    if (!group)
-    {
-        removeFromExistingGroup(leader);
-        group = new Group();
-        if (!group->Create(leader))
-        {
-            TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: failed to create raid group for run {} (team {}).", run.Id, team.Id);
-            delete group;
-            return;
-        }
-
-        group->ConvertToRaid();
-        sGroupMgr->AddGroup(group);
-        run.GroupGuid = group->GetGUID();
-    }
-    else if (!group->isRaidGroup())
-        group->ConvertToRaid();
-
-    auto addToRaid = [group, runId = run.Id, removeFromExistingGroup](Player* player) -> bool
-    {
-        if (group->IsMember(player->GetGUID()))
-            return true;
-
-        removeFromExistingGroup(player);
-
-        if (group->AddMember(player))
-            return true;
-
-        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: failed to add player {} to raid for run {}.", player->GetGUID().ToString(), runId);
-        return false;
-    };
-
     for (ObjectGuid const& memberGuid : team.Members)
     {
         Player* player = ObjectAccessor::FindPlayer(memberGuid);
@@ -535,8 +474,8 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
             continue;
         }
 
-        if (!addToRaid(player))
-            continue;
+        if (instanceSave)
+            player->BindToInstance(instanceSave, false);
 
         if (instanceSave)
             player->BindToInstance(instanceSave, false);
