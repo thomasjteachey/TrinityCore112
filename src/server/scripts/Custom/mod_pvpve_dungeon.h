@@ -75,6 +75,10 @@ class PvpveDungeonMgr
 {
 public:
     static PvpveDungeonMgr* Instance();
+    static PvpveDungeonMgr* instance()
+    {
+        return Instance();
+    }
 
     void LoadConfigFromDB();
 
