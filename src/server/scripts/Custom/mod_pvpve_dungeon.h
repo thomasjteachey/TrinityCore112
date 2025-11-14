@@ -52,6 +52,7 @@ struct PvpveDungeonRun
     uint64 Id = 0;
     uint32 TemplateId = 0;
     Map* InstanceMap = nullptr;
+    ObjectGuid GroupGuid;
     time_t CreatedTime = 0;
     time_t StartTime = 0;
     bool Active = false;
@@ -66,6 +67,7 @@ struct QueuedTeam
     uint64 TeamId = 0;
     uint32 TemplateId = 0;
     time_t QueueTime = 0;
+    std::vector<ObjectGuid> Members;
     bool Ready = false;
 };
 
@@ -100,7 +102,7 @@ private:
     PvpveDungeonMgr();
 
     void StartNextRun();
-    void AssignTeamToRun(PvpveDungeonRun& run, PvpveTeam& team);
+    void AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued);
     uint8 PickSpawnIndex(uint32 templateId);
     void CleanupRun(uint64 runId);
     void CleanupPlayer(ObjectGuid const& guid);

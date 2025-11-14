@@ -18,7 +18,11 @@
 #include "mod_pvpve_dungeon.h"
 
 #include "DatabaseEnv.h"
+#include "Group.h"
+#include "GroupMgr.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
+#include "Player.h"
 
 #include <algorithm>
 #include <ctime>
@@ -141,6 +145,7 @@ void PvpveDungeonMgr::QueueTeam(uint64 teamId)
     queued.TeamId = teamId;
     queued.TemplateId = teamItr->second.TemplateId;
     queued.QueueTime = std::time(nullptr);
+    queued.Members = teamItr->second.Members;
     queued.Ready = teamItr->second.Ready;
 
     auto [itr, inserted] = _queue.insert_or_assign(teamId, queued);
@@ -218,15 +223,125 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 TC_LOG_INFO("server.custom", "PvpveDungeonMgr: created new run {} for template {}.", selectedRun->Id, dungeonTemplate->Id);
         }
 
-        selectedRun->Teams.push_back(teamId);
-        AssignTeamToRun(*selectedRun, teamItr->second);
+        AssignTeamToRun(*selectedRun, queueItr->second);
         _queue.erase(queueItr);
     }
 }
 
-void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, PvpveTeam& team)
+void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued)
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO assign team {} to run {}.", team.Id ? team.Id : run.Teams.back(), run.Id);
+    if (queued.Members.empty())
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: queued team {} has no members for run {}.", queued.TeamId, run.Id);
+        return;
+    }
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
+    if (!dungeonTemplate)
+    {
+        TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: unable to assign team {} to run {} because template {} is missing.", queued.TeamId, run.Id, run.TemplateId);
+        return;
+    }
+
+    std::vector<SpawnPoint> const* spawnList = GetSpawnPoints(run.TemplateId);
+    if (!spawnList || spawnList->empty())
+    {
+        TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: run {} for template {} has no spawn points configured.", run.Id, run.TemplateId);
+        return;
+    }
+
+    uint8 spawnIndex = PickSpawnIndex(run.TemplateId);
+    auto spawnItr = std::find_if(spawnList->begin(), spawnList->end(), [spawnIndex](SpawnPoint const& spawn)
+    {
+        return spawn.Index == spawnIndex;
+    });
+
+    if (spawnItr == spawnList->end())
+    {
+        TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: spawn index {} not found for template {} (run {}).", uint32(spawnIndex), run.TemplateId, run.Id);
+        return;
+    }
+
+    PvpveTeam team;
+    team.Id = queued.TeamId ? queued.TeamId : _nextTeamId++;
+    team.TemplateId = run.TemplateId;
+    team.Members = queued.Members;
+    team.SpawnIndex = spawnIndex;
+    team.CreatedTime = std::time(nullptr);
+    team.Ready = queued.Ready;
+
+    Group* group = nullptr;
+    if (!run.GroupGuid.IsEmpty())
+        group = sGroupMgr->GetGroupByGUID(run.GroupGuid.GetCounter());
+
+    Player* leader = nullptr;
+    for (ObjectGuid const& guid : team.Members)
+    {
+        leader = ObjectAccessor::FindPlayer(guid);
+        if (leader)
+            break;
+    }
+
+    if (!leader)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: unable to find an online leader for team {} in run {}.", team.Id, run.Id);
+        return;
+    }
+
+    if (!group)
+    {
+        group = new Group();
+        if (!group->Create(leader))
+        {
+            TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: failed to create raid group for run {} (team {}).", run.Id, team.Id);
+            delete group;
+            return;
+        }
+
+        group->ConvertToRaid();
+        sGroupMgr->AddGroup(group);
+        run.GroupGuid = group->GetGUID();
+    }
+    else if (!group->isRaidGroup())
+        group->ConvertToRaid();
+
+    auto addToRaid = [group, runId = run.Id](Player* player) -> bool
+    {
+        if (group->IsMember(player->GetGUID()))
+            return true;
+
+        if (group->AddMember(player))
+            return true;
+
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: failed to add player {} to raid for run {}.", player->GetGUID().ToString(), runId);
+        return false;
+    };
+
+    for (ObjectGuid const& memberGuid : team.Members)
+    {
+        Player* player = ObjectAccessor::FindPlayer(memberGuid);
+        if (!player)
+        {
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: unable to find player {} for team {} in run {}.", memberGuid.ToString(), team.Id, run.Id);
+            continue;
+        }
+
+        if (!addToRaid(player))
+            continue;
+
+        if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
+
+        if (std::find(run.Players.begin(), run.Players.end(), memberGuid) == run.Players.end())
+            run.Players.push_back(memberGuid);
+
+        run.PlayerSpawns[memberGuid] = spawnIndex;
+        _playerToRun[memberGuid] = run.Id;
+        _playerToTeam[memberGuid] = team.Id;
+    }
+
+    run.Teams.push_back(team.Id);
+    _teams[team.Id] = std::move(team);
 }
 
 uint8 PvpveDungeonMgr::PickSpawnIndex(uint32 templateId)
