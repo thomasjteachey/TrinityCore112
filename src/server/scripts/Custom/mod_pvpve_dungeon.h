@@ -126,7 +126,7 @@ private:
 
     void StartNextRun();
     void AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued);
-    uint8 PickSpawnIndex(uint32 templateId);
+    uint8 PickSpawnIndex(PvpveDungeonRun const& run);
     void CleanupRun(uint64 runId);
     void CleanupPlayer(ObjectGuid const& guid);
     void OnPlayerEliminated(Player* player);
