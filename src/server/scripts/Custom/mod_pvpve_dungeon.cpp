@@ -21,6 +21,7 @@
 #include "DatabaseEnv.h"
 #include "Group.h"
 #include "GroupMgr.h"
+#include "InstanceScript.h"
 #include "Log.h"
 #include "MapInstanced.h"
 #include "MapManager.h"
@@ -39,6 +40,9 @@ char const* const kTemplateQuery = "SELECT Id, MapId, Enabled, MinLevel, MaxLeve
 
 char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, PositionY, PositionZ, Orientation "
     "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
+
+constexpr uint32 kPvpveFfaAuraSpellId = 0;
+constexpr uint32 kPvpveFfaPlayerFlag = PLAYER_FLAGS_UNK7;
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
@@ -688,6 +692,7 @@ struct TeleportDestination
 
 TeleportDestination const kAllianceTeleportDestination{ 0, -8833.38f, 628.62f, 94.0066f, 1.0646f };
 TeleportDestination const kHordeTeleportDestination{ 1, 1633.33f, -4439.09f, 15.999f, 5.3178f };
+}
 
 class PvpveDungeonPlayerScript : public PlayerScript
 {
@@ -834,6 +839,8 @@ private:
     GuidSet _pendingTeleport;
 };
 
+namespace
+{
 struct PvpveDungeonWorldScript : WorldScript
 {
     PvpveDungeonWorldScript() : WorldScript("pvpve_dungeon_world") { }
@@ -857,4 +864,36 @@ void AddSC_custom_pvpve_dungeon()
     new PvpveDungeonPlayerScript();
     new PvpveDungeonWorldScript();
     AddSC_npc_pvpve_dungeon_queue();
+}
+
+void ApplyPvpveFfaState(Player* player)
+{
+    if (!player)
+        return;
+
+    if (kPvpveFfaAuraSpellId)
+    {
+        if (!player->HasAura(kPvpveFfaAuraSpellId))
+            player->AddAura(kPvpveFfaAuraSpellId, player);
+
+        return;
+    }
+
+    if (!player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
+        player->SetFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
+}
+
+void ClearPvpveFfaState(Player* player)
+{
+    if (!player)
+        return;
+
+    if (kPvpveFfaAuraSpellId)
+    {
+        player->RemoveAura(kPvpveFfaAuraSpellId);
+        return;
+    }
+
+    if (player->HasFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag))
+        player->RemoveFlag(PLAYER_FLAGS, kPvpveFfaPlayerFlag);
 }
