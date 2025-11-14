@@ -167,10 +167,17 @@ public:
             _pvpveRunId = 0;
         }
 
-        void OnCreatureKilled(Creature* creature, Player* killer) override
+        void OnUnitDeath(Unit* unit) override
         {
-            InstanceScript::OnCreatureKilled(creature, killer);
+            InstanceScript::OnUnitDeath(unit);
 
+            if (!_pvpveRunId)
+                return;
+
+            if (!unit)
+                return;
+
+            Creature* creature = unit->ToCreature();
             if (!creature)
                 return;
 
@@ -178,10 +185,10 @@ public:
             if (!bossEntry || creature->GetEntry() != bossEntry)
                 return;
 
-            if (!_pvpveRunId)
-                return;
+            ObjectGuid creditGuid = ObjectGuid::Empty;
+            if (Player* killer = creature->GetLootRecipient())
+                creditGuid = killer->GetGUID();
 
-            ObjectGuid const creditGuid = killer ? killer->GetGUID() : ObjectGuid::Empty;
             sPvpveDungeonMgr->OnBossDefeated(_pvpveRunId, creditGuid);
         }
 
