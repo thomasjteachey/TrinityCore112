@@ -34,7 +34,7 @@ constexpr uint32 ACTION_QUEUE = GOSSIP_ACTION_INFO_DEF + 1;
 constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 2;
 constexpr uint32 STOCKADES_TEMPLATE_ID = 1;
 
-void SendLeaderError(Player* player, char const* text)
+void SendQueueError(Player* player, char const* text)
 {
     if (!player)
         return;
@@ -104,65 +104,90 @@ public:
             if (!player)
                 return;
 
+            DungeonTemplate const* dungeonTemplate = PvpveDungeonMgr::instance()->GetDungeonTemplate(STOCKADES_TEMPLATE_ID);
+            if (!dungeonTemplate || !dungeonTemplate->Enabled)
+            {
+                SendQueueError(player, "The Stockades PvPvE queue is currently unavailable.");
+                return;
+            }
+
             Group* group = player->GetGroup();
+            std::vector<ObjectGuid> memberGuids;
+            memberGuids.reserve(group ? group->GetMembersCount() : 1);
+
             if (!group)
             {
-                SendLeaderError(player, "You must be in a party to queue for the Stockades PvPvE event.");
-                return;
-            }
-
-            if (!group->IsLeader(player->GetGUID()))
-            {
-                SendLeaderError(player, "Only the party leader can queue for the Stockades PvPvE event.");
-                return;
-            }
-
-            if (group->GetMembersCount() != 2)
-            {
-                SendLeaderError(player, "Exactly two party members are required for this queue.");
-                return;
-            }
-
-            std::vector<ObjectGuid> memberGuids;
-            memberGuids.reserve(2);
-
-            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-            {
-                Player* member = ref->GetSource();
-                if (!member || !member->IsInWorld())
+                if (dungeonTemplate->MinPlayers > 1)
                 {
-                    SendLeaderError(player, "All party members must be online to join the queue.");
+                    SendQueueError(player, "You must be in a party to queue for this event.");
                     return;
                 }
 
-                if (!member->IsAlive())
-                {
-                    SendLeaderError(player, "All party members must be alive to join the queue.");
-                    return;
-                }
-
-                if (member->GetMap() && member->GetMap()->Instanceable())
-                {
-                    SendLeaderError(player, "Party members must leave instances before queueing.");
-                    return;
-                }
-
-                memberGuids.push_back(member->GetGUID());
+                memberGuids.push_back(player->GetGUID());
             }
-
-            if (memberGuids.size() != 2)
+            else
             {
-                SendLeaderError(player, "Unable to determine party members. Please try again.");
-                return;
+                if (!group->IsLeader(player->GetGUID()))
+                {
+                    SendQueueError(player, "Only the party leader can queue for the Stockades PvPvE event.");
+                    return;
+                }
+
+                uint32 const memberCount = group->GetMembersCount();
+                if (dungeonTemplate->MinPlayers && memberCount < dungeonTemplate->MinPlayers)
+                {
+                    SendQueueError(player, "Your party does not meet the minimum size for this event.");
+                    return;
+                }
+
+                if (dungeonTemplate->MaxPlayers && memberCount > dungeonTemplate->MaxPlayers)
+                {
+                    SendQueueError(player, "Your party exceeds the maximum size for this event.");
+                    return;
+                }
+
+                for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+                {
+                    Player* member = ref->GetSource();
+                    if (!member || !member->IsInWorld())
+                    {
+                        SendQueueError(player, "All party members must be online to join the queue.");
+                        return;
+                    }
+
+                    if (!member->IsAlive())
+                    {
+                        SendQueueError(player, "All party members must be alive to join the queue.");
+                        return;
+                    }
+
+                    if (member->GetMap() && member->GetMap()->Instanceable())
+                    {
+                        SendQueueError(player, "Party members must leave instances before queueing.");
+                        return;
+                    }
+
+                    memberGuids.push_back(member->GetGUID());
+                }
+
+                if (memberGuids.size() != memberCount)
+                {
+                    SendQueueError(player, "Unable to determine party members. Please try again.");
+                    return;
+                }
             }
 
             if (!PvpveDungeonMgr::instance()->QueueTeam(STOCKADES_TEMPLATE_ID, memberGuids))
             {
-                SendLeaderError(player, "Failed to join the queue. Please try again shortly.");
+                SendQueueError(player, "Failed to join the queue. Please try again shortly.");
                 return;
             }
 
-            BroadcastToGroup(group, "You have joined the Stockades PvPvE queue!");
+            if (group)
+                BroadcastToGroup(group, "You have joined the Stockades PvPvE queue!");
+            else if (WorldSession* session = player->GetSession())
+                session->SendNotification("You have joined the Stockades PvPvE queue!");
+
             CloseGossipMenuFor(player);
         }
     };
