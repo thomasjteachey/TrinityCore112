@@ -707,7 +707,7 @@ class spell_hun_masters_call : public SpellScript
     {
         Player* player = GetCaster()->ToPlayer();
         if (!player)
-            return SPELL_FAILED_DONT_REPORT_ERROR;
+            return SPELL_FAILED_ERROR;
 
         Guardian* pet = player->GetGuardianPet();
         ASSERT(pet); // checked in Spell::CheckCast
@@ -1599,7 +1599,7 @@ class spell_hun_outmaneuver : public SpellScript
     {
         Player* player = GetCaster()->ToPlayer();
         if (!player)
-            return SPELL_FAILED_DONT_REPORT_ERROR;
+            return SPELL_FAILED_ERROR;
 
         Guardian* pet = player->GetGuardianPet();
         ASSERT(pet); // checked in Spell::CheckCast
