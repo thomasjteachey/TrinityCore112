@@ -2620,16 +2620,73 @@ SpellMissInfo WorldObject::SpellHitResult(Unit* victim, SpellInfo const* spellIn
 
 void WorldObject::SendSpellMiss(Unit* target, uint32 spellID, SpellMissInfo missInfo)
 {
-    WorldPacket data(SMSG_SPELLLOGMISS, (4 + 8 + 1 + 4 + 8 + 1));
-    data << uint32(spellID);
-    data << uint64(GetGUID());
-    data << uint8(0);                                       // can be 0 or 1
-    data << uint32(1);                                      // target count
-    // for (i = 0; i < target count; ++i)
-    data << uint64(target->GetGUID());                      // target GUID
-    data << uint8(missInfo);
-    // end loop
-    SendMessageToSet(&data, true);
+    if (!target)
+        return;
+
+    auto const buildSpellMissPacket = [&](uint64 casterGuid)
+    {
+        WorldPacket data(SMSG_SPELLLOGMISS, (4 + 8 + 1 + 4 + 8 + 1));
+        data << uint32(spellID);
+        data << uint64(casterGuid);
+        data << uint8(0);                                   // can be 0 or 1
+        data << uint32(1);                                  // target count
+        // for (i = 0; i < target count; ++i)
+        data << uint64(target->GetGUID());                  // target GUID
+        data << uint8(missInfo);
+        // end loop
+        return data;
+    };
+
+    WorldPacket missPacket = buildSpellMissPacket(GetGUID());
+
+    Player* controllingPlayer = nullptr;
+    if (Unit const* unitCaster = ToUnit())
+        controllingPlayer = unitCaster->GetCharmerOrOwnerPlayerOrPlayerItself();
+    else if (GameObject const* gameObjectCaster = ToGameObject())
+    {
+        if (Unit* owner = gameObjectCaster->GetOwner())
+            controllingPlayer = owner->GetCharmerOrOwnerPlayerOrPlayerItself();
+    }
+
+    if (IsInWorld())
+        SendMessageToSet(&missPacket, true);
+    else
+    {
+        auto const broadcastViaTarget = [&missPacket, target]()
+        {
+            target->SendMessageToSet(&missPacket, true);
+
+            if (Player* playerTarget = target->ToPlayer())
+                playerTarget->SendDirectMessage(&missPacket);
+        };
+
+        if (GameObject const* gameObjectCaster = ToGameObject())
+        {
+            if (gameObjectCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP)
+            {
+                // Traps despawn the moment they trigger, so they might no longer be in the world when miss feedback is sent.
+                // In that case broadcast the result around the target so players nearby still get the feedback text.
+                broadcastViaTarget();
+            }
+            else
+            {
+                // Other despawned gameobjects fall back to the victim broadcast to ensure nearby players still receive feedback.
+                broadcastViaTarget();
+            }
+        }
+        else
+        {
+            // If we reach this point we are no longer in world (for example destroyed spell caster).
+            // Fallback to broadcasting the packet around the target so it still receives the feedback text.
+            broadcastViaTarget();
+        }
+    }
+
+    if (controllingPlayer && controllingPlayer->GetGUID() != GetGUID())
+    {
+        WorldPacket ownerPacket = buildSpellMissPacket(controllingPlayer->GetGUID());
+        controllingPlayer->SendDirectMessage(&ownerPacket);
+    }
 }
 
 FactionTemplateEntry const* WorldObject::GetFactionTemplateEntry() const
