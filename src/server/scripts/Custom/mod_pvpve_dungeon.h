@@ -96,6 +96,8 @@ public:
     void OnPlayerEnterDungeon(Player* player);
     void OnPlayerLeaveDungeon(Player* player);
     void OnPlayerDeath(Player* player);
+    bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
+    bool IsPlayerInPvpveRun(Player const* player) const;
 
     PvpveDungeonRun* GetRun(uint64 runId);
     PvpveTeam* GetTeam(uint64 teamId);

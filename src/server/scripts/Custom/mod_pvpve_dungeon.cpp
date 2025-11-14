@@ -17,6 +17,7 @@
 
 #include "mod_pvpve_dungeon.h"
 
+#include "Duration.h"
 #include "DatabaseEnv.h"
 #include "Group.h"
 #include "GroupMgr.h"
@@ -53,6 +54,16 @@ std::vector<SpawnPoint> const* PvpveDungeonMgr::GetSpawnPoints(uint32 templateId
         return nullptr;
 
     return &itr->second;
+}
+
+bool PvpveDungeonMgr::IsPlayerInPvpveRun(ObjectGuid const& guid) const
+{
+    return _playerToRun.find(guid) != _playerToRun.end();
+}
+
+bool PvpveDungeonMgr::IsPlayerInPvpveRun(Player const* player) const
+{
+    return player && IsPlayerInPvpveRun(player->GetGUID());
 }
 
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()
@@ -410,6 +421,33 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     _teams[team.Id] = std::move(team);
 }
 
+PvpveDungeonRun* PvpveDungeonMgr::GetRun(uint64 runId)
+{
+    auto itr = _runs.find(runId);
+    if (itr == _runs.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+PvpveTeam* PvpveDungeonMgr::GetTeam(uint64 teamId)
+{
+    auto itr = _teams.find(teamId);
+    if (itr == _teams.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+PvpveDungeonRun* PvpveDungeonMgr::GetRunForPlayer(ObjectGuid const& guid)
+{
+    auto itr = _playerToRun.find(guid);
+    if (itr == _playerToRun.end())
+        return nullptr;
+
+    return GetRun(itr->second);
+}
+
 uint8 PvpveDungeonMgr::PickSpawnIndex(uint32 templateId)
 {
     TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO pick spawn index for template {}.", templateId);
@@ -433,6 +471,163 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* /*player*/)
 
 namespace
 {
+struct TeleportDestination
+{
+    uint32 MapId;
+    float X;
+    float Y;
+    float Z;
+    float O;
+};
+
+TeleportDestination const kAllianceTeleportDestination{ 0, -8833.38f, 628.62f, 94.0066f, 1.0646f };
+TeleportDestination const kHordeTeleportDestination{ 1, 1633.33f, -4439.09f, 15.999f, 5.3178f };
+
+class PvpveDungeonPlayerScript : public PlayerScript
+{
+public:
+    PvpveDungeonPlayerScript() : PlayerScript("pvpve_dungeon_player") { }
+
+    void OnPVPKill(Player* /*killer*/, Player* killed) override
+    {
+        HandlePlayerDeath(killed);
+    }
+
+    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
+    {
+        HandlePlayerDeath(killed);
+    }
+
+    void OnPlayerRepop(Player* player) override
+    {
+        if (!player)
+            return;
+
+        if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+        {
+            ClearPendingState(player->GetGUID());
+            return;
+        }
+
+        if (MarkPlayerEliminated(player))
+            sPvpveDungeonMgr->OnPlayerEliminated(player);
+
+        ScheduleTeleportOut(player);
+    }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(guid);
+        if (!run)
+        {
+            ClearPendingState(guid);
+            return;
+        }
+
+        DungeonTemplate const* dungeonTemplate = sPvpveDungeonMgr->GetDungeonTemplate(run->TemplateId);
+        if (!dungeonTemplate)
+        {
+            ClearPendingState(guid);
+            return;
+        }
+
+        if (player->GetMapId() != dungeonTemplate->MapId)
+        {
+            sPvpveDungeonMgr->OnPlayerLeftMap(player);
+            ClearPendingState(guid);
+        }
+    }
+
+private:
+    void HandlePlayerDeath(Player* player)
+    {
+        if (!player)
+            return;
+
+        if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+        {
+            ClearPendingState(player->GetGUID());
+            return;
+        }
+
+        bool const firstElimination = MarkPlayerEliminated(player);
+        if (firstElimination)
+            sPvpveDungeonMgr->OnPlayerEliminated(player);
+
+        ForceRelease(player);
+        ScheduleTeleportOut(player);
+    }
+
+    bool MarkPlayerEliminated(Player* player)
+    {
+        if (!player)
+            return false;
+
+        return _eliminatedPlayers.insert(player->GetGUID()).second;
+    }
+
+    void ForceRelease(Player* player)
+    {
+        if (!player)
+            return;
+
+        if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            player->RepopAtGraveyard();
+    }
+
+    TeleportDestination GetTeleportLocation(Player const* player) const
+    {
+        if (!player)
+            return kAllianceTeleportDestination;
+
+        return player->GetTeamId() == TEAM_ALLIANCE ? kAllianceTeleportDestination : kHordeTeleportDestination;
+    }
+
+    void ScheduleTeleportOut(Player* player)
+    {
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        if (!_pendingTeleport.insert(guid).second)
+            return;
+
+        player->m_Events.AddEventAtOffset([this, guid]()
+        {
+            _pendingTeleport.erase(guid);
+
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            if (!player)
+                return;
+
+            if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+            {
+                ClearPendingState(guid);
+                return;
+            }
+
+            if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                player->RepopAtGraveyard();
+
+            TeleportDestination const destination = GetTeleportLocation(player);
+            player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
+        }, 1s);
+    }
+
+    void ClearPendingState(ObjectGuid const& guid)
+    {
+        _eliminatedPlayers.erase(guid);
+        _pendingTeleport.erase(guid);
+    }
+
+    GuidSet _eliminatedPlayers;
+    GuidSet _pendingTeleport;
+};
+
 struct PvpveDungeonWorldScript : WorldScript
 {
     PvpveDungeonWorldScript() : WorldScript("pvpve_dungeon_world") { }
@@ -453,6 +648,7 @@ void AddSC_npc_pvpve_dungeon_queue();
 
 void AddSC_custom_pvpve_dungeon()
 {
+    new PvpveDungeonPlayerScript();
     new PvpveDungeonWorldScript();
     AddSC_npc_pvpve_dungeon_queue();
 }
