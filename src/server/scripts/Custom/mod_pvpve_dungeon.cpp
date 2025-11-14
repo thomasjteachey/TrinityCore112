@@ -27,10 +27,12 @@
 #include "MapManager.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Random.h"
 #include "ScriptMgr.h"
 
 #include <algorithm>
 #include <ctime>
+#include <set>
 #include <string>
 
 namespace
@@ -435,7 +437,7 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         return;
     }
 
-    uint8 spawnIndex = PickSpawnIndex(run.TemplateId);
+    uint8 spawnIndex = PickSpawnIndex(run);
     auto spawnItr = std::find_if(spawnList->begin(), spawnList->end(), [spawnIndex](SpawnPoint const& spawn)
     {
         return spawn.Index == spawnIndex;
@@ -563,10 +565,30 @@ PvpveDungeonRun* PvpveDungeonMgr::GetRunForPlayer(ObjectGuid const& guid)
     return GetRun(itr->second);
 }
 
-uint8 PvpveDungeonMgr::PickSpawnIndex(uint32 templateId)
+uint8 PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run)
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO pick spawn index for template {}.", templateId);
-    return 0;
+    auto spawnList = GetSpawnPoints(run.TemplateId);
+    if (!spawnList || spawnList->empty())
+        return 0;
+
+    std::set<uint8> usedIndices;
+    for (uint64 teamId : run.Teams)
+    {
+        if (PvpveTeam* team = GetTeam(teamId))
+            usedIndices.insert(team->SpawnIndex);
+    }
+
+    for (SpawnPoint const& spawn : *spawnList)
+    {
+        if (!usedIndices.count(spawn.Index))
+            return spawn.Index;
+    }
+
+    uint32 randomIdx = urand(0, spawnList->size() - 1);
+    uint8 fallback = (*spawnList)[randomIdx].Index;
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: reusing spawn index {} for template {} due to exhausted slots.",
+        uint32(fallback), run.TemplateId);
+    return fallback;
 }
 
 void PvpveDungeonMgr::OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId)
