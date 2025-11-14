@@ -291,6 +291,19 @@ void RemoveTitlesBelowRank(Player* player, uint8 highestRank)
     }
 }
 
+void RemoveTitlesBelowHighestEligibleRank(Player* player)
+{
+    if (!sConfigMgr->GetBoolDefault("PvPTitles.RemoveLowerTitles", false))
+        return;
+
+    uint32 const kills = player->GetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS);
+    RankThresholdArray const thresholds = GetConfiguredKillThresholds();
+    uint8 const highestEligibleRank = GetHighestEligibleRank(kills, thresholds);
+
+    if (highestEligibleRank < MAX_RANK)
+        RemoveTitlesBelowRank(player, highestEligibleRank);
+}
+
 class PvPTitlesPlayerScript : public PlayerScript
 {
 public:
@@ -312,6 +325,8 @@ public:
 
         if (sConfigMgr->GetBoolDefault("PvPTitles.AwardTitlesOnLogin", false))
             AwardEarnedTitles(player);
+
+        RemoveTitlesBelowHighestEligibleRank(player);
     }
 
     void OnPVPKill(Player* killer, Player* killed) override
