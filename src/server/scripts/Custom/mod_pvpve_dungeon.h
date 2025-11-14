@@ -71,6 +71,8 @@ struct PvpveDungeonRun
     bool Active = false;
     bool Completed = false;
     bool Finished = false;
+    bool BossDefeated = false;
+    bool TimeoutWarningSent = false;
     std::vector<ObjectGuid> Players;
     std::map<ObjectGuid, uint8> PlayerSpawns;
     std::vector<uint64> Teams;
@@ -112,6 +114,7 @@ public:
     void OnPlayerDeath(Player* player);
     void OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId);
     void OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript);
+    void OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid);
     bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
     bool IsPlayerInPvpveRun(Player const* player) const;
 
@@ -133,7 +136,7 @@ private:
     void OnPlayerLeftMap(Player* player);
     void EvaluateRunState(PvpveDungeonRun& run);
     bool TeamHasActiveMembers(PvpveTeam const& team, DungeonTemplate const* dungeonTemplate) const;
-    void FinishRun(PvpveDungeonRun& run);
+    void FinishRun(PvpveDungeonRun& run, uint64 preferredWinner = 0);
     void TrackQueuedMembers(std::vector<ObjectGuid> const& members);
     void UntrackQueuedMembers(std::vector<ObjectGuid> const& members);
     void CheckRunRuntime(PvpveDungeonRun& run, time_t now);

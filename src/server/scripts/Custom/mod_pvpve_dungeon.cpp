@@ -670,14 +670,7 @@ void PvpveDungeonMgr::EvaluateRunState(PvpveDungeonRun& run)
             ++activeTeams;
     }
 
-    bool shouldFinish = false;
-    if (run.Teams.size() > 1 && activeTeams <= 1)
-        shouldFinish = true;
-    else if (run.Teams.size() == 1 && activeTeams == 0)
-        shouldFinish = true;
-
-    if (shouldFinish)
-        FinishRun(run);
+    // Runs now finish when the instance boss is defeated; elimination merely tracks team status.
 }
 
 void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
@@ -750,7 +743,42 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     EvaluateRunState(*run);
 }
 
-void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
+void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
+{
+    PvpveDungeonRun* run = GetRun(runId);
+    if (!run)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: ignoring boss defeat for unknown run {}.", runId);
+        return;
+    }
+
+    if (run->Finished)
+    {
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} already finished; boss defeat notification ignored.", runId);
+        return;
+    }
+
+    run->BossDefeated = true;
+
+    uint64 preferredWinner = 0;
+    if (!creditGuid.IsEmpty())
+    {
+        auto teamItr = _playerToTeam.find(creditGuid);
+        if (teamItr != _playerToTeam.end())
+        {
+            if (PvpveTeam* team = GetTeam(teamItr->second))
+            {
+                if (!team->Eliminated)
+                    preferredWinner = team->Id;
+            }
+        }
+    }
+
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: boss defeated for run {} (credit team: {}).", runId, preferredWinner);
+    FinishRun(*run, preferredWinner);
+}
+
+void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
 {
     if (run.Finished)
         return;
@@ -760,11 +788,25 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
 
     std::vector<uint64> winningTeams;
     winningTeams.reserve(run.Teams.size());
-    for (uint64 teamId : run.Teams)
+    if (preferredWinner)
     {
-        PvpveTeam* team = GetTeam(teamId);
-        if (team && !team->Eliminated)
-            winningTeams.push_back(teamId);
+        if (PvpveTeam* team = GetTeam(preferredWinner))
+        {
+            if (!team->Eliminated)
+                winningTeams.push_back(preferredWinner);
+        }
+        else
+            preferredWinner = 0;
+    }
+
+    if (winningTeams.empty())
+    {
+        for (uint64 teamId : run.Teams)
+        {
+            PvpveTeam* team = GetTeam(teamId);
+            if (team && !team->Eliminated)
+                winningTeams.push_back(teamId);
+        }
     }
 
     if (winningTeams.empty())
@@ -842,10 +884,17 @@ void PvpveDungeonMgr::CheckRunRuntime(PvpveDungeonRun& run, time_t now)
 
     uint32 const elapsed = uint32(now - run.StartTime);
     if (elapsed < dungeonTemplate->MaxRuntimeSecs)
+    {
+        run.TimeoutWarningSent = false;
         return;
+    }
 
-    TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s). Finishing run.", run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
-    FinishRun(run);
+    if (!run.TimeoutWarningSent)
+    {
+        run.TimeoutWarningSent = true;
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s) but will remain active until the boss is defeated.",
+            run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
+    }
 }
 
 uint32 PvpveDungeonMgr::CountActiveRuns() const
