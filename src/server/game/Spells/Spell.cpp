@@ -97,7 +97,7 @@ namespace
         if (!caster || !spellInfo)
             return;
 
-        if (result == SPELL_CAST_OK && !sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_MESSAGE_ON_SUCCESS))
+        if (result == SPELL_CAST_OK)
             return;
 
         if (!IsTrapGameObject(caster))
@@ -143,9 +143,7 @@ namespace
         char const* resultText = EnumUtils::ToConstant(result);
 
         std::ostringstream message;
-        if (result == SPELL_CAST_OK)
-            message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") succeeded for " << targetName << ".";
-        else if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
+        if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
             message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << " (custom error " << customError << ").";
         else
             message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << ".";
@@ -5236,8 +5234,6 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
 
 SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint32* param2 /*= nullptr*/)
 {
-    bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_MESSAGE_ON_SUCCESS) && IsTrapGameObject(m_caster);
-
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
         return SPELL_FAILED_CASTER_DEAD;
@@ -5432,11 +5428,6 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
 
             SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
         }
-        else if (trapSuccessDebugPending)
-        {
-            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, SPELL_CAST_OK, SPELL_CUSTOM_ERROR_NONE);
-            trapSuccessDebugPending = false;
-        }
     }
 
     if (Unit* target = m_targets.GetUnitTarget())
@@ -5448,11 +5439,6 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 return castResult;
 
             SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
-        }
-        else if (trapSuccessDebugPending)
-        {
-            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, SPELL_CAST_OK, SPELL_CUSTOM_ERROR_NONE);
-            trapSuccessDebugPending = false;
         }
 
         if (target != m_caster)
