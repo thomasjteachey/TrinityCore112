@@ -45,6 +45,7 @@ struct PvpveTeam
     time_t CreatedTime = 0;
     uint8 SpawnIndex = 0;
     bool Ready = false;
+    bool Eliminated = false;
 };
 
 struct PvpveDungeonRun
@@ -57,6 +58,7 @@ struct PvpveDungeonRun
     time_t StartTime = 0;
     bool Active = false;
     bool Completed = false;
+    bool Finished = false;
     std::vector<ObjectGuid> Players;
     std::map<ObjectGuid, uint8> PlayerSpawns;
     std::vector<uint64> Teams;
@@ -116,6 +118,9 @@ private:
     void OnInstanceCreated(Map* map);
     void OnPlayerEliminated(Player* player);
     void OnPlayerLeftMap(Player* player);
+    void EvaluateRunState(PvpveDungeonRun& run);
+    bool TeamHasActiveMembers(PvpveTeam const& team, DungeonTemplate const* dungeonTemplate) const;
+    void FinishRun(PvpveDungeonRun& run);
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
