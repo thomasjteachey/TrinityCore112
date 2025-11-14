@@ -21,6 +21,7 @@
 #include "DatabaseEnv.h"
 #include "Group.h"
 #include "GroupMgr.h"
+#include "InstanceSaveMgr.h"
 #include "InstanceScript.h"
 #include "Log.h"
 #include "MapInstanced.h"
@@ -437,6 +438,15 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         return;
     }
 
+    uint32 const runInstanceId = run.InstanceId ? run.InstanceId : (run.InstanceMap ? run.InstanceMap->GetInstanceId() : 0u);
+    InstanceSave* instanceSave = nullptr;
+    if (runInstanceId)
+    {
+        instanceSave = sInstanceSaveMgr->GetInstanceSave(runInstanceId);
+        if (!instanceSave)
+            TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} is tracking instance {} but no InstanceSave exists yet.", run.Id, runInstanceId);
+    }
+
     uint8 spawnIndex = PickSpawnIndex(run);
     auto spawnItr = std::find_if(spawnList->begin(), spawnList->end(), [spawnIndex](SpawnPoint const& spawn)
     {
@@ -461,6 +471,15 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     if (!run.GroupGuid.IsEmpty())
         group = sGroupMgr->GetGroupByGUID(run.GroupGuid.GetCounter());
 
+    auto removeFromExistingGroup = [](Player* player)
+    {
+        if (!player)
+            return;
+
+        if (Group* currentGroup = player->GetGroup())
+            Player::RemoveFromGroup(currentGroup, player->GetGUID(), GROUP_REMOVEMETHOD_DEFAULT);
+    };
+
     Player* leader = nullptr;
     for (ObjectGuid const& guid : team.Members)
     {
@@ -477,6 +496,7 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
 
     if (!group)
     {
+        removeFromExistingGroup(leader);
         group = new Group();
         if (!group->Create(leader))
         {
@@ -492,10 +512,12 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     else if (!group->isRaidGroup())
         group->ConvertToRaid();
 
-    auto addToRaid = [group, runId = run.Id](Player* player) -> bool
+    auto addToRaid = [group, runId = run.Id, removeFromExistingGroup](Player* player) -> bool
     {
         if (group->IsMember(player->GetGUID()))
             return true;
+
+        removeFromExistingGroup(player);
 
         if (group->AddMember(player))
             return true;
@@ -515,6 +537,9 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
 
         if (!addToRaid(player))
             continue;
+
+        if (instanceSave)
+            player->BindToInstance(instanceSave, false);
 
         if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
