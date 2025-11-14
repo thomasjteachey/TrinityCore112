@@ -43,6 +43,7 @@
 #include "Unit.h"
 #include "Util.h"
 #include "Vehicle.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include <numeric>
 
@@ -5741,8 +5742,8 @@ void AuraEffect::HandleProcTriggerSpellAuraProc(AuraApplication* aurApp, ProcEve
                     if (session->GetSecurity() > SEC_PLAYER)
                     {
                         EnumText const reasonText = EnumUtils::ToString(castResult);
-                        std::string const whisper = Trinity::StringFormat("Nature's Grasp failed: {}", reasonText.Title);
-                        playerCaster->Unit::Whisper(whisper, LANG_UNIVERSAL, playerCaster);
+                        std::string const message = Trinity::StringFormat("Nature's Grasp failed: {}", reasonText.Title);
+                        sWorld->SendServerMessage(SERVER_MSG_STRING, message, playerCaster);
                     }
         }
     }
