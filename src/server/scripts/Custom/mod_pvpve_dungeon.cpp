@@ -692,6 +692,7 @@ struct TeleportDestination
 
 TeleportDestination const kAllianceTeleportDestination{ 0, -8833.38f, 628.62f, 94.0066f, 1.0646f };
 TeleportDestination const kHordeTeleportDestination{ 1, 1633.33f, -4439.09f, 15.999f, 5.3178f };
+}
 
 class PvpveDungeonPlayerScript : public PlayerScript
 {
@@ -838,6 +839,8 @@ private:
     GuidSet _pendingTeleport;
 };
 
+namespace
+{
 struct PvpveDungeonWorldScript : WorldScript
 {
     PvpveDungeonWorldScript() : WorldScript("pvpve_dungeon_world") { }

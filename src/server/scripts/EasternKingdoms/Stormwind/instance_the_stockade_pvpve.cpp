@@ -25,7 +25,6 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Position.h"
-#include "QuaternionData.h"
 #include "SharedDefines.h"
 #include "StringFormat.h"
 
