@@ -15,42 +15,44 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Chat.h"
 #include "Creature.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
+#include "GameTime.h"
 #include "Item.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "TaskScheduler.h"
+#include "Util.h"
 
 #include <chrono>
-#include <cmath>
 #include <shared_mutex>
 #include <unordered_set>
 
-namespace
-{
 using namespace std::chrono_literals;
 
-constexpr uint32 GURUBASHI_ARENA_AREA_ID = 1599;
+namespace
+{
 constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
+constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
+constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
-constexpr auto CHECK_INTERVAL = 1h;
-constexpr float ARENA_RADIUS = 45.0f;
-constexpr float MAX_HEIGHT_DELTA = 20.0f;
+constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 
 Position const ChestSpawnPosition = { -13232.5f, 199.5f, 31.760f, 3.124f };
 
-bool IsPlayerInArena(Player* player)
+bool IsPlayerEligible(Player* player)
 {
-    if (!player || !player->IsInWorld() || player->IsGameMaster())
+    if (!player || !player->IsInWorld())
         return false;
 
     if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
@@ -62,13 +64,45 @@ bool IsPlayerInArena(Player* player)
     if (!player->IsAlive())
         return false;
 
-    if (player->GetAreaId() == GURUBASHI_ARENA_AREA_ID)
-        return true;
+    return player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
+}
 
-    if (player->GetDistance2d(ChestSpawnPosition.GetPositionX(), ChestSpawnPosition.GetPositionY()) > ARENA_RADIUS)
-        return false;
+uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
+{
+    uint32 playerCount = 0;
 
-    return std::fabs(player->GetPositionZ() - ChestSpawnPosition.GetPositionZ()) <= MAX_HEIGHT_DELTA;
+    std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+    for (auto const& playerPair : ObjectAccessor::GetPlayers())
+    {
+        Player* player = playerPair.second;
+        if (!IsPlayerEligible(player))
+            continue;
+
+        if (firstEligibleGuid && !*firstEligibleGuid)
+            *firstEligibleGuid = player->GetGUID();
+
+        ++playerCount;
+    }
+
+    return playerCount;
+}
+
+Player* FindEligibleSummoner(ObjectGuid preferredGuid)
+{
+    if (preferredGuid)
+        if (Player* player = ObjectAccessor::FindPlayer(preferredGuid))
+            if (IsPlayerEligible(player))
+                return player;
+
+    std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+    for (auto const& playerPair : ObjectAccessor::GetPlayers())
+    {
+        Player* player = playerPair.second;
+        if (IsPlayerEligible(player))
+            return player;
+    }
+
+    return nullptr;
 }
 
 void YellFromChromie()
@@ -137,10 +171,28 @@ public:
     }
 };
 
+enum class SpawnResult
+{
+    Success,
+    NotEnoughPlayers,
+    NoEligiblePlayers,
+    MapNotAvailable,
+    ChestAlreadyActive
+};
+
 class gurubashi_arena_hourly_event : public WorldScript
 {
 public:
-    gurubashi_arena_hourly_event() : WorldScript("gurubashi_arena_hourly_event") { }
+    gurubashi_arena_hourly_event() : WorldScript("gurubashi_arena_hourly_event")
+    {
+        s_Instance = this;
+    }
+
+    ~gurubashi_arena_hourly_event() override
+    {
+        if (s_Instance == this)
+            s_Instance = nullptr;
+    }
 
     void OnStartup() override
     {
@@ -151,6 +203,8 @@ public:
     {
         _scheduler.CancelAll();
         _currentChestGuid.Clear();
+        _nextCheckTimeMs = 0;
+        _lastEligibleCount = 0;
     }
 
     void OnUpdate(uint32 diff) override
@@ -158,54 +212,66 @@ public:
         _scheduler.Update(diff);
     }
 
+    static gurubashi_arena_hourly_event* GetInstance()
+    {
+        return s_Instance;
+    }
+
+    uint32 GetLastEligibleCount() const
+    {
+        return _lastEligibleCount;
+    }
+
+    std::chrono::milliseconds GetTimeUntilNextScan() const
+    {
+        if (!_nextCheckTimeMs)
+            return std::chrono::milliseconds::zero();
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (_nextCheckTimeMs <= nowMs)
+            return std::chrono::milliseconds::zero();
+
+        return std::chrono::milliseconds(_nextCheckTimeMs - nowMs);
+    }
+
+    SpawnResult ForceSpawn()
+    {
+        return AttemptSpawn(true);
+    }
+
 private:
     void ScheduleNextCheck(std::chrono::milliseconds delay)
     {
+        _nextCheckTimeMs = GameTime::GetGameTimeMS() + static_cast<uint32>(delay.count());
         _scheduler.Schedule(delay, [this](TaskContext context)
         {
-            AttemptSpawn();
+            AttemptSpawn(false);
+            _nextCheckTimeMs = GameTime::GetGameTimeMS() + static_cast<uint32>(CHECK_INTERVAL.count());
             context.Repeat(CHECK_INTERVAL);
         });
     }
 
-    void AttemptSpawn()
+    SpawnResult AttemptSpawn(bool force)
     {
         ObjectGuid summonerGuid;
-        uint32 playerCount = 0;
+        uint32 const playerCount = CountEligiblePlayers(&summonerGuid);
+        _lastEligibleCount = playerCount;
 
-        {
-            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
-            for (auto const& playerPair : ObjectAccessor::GetPlayers())
-            {
-                Player* player = playerPair.second;
-                if (!IsPlayerInArena(player))
-                    continue;
+        if (!force && playerCount < REQUIRED_PLAYER_COUNT)
+            return SpawnResult::NotEnoughPlayers;
 
-                if (!summonerGuid)
-                    summonerGuid = player->GetGUID();
-
-                ++playerCount;
-            }
-        }
-
-        if (playerCount < 5)
-            return;
-
-        if (!summonerGuid)
-            return;
-
-        Player* summoner = ObjectAccessor::FindPlayer(summonerGuid);
+        Player* summoner = FindEligibleSummoner(summonerGuid);
         if (!summoner || !summoner->IsInWorld())
-            return;
+            return SpawnResult::NoEligiblePlayers;
 
         Map* map = summoner->GetMap();
         if (!map)
-            return;
+            return SpawnResult::MapNotAvailable;
 
         if (GameObject* existing = _currentChestGuid ? map->GetGameObject(_currentChestGuid) : nullptr)
         {
             if (existing->IsInWorld())
-                return;
+                return SpawnResult::ChestAlreadyActive;
 
             _currentChestGuid.Clear();
         }
@@ -215,15 +281,120 @@ private:
             chest->SetRespawnTime(0);
             _currentChestGuid = chest->GetGUID();
             YellFromChromie();
+            return SpawnResult::Success;
         }
+
+        return SpawnResult::MapNotAvailable;
     }
 
     TaskScheduler _scheduler;
     ObjectGuid _currentChestGuid;
+    uint32 _nextCheckTimeMs = 0;
+    uint32 _lastEligibleCount = 0;
+
+    static gurubashi_arena_hourly_event* s_Instance;
 };
+
+gurubashi_arena_hourly_event* gurubashi_arena_hourly_event::s_Instance = nullptr;
+
+namespace
+{
+using namespace Trinity::ChatCommands;
+
+std::string FormatDuration(std::chrono::milliseconds duration)
+{
+    if (duration <= std::chrono::milliseconds::zero())
+        return "0s";
+
+    uint64 seconds = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+    if (duration.count() % 1000)
+        ++seconds;
+
+    return secsToTimeString(seconds, TimeFormat::ShortText, true);
+}
+
+class gurubashi_arena_commands : public CommandScript
+{
+public:
+    gurubashi_arena_commands() : CommandScript("gurubashi_arena_commands") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable gurubashiCommandTable =
+        {
+            { "status", HandleStatus, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "scan",   HandleScan,   rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "force",  HandleForce,  rbac::RBAC_PERM_COMMAND_GM, Console::Yes }
+        };
+
+        static ChatCommandTable rootTable =
+        {
+            { "gurubashi", gurubashiCommandTable }
+        };
+
+        return rootTable;
+    }
+
+    static bool HandleStatus(ChatHandler* handler)
+    {
+        if (gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance())
+        {
+            handler->PSendSysMessage("Last eligible players counted: %u", event->GetLastEligibleCount());
+            handler->PSendSysMessage("Next automatic scan in: %s", FormatDuration(event->GetTimeUntilNextScan()).c_str());
+            return true;
+        }
+
+        handler->SendSysMessage("Gurubashi arena event script is not initialized.");
+        handler->SetSentErrorMessage(true);
+        return false;
+    }
+
+    static bool HandleScan(ChatHandler* handler)
+    {
+        uint32 const count = CountEligiblePlayers();
+        handler->PSendSysMessage("Currently %u eligible players are in Stranglethorn Vale.", count);
+        return true;
+    }
+
+    static bool HandleForce(ChatHandler* handler)
+    {
+        gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+        if (!event)
+        {
+            handler->SendSysMessage("Gurubashi arena event script is not initialized.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        switch (event->ForceSpawn())
+        {
+            case SpawnResult::Success:
+                handler->SendSysMessage("Gurubashi chest spawned.");
+                return true;
+            case SpawnResult::ChestAlreadyActive:
+                handler->SendSysMessage("A Gurubashi chest is already active.");
+                return false;
+            case SpawnResult::NoEligiblePlayers:
+                handler->SendSysMessage("No eligible players are currently in Stranglethorn Vale to anchor the spawn.");
+                handler->SetSentErrorMessage(true);
+                return false;
+            case SpawnResult::MapNotAvailable:
+                handler->SendSysMessage("Unable to access the map to spawn the chest.");
+                handler->SetSentErrorMessage(true);
+                return false;
+            case SpawnResult::NotEnoughPlayers:
+            default:
+                handler->SendSysMessage("Force spawn failed for an unknown reason.");
+                handler->SetSentErrorMessage(true);
+                return false;
+        }
+    }
+};
+}
 
 void AddSC_custom_gurubashi_arena()
 {
     new go_custom_gurubashi_hourly_chest();
     new gurubashi_arena_hourly_event();
+    new gurubashi_arena_commands();
 }
