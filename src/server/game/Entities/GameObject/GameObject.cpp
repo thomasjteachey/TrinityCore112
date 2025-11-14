@@ -773,7 +773,10 @@ void GameObject::Update(uint32 diff)
                     else if (Unit* target = ObjectAccessor::GetUnit(*this, m_lootStateUnitGUID))
                     {
                         // Some traps do not have a spell but should be triggered
-                        CastSpellExtraArgs args;
+                        // Trap spells should still activate even if their owner is in a state
+                        // that normally prevents casting (for example Feign Death).  Ignore
+                        // caster aura checks so trap triggers are not cancelled by owner state.
+                        CastSpellExtraArgs args(TRIGGERED_IGNORE_CASTER_AURAS);
                         args.SetOriginalCaster(GetOwnerGUID());
                         if (goInfo->trap.spellId)
                         {

@@ -3218,6 +3218,15 @@ DireMaulBeads.ChestDespawnSeconds = 300
 AllowTrackBothResources = 0
 
 #
+#    Trap.DebugWhisperOnSuccess
+#        Description: Sends GM trap debug whispers even when the trap passes target validation.
+#                     Enable this to quickly verify that the debug whisper system is working.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Trap.DebugWhisperOnSuccess = 0
+
+#
 #    PlayerStart.AllReputation
 #        Description: Players will start with most of the high level reputations that are needed
 #                     for items, mounts etc.
