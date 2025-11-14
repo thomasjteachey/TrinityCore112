@@ -153,4 +153,7 @@ private:
 
 #define sPvpveDungeonMgr PvpveDungeonMgr::Instance()
 
+void ApplyPvpveFfaState(Player* player);
+void ClearPvpveFfaState(Player* player);
+
 #endif // MOD_PVPVE_DUNGEON_H
