@@ -26,7 +26,6 @@
 #include "MapManager.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
-#include "Group.h"
 #include "Random.h"
 #include "ScriptMgr.h"
 
@@ -473,13 +472,6 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         {
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: unable to find player {} for team {} in run {}.", memberGuid.ToString(), team.Id, run.Id);
             continue;
-        }
-
-        if (Group* group = player->GetGroup())
-        {
-            TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: removing player {} from group {} before entering run {}.",
-                memberGuid.ToString(), group->GetGUID().ToString(), run.Id);
-            Player::RemoveFromGroup(group, memberGuid, GROUP_REMOVEMETHOD_KICK);
         }
 
         if (instanceSave)
