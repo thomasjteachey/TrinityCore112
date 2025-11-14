@@ -150,6 +150,57 @@ namespace
         else
             handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s.", spellName, spellInfo->Id, targetName.c_str(), resultText);
     }
+
+    void WhisperTrapFailureToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
+    {
+        if (!caster || !spellInfo || result == SPELL_CAST_OK)
+            return;
+
+        GameObject const* trapCaster = caster->ToGameObject();
+        if (!trapCaster || trapCaster->GetGoType() != GAMEOBJECT_TYPE_TRAP)
+            return;
+
+        Unit* owner = trapCaster->GetOwner();
+        if (!owner)
+            return;
+
+        Player* ownerPlayer = owner->ToPlayer();
+        if (!ownerPlayer)
+            return;
+
+        WorldSession* session = ownerPlayer->GetSession();
+        if (!session || AccountMgr::IsPlayerAccount(session->GetSecurity()))
+            return;
+
+        std::string targetName;
+        if (WorldObject const* target = targets.GetObjectTarget())
+        {
+            targetName = target->GetName();
+            if (targetName.empty())
+                targetName = target->GetGUID().ToString();
+        }
+        else if (Unit const* unitTarget = targets.GetUnitTarget())
+        {
+            targetName = unitTarget->GetName();
+            if (targetName.empty())
+                targetName = unitTarget->GetGUID().ToString();
+        }
+
+        if (targetName.empty())
+            targetName = "<no target>";
+
+        char const* spellName = spellInfo->SpellName[DEFAULT_LOCALE];
+        if (!spellName || !*spellName)
+            spellName = "Unknown spell";
+
+        char const* resultText = EnumUtils::ToConstant(result);
+
+        ChatHandler handler(session);
+        if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
+            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s (custom error %u).", spellName, spellInfo->Id, targetName.c_str(), resultText, customError);
+        else
+            handler.PSendSysMessage("[Trap Debug] %s (%u) failed for %s: %s.", spellName, spellInfo->Id, targetName.c_str(), resultText);
+    }
 }
 
 SpellDestination::SpellDestination()
