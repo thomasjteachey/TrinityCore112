@@ -3642,6 +3642,12 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->_GetEffect(EFFECT_0).ApplyAuraName = SPELL_AURA_DUMMY;
     });
 
+    // Flare - should explode immediately on the target location (no missile travel time)
+    ApplySpellFix({ 1543 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Speed = 0.0f;
+    });
+
     ApplySpellFix({
         27892, // To Anchor 1
         27928, // To Anchor 1
