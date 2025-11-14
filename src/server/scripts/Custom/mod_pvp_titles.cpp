@@ -366,11 +366,8 @@ private:
         RankThresholdArray const thresholds = GetConfiguredKillThresholds();
         bool const removeLower = sConfigMgr->GetBoolDefault("PvPTitles.RemoveLowerTitles", false);
 
-        for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
+        auto const AwardRank = [player](uint8 rank)
         {
-            if (kills < thresholds[rank])
-                continue;
-
             std::vector<char const*> newlyAwarded;
             newlyAwarded.reserve(2);
 
@@ -394,6 +391,23 @@ private:
                     else
                         ChatHandler(session).PSendSysMessage("You have earned the titles '%s' and '%s'.", newlyAwarded[0], newlyAwarded[1]);
                 }
+            }
+        };
+
+        if (removeLower)
+        {
+            uint8 const highestRank = GetHighestEligibleRank(kills, thresholds);
+            if (highestRank < MAX_RANK)
+                AwardRank(highestRank);
+        }
+        else
+        {
+            for (uint8 rank = RANK_ONE; rank < MAX_RANK; ++rank)
+            {
+                if (kills < thresholds[rank])
+                    continue;
+
+                AwardRank(rank);
             }
         }
 
