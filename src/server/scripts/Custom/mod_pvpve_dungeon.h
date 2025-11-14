@@ -14,6 +14,7 @@ class Group;
 class Creature;
 class WorldPacket;
 class WorldSession;
+class PvpveDungeonPlayerScript;
 
 struct DungeonTemplate
 {
@@ -149,8 +150,13 @@ private:
     SpawnContainer _spawns;
     uint64 _nextRunId = 1;
     uint64 _nextTeamId = 1;
+
+    friend class PvpveDungeonPlayerScript;
 };
 
 #define sPvpveDungeonMgr PvpveDungeonMgr::Instance()
+
+void ApplyPvpveFfaState(Player* player);
+void ClearPvpveFfaState(Player* player);
 
 #endif // MOD_PVPVE_DUNGEON_H
