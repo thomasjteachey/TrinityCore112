@@ -735,6 +735,9 @@ class TC_GAME_API SpellMgr
     friend class UnitTestDataLoader;
 };
 
+
+bool IsNaturesGraspAura(uint32 spellId);
+
 #define sSpellMgr SpellMgr::instance()
 
 #endif
