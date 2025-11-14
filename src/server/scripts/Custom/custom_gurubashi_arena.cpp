@@ -196,7 +196,7 @@ public:
 
     void OnStartup() override
     {
-        ScheduleNextCheck(0s);
+        ScheduleNextCheck(CalculateDelayUntilNextHour(true));
     }
 
     void OnShutdown() override
@@ -240,14 +240,25 @@ public:
     }
 
 private:
+    static std::chrono::milliseconds CalculateDelayUntilNextHour(bool allowImmediate)
+    {
+        uint64 const nowMs = GameTime::GetGameTimeMS();
+        uint64 const intervalMs = static_cast<uint64>(CHECK_INTERVAL.count());
+        uint64 const remainder = nowMs % intervalMs;
+
+        if (remainder == 0)
+            return allowImmediate ? std::chrono::milliseconds::zero() : CHECK_INTERVAL;
+
+        return std::chrono::milliseconds(intervalMs - remainder);
+    }
+
     void ScheduleNextCheck(std::chrono::milliseconds delay)
     {
         _nextCheckTimeMs = GameTime::GetGameTimeMS() + static_cast<uint32>(delay.count());
-        _scheduler.Schedule(delay, [this](TaskContext context)
+        _scheduler.Schedule(delay, [this](TaskContext /*context*/)
         {
             AttemptSpawn(false);
-            _nextCheckTimeMs = GameTime::GetGameTimeMS() + static_cast<uint32>(CHECK_INTERVAL.count());
-            context.Repeat(CHECK_INTERVAL);
+            ScheduleNextCheck(CalculateDelayUntilNextHour(false));
         });
     }
 
