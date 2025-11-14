@@ -23,6 +23,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 
 #include <algorithm>
 #include <ctime>
@@ -363,4 +364,27 @@ void PvpveDungeonMgr::OnPlayerEliminated(Player* /*player*/)
 void PvpveDungeonMgr::OnPlayerLeftMap(Player* /*player*/)
 {
     TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO handle player leaving map.");
+}
+
+namespace
+{
+struct PvpveDungeonWorldScript : WorldScript
+{
+    PvpveDungeonWorldScript() : WorldScript("pvpve_dungeon_world") { }
+
+    void OnStartup() override
+    {
+        PvpveDungeonMgr::instance()->LoadConfigFromDB();
+    }
+
+    void OnUpdate(uint32 diff) override
+    {
+        PvpveDungeonMgr::instance()->Update(diff);
+    }
+};
+}
+
+void AddSC_custom_pvpve_dungeon()
+{
+    new PvpveDungeonWorldScript();
 }
