@@ -17,6 +17,8 @@
 
 #include "Spell.h"
 #include <algorithm>
+#include <sstream>
+#include "AccountMgr.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -44,6 +46,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SmartEnum.h"
 #include "SharedDefines.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -68,17 +71,86 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
-    // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
-    bool TrapGameObjectCanIgnoreTargetFailure(WorldObject const* caster, SpellCastResult result)
+    bool IsTrapGameObject(WorldObject const* caster)
     {
-        if (result == SPELL_CAST_OK || !caster)
+        if (!caster)
             return false;
 
         GameObject const* goCaster = caster->ToGameObject();
-        if (!goCaster || goCaster->GetGoType() != GAMEOBJECT_TYPE_TRAP)
+        if (!goCaster)
             return false;
 
-        return true;
+        return goCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
+    }
+
+    // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
+    bool TrapGameObjectCanIgnoreTargetFailure(WorldObject const* caster, SpellCastResult result)
+    {
+        if (result == SPELL_CAST_OK)
+            return false;
+
+        return IsTrapGameObject(caster);
+    }
+
+    void SendTrapDebugServerMessageToOwner(WorldObject const* caster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
+    {
+        if (!caster || !spellInfo)
+            return;
+
+        if (result == SPELL_CAST_OK && !sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_MESSAGE_ON_SUCCESS))
+            return;
+
+        if (!IsTrapGameObject(caster))
+            return;
+
+        GameObject const* trapCaster = caster->ToGameObject();
+        if (!trapCaster)
+            return;
+
+        Unit* owner = trapCaster->GetOwner();
+        if (!owner)
+            return;
+
+        Player* ownerPlayer = owner->ToPlayer();
+        if (!ownerPlayer)
+            return;
+
+        WorldSession* session = ownerPlayer->GetSession();
+        if (!session || AccountMgr::IsPlayerAccount(session->GetSecurity()))
+            return;
+
+        std::string targetName;
+        if (WorldObject const* target = targets.GetObjectTarget())
+        {
+            targetName = target->GetName();
+            if (targetName.empty())
+                targetName = target->GetGUID().ToString();
+        }
+        else if (Unit const* unitTarget = targets.GetUnitTarget())
+        {
+            targetName = unitTarget->GetName();
+            if (targetName.empty())
+                targetName = unitTarget->GetGUID().ToString();
+        }
+
+        if (targetName.empty())
+            targetName = "<no target>";
+
+        char const* spellName = spellInfo->SpellName[DEFAULT_LOCALE];
+        if (!spellName || !*spellName)
+            spellName = "Unknown spell";
+
+        char const* resultText = EnumUtils::ToConstant(result);
+
+        std::ostringstream message;
+        if (result == SPELL_CAST_OK)
+            message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") succeeded for " << targetName << ".";
+        else if (result == SPELL_FAILED_CUSTOM_ERROR && customError != SPELL_CUSTOM_ERROR_NONE)
+            message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << " (custom error " << customError << ").";
+        else
+            message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << ".";
+
+        sWorld->SendServerMessage(SERVER_MSG_STRING, message.str(), ownerPlayer);
     }
 }
 
@@ -5164,6 +5236,8 @@ void Spell::HandleEffects(Unit* pUnitTarget, Item* pItemTarget, GameObject* pGoT
 
 SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint32* param2 /*= nullptr*/)
 {
+    bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_MESSAGE_ON_SUCCESS) && IsTrapGameObject(m_caster);
+
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
         return SPELL_FAILED_CASTER_DEAD;
@@ -5350,11 +5424,18 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         SpellCastResult castResult = m_spellInfo->CheckExplicitTarget(caster, m_targets.GetObjectTarget(), m_targets.GetItemTarget());
         if (castResult != SPELL_CAST_OK)
         {
-            if ((!m_targets.GetObjectTarget() && !m_targets.GetUnitTarget()) ||
-                !TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
-            {
+            if (!m_targets.GetObjectTarget() && !m_targets.GetUnitTarget())
                 return castResult;
-            }
+
+            if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
+                return castResult;
+
+            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
+        }
+        else if (trapSuccessDebugPending)
+        {
+            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, SPELL_CAST_OK, SPELL_CUSTOM_ERROR_NONE);
+            trapSuccessDebugPending = false;
         }
     }
 
@@ -5365,6 +5446,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             if (!TrapGameObjectCanIgnoreTargetFailure(m_caster, castResult))
                 return castResult;
+
+            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, castResult, m_customError);
+        }
+        else if (trapSuccessDebugPending)
+        {
+            SendTrapDebugServerMessageToOwner(m_caster, m_spellInfo, m_targets, SPELL_CAST_OK, SPELL_CUSTOM_ERROR_NONE);
+            trapSuccessDebugPending = false;
         }
 
         if (target != m_caster)
