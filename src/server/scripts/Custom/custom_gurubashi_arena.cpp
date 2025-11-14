@@ -48,7 +48,7 @@ constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 
-Position const ChestSpawnPosition = { -13232.5f, 199.5f, 31.760f, 3.124f };
+Position const ChestSpawnPosition = { -13213.58f, 274.136f, 21.85f, 4.39f };
 
 bool IsPlayerEligible(Player* player)
 {
