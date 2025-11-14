@@ -168,7 +168,6 @@ namespace
             case SPELL_MISS_DEFLECT: return "was deflected";
             case SPELL_MISS_ABSORB: return "was absorbed";
             case SPELL_MISS_REFLECT: return "was reflected";
-            case SPELL_MISS_INTERRUPT: return "was interrupted";
             default:
                 break;
         }
@@ -181,10 +180,11 @@ namespace
         if (missInfo == SPELL_MISS_NONE || !target)
             return;
 
-        if (!spell->m_triggeredByAuraSpell || !IsNaturesGraspAura(spell->m_triggeredByAuraSpell->Id))
+        SpellInfo const* triggeredByAura = spell->GetTriggeredByAuraSpell();
+        if (!triggeredByAura || !IsNaturesGraspAura(triggeredByAura->Id))
             return;
 
-        Player* playerCaster = spell->m_caster->ToPlayer();
+        Player* playerCaster = spell->GetCaster() ? spell->GetCaster()->ToPlayer() : nullptr;
         if (!playerCaster)
             return;
 
