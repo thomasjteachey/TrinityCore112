@@ -22,6 +22,8 @@
 #include "Group.h"
 #include "GroupMgr.h"
 #include "Log.h"
+#include "MapInstanced.h"
+#include "MapManager.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -79,12 +81,6 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
     PvpveDungeonRun* run = GetRun(runItr->second);
     if (!run)
         return;
-
-    if (!run->InstanceId)
-    {
-        run->InstanceId = player->GetInstanceId();
-        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: tracking instance {} for run {}.", run->InstanceId, run->Id);
-    }
 
     if (!run->InstanceMap)
         run->InstanceMap = player->GetMap();
@@ -483,9 +479,26 @@ uint8 PvpveDungeonMgr::PickSpawnIndex(uint32 templateId)
     return 0;
 }
 
-void PvpveDungeonMgr::OnInstanceCreated(Map* /*map*/)
+void PvpveDungeonMgr::OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId)
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO handle instance creation.");
+    if (!instanceId)
+        return;
+
+    PvpveDungeonRun* run = GetRun(runId);
+    if (!run || run->TemplateId != templateId)
+        return;
+
+    if (run->InstanceId == instanceId)
+        return;
+
+    if (run->InstanceId && run->InstanceId != instanceId)
+    {
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} already tracked with instance {} (new {}).", run->Id, run->InstanceId, instanceId);
+        return;
+    }
+
+    run->InstanceId = instanceId;
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: tracking instance {} for run {}.", run->InstanceId, run->Id);
 }
 
 bool PvpveDungeonMgr::TeamHasActiveMembers(PvpveTeam const& team, DungeonTemplate const* dungeonTemplate) const
@@ -636,12 +649,26 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run)
 
         TC_LOG_INFO("server.custom", "PvpveDungeonMgr: run {} finished. Winning teams: {}.", run.Id, winnersList);
     }
-    if (run.InstanceScript)
+    PvpveDungeonInstance* instanceScript = run.InstanceScript;
+    if (!instanceScript)
+    {
+        DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
+        if (dungeonTemplate && run.InstanceId)
+        {
+            if (Map* map = sMapMgr->FindMap(dungeonTemplate->MapId, run.InstanceId))
+            {
+                if (InstanceMap* instanceMap = map->ToInstanceMap())
+                    instanceScript = dynamic_cast<PvpveDungeonInstance*>(instanceMap->GetInstanceScript());
+            }
+        }
+    }
+
+    if (instanceScript)
     {
         for (uint64 teamId : winningTeams)
         {
             if (PvpveTeam* team = GetTeam(teamId))
-                run.InstanceScript->OnPvpveRunFinished(run.Id, *team);
+                instanceScript->OnPvpveRunFinished(run.Id, *team);
         }
     }
 
