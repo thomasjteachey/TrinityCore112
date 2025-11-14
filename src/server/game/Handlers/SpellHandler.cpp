@@ -119,6 +119,13 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
         return;
     }
 
+    // Disable usage of inventory items while inside battlegrounds (but still allow equipped trinkets)
+    if (!pUser->IsGameMaster() && pUser->InBattleground() && !pUser->InArena() && !pItem->IsEquipped())
+    {
+        pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, pItem, nullptr);
+        return;
+    }
+
     // only allow conjured consumable, bandage, poisons (all should have the 2^21 item flag set in DB)
     if (proto->Class == ITEM_CLASS_CONSUMABLE && !proto->HasFlag(ITEM_FLAG_IGNORE_DEFAULT_ARENA_RESTRICTIONS) && pUser->InArena())
     {
