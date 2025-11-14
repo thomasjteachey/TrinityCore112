@@ -2620,6 +2620,9 @@ SpellMissInfo WorldObject::SpellHitResult(Unit* victim, SpellInfo const* spellIn
 
 void WorldObject::SendSpellMiss(Unit* target, uint32 spellID, SpellMissInfo missInfo)
 {
+    if (!target)
+        return;
+
     WorldPacket data(SMSG_SPELLLOGMISS, (4 + 8 + 1 + 4 + 8 + 1));
     data << uint32(spellID);
     data << uint64(GetGUID());
@@ -2629,7 +2632,27 @@ void WorldObject::SendSpellMiss(Unit* target, uint32 spellID, SpellMissInfo miss
     data << uint64(target->GetGUID());                      // target GUID
     data << uint8(missInfo);
     // end loop
-    SendMessageToSet(&data, true);
+
+    if (IsInWorld())
+    {
+        SendMessageToSet(&data, true);
+        return;
+    }
+
+    if (GameObject const* gameObjectCaster = ToGameObject())
+    {
+        if (gameObjectCaster->GetGoType() == GAMEOBJECT_TYPE_TRAP)
+        {
+            // Traps despawn the moment they trigger, so they might no longer be in the world when miss feedback is sent.
+            // In that case broadcast the result around the target so players nearby still get the feedback text.
+            target->SendMessageToSet(&data, true);
+            return;
+        }
+    }
+
+    // If we reach this point we are no longer in world (for example destroyed spell caster).
+    // Fallback to broadcasting the packet around the target so it still receives the feedback text.
+    target->SendMessageToSet(&data, true);
 }
 
 FactionTemplateEntry const* WorldObject::GetFactionTemplateEntry() const
