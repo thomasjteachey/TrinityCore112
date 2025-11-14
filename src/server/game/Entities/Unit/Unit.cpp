@@ -9077,6 +9077,8 @@ bool Unit::IsInDisallowedMountForm() const
     if (GetDisplayId() == GetNativeDisplayId())
         return false;
 
+
+
     CreatureDisplayInfoEntry const* display = sCreatureDisplayInfoStore.LookupEntry(GetDisplayId());
     if (!display)
         return true;
@@ -9087,6 +9089,10 @@ bool Unit::IsInDisallowedMountForm() const
 
     CreatureModelDataEntry const* model = sCreatureModelDataStore.LookupEntry(display->ModelID);
     ChrRacesEntry const* race = sChrRacesStore.LookupEntry(displayExtra->DisplayRaceID);
+
+
+    if (display->ModelID == 14406)
+        return false;
 
     if (model && !(model->HasFlag(CREATURE_MODEL_DATA_FLAGS_CAN_MOUNT)))
         if (race && !(race->HasFlag(CHRRACES_FLAGS_CAN_MOUNT)))
@@ -11041,6 +11047,7 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself();
 
     Creature* creature = victim->ToCreature();
+    bool disableLootTagging = creature ? creature->GetCreatureTemplate()->DisableLootTag : false;
 
     bool isRewardAllowed = true;
     if (creature)
@@ -11146,6 +11153,9 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
                 if (!loot->empty())
                     group->UpdateLooterGuid(creature);
             }
+
+            if (disableLootTagging)
+                loot->MakeLootPublic();
         }
 
         player->RewardPlayerAndGroupAtKill(victim, false);
