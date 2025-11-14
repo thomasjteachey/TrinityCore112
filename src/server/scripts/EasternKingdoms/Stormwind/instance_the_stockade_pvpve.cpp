@@ -20,6 +20,7 @@
 #include "Configuration/Config.h"
 #include "Duration.h"
 #include "GameObject.h"
+#include "Map.h"
 #include "InstanceScript.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
