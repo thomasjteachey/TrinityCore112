@@ -20,16 +20,16 @@
 #include "Configuration/Config.h"
 #include "Duration.h"
 #include "GameObject.h"
+#include "Map.h"
 #include "InstanceScript.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Position.h"
-#include "QuaternionData.h"
 #include "SharedDefines.h"
 #include "StringFormat.h"
 
-#include "mod_pvpve_dungeon.h"
+#include "../../Custom/mod_pvpve_dungeon.h"
 
 #include <string>
 
@@ -127,7 +127,7 @@ public:
             if (PvpveDungeonRun* run = PvpveDungeonMgr::instance()->GetRunForPlayer(player->GetGUID()))
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
 
-            player->SetPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
+            ApplyPvpveFfaState(player);
             sPvpveDungeonMgr->OnPlayerEnteredInstance(player, this);
         }
 
@@ -138,16 +138,17 @@ public:
             if (!player)
                 return;
 
+            ClearPvpveFfaState(player);
+
             if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
                 return;
-
-            player->RemovePvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
         }
 
         void OnPvpveRunFinished(uint32 runId, PvpveTeam const& winningTeam) override
         {
             AnnounceVictory(runId, winningTeam);
             SummonRewardChest(runId, winningTeam);
+            ClearFfaState(winningTeam);
         }
 
     private:
@@ -215,6 +216,15 @@ public:
             else
             {
                 TC_LOG_WARN("server.custom", "Stockades PvPvE: failed to summon reward chest {} for run {} (team {}).", chestEntry, runId, team.Id);
+            }
+        }
+
+        void ClearFfaState(PvpveTeam const& team)
+        {
+            for (ObjectGuid const& guid : team.Members)
+            {
+                if (Player* player = ObjectAccessor::FindPlayer(guid))
+                    ClearPvpveFfaState(player);
             }
         }
 
