@@ -4774,6 +4774,8 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
 
                 if (toSet != WEATHER_TYPE_FINE)
                     wz->SetWeather(toSet, 0.9999f); // max intensity so it's visible
+                else
+                    wz->SetWeather(WEATHER_TYPE_FINE, 0.0f);
             }
 
             wz->SendWeatherUpdateToPlayer(player);
