@@ -90,6 +90,17 @@ namespace
         return IsTrapGameObject(caster);
     }
 
+    // Certain crowd control spells (for example Psychic Scream) are expected to break stealth
+    // even though their DBC data does not mark them as dealing damage. Handle that manually
+    // instead of forcing every stealth aura to listen to hit-by-spell interrupts.
+    bool SpellBreaksStealthRegardlessOfInterruptFlags(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo || spellInfo->IsPositive())
+            return false;
+
+        return spellInfo->HasAura(SPELL_AURA_MOD_FEAR);
+    }
+
     void SendTrapDebugServerMessageToOwner(GameObject const* trapCaster, SpellInfo const* spellInfo, SpellCastTargets const& targets, SpellCastResult result, SpellCustomErrors customError)
     {
         if (!trapCaster || !spellInfo)
@@ -2883,7 +2894,12 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
             return SPELL_MISS_EVADE;
 
         if (m_caster->IsValidAttackTarget(unit, m_spellInfo))
+        {
             unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
+
+            if (SpellBreaksStealthRegardlessOfInterruptFlags(m_spellInfo))
+                unit->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+        }
         else if (m_caster->IsFriendlyTo(unit))
         {
             // for delayed spells ignore negative spells (after duel end) for friendly targets
