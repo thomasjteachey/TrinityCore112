@@ -7152,7 +7152,24 @@ void Player::SetInArenaTeam(uint32 ArenaTeamId, uint8 slot, uint8 type)
 
 void Player::SetArenaTeamInfoField(uint8 slot, ArenaTeamInfoType type, uint32 value)
 {
-    SetUInt32Value(PLAYER_FIELD_ARENA_TEAM_INFO_1_1 + (slot * ARENA_TEAM_END) + type, value);
+    if (slot >= MAX_ARENA_SLOT)
+    {
+        TC_LOG_ERROR("entities.player", "Player::SetArenaTeamInfoField called for invalid slot {}.", slot);
+        return;
+    }
+
+    m_arenaTeamInfo[slot][type] = value;
+
+    if (slot < ClientArenaSlotCount)
+        SetUInt32Value(PLAYER_FIELD_ARENA_TEAM_INFO_1_1 + (slot * ARENA_TEAM_END) + type, value);
+}
+
+uint32 Player::GetArenaTeamInfoField(uint8 slot, ArenaTeamInfoType type) const
+{
+    if (slot >= MAX_ARENA_SLOT)
+        return 0;
+
+    return m_arenaTeamInfo[slot][type];
 }
 
 uint32 Player::GetZoneIdFromDB(ObjectGuid guid)
@@ -17324,7 +17341,9 @@ void Player::_LoadDeclinedNames(PreparedQueryResult result)
 void Player::_LoadArenaTeamInfo(PreparedQueryResult result)
 {
     // arenateamid, played_week, played_season, personal_rating
-    memset((void*)&m_uint32Values[PLAYER_FIELD_ARENA_TEAM_INFO_1_1], 0, sizeof(uint32) * MAX_ARENA_SLOT * ARENA_TEAM_END);
+    memset((void*)&m_uint32Values[PLAYER_FIELD_ARENA_TEAM_INFO_1_1], 0, sizeof(uint32) * ClientArenaSlotCount * ARENA_TEAM_END);
+    for (auto& slotInfo : m_arenaTeamInfo)
+        slotInfo.fill(0);
 
     std::array<uint16, MAX_ARENA_SLOT> personalRatingCache{};
 
