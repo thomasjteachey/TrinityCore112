@@ -120,7 +120,7 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
     }
 
     // Keep stat scrolls disabled inside battlegrounds (but still allow other inventory items)
-    if (!pUser->IsGameMaster() && pUser->InBattleground() && !pUser->InArena() && !pItem->IsEquipped())
+    if (pUser->InBattleground() && !pUser->InArena() && !pItem->IsEquipped())
     {
         if (proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_SCROLL)
         {
