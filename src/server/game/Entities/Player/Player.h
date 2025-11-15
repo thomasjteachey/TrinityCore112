@@ -20,6 +20,7 @@
 
 #include "GridObject.h"
 #include "Unit.h"
+#include "ArenaTeam.h"
 #include "DatabaseEnvFwd.h"
 #include "DBCEnums.h"
 #include "EquipmentSet.h"
