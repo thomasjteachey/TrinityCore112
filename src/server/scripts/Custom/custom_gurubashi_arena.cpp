@@ -242,14 +242,14 @@ public:
 private:
     static std::chrono::milliseconds CalculateDelayUntilNextHour(bool allowImmediate)
     {
-        uint64 const nowMs = GameTime::GetGameTimeMS();
-        uint64 const intervalMs = static_cast<uint64>(CHECK_INTERVAL.count());
-        uint64 const remainder = nowMs % intervalMs;
+        time_t const now = GameTime::GetGameTime();
+        uint32 const secondsIntoHour = uint32(now % HOUR);
 
-        if (remainder == 0)
+        if (secondsIntoHour == 0)
             return allowImmediate ? std::chrono::milliseconds::zero() : CHECK_INTERVAL;
 
-        return std::chrono::milliseconds(intervalMs - remainder);
+        uint32 const secondsUntilNextHour = HOUR - secondsIntoHour;
+        return std::chrono::milliseconds(secondsUntilNextHour * IN_MILLISECONDS);
     }
 
     void ScheduleNextCheck(std::chrono::milliseconds delay)
@@ -321,7 +321,7 @@ std::string FormatDuration(std::chrono::milliseconds duration)
     if (duration.count() % 1000)
         ++seconds;
 
-    return secsToTimeString(seconds, TimeFormat::ShortText, true);
+    return secsToTimeString(seconds, TimeFormat::ShortText, false);
 }
 
 class gurubashi_arena_commands : public CommandScript
