@@ -39,7 +39,7 @@ public:
             return SPELL_FAILED_DONT_REPORT;
 
         if (!Trinity::Custom::HasEnoughIneligibleDepletedMarks(player, Trinity::Custom::DEPLETED_MARK_CONVERSION_COST))
-            return SPELL_FAILED_NOT_ENOUGH_ITEMS;
+            return SPELL_FAILED_NEED_MORE_ITEMS;
 
         _dest.clear();
         if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, _dest, _rewardEntry, 1) != EQUIP_ERR_OK)
