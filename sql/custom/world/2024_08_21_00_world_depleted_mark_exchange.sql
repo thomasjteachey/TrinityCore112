@@ -13,9 +13,8 @@ DELETE FROM `quest_template_addon` WHERE `ID` = 90050;
 DELETE FROM `quest_template` WHERE `ID` = 90050;
 DELETE FROM `item_template` WHERE `entry` = 91001;
 
--- Teach depleted marks to cast a spell that mirrors the enchanting reagents
 SET @DEPLETED_MARK_SPELL := 91050;
--- The matching Spell.dbc row should be cloned from spell 13361 with the new tooltip text.
+-- The matching Spell.dbc row is cloned below from spell 13361 with the new tooltip text.
 
 UPDATE `item_template`
 SET `ScriptName` = '',
@@ -30,3 +29,17 @@ WHERE `entry` BETWEEN 20559 AND 20575;
 DELETE FROM `spell_script_names` WHERE `spell_id` = @DEPLETED_MARK_SPELL;
 INSERT INTO `spell_script_names` (`spell_id`, `ScriptName`) VALUES
 (@DEPLETED_MARK_SPELL, 'spell_depleted_mark_converter');
+
+-- Clone spell 13361 into dbc.spell_lplus so the depleted mark conversion spell has a proper entry
+DROP TEMPORARY TABLE IF EXISTS `tmp_spell_lplus_clone`;
+CREATE TEMPORARY TABLE `tmp_spell_lplus_clone`
+AS SELECT * FROM `dbc`.`spell_lplus` WHERE `Id` = 13361;
+
+UPDATE `tmp_spell_lplus_clone`
+SET `Id` = @DEPLETED_MARK_SPELL;
+
+DELETE FROM `dbc`.`spell_lplus` WHERE `Id` = @DEPLETED_MARK_SPELL;
+INSERT INTO `dbc`.`spell_lplus`
+SELECT * FROM `tmp_spell_lplus_clone`;
+
+DROP TEMPORARY TABLE IF EXISTS `tmp_spell_lplus_clone`;
