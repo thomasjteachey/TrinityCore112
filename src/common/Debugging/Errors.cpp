@@ -20,8 +20,9 @@
 #include "StringFormat.h"
 #include <cstdio>
 #include <cstdlib>
-#include <thread>
 #include <cstdarg>
+#include <thread>
+#include <sstream>
 
 /**
     @file Errors.cpp
@@ -36,16 +37,10 @@
 
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
 #include <Windows.h>
-#define Crash(message) \
-    ULONG_PTR execeptionArgs[] = { reinterpret_cast<ULONG_PTR>(strdup(message)), reinterpret_cast<ULONG_PTR>(_ReturnAddress()) }; \
-    RaiseException(EXCEPTION_ASSERTION_FAILURE, 0, 2, execeptionArgs);
 #else
+#include <execinfo.h>
 // should be easily accessible in gdb
 extern "C" { TC_COMMON_API char const* TrinityAssertionFailedMessage = nullptr; }
-#define Crash(message) \
-    TrinityAssertionFailedMessage = strdup(message); \
-    *((volatile int*)nullptr) = 0; \
-    exit(1);
 #endif
 
 namespace
@@ -56,6 +51,46 @@ namespace
             return;
 
         TC_LOG_FATAL("server.crash", "{}", message);
+    }
+
+#if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
+    void LogStackTrace()
+    {
+        constexpr int32 MaxFrames = 64;
+        void* stack[MaxFrames];
+        int32 capturedFrames = backtrace(stack, MaxFrames);
+        if (capturedFrames <= 0)
+            return;
+
+        char** symbols = backtrace_symbols(stack, capturedFrames);
+        if (!symbols)
+            return;
+
+        std::ostringstream stream;
+        stream << "\nStack trace:\n";
+        for (int32 i = 0; i < capturedFrames; ++i)
+            stream << "  [" << i << "] " << symbols[i] << '\n';
+
+        std::string trace = stream.str();
+        LogCrashMessage(trace);
+        fprintf(stderr, "%s", trace.c_str());
+        fflush(stderr);
+
+        free(symbols);
+    }
+#endif
+
+    [[noreturn]] void Crash(char const* message)
+    {
+#if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
+        ULONG_PTR execeptionArgs[] = { reinterpret_cast<ULONG_PTR>(strdup(message)), reinterpret_cast<ULONG_PTR>(_ReturnAddress()) };
+        RaiseException(EXCEPTION_ASSERTION_FAILURE, 0, 2, execeptionArgs);
+#else
+        TrinityAssertionFailedMessage = strdup(message);
+        LogStackTrace();
+        *((volatile int*)nullptr) = 0;
+        exit(1);
+#endif
     }
 
     std::string FormatAssertionMessage(char const* format, va_list args)
