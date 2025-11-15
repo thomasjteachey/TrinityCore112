@@ -28,6 +28,7 @@ void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
 void AddSC_custom_gurubashi_arena();
 void AddSC_custom_pvpve_dungeon();
+void AddSC_custom_depleted_mark_exchange();
 
 void AddCustomScripts()
 {
@@ -39,4 +40,5 @@ void AddCustomScripts()
     AddSC_custom_diremaul_beads();
     AddSC_custom_gurubashi_arena();
     AddSC_custom_pvpve_dungeon();
+    AddSC_custom_depleted_mark_exchange();
 }
