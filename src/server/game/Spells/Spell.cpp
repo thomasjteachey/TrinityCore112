@@ -5397,7 +5397,6 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             if ((*j)->IsAffectedOnSpell(m_spellInfo))
             {
-                m_needComboPoints = false;
                 if ((*j)->GetMiscValue() == 1)
                 {
                     reqCombat = false;
