@@ -20,6 +20,7 @@
 
 #include "GridObject.h"
 #include "Unit.h"
+#include "ArenaTeam.h"
 #include "DatabaseEnvFwd.h"
 #include "DBCEnums.h"
 #include "EquipmentSet.h"
@@ -30,6 +31,7 @@
 #include "PetDefines.h"
 #include "PlayerTaxi.h"
 #include "QuestDef.h"
+#include <array>
 #include <memory>
 #include <queue>
 #include <unordered_set>
@@ -1596,11 +1598,14 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         static void RemovePetitionsAndSigns(ObjectGuid guid, CharterTypes type);
 
         // Arena Team
+        static constexpr uint8 ClientArenaSlotCount = 3;
+
         void SetInArenaTeam(uint32 ArenaTeamId, uint8 slot, uint8 type);
         void SetArenaTeamInfoField(uint8 slot, ArenaTeamInfoType type, uint32 value);
+        uint32 GetArenaTeamInfoField(uint8 slot, ArenaTeamInfoType type) const;
         static void LeaveAllArenaTeams(ObjectGuid guid);
-        uint32 GetArenaTeamId(uint8 slot) const { return GetUInt32Value(PLAYER_FIELD_ARENA_TEAM_INFO_1_1 + (slot * ARENA_TEAM_END) + ARENA_TEAM_ID); }
-        uint32 GetArenaPersonalRating(uint8 slot) const { return GetUInt32Value(PLAYER_FIELD_ARENA_TEAM_INFO_1_1 + (slot * ARENA_TEAM_END) + ARENA_TEAM_PERSONAL_RATING); }
+        uint32 GetArenaTeamId(uint8 slot) const { return GetArenaTeamInfoField(slot, ARENA_TEAM_ID); }
+        uint32 GetArenaPersonalRating(uint8 slot) const { return GetArenaTeamInfoField(slot, ARENA_TEAM_PERSONAL_RATING); }
         void SetArenaTeamIdInvited(uint32 ArenaTeamId) { m_ArenaTeamIdInvited = ArenaTeamId; }
         uint32 GetArenaTeamIdInvited() const { return m_ArenaTeamIdInvited; }
 
@@ -2396,6 +2401,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         uint32 m_GuildIdInvited;
         uint32 m_ArenaTeamIdInvited;
+        std::array<std::array<uint32, ARENA_TEAM_END>, MAX_ARENA_SLOT> m_arenaTeamInfo{};
 
         PlayerMails m_mail;
         PlayerSpellMap m_spells;
