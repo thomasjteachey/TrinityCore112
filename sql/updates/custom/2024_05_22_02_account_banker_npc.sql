@@ -1,0 +1,4 @@
+INSERT INTO `creature_template` (`entry`, `modelid1`, `name`, `subname`, `gossip_menu_id`, `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `scale`, `rank`, `dmgschool`, `BaseAttackTime`, `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`, `unit_flags`, `unit_flags2`, `dynamicflags`, `family`, `type`, `type_flags`, `AIName`, `MovementType`, `HoverHeight`, `HealthModifier`, `ManaModifier`, `ArmorModifier`, `DamageModifier`, `ExperienceModifier`, `RacialLeader`, `movementId`, `RegenHealth`, `flags_extra`, `ScriptName`)
+VALUES
+(900000, 18945, 'Account Banker', 'Shared Vault', 0, 80, 80, 0, 35, 1, 1, 1.14286, 1, 0, 0, 2000, 2000, 1, 1, 1, 0, 0, 0, 0, 7, 0, '', 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, 'npc_account_banker')
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`), `subname`=VALUES(`subname`), `npcflag`=VALUES(`npcflag`), `ScriptName`=VALUES(`ScriptName`);
