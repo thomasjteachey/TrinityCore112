@@ -15,55 +15,80 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ScriptMgr.h"
 #include "Item.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "Player.h"
+#include "ScriptMgr.h"
+#include "SpellScript.h"
 
-class item_depleted_mark_converter : public ItemScript
+class spell_depleted_mark_converter : public SpellScript
 {
+    PrepareSpellScript(spell_depleted_mark_converter);
+
 public:
-    item_depleted_mark_converter() : ItemScript("item_depleted_mark_converter") { }
+    spell_depleted_mark_converter() = default;
 
-    bool OnUse(Player* player, Item* item, SpellCastTargets const& /*targets*/) override
+    SpellCastResult CheckRequirement()
     {
-        if (!player || !item)
-            return false;
+        Player* player = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        if (!player)
+            return SPELL_FAILED_DONT_REPORT;
 
-        uint32 const rewardEntry = Trinity::Custom::GetDepletedMarkEntryForPlayer(player);
-        if (!rewardEntry)
-        {
-            player->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, item, nullptr);
-            return false;
-        }
+        _rewardEntry = Trinity::Custom::GetDepletedMarkEntryForPlayer(player);
+        if (!_rewardEntry)
+            return SPELL_FAILED_DONT_REPORT;
 
         if (!Trinity::Custom::HasEnoughIneligibleDepletedMarks(player, Trinity::Custom::DEPLETED_MARK_CONVERSION_COST))
-        {
-            player->SendEquipError(EQUIP_ERR_ITEM_NOT_FOUND, item, nullptr);
-            return false;
-        }
+            return SPELL_FAILED_NOT_ENOUGH_ITEMS;
 
-        ItemPosCountVec dest;
-        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, rewardEntry, 1) != EQUIP_ERR_OK)
-        {
-            player->SendEquipError(EQUIP_ERR_INVENTORY_FULL, nullptr, nullptr, rewardEntry);
-            return false;
-        }
+        _dest.clear();
+        if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, _dest, _rewardEntry, 1) != EQUIP_ERR_OK)
+            return SPELL_FAILED_TOO_MANY_OF_ITEM;
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleScript(SpellEffIndex effIndex)
+    {
+        PreventHitDefaultEffect(effIndex);
+
+        Player* player = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        if (!player || !_rewardEntry)
+            return;
 
         if (!Trinity::Custom::ConsumeIneligibleDepletedMarks(player, Trinity::Custom::DEPLETED_MARK_CONVERSION_COST))
         {
-            player->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, item, nullptr);
-            return false;
+            player->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, GetCastItem(), nullptr);
+            return;
         }
 
-        if (Item* newItem = player->StoreNewItem(dest, rewardEntry, true))
+        if (Item* newItem = player->StoreNewItem(_dest, _rewardEntry, true))
             player->SendNewItem(newItem, 1, true, false);
+    }
 
-        return true;
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_depleted_mark_converter::CheckRequirement);
+        OnEffectHitTarget += SpellEffectFn(spell_depleted_mark_converter::HandleScript, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+
+private:
+    ItemPosCountVec _dest;
+    uint32 _rewardEntry = 0;
+};
+
+class spell_depleted_mark_converter_loader : public SpellScriptLoader
+{
+public:
+    spell_depleted_mark_converter_loader() : SpellScriptLoader("spell_depleted_mark_converter") { }
+
+    SpellScript* GetSpellScript() const override
+    {
+        return new spell_depleted_mark_converter();
     }
 };
 
 void AddSC_custom_depleted_mark_exchange()
 {
-    new item_depleted_mark_converter();
+    new spell_depleted_mark_converter_loader();
 }
