@@ -119,11 +119,14 @@ void WorldSession::HandleUseItemOpcode(WorldPacket& recvPacket)
         return;
     }
 
-    // Disable usage of inventory items while inside battlegrounds (but still allow equipped trinkets)
+    // Keep stat scrolls disabled inside battlegrounds (but still allow other inventory items)
     if (!pUser->IsGameMaster() && pUser->InBattleground() && !pUser->InArena() && !pItem->IsEquipped())
     {
-        pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, pItem, nullptr);
-        return;
+        if (proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_SCROLL)
+        {
+            pUser->SendEquipError(EQUIP_ERR_CANT_DO_RIGHT_NOW, pItem, nullptr);
+            return;
+        }
     }
 
     // only allow conjured consumable, bandage, poisons (all should have the 2^21 item flag set in DB)
