@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 template <typename T>
@@ -104,6 +105,7 @@ class TC_DATABASE_API MySQLConnection
         bool                                 m_prepareError;  //! Was there any error while preparing statements?
 
     private:
+        void SetLastErrorQuery(std::string_view query);
         bool _HandleMySQLErrno(uint32 errNo, uint8 attempts = 5);
 
         ProducerConsumerQueue<SQLOperation*>* m_queue;      //! Queue shared with other asynchronous connections.
@@ -112,6 +114,7 @@ class TC_DATABASE_API MySQLConnection
         MySQLConnectionInfo&  m_connectionInfo;             //! Connection info (used for logging)
         ConnectionFlags       m_connectionFlags;            //! Connection flags (for preparing relevant statements)
         std::mutex            m_Mutex;
+        std::string           m_lastQuery;
 
         MySQLConnection(MySQLConnection const& right) = delete;
         MySQLConnection& operator=(MySQLConnection const& right) = delete;

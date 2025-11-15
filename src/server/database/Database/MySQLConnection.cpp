@@ -191,6 +191,11 @@ bool MySQLConnection::Execute(char const* sql)
     if (!m_Mysql)
         return false;
 
+    if (sql)
+        SetLastErrorQuery(sql);
+    else
+        SetLastErrorQuery({});
+
     {
         uint32 _s = getMSTime();
 
@@ -223,6 +228,7 @@ bool MySQLConnection::Execute(PreparedStatementBase* stmt)
     MySQLPreparedStatement* m_mStmt = GetPreparedStatement(index);
     ASSERT(m_mStmt);            // Can only be null if preparation failed, server side error or bad query
 
+    SetLastErrorQuery(m_mStmt->getQueryString());
     m_mStmt->BindParameters(stmt);
 
     MYSQL_STMT* msql_STMT = m_mStmt->GetSTMT();
@@ -270,6 +276,7 @@ bool MySQLConnection::_Query(PreparedStatementBase* stmt, MySQLPreparedStatement
     MySQLPreparedStatement* m_mStmt = GetPreparedStatement(index);
     ASSERT(m_mStmt);            // Can only be null if preparation failed, server side error or bad query
 
+    SetLastErrorQuery(m_mStmt->getQueryString());
     m_mStmt->BindParameters(stmt);
     *mysqlStmt = m_mStmt;
 
@@ -334,6 +341,11 @@ bool MySQLConnection::_Query(const char* sql, MySQLResult** pResult, MySQLField*
 {
     if (!m_Mysql)
         return false;
+
+    if (sql)
+        SetLastErrorQuery(sql);
+    else
+        SetLastErrorQuery({});
 
     {
         uint32 _s = getMSTime();
@@ -511,6 +523,26 @@ uint32 MySQLConnection::GetServerVersion() const
     return mysql_get_server_version(m_Mysql);
 }
 
+void MySQLConnection::SetLastErrorQuery(std::string_view query)
+{
+    if (query.empty())
+    {
+        m_lastQuery.clear();
+        return;
+    }
+
+    constexpr size_t MaxLastQueryLength = 512;
+
+    if (query.size() <= MaxLastQueryLength)
+    {
+        m_lastQuery.assign(query.data(), query.size());
+        return;
+    }
+
+    m_lastQuery.assign(query.data(), MaxLastQueryLength);
+    m_lastQuery.append("... (truncated)");
+}
+
 MySQLPreparedStatement* MySQLConnection::GetPreparedStatement(uint32 index)
 {
     ASSERT(index < m_stmts.size(), "Tried to access invalid prepared statement index %u (max index " SZFMTD ") on database `%s`, connection type: %s",
@@ -574,6 +606,16 @@ PreparedResultSet* MySQLConnection::Query(PreparedStatementBase* stmt)
 
 bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 5*/)
 {
+    auto const LogSchemaOrParseIssue = [this, errNo](char const* baseMessage)
+    {
+        char const* mysqlMessage = (m_Mysql ? mysql_error(m_Mysql) : nullptr);
+        char const* query = m_lastQuery.empty() ? "<unavailable>" : m_lastQuery.c_str();
+        char const* connectionKind = (m_connectionFlags & CONNECTION_ASYNC) ? "asynchronous" : "synchronous";
+
+        TC_LOG_ERROR("sql.sql", "{} Database `{}` ({} connection) reported MySQL errno {} ({}). Last query before the failure: {}", baseMessage,
+            m_connectionInfo.database, connectionKind, errNo, mysqlMessage ? mysqlMessage : "unknown", query);
+    };
+
     switch (errNo)
     {
         case CR_SERVER_GONE_ERROR:
@@ -644,12 +686,12 @@ bool MySQLConnection::_HandleMySQLErrno(uint32 errNo, uint8 attempts /*= 5*/)
         // Outdated table or database structure - terminate core
         case ER_BAD_FIELD_ERROR:
         case ER_NO_SUCH_TABLE:
-            TC_LOG_ERROR("sql.sql", "Your database structure is not up to date. Please make sure you've executed all queries in the sql/updates folders.");
+            LogSchemaOrParseIssue("Your database structure is not up to date. Please make sure you've executed all queries in the sql/updates folders.");
             std::this_thread::sleep_for(std::chrono::seconds(10));
             ABORT();
             return false;
         case ER_PARSE_ERROR:
-            TC_LOG_ERROR("sql.sql", "Error while parsing SQL. Core fix required.");
+            LogSchemaOrParseIssue("Error while parsing SQL. Core fix required.");
             std::this_thread::sleep_for(std::chrono::seconds(10));
             ABORT();
             return false;
