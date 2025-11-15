@@ -2784,6 +2784,14 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
             }
         }
 
+        // Being struck by hostile abilities must always break stealth even if the aura
+        // itself only specifies an interrupt on damage. The DBC interrupt flags are not
+        // fully reliable for older clients which leads to effects such as Psychic Scream
+        // leaving stealth up on the victim. Force stealth auras to respond to the
+        // "hit by spell" interrupt flag so that hostile spells consistently remove them.
+        if (spellInfo->HasAura(SPELL_AURA_MOD_STEALTH))
+            spellInfo->AuraInterruptFlags |= AURA_INTERRUPT_FLAG_HITBYSPELL;
+
         // spells ignoring hit result should not be binary
         if (!spellInfo->HasAttribute(SPELL_ATTR3_IGNORE_HIT_RESULT))
         {
