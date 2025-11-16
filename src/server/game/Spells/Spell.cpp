@@ -73,12 +73,42 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
+    constexpr float MinStarfireSnareSpeedRate = 0.01f;
+    constexpr float MaxStarfireSnareSpeedRate = 1.0f;
+    UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
     bool IsTrapGameObject(GameObject const* caster)
     {
         if (!caster)
             return false;
 
         return caster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
+    }
+
+    bool ApplyStarfireSnare(Player* player, float requestedSpeedRate)
+    {
+        float const clampedSpeedRate = std::clamp(requestedSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+        if (clampedSpeedRate <= 0.0f)
+            return false;
+
+        bool snared = false;
+
+        for (UnitMoveType moveType : StarfireSnareMoveTypes)
+        {
+            if (player->GetSpeedRate(moveType) > clampedSpeedRate)
+            {
+                player->SetSpeedRate(moveType, clampedSpeedRate);
+                snared = true;
+            }
+        }
+
+        return snared;
+    }
+
+    void RemoveStarfireSnare(Player* player)
+    {
+        for (UnitMoveType moveType : StarfireSnareMoveTypes)
+            player->UpdateSpeed(moveType);
     }
 
     // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
@@ -720,6 +750,7 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
     m_timer = 0;                                            // will set to castime in prepare
     m_channeledDuration = 0;                                // will be setup in Spell::handle_immediate
     m_immediateHandled = false;
+    m_resetStarfireSnareAfterCast = false;
 
     m_channelTargetEffectMask = 0;
 
@@ -3280,9 +3311,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     // Prepare data for triggers
     prepareDataForTriggerSystem();
 
-    if (Player* player = m_caster->ToPlayer())
+    Player* playerCaster = m_caster->ToPlayer();
+    if (playerCaster)
     {
-        if (!player->GetCommandStatus(CHEAT_CASTTIME))
+        if (!playerCaster->GetCommandStatus(CHEAT_CASTTIME))
         {
             // calculate cast time (calculated after first CheckCast check to prevent charge counting for first CheckCast fail)
             m_casttime = m_spellInfo->CalcCastTime(this);
@@ -3293,6 +3325,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
+    float starfireSnareSpeedRate = 0.0f;
+    if (playerCaster && m_casttime && m_spellInfo->IsStarfire())
+        starfireSnareSpeedRate = playerCaster->GetStarfireSnareSpeedRate();
+
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
     // (even if they are interrupted on moving, spells with almost immediate effect get to have their effect processed before movement interrupter kicks in)
@@ -3301,10 +3337,19 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         // 1. Has casttime, 2. Or doesn't have flag to allow movement during channel
         if (m_casttime || !m_spellInfo->IsMoveAllowedChannel())
         {
-            SendCastResult(SPELL_FAILED_MOVING);
-            finish(false);
-            return SPELL_FAILED_MOVING;
+            if (!(starfireSnareSpeedRate > 0.0f && m_spellInfo->IsStarfire()))
+            {
+                SendCastResult(SPELL_FAILED_MOVING);
+                finish(false);
+                return SPELL_FAILED_MOVING;
+            }
         }
+    }
+
+    if (starfireSnareSpeedRate > 0.0f)
+    {
+        if (ApplyStarfireSnare(playerCaster, starfireSnareSpeedRate))
+            m_resetStarfireSnareAfterCast = true;
     }
 
     // Creatures focus their target when possible
@@ -4042,6 +4087,14 @@ void Spell::finish(bool ok)
     Unit* unitCaster = m_caster->ToUnit();
     if (!unitCaster)
         return;
+
+    if (m_resetStarfireSnareAfterCast)
+    {
+        if (Player* playerCaster = unitCaster->ToPlayer())
+            RemoveStarfireSnare(playerCaster);
+
+        m_resetStarfireSnareAfterCast = false;
+    }
 
     if (m_spellInfo->IsChanneled())
         unitCaster->UpdateInterruptMask();
