@@ -4001,18 +4001,25 @@ void Spell::update(uint32 difftime)
     }
 
     // check if the player caster has moved before the spell finished
-    if (m_caster->GetTypeId() == TYPEID_PLAYER && m_timer != 0 &&
-        m_caster->ToPlayer()->isMoving() && m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT &&
-        (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !m_caster->ToPlayer()->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
+    if (m_caster->GetTypeId() == TYPEID_PLAYER && m_timer != 0)
     {
-        // don't cancel for melee, autorepeat, triggered and instant spells
-        if (!m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !IsTriggered() && !(IsChannelActive() && m_spellInfo->IsMoveAllowedChannel()))
+        Player* playerCaster = m_caster->ToPlayer();
+        bool const playerMoved = playerCaster->isMoving();
+        bool const starfireMovementAllowed = m_spellInfo->IsStarfire() && playerCaster->GetStarfireSnareSpeedRate() > 0.0f;
+
+        if (playerMoved && !starfireMovementAllowed &&
+            m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT &&
+            (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
         {
-            // if charmed by creature, trust the AI not to cheat and allow the cast to proceed
-            // @todo this is a hack, "creature" movesplines don't differentiate turning/moving right now
-            // however, checking what type of movement the spline is for every single spline would be really expensive
-            if (!m_caster->ToPlayer()->GetCharmerGUID().IsCreature())
-                cancel();
+            // don't cancel for melee, autorepeat, triggered and instant spells
+            if (!m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !IsTriggered() && !(IsChannelActive() && m_spellInfo->IsMoveAllowedChannel()))
+            {
+                // if charmed by creature, trust the AI not to cheat and allow the cast to proceed
+                // @todo this is a hack, "creature" movesplines don't differentiate turning/moving right now
+                // however, checking what type of movement the spline is for every single spline would be really expensive
+                if (!playerCaster->GetCharmerGUID().IsCreature())
+                    cancel();
+            }
         }
     }
 
