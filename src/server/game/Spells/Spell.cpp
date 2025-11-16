@@ -73,12 +73,42 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
+    constexpr float MinStarfireSnareSpeedRate = 0.01f;
+    constexpr float MaxStarfireSnareSpeedRate = 1.0f;
+    UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
     bool IsTrapGameObject(GameObject const* caster)
     {
         if (!caster)
             return false;
 
         return caster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
+    }
+
+    bool ApplyStarfireSnare(Player* player, float requestedSpeedRate)
+    {
+        float const clampedSpeedRate = std::clamp(requestedSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+        if (clampedSpeedRate <= 0.0f)
+            return false;
+
+        bool snared = false;
+
+        for (UnitMoveType moveType : StarfireSnareMoveTypes)
+        {
+            if (player->GetSpeedRate(moveType) > clampedSpeedRate)
+            {
+                player->SetSpeedRate(moveType, clampedSpeedRate);
+                snared = true;
+            }
+        }
+
+        return snared;
+    }
+
+    void RemoveStarfireSnare(Player* player)
+    {
+        for (UnitMoveType moveType : StarfireSnareMoveTypes)
+            player->UpdateSpeed(moveType);
     }
 
     // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
@@ -720,6 +750,7 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
     m_timer = 0;                                            // will set to castime in prepare
     m_channeledDuration = 0;                                // will be setup in Spell::handle_immediate
     m_immediateHandled = false;
+    m_resetStarfireSnareAfterCast = false;
 
     m_channelTargetEffectMask = 0;
 
@@ -3307,6 +3338,18 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
+    if (m_casttime && m_spellInfo->IsStarfire())
+    {
+        if (Player* player = m_caster->ToPlayer())
+        {
+            if (float const snareSpeedRate = player->GetStarfireSnareSpeedRate())
+            {
+                if (ApplyStarfireSnare(player, snareSpeedRate))
+                    m_resetStarfireSnareAfterCast = true;
+            }
+        }
+    }
+
     // Creatures focus their target when possible
     if (m_casttime && m_caster->IsCreature() && !m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_POSSESSED))
     {
@@ -4042,6 +4085,14 @@ void Spell::finish(bool ok)
     Unit* unitCaster = m_caster->ToUnit();
     if (!unitCaster)
         return;
+
+    if (m_resetStarfireSnareAfterCast)
+    {
+        if (Player* playerCaster = unitCaster->ToPlayer())
+            RemoveStarfireSnare(playerCaster);
+
+        m_resetStarfireSnareAfterCast = false;
+    }
 
     if (m_spellInfo->IsChanneled())
         unitCaster->UpdateInterruptMask();
