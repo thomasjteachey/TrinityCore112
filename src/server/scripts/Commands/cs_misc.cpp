@@ -16,6 +16,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "AccountBankMgr.h"
 #include "AccountMgr.h"
 #include "ArenaTeamMgr.h"
 #include "CellImpl.h"
@@ -40,17 +41,23 @@
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
+#include "Optional.h"
 #include "Pet.h"
 #include "Player.h"
 #include "Realm.h"
+#include "StringConvert.h"
 #include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "Tokenize.h"
 #include "Transport.h"
 #include "Weather.h"
 #include "WeatherMgr.h"
 #include "World.h"
 #include "WorldSession.h"
+#include <limits>
+#include <string_view>
+#include <vector>
 
 // temporary hack until includes are sorted out (don't want to pull in Windows.h)
 #ifdef GetClassName
@@ -77,6 +84,7 @@ public:
             { "additem set",      HandleAddItemSetCommand,       rbac::RBAC_PERM_COMMAND_ADDITEMSET,       Console::No },
             { "appear",           HandleAppearCommand,           rbac::RBAC_PERM_COMMAND_APPEAR,           Console::No },
             { "aura",             HandleAuraCommand,             rbac::RBAC_PERM_COMMAND_AURA,             Console::No },
+            { "accountbank",      HandleAccountBankCommand,      rbac::RBAC_PERM_COMMAND_ACCOUNT_BANK,     Console::No },
             { "bank",             HandleBankCommand,             rbac::RBAC_PERM_COMMAND_BANK,             Console::No },
             { "bindsight",        HandleBindSightCommand,        rbac::RBAC_PERM_COMMAND_BINDSIGHT,        Console::No },
             { "combatstop",       HandleCombatStopCommand,       rbac::RBAC_PERM_COMMAND_COMBATSTOP,       Console::Yes },
@@ -127,6 +135,22 @@ public:
             { "mailbox",          HandleMailBoxCommand,          rbac::RBAC_PERM_COMMAND_MAILBOX,          Console::No },
         };
         return commandTable;
+    }
+
+    static Optional<uint8> ParseInventoryIndex(std::string_view value)
+    {
+        if (Optional<uint32> parsed = Trinity::StringTo<uint32>(value))
+        {
+            if (*parsed <= std::numeric_limits<uint8>::max())
+                return static_cast<uint8>(*parsed);
+        }
+
+        return Optional<uint8>();
+    }
+
+    static void SendAccountBankUsage(ChatHandler* handler)
+    {
+        handler->PSendSysMessage("Usage: .accountbank list | .accountbank deposit <bag> <slot> | .accountbank withdraw <slot>");
     }
 
     static bool HandlePvPstatsCommand(ChatHandler* handler)
@@ -180,6 +204,89 @@ public:
         }
 
         return true;
+    }
+
+    static bool HandleAccountBankCommand(ChatHandler* handler, char const* args)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!player)
+            return false;
+
+        if (AccountBank::IsAccountBankOpen(player))
+        {
+            handler->PSendSysMessage("Close the account banker before using chat commands.");
+            return false;
+        }
+
+        std::string_view argsView = args ? std::string_view(args) : std::string_view();
+        std::vector<std::string_view> tokens = Trinity::Tokenize(argsView, ' ', false);
+
+        if (tokens.empty())
+        {
+            SendAccountBankUsage(handler);
+            return true;
+        }
+
+        std::string_view subCommand = tokens[0];
+        if (subCommand == "list")
+            return HandleAccountBankList(handler);
+        if (subCommand == "deposit")
+            return HandleAccountBankDeposit(handler, player, tokens);
+        if (subCommand == "withdraw")
+            return HandleAccountBankWithdraw(handler, player, tokens);
+
+        SendAccountBankUsage(handler);
+        return true;
+    }
+
+    static bool HandleAccountBankList(ChatHandler* handler)
+    {
+        return AccountBank::List(handler);
+    }
+
+    static bool HandleAccountBankDeposit(ChatHandler* handler, Player* player, std::vector<std::string_view> const& tokens)
+    {
+        if (tokens.size() < 3)
+        {
+            SendAccountBankUsage(handler);
+            return false;
+        }
+
+        Optional<uint8> bagArg = ParseInventoryIndex(tokens[1]);
+        Optional<uint8> slotArg = ParseInventoryIndex(tokens[2]);
+        if (!bagArg || !slotArg)
+        {
+            handler->PSendSysMessage("Invalid bag or slot index.");
+            return false;
+        }
+
+        Item* item = player->GetItemByPos(*bagArg, *slotArg);
+        if (!item)
+        {
+            handler->PSendSysMessage("No item found in bag %u slot %u.", *bagArg, *slotArg);
+            return false;
+        }
+
+        return AccountBank::Deposit(handler, player, item);
+    }
+
+    static bool HandleAccountBankWithdraw(ChatHandler* handler, Player* player, std::vector<std::string_view> const& tokens)
+    {
+        if (tokens.size() < 2)
+        {
+            SendAccountBankUsage(handler);
+            return false;
+        }
+
+        Optional<uint32> slotArg = Trinity::StringTo<uint32>(tokens[1]);
+        if (!slotArg || *slotArg >= AccountBank::MAX_SLOTS)
+        {
+            handler->PSendSysMessage("Invalid slot.");
+            return false;
+        }
+
+        uint16 slot = static_cast<uint16>(*slotArg);
+        return AccountBank::Withdraw(handler, player, slot);
     }
 
     static bool HandleGPSCommand(ChatHandler* handler, char const* args)

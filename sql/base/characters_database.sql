@@ -2055,6 +2055,23 @@ LOCK TABLES `item_instance` WRITE;
 UNLOCK TABLES;
 
 --
+-- Table structure for table `account_bank_item`
+--
+
+DROP TABLE IF EXISTS `account_bank_item`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `account_bank_item` (
+  `accountId` int unsigned NOT NULL,
+  `slot` smallint unsigned NOT NULL,
+  `item_guid` int unsigned NOT NULL,
+  PRIMARY KEY (`accountId`,`slot`),
+  UNIQUE KEY `idx_account_bank_item_guid` (`item_guid`),
+  CONSTRAINT `fk_account_bank_item_guid` FOREIGN KEY (`item_guid`) REFERENCES `item_instance` (`guid`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Account wide bank slots';
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
 -- Table structure for table `item_loot_items`
 --
 

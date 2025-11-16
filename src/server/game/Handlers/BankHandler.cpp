@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "AccountBankMgr.h"
 #include "BankPackets.h"
 #include "Item.h"
 #include "DBCStores.h"
@@ -143,6 +144,14 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
         packet.Result = ERR_BANKSLOT_NOTBANKER;
         SendPacket(packet.Write());
         TC_LOG_DEBUG("network", "WORLD: HandleBuyBankSlotOpcode - {} not found or you can't interact with him.", buyBankSlot.Banker.ToString());
+        return;
+    }
+
+    if (AccountBank::IsAccountBankOpen(_player))
+    {
+        packet.Result = ERR_BANKSLOT_NOTBANKER;
+        SendPacket(packet.Write());
+        SendNotification("Shared account banks do not support additional bag slots.");
         return;
     }
 
