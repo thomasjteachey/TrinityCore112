@@ -358,6 +358,7 @@ class TC_GAME_API Battleground
 
         void AddPlayerToResurrectQueue(ObjectGuid npc_guid, ObjectGuid player_guid);
         void RemovePlayerFromResurrectQueue(ObjectGuid player_guid);
+        bool IsPlayerInResurrectQueue(ObjectGuid player_guid) const;
 
         /// Relocate all players in ReviveQueue to the closest graveyard
         void RelocateDeadPlayers(ObjectGuid guideGuid);

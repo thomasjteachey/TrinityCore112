@@ -34,6 +34,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ReputationMgr.h"
+#include "Miscellaneous/DepletedMarks.h"
 #include "SpellAuras.h"
 #include "TemporarySummon.h"
 #include "Transport.h"
@@ -852,18 +853,9 @@ void Battleground::EndBattleground(uint32 winner)
                 player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
                 player->ModifyMoney(winner_money);
 
-                for (int i = 20559; i <= 20575; i++)
-                {
-                    Item* depletedMark = player->GetItemByEntry(i);
-                    if (depletedMark)
-                    {
-                        if (player->CanUseItem(depletedMark->GetTemplate()) == EQUIP_ERR_OK)
-                        {
-                            player->DestroyItem(depletedMark->GetBagSlot(), depletedMark->GetSlot(), true); //remove old one
-                            player->AddItem(20558, 1); //restored mark of honor
-                        }
-                    }
-                }
+                bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS;
+                if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
+                    player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
             }
             else
             {
@@ -1363,6 +1355,22 @@ void Battleground::RemovePlayerFromResurrectQueue(ObjectGuid player_guid)
             }
         }
     }
+}
+
+bool Battleground::IsPlayerInResurrectQueue(ObjectGuid player_guid) const
+{
+    for (std::map<ObjectGuid, GuidVector>::const_iterator itr = m_ReviveQueue.begin(); itr != m_ReviveQueue.end(); ++itr)
+    {
+        for (GuidVector::const_iterator itr2 = itr->second.begin(); itr2 != itr->second.end(); ++itr2)
+            if (*itr2 == player_guid)
+                return true;
+    }
+
+    for (GuidVector::const_iterator itr = m_ResurrectQueue.begin(); itr != m_ResurrectQueue.end(); ++itr)
+        if (*itr == player_guid)
+            return true;
+
+    return false;
 }
 
 void Battleground::RelocateDeadPlayers(ObjectGuid guideGuid)
