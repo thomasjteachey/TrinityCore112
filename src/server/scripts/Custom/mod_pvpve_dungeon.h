@@ -140,6 +140,7 @@ private:
     void CheckRunRuntime(PvpveDungeonRun& run, time_t now);
     void LogQueueStats(time_t now) const;
     uint32 CountActiveRuns() const;
+    void ClearRunLockouts(uint64 runId);
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
@@ -154,6 +155,7 @@ private:
     TeamContainer _teams;
     PlayerRunMap _playerToRun;
     PlayerTeamMap _playerToTeam;
+    PlayerRunMap _playerRunLockouts;
     TemplateContainer _templates;
     SpawnContainer _spawns;
     GuidSet _queuedPlayers;
