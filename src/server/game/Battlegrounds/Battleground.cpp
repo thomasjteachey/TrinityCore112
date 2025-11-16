@@ -1357,6 +1357,22 @@ void Battleground::RemovePlayerFromResurrectQueue(ObjectGuid player_guid)
     }
 }
 
+bool Battleground::IsPlayerInResurrectQueue(ObjectGuid player_guid) const
+{
+    for (std::map<ObjectGuid, GuidVector>::const_iterator itr = m_ReviveQueue.begin(); itr != m_ReviveQueue.end(); ++itr)
+    {
+        for (GuidVector::const_iterator itr2 = itr->second.begin(); itr2 != itr->second.end(); ++itr2)
+            if (*itr2 == player_guid)
+                return true;
+    }
+
+    for (GuidVector::const_iterator itr = m_ResurrectQueue.begin(); itr != m_ResurrectQueue.end(); ++itr)
+        if (*itr == player_guid)
+            return true;
+
+    return false;
+}
+
 void Battleground::RelocateDeadPlayers(ObjectGuid guideGuid)
 {
     // Those who are waiting to resurrect at this node are taken to the closest own node's graveyard
