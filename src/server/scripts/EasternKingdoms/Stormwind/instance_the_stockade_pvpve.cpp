@@ -148,9 +148,11 @@ public:
                     if (WorldSession* session = player->GetSession())
                         session->SendNotification("The Stockades are only accessible through the PvPvE queue.");
 
-                    player->TeleportTo(StockadesExteriorMapId, kStockadesExteriorPosition.GetPositionX(),
-                        kStockadesExteriorPosition.GetPositionY(), kStockadesExteriorPosition.GetPositionZ(),
-                        kStockadesExteriorPosition.GetOrientation());
+                    player->TeleportTo(StockadesPvPvE::StockadesExteriorMapId,
+                        StockadesPvPvE::kStockadesExteriorPosition.GetPositionX(),
+                        StockadesPvPvE::kStockadesExteriorPosition.GetPositionY(),
+                        StockadesPvPvE::kStockadesExteriorPosition.GetPositionZ(),
+                        StockadesPvPvE::kStockadesExteriorPosition.GetOrientation());
                 }
 
                 return;
