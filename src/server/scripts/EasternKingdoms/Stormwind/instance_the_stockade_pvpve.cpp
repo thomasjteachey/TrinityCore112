@@ -144,8 +144,7 @@ public:
             }
 
             sWorld->SendServerMessage(SERVER_MSG_STRING,
-                Trinity::StringFormat("|cffff0000[Stockades PvPvE]|r %s is invading the Stormwind Stockade!",
-                    player->GetName().c_str()));
+                "|cffff0000[Stockades PvPvE]|r You sense an evil presence.");
 
             ApplyPvpveFfaState(player);
             sPvpveDungeonMgr->OnPlayerEnteredInstance(player, this);
