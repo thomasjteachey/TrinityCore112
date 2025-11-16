@@ -710,6 +710,8 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     run->PlayerSpawns.erase(guid);
     _playerToRun.erase(runItr);
 
+    _playerToTeam.erase(guid);
+
     EvaluateRunState(*run);
 }
 

@@ -267,6 +267,7 @@ struct ZoneDynamicInfo
     std::unique_ptr<Weather> DefaultWeather;
     WeatherState WeatherId;
     float Intensity;
+    time_t LastCustomWeatherUpdateTime;
 
     struct LightOverride
     {
