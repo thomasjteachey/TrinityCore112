@@ -16,6 +16,7 @@
  */
 
 #include "Unit.h"
+#include <algorithm>
 #include <array>
 #include "AbstractFollower.h"
 #include "Battlefield.h"
@@ -3204,6 +3205,11 @@ bool Unit::IsMovementPreventedByCasting() const
             if (spell->GetSpellInfo()->IsMoveAllowedChannel())
                 return false;
 
+    if (GetStarfireSnareSpeedRate() > 0.0f)
+        if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
+            if (spell->GetSpellInfo()->IsStarfire())
+                return false;
+
     // prohibit movement for all other spell casts
     return true;
 }
@@ -4688,6 +4694,47 @@ bool Unit::HasAuraWithMechanic(uint32 mechanicMask) const
     }
 
     return false;
+}
+
+float Unit::GetStarfireSnareSpeedRate() const
+{
+    float bestRate = 0.0f;
+
+    for (AuraApplicationMap::const_iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end(); ++iter)
+    {
+        Aura const* aura = iter->second->GetBase();
+        SpellInfo const* spellInfo = aura->GetSpellInfo();
+        if (!spellInfo)
+            continue;
+
+        float const spellDefinedRate = spellInfo->GetStarfireSnareSpeedRate();
+        if (spellDefinedRate > 0.0f)
+        {
+            if (spellDefinedRate > bestRate)
+                bestRate = spellDefinedRate;
+
+            continue;
+        }
+
+        if (!spellInfo->HasAttribute(SPELL_ATTR0_CU_ALLOW_STARFIRE_SNARE_CAST))
+            continue;
+
+        for (uint8 effIndex = EFFECT_0; effIndex < MAX_SPELL_EFFECTS; ++effIndex)
+        {
+            if (AuraEffect const* auraEffect = aura->GetEffect(effIndex))
+            {
+                int32 const amount = auraEffect->GetAmount();
+                if (amount <= 0)
+                    continue;
+
+                float const rate = std::clamp(static_cast<float>(amount) / 100.0f, 0.0f, 1.0f);
+                if (rate > bestRate)
+                    bestRate = rate;
+            }
+        }
+    }
+
+    return bestRate;
 }
 
 bool Unit::HasStrongerAuraWithDR(SpellInfo const* auraSpellInfo, Unit* caster, bool triggered) const
