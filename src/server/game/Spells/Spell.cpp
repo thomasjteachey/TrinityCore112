@@ -105,8 +105,32 @@ namespace
         return snared;
     }
 
-    void RemoveStarfireSnare(Player* player)
+    bool HasConcurrentStarfireSnareCast(Player* player, Spell const* ignoredSpell)
     {
+        if (!player)
+            return false;
+
+        Spell* currentSpell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        if (!currentSpell || currentSpell == ignoredSpell)
+            return false;
+
+        if (currentSpell->getState() == SPELL_STATE_FINISHED)
+            return false;
+
+        if (!currentSpell->GetSpellInfo()->IsStarfire())
+            return false;
+
+        return player->GetStarfireSnareSpeedRate() > 0.0f;
+    }
+
+    void RemoveStarfireSnare(Player* player, Spell const* ignoredSpell)
+    {
+        if (!player)
+            return;
+
+        if (HasConcurrentStarfireSnareCast(player, ignoredSpell))
+            return;
+
         for (UnitMoveType moveType : StarfireSnareMoveTypes)
             player->UpdateSpeed(moveType);
     }
@@ -4106,7 +4130,7 @@ void Spell::finish(bool ok)
     if (m_resetStarfireSnareAfterCast)
     {
         if (Player* playerCaster = unitCaster->ToPlayer())
-            RemoveStarfireSnare(playerCaster);
+            RemoveStarfireSnare(playerCaster, this);
 
         m_resetStarfireSnareAfterCast = false;
     }
