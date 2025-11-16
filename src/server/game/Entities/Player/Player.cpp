@@ -17,6 +17,7 @@
 
 #include "Player.h"
 #include "AccountMgr.h"
+#include "AccountBankMgr.h"
 #include "AchievementMgr.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
@@ -11820,6 +11821,17 @@ InventoryResult Player::CanBankItem(uint8 bag, uint8 slot, ItemPosCountVec& dest
 
     if (pItem->IsBindedNotWith(this))
         return EQUIP_ERR_DONT_OWN_THAT_ITEM;
+
+    if (AccountBank::IsAccountBankOpen(this))
+    {
+        bool const targetIsAccountSlot = (bag == INVENTORY_SLOT_BAG_0) && (slot >= BANK_SLOT_ITEM_START) &&
+            (slot < BANK_SLOT_ITEM_START + AccountBank::MAX_SLOTS);
+        if (!targetIsAccountSlot)
+            return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
+
+        if (!IsBankPos(pItem->GetBagSlot(), pItem->GetSlot()) && !AccountBank::IsDepositable(pItem))
+            return EQUIP_ERR_CANT_DO_RIGHT_NOW;
+    }
 
     // Currency tokens are not supposed to be swapped out of their hidden bag
     uint8 pItemslot = pItem->GetSlot();

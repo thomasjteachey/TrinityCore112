@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "AccountBankMgr.h"
 #include "BankPackets.h"
 #include "Item.h"
 #include "DBCStores.h"
@@ -146,6 +147,14 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
         return;
     }
 
+    if (AccountBank::IsAccountBankOpen(_player))
+    {
+        packet.Result = ERR_BANKSLOT_NOTBANKER;
+        SendPacket(packet.Write());
+        SendNotification("Shared account banks do not support additional bag slots.");
+        return;
+    }
+
     uint32 slot = _player->GetBankBagSlotCount();
 
     // next slot
@@ -182,6 +191,9 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
 
 void WorldSession::SendShowBank(ObjectGuid guid)
 {
+    if (_player && AccountBank::IsAccountBankOpen(_player) && !AccountBank::IsAccountBanker(_player, guid))
+        AccountBank::CloseAccountBank(_player);
+
     m_currentBankerGUID = guid;
     WorldPackets::Bank::ShowBank packet;
     packet.Banker = guid;
