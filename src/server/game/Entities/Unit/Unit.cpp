@@ -4704,16 +4704,20 @@ float Unit::GetStarfireSnareSpeedRate() const
     {
         Aura const* aura = iter->second->GetBase();
         SpellInfo const* spellInfo = aura->GetSpellInfo();
-        if (!spellInfo || !spellInfo->HasAttribute(SPELL_ATTR0_CU_ALLOW_STARFIRE_SNARE_CAST))
+        if (!spellInfo)
             continue;
 
-        if (float const spellDefinedRate = spellInfo->GetStarfireSnareSpeedRate())
+        float const spellDefinedRate = spellInfo->GetStarfireSnareSpeedRate();
+        if (spellDefinedRate > 0.0f)
         {
             if (spellDefinedRate > bestRate)
                 bestRate = spellDefinedRate;
 
             continue;
         }
+
+        if (!spellInfo->HasAttribute(SPELL_ATTR0_CU_ALLOW_STARFIRE_SNARE_CAST))
+            continue;
 
         for (uint8 effIndex = EFFECT_0; effIndex < MAX_SPELL_EFFECTS; ++effIndex)
         {
