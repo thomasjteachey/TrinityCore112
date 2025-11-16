@@ -29,7 +29,8 @@
 #include "Position.h"
 #include "SharedDefines.h"
 #include "StringFormat.h"
-#include "World.h"
+#include "WorldSession.h"
+#include "Group.h"
 
 #include "../../Custom/mod_pvpve_dungeon.h"
 
@@ -143,8 +144,7 @@ public:
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
             }
 
-            sWorld->SendServerMessage(SERVER_MSG_STRING,
-                "|cffff0000[Stockades PvPvE]|r You sense an evil presence.");
+            NotifyOpposingPlayersOfInvasion(player);
 
             ApplyPvpveFfaState(player);
             sPvpveDungeonMgr->OnPlayerEnteredInstance(player, this);
@@ -270,6 +270,30 @@ public:
             {
                 if (Player* player = ObjectAccessor::FindPlayer(guid))
                     ClearPvpveFfaState(player);
+            }
+        }
+
+        void NotifyOpposingPlayersOfInvasion(Player* invadingPlayer)
+        {
+            if (!invadingPlayer || !instance)
+                return;
+
+            Map::PlayerList const& players = instance->GetPlayers();
+            if (players.isEmpty())
+                return;
+
+            Group const* invadingGroup = invadingPlayer->GetGroup();
+            for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+            {
+                Player* target = itr->GetSource();
+                if (!target || target == invadingPlayer)
+                    continue;
+
+                if (invadingGroup && target->GetGroup() == invadingGroup)
+                    continue;
+
+                if (WorldSession* session = target->GetSession())
+                    session->SendNotification("You sense an evil presence");
             }
         }
 
