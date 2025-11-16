@@ -982,7 +982,10 @@ public:
 
         ObjectGuid const guid = player->GetGUID();
         if (sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+        {
+            TeleportOutImmediately(player);
             sPvpveDungeonMgr->OnPlayerLeftMap(player);
+        }
 
         ClearPendingState(guid);
     }
@@ -1061,6 +1064,17 @@ private:
             TeleportDestination const destination = GetTeleportLocation(player);
             player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
         }, 1s);
+    }
+
+    void TeleportOutImmediately(Player* player)
+    {
+        if (!player)
+            return;
+
+        ForceRelease(player);
+
+        TeleportDestination const destination = GetTeleportLocation(player);
+        player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
     }
 
     void ClearPendingState(ObjectGuid const& guid)
