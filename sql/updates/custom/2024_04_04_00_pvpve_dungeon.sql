@@ -16,13 +16,11 @@ CREATE TABLE IF NOT EXISTS `pvpve_dungeon_template` (
 CREATE TABLE IF NOT EXISTS `pvpve_dungeon_spawn` (
   `TemplateId` INT UNSIGNED NOT NULL,
   `SpawnIndex` TINYINT UNSIGNED NOT NULL,
-  `CreatureEntry` INT UNSIGNED NOT NULL,
   `MapId` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   `PositionX` FLOAT NOT NULL DEFAULT 0,
   `PositionY` FLOAT NOT NULL DEFAULT 0,
   `PositionZ` FLOAT NOT NULL DEFAULT 0,
   `Orientation` FLOAT NOT NULL DEFAULT 0,
-  `RespawnSeconds` INT UNSIGNED NOT NULL DEFAULT 30,
   PRIMARY KEY (`TemplateId`, `SpawnIndex`),
   CONSTRAINT `FK_pvpve_dungeon_spawn_template` FOREIGN KEY (`TemplateId`) REFERENCES `pvpve_dungeon_template` (`Id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
@@ -41,16 +39,17 @@ ON DUPLICATE KEY UPDATE
   `MaxPlayersPerTeam` = VALUES(`MaxPlayersPerTeam`),
   `MaxRuntimeSecs` = VALUES(`MaxRuntimeSecs`);
 
-INSERT INTO `pvpve_dungeon_spawn` (`TemplateId`, `SpawnIndex`, `CreatureEntry`, `MapId`, `PositionX`, `PositionY`, `PositionZ`, `Orientation`, `RespawnSeconds`)
+INSERT INTO `pvpve_dungeon_spawn` (`TemplateId`, `SpawnIndex`, `MapId`, `PositionX`, `PositionY`, `PositionZ`, `Orientation`)
 VALUES
-  (1, 0, 1706, 34, 48.825, -7.284, -20.216, 5.78, 30),
-  (1, 1, 1707, 34, 73.594, -10.873, -20.219, 4.60, 30),
-  (1, 2, 1708, 34, 96.325, -12.443, -20.219, 3.10, 30)
+  -- Center staging area in the entry hall
+  (1, 0, 34, 52.573, -0.411, -20.213, 4.69),
+  -- South cell block (left wing)
+  (1, 1, 34, 90.944, -33.215, -20.219, 1.57),
+  -- North cell block (right wing)
+  (1, 2, 34, 90.944, 33.215, -20.219, 4.71)
 ON DUPLICATE KEY UPDATE
-  `CreatureEntry` = VALUES(`CreatureEntry`),
   `MapId` = VALUES(`MapId`),
   `PositionX` = VALUES(`PositionX`),
   `PositionY` = VALUES(`PositionY`),
   `PositionZ` = VALUES(`PositionZ`),
-  `Orientation` = VALUES(`Orientation`),
-  `RespawnSeconds` = VALUES(`RespawnSeconds`);
+  `Orientation` = VALUES(`Orientation`);

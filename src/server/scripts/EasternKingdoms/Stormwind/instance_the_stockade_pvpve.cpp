@@ -20,6 +20,7 @@
 #include "Configuration/Config.h"
 #include "Duration.h"
 #include "GameObject.h"
+#include "Creature.h"
 #include "Map.h"
 #include "InstanceScript.h"
 #include "Log.h"
@@ -45,6 +46,7 @@ Position const DefaultChestPosition = { 71.879f, -15.478f, -20.215f, 0.0f };
 uint32 s_ChestGameObjectId = 0;
 Seconds s_ChestDespawn = Seconds(DefaultChestDespawnSeconds);
 Position s_ChestPosition = DefaultChestPosition;
+uint32 s_BossCreatureEntry = 0;
 
 void LoadConfig()
 {
@@ -54,13 +56,18 @@ void LoadConfig()
     float const configuredY = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnY", DefaultChestPosition.GetPositionY());
     float const configuredZ = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnZ", DefaultChestPosition.GetPositionZ());
     float const configuredO = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnO", DefaultChestPosition.GetOrientation());
+    int32 const configuredBoss = sConfigMgr->GetIntDefault("StockadesPvPvE.BossCreatureEntry", 0);
 
     s_ChestGameObjectId = configuredEntry > 0 ? uint32(configuredEntry) : 0u;
     s_ChestDespawn = Seconds(configuredDespawn >= 0 ? uint32(configuredDespawn) : DefaultChestDespawnSeconds);
     s_ChestPosition.Relocate(configuredX, configuredY, configuredZ, configuredO);
+    s_BossCreatureEntry = configuredBoss > 0 ? uint32(configuredBoss) : 0u;
 
     if (!s_ChestGameObjectId)
         TC_LOG_WARN("server.custom", "Stockades PvPvE: reward chest entry is 0; chest spawning is disabled.");
+
+    if (!s_BossCreatureEntry)
+        TC_LOG_WARN("server.custom", "Stockades PvPvE: boss creature entry is 0; boss defeat tracking is disabled.");
 }
 
 QuaternionData GetChestRotation()
@@ -82,6 +89,11 @@ void EnsureConfigLoaded()
 uint32 GetChestGameObjectId()
 {
     return s_ChestGameObjectId;
+}
+
+uint32 GetBossCreatureEntry()
+{
+    return s_BossCreatureEntry;
 }
 
 Seconds GetChestDespawnTime()
@@ -125,7 +137,10 @@ public:
                 return;
 
             if (PvpveDungeonRun* run = PvpveDungeonMgr::instance()->GetRunForPlayer(player->GetGUID()))
+            {
+                _pvpveRunId = run->Id;
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
+            }
 
             ApplyPvpveFfaState(player);
             sPvpveDungeonMgr->OnPlayerEnteredInstance(player, this);
@@ -149,6 +164,32 @@ public:
             AnnounceVictory(runId, winningTeam);
             SummonRewardChest(runId, winningTeam);
             ClearFfaState(winningTeam);
+            _pvpveRunId = 0;
+        }
+
+        void OnUnitDeath(Unit* unit) override
+        {
+            InstanceScript::OnUnitDeath(unit);
+
+            if (!_pvpveRunId)
+                return;
+
+            if (!unit)
+                return;
+
+            Creature* creature = unit->ToCreature();
+            if (!creature)
+                return;
+
+            uint32 const bossEntry = StockadesPvPvE::GetBossCreatureEntry();
+            if (!bossEntry || creature->GetEntry() != bossEntry)
+                return;
+
+            ObjectGuid creditGuid = ObjectGuid::Empty;
+            if (Player* killer = creature->GetLootRecipient())
+                creditGuid = killer->GetGUID();
+
+            sPvpveDungeonMgr->OnBossDefeated(_pvpveRunId, creditGuid);
         }
 
     private:
@@ -230,6 +271,7 @@ public:
 
         ObjectGuid _rewardChestGuid;
         uint32 _rewardChestRunId = 0;
+        uint64 _pvpveRunId = 0;
     };
 };
 

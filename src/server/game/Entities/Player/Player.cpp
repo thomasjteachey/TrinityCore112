@@ -344,6 +344,7 @@ Player::Player(WorldSession* session) : Unit(true)
 
     m_HomebindTimer = 0;
     m_InstanceValid = true;
+    m_InstanceValidityOverride = false;
     m_dungeonDifficulty = DUNGEON_DIFFICULTY_NORMAL;
     m_raidDifficulty = RAID_DIFFICULTY_10MAN_NORMAL;
     m_raidMapDifficulty = RAID_DIFFICULTY_10MAN_NORMAL;
@@ -19377,6 +19378,14 @@ void Player::SendSavedInstances()
     }
 }
 
+void Player::SetInstanceValidityOverride(bool enabled)
+{
+    m_InstanceValidityOverride = enabled;
+
+    if (enabled)
+        m_InstanceValid = true;
+}
+
 bool Player::Satisfy(AccessRequirement const* ar, uint32 target_map, bool report)
 {
     if (!IsGameMaster() && ar)
@@ -19464,6 +19473,9 @@ bool Player::CheckInstanceValidity(bool /*isLogin*/)
 {
     // game masters' instances are always valid
     if (IsGameMaster())
+        return true;
+
+    if (HasInstanceValidityOverride())
         return true;
 
     // non-instances are always valid
