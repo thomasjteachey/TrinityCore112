@@ -7120,13 +7120,14 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
         AddItem(40752, value);
     SetHonorPoints(uint32(newValue));
 
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
+    stmt->setUInt32(0, newValue);
+    stmt->setUInt32(1, GetGUID().GetCounter());
+
     if (trans)
-    {
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
-        stmt->setUInt32(0, newValue);
-        stmt->setUInt32(1, GetGUID().GetCounter());
         trans->Append(stmt);
-    }
+    else
+        CharacterDatabase.Execute(stmt);
 }
 
 void Player::ModifyArenaPoints(int32 value, CharacterDatabaseTransaction trans)
