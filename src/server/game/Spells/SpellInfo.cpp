@@ -1246,6 +1246,32 @@ bool SpellInfo::IsMoveAllowedChannel() const
     return IsChanneled() && (HasAttribute(SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING) || (!(ChannelInterruptFlags & (AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING))));
 }
 
+bool SpellInfo::IsStarfire() const
+{
+    return SpellFamilyName == SPELLFAMILY_DRUID && (SpellFamilyFlags[0] & 0x00000004);
+}
+
+float SpellInfo::GetStarfireSnareSpeedRate() const
+{
+    switch (Id)
+    {
+        case 16814: // Starlight Wrath (Rank 1)
+            return 0.05f;
+        case 16815: // Rank 2
+            return 0.10f;
+        case 16816: // Rank 3
+            return 0.15f;
+        case 16817: // Rank 4
+            return 0.20f;
+        case 16818: // Rank 5
+            return 0.25f;
+        default:
+            break;
+    }
+
+    return 0.0f;
+}
+
 bool SpellInfo::NeedsComboPoints() const
 {
     return HasAttribute(SpellAttr1(SPELL_ATTR1_REQ_COMBO_POINTS1 | SPELL_ATTR1_REQ_COMBO_POINTS2));

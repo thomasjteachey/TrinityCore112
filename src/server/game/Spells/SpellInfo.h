@@ -167,6 +167,7 @@ enum SpellCustomAttributes
     SPELL_ATTR0_CU_DEPRECATED_LIQUID_AURA        = 0x00400000, // DO NOT REUSE
     SPELL_ATTR0_CU_IS_TALENT                     = 0x00800000, // reserved for master branch
     SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED          = 0x01000000,
+    SPELL_ATTR0_CU_ALLOW_STARFIRE_SNARE_CAST     = 0x02000000,
 
     SPELL_ATTR0_CU_NEGATIVE                      = SPELL_ATTR0_CU_NEGATIVE_EFF0 | SPELL_ATTR0_CU_NEGATIVE_EFF1 | SPELL_ATTR0_CU_NEGATIVE_EFF2
 };
@@ -416,6 +417,8 @@ class TC_GAME_API SpellInfo
         bool IsPositiveEffect(uint8 effIndex) const;
         bool IsChanneled() const;
         bool IsMoveAllowedChannel() const;
+        bool IsStarfire() const;
+        float GetStarfireSnareSpeedRate() const;
         bool NeedsComboPoints() const;
         bool IsNextMeleeSwingSpell() const;
         bool IsBreakingStealth() const;
