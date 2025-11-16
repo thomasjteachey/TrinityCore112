@@ -723,13 +723,7 @@ void BattlegroundMgr::SendAreaSpiritHealerQueryOpcode(Player* player, Battlegrou
 {
     WorldPacket data(SMSG_AREA_SPIRIT_HEALER_TIME, 12);
 
-    uint32 const interval = bg->GetResurrectionInterval();
-    uint32 timeRemaining = 0;
-
-    if (bg->GetLastResurrectTime() < interval)
-        timeRemaining = interval - bg->GetLastResurrectTime();
-
-    data << guid << timeRemaining;
+    data << guid << bg->GetTimeUntilResurrection();
     player->SendDirectMessage(&data);
 }
 

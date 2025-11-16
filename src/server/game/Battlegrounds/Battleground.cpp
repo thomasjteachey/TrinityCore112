@@ -1357,6 +1357,16 @@ void Battleground::RemovePlayerFromResurrectQueue(ObjectGuid player_guid)
     }
 }
 
+uint32 Battleground::GetTimeUntilResurrection() const
+{
+    uint32 const interval = GetResurrectionInterval();
+
+    if (m_LastResurrectTime >= interval)
+        return 0;
+
+    return interval - m_LastResurrectTime;
+}
+
 bool Battleground::IsPlayerInResurrectQueue(ObjectGuid player_guid) const
 {
     for (std::map<ObjectGuid, GuidVector>::const_iterator itr = m_ReviveQueue.begin(); itr != m_ReviveQueue.end(); ++itr)
