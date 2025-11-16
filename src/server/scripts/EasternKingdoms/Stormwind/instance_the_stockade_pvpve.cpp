@@ -29,6 +29,7 @@
 #include "Position.h"
 #include "SharedDefines.h"
 #include "StringFormat.h"
+#include "World.h"
 
 #include "../../Custom/mod_pvpve_dungeon.h"
 
@@ -141,6 +142,10 @@ public:
                 _pvpveRunId = run->Id;
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
             }
+
+            sWorld->SendServerMessage(SERVER_MSG_STRING,
+                Trinity::StringFormat("|cffff0000[Stockades PvPvE]|r %s is invading the Stormwind Stockade!",
+                    player->GetName().c_str()));
 
             ApplyPvpveFfaState(player);
             sPvpveDungeonMgr->OnPlayerEnteredInstance(player, this);
