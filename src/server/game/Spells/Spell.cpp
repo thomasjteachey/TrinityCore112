@@ -3311,9 +3311,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     // Prepare data for triggers
     prepareDataForTriggerSystem();
 
-    if (Player* player = m_caster->ToPlayer())
+    Player* playerCaster = m_caster->ToPlayer();
+    if (playerCaster)
     {
-        if (!player->GetCommandStatus(CHEAT_CASTTIME))
+        if (!playerCaster->GetCommandStatus(CHEAT_CASTTIME))
         {
             // calculate cast time (calculated after first CheckCast check to prevent charge counting for first CheckCast fail)
             m_casttime = m_spellInfo->CalcCastTime(this);
@@ -3324,6 +3325,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
+    float starfireSnareSpeedRate = 0.0f;
+    if (playerCaster && m_casttime && m_spellInfo->IsStarfire())
+        starfireSnareSpeedRate = playerCaster->GetStarfireSnareSpeedRate();
+
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
     // (even if they are interrupted on moving, spells with almost immediate effect get to have their effect processed before movement interrupter kicks in)
@@ -3332,22 +3337,19 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         // 1. Has casttime, 2. Or doesn't have flag to allow movement during channel
         if (m_casttime || !m_spellInfo->IsMoveAllowedChannel())
         {
-            SendCastResult(SPELL_FAILED_MOVING);
-            finish(false);
-            return SPELL_FAILED_MOVING;
+            if (!(starfireSnareSpeedRate > 0.0f && m_spellInfo->IsStarfire()))
+            {
+                SendCastResult(SPELL_FAILED_MOVING);
+                finish(false);
+                return SPELL_FAILED_MOVING;
+            }
         }
     }
 
-    if (m_casttime && m_spellInfo->IsStarfire())
+    if (starfireSnareSpeedRate > 0.0f)
     {
-        if (Player* player = m_caster->ToPlayer())
-        {
-            if (float const snareSpeedRate = player->GetStarfireSnareSpeedRate())
-            {
-                if (ApplyStarfireSnare(player, snareSpeedRate))
-                    m_resetStarfireSnareAfterCast = true;
-            }
-        }
+        if (ApplyStarfireSnare(playerCaster, starfireSnareSpeedRate))
+            m_resetStarfireSnareAfterCast = true;
     }
 
     // Creatures focus their target when possible
