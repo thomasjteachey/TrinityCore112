@@ -127,6 +127,7 @@ class TC_GAME_API CombatManager
         void EndAllPvPCombat();
         void EndAllCombat() { EndAllPvECombat(); EndAllPvPCombat(); }
         bool UpdateOwnerCombatState() const;
+        void ModifyForcedCombatState(bool addReference);
 
         CombatManager(CombatManager const&) = delete;
         CombatManager& operator=(CombatManager const&) = delete;
@@ -139,7 +140,7 @@ class TC_GAME_API CombatManager
         std::unordered_map<ObjectGuid, CombatReference*> _pveRefs;
         std::unordered_map<ObjectGuid, PvPCombatReference*> _pvpRefs;
 
-        bool m_forcedCombat;
+        uint32 _forcedCombatRefs = 0;
 
     friend struct CombatReference;
     friend struct PvPCombatReference;

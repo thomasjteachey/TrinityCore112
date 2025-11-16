@@ -147,6 +147,11 @@ void CombatManager::Update(uint32 tdiff)
         else
             ++it;
     }
+
+    if (!_pveRefs.empty() || !_pvpRefs.empty())
+        RevalidateCombat();
+
+    UpdateOwnerCombatState();
 }
 
 bool CombatManager::HasPvECombat() const
@@ -159,7 +164,7 @@ bool CombatManager::HasPvECombat() const
 
 bool CombatManager::HasCombat() const
 {
-    return HasPvECombat() || HasPvPCombat() || GetOwner()->HasAura(29131) || GetOwner()->HasAura(5229);
+    return HasPvECombat() || HasPvPCombat() || _forcedCombatRefs != 0;
 }
 
 bool CombatManager::HasPvECombatWithPlayers() const
@@ -188,6 +193,26 @@ Unit* CombatManager::GetAnyTarget() const
         if (!pair.second->IsSuppressedFor(_owner))
             return pair.second->GetOther(_owner);
     return nullptr;
+}
+
+void CombatManager::ModifyForcedCombatState(bool addReference)
+{
+    bool const hadForcedCombat = _forcedCombatRefs != 0;
+
+    if (addReference)
+        ++_forcedCombatRefs;
+    else
+    {
+        if (_forcedCombatRefs == 0)
+            return;
+
+        --_forcedCombatRefs;
+    }
+
+    if (hadForcedCombat == (_forcedCombatRefs != 0))
+        return;
+
+    UpdateOwnerCombatState();
 }
 
 bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
