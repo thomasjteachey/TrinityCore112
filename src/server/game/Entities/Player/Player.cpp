@@ -25021,22 +25021,9 @@ void Player::InitGlyphsForLevel()
             if (gs->Tooltip)
                 SetGlyphSlot(gs->Tooltip - 1, gs->ID);
 
-    uint8 level = GetLevel();
-    uint32 value = 0;
-
-    // 0x3F = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 for 80 level
-    if (level >= 15)
-        value |= (0x01 | 0x02);
-    if (level >= 30)
-        value |= 0x08;
-    if (level >= 50)
-        value |= 0x04;
-    if (level >= 70)
-        value |= 0x10;
-    if (level >= 80)
-        value |= 0x20;
-
-    SetUInt32Value(PLAYER_GLYPHS_ENABLED, value);
+    // Unlock all glyph slots regardless of player level.
+    // 0x3F = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 (the default WoTLK bitmask for level 80)
+    SetUInt32Value(PLAYER_GLYPHS_ENABLED, 0x3F);
 }
 
 void Player::SetGlyph(uint8 slot, uint32 glyph)
