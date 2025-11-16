@@ -44,6 +44,7 @@ namespace AccountBank
     void UpdateAccountBankSession(Player* player);
     void UpdateAccountBankSessions();
     bool IsAccountBankOpen(Player const* player);
+    bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid);
 }
 
 #endif // TRINITYCORE_ACCOUNT_BANK_MGR_H

@@ -38,6 +38,19 @@ namespace AccountBank
 {
 namespace
 {
+    void CleanupRemovedItem(Player* player, Item* item)
+    {
+        if (!player || !item)
+            return;
+
+        RemoveItemFromUpdateQueueOf(item, player);
+        if (item->IsInWorld())
+        {
+            item->RemoveFromWorld();
+            item->DestroyForPlayer(player);
+        }
+    }
+
     struct StoredBankItem
     {
         uint8 Bag = 0;
@@ -159,6 +172,7 @@ namespace
             if (Item* item = player->GetItemByPos(bag, slot))
             {
                 player->RemoveItem(bag, slot, true);
+                CleanupRemovedItem(player, item);
                 StoredBankItem stored;
                 stored.Bag = bag;
                 stored.Slot = slot;
@@ -261,6 +275,7 @@ namespace
                         continue;
 
                     player->RemoveItem(inserted->GetBagSlot(), inserted->GetSlot(), true);
+                    CleanupRemovedItem(player, inserted);
                     delete inserted;
                 }
                 return false;
@@ -297,6 +312,7 @@ namespace
                 continue;
 
             player->RemoveItem(INVENTORY_SLOT_BAG_0, playerSlot, true);
+            CleanupRemovedItem(player, item);
             item->DeleteFromInventoryDB(trans);
             item->SetGuidValue(ITEM_FIELD_CONTAINED, ObjectGuid::Empty);
             item->SetGuidValue(ITEM_FIELD_OWNER, ObjectGuid::Empty);
@@ -579,6 +595,18 @@ void UpdateAccountBankSession(Player* player)
 bool IsAccountBankOpen(Player const* player)
 {
     return GetSession(player) != nullptr;
+}
+
+bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid)
+{
+    if (!player)
+        return false;
+
+    SessionState const* session = GetSession(player);
+    if (!session)
+        return false;
+
+    return session->BankerGuid == bankerGuid;
 }
 
 void UpdateAccountBankSessions()
