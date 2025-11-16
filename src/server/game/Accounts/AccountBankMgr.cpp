@@ -21,6 +21,7 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "Item.h"
+#include "Bag.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Optional.h"
