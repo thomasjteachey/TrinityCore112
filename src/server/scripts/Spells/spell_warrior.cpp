@@ -124,18 +124,22 @@ class spell_warr_bloodrage : public AuraScript
         return GetOwner()->GetTypeId() == TYPEID_PLAYER;
     }
 
-    void UpdateCombat(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    void ForceCombatOn(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
+        if (Player* player = GetTarget()->ToPlayer())
+            player->GetCombatManager().ModifyForcedCombatState(true);
+    }
 
-        Player* player = GetTarget()->ToPlayer();
-        player->GetCombatManager().UpdateOwnerCombatState();
-
+    void ForceCombatOff(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* player = GetTarget()->ToPlayer())
+            player->GetCombatManager().ModifyForcedCombatState(false);
     }
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_warr_bloodrage::UpdateCombat, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
-        AfterEffectRemove += AuraEffectRemoveFn(spell_warr_bloodrage::UpdateCombat, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectApply += AuraEffectApplyFn(spell_warr_bloodrage::ForceCombatOn, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_warr_bloodrage::ForceCombatOff, EFFECT_0, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
