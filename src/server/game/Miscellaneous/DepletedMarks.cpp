@@ -192,13 +192,34 @@ bool ConsumeEligibleDepletedMarks(Player* player, uint32 amount)
     if (!HasEnoughEligibleDepletedMarks(player, amount, false))
         return false;
 
+    while (amount > 0)
+    {
+        uint32 const entry = GetOwnedEligibleDepletedMarkEntry(player);
+        if (!entry)
+            break;
+
+        player->DestroyItemCount(entry, 1, true);
+        --amount;
+    }
+
+    return amount == 0;
+}
+
+uint32 GetOwnedEligibleDepletedMarkEntry(Player const* player)
+{
+    if (!player)
+        return 0;
+
     uint32 const classMask = player->GetClassMask();
     uint32 const raceMask = player->GetRaceMask();
 
+    uint32 bestEntry = 0;
+    uint8 bestScore = 0;
+
     for (uint32 entry : DepletedMarkEntries)
     {
-        if (amount == 0)
-            break;
+        if (!player->GetItemCount(entry))
+            continue;
 
         ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(entry);
         if (!itemTemplate)
@@ -207,16 +228,18 @@ bool ConsumeEligibleDepletedMarks(Player* player, uint32 amount)
         if (!IsTemplateEligibleForPlayer(itemTemplate, classMask, raceMask))
             continue;
 
-        uint32 available = player->GetItemCount(entry);
-        if (!available)
-            continue;
+        uint8 const classScore = GetSpecificityScore(itemTemplate->AllowableClass, classMask);
+        uint8 const raceScore = GetSpecificityScore(itemTemplate->AllowableRace, raceMask);
+        uint8 const score = classScore * 3 + raceScore;
 
-        uint32 toRemove = std::min(amount, available);
-        player->DestroyItemCount(entry, toRemove, true);
-        amount -= toRemove;
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestEntry = entry;
+        }
     }
 
-    return amount == 0;
+    return bestEntry;
 }
 
 uint32 GetDepletedMarkEntryForPlayer(Player const* player)
