@@ -113,6 +113,7 @@ PvpveDungeonMgr::PvpveDungeonMgr()
     _teams.clear();
     _playerToRun.clear();
     _playerToTeam.clear();
+    _playerRunLockouts.clear();
     _templates.clear();
     _spawns.clear();
     _queuedPlayers.clear();
@@ -380,11 +381,21 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 if (candidate.Completed)
                     continue;
 
-                if (candidate.Teams.size() < dungeonTemplate->MaxTeams)
+                if (candidate.Teams.size() >= dungeonTemplate->MaxTeams)
+                    continue;
+
+                bool const memberHasLockout = std::any_of(queueItr->second.Members.begin(), queueItr->second.Members.end(),
+                    [this, &candidate](ObjectGuid const& guid)
                 {
-                    selectedRun = &candidate;
-                    break;
-                }
+                    auto lockoutItr = _playerRunLockouts.find(guid);
+                    return lockoutItr != _playerRunLockouts.end() && lockoutItr->second == candidate.Id;
+                });
+
+                if (memberHasLockout)
+                    continue;
+
+                selectedRun = &candidate;
+                break;
             }
 
             if (!selectedRun)
@@ -712,6 +723,11 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
 
     _playerToTeam.erase(guid);
 
+    if (run->Finished)
+        _playerRunLockouts.erase(guid);
+    else
+        _playerRunLockouts[guid] = run->Id;
+
     EvaluateRunState(*run);
 }
 
@@ -821,6 +837,19 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
     }
 
     TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO distribute rewards for run {}.", run.Id);
+
+    ClearRunLockouts(run.Id);
+}
+
+void PvpveDungeonMgr::ClearRunLockouts(uint64 runId)
+{
+    for (auto itr = _playerRunLockouts.begin(); itr != _playerRunLockouts.end(); )
+    {
+        if (itr->second == runId)
+            itr = _playerRunLockouts.erase(itr);
+        else
+            ++itr;
+    }
 }
 
 void PvpveDungeonMgr::TrackQueuedMembers(std::vector<ObjectGuid> const& members)
