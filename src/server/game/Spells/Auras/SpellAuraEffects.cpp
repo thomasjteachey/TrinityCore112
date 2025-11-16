@@ -5670,9 +5670,22 @@ void AuraEffect::HandleModAttackPowerOfArmorAuraTick(Unit* target, Unit* caster)
     target->UpdateAttackPowerAndDamage(true);
 }
 
-//ttopper: breakable roots/fears
 void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInfo& eventInfo)
 {
+    static flag96 const EntanglingRootsFamilyMask(0x00000200, 0, 0);
+
+    SpellInfo const* auraInfo = GetSpellInfo();
+    bool const isEntanglingRootsAura = auraInfo && auraInfo->SpellFamilyName == SPELLFAMILY_DRUID
+        && (auraInfo->SpellFamilyFlags & EntanglingRootsFamilyMask);
+
+    if (isEntanglingRootsAura)
+    {
+        if (DamageInfo* damageInfo = eventInfo.GetDamageInfo())
+            if (SpellInfo const* damageSpell = damageInfo->GetSpellInfo())
+                if (damageSpell->Id == auraInfo->Id)
+                    return;
+    }
+
     Unit* caster = aurApp->GetBase()->GetCaster()->ToUnit();
     int32 maxDamage = 1300;
     if (caster)
