@@ -5122,7 +5122,7 @@ void Player::RepopAtGraveyard()
                 if (!bg)
                     return;
 
-                if (HasAura(SPELL_WAITING_FOR_RESURRECT))
+                if (bg->IsPlayerInResurrectQueue(GetGUID()))
                     return;
 
                 uint32 spiritEntry = GetBGTeam() == ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
