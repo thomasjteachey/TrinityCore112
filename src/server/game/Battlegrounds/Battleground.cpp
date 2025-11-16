@@ -854,7 +854,7 @@ void Battleground::EndBattleground(uint32 winner)
                 player->ModifyMoney(winner_money);
 
                 bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS;
-                if (canRestoreMark && Trinity::Custom::ConsumeDepletedMarks(player, 1))
+                if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
                     player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
             }
             else

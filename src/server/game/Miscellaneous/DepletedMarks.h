@@ -42,6 +42,10 @@ namespace Trinity::Custom
     uint32 GetTotalIneligibleDepletedMarkCount(Player const* player, bool includeBank = false);
     bool HasEnoughIneligibleDepletedMarks(Player const* player, uint32 requiredCount, bool includeBank = false);
     bool ConsumeIneligibleDepletedMarks(Player* player, uint32 amount);
+    uint32 GetTotalEligibleDepletedMarkCount(Player const* player, bool includeBank = false);
+    bool HasEnoughEligibleDepletedMarks(Player const* player, uint32 requiredCount, bool includeBank = false);
+    bool ConsumeEligibleDepletedMarks(Player* player, uint32 amount);
+    uint32 GetOwnedEligibleDepletedMarkEntry(Player const* player);
     uint32 GetDepletedMarkEntryForPlayer(Player const* player);
 }
 

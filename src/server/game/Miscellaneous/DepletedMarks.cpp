@@ -155,6 +155,93 @@ bool ConsumeIneligibleDepletedMarks(Player* player, uint32 amount)
     return amount == 0;
 }
 
+uint32 GetTotalEligibleDepletedMarkCount(Player const* player, bool includeBank)
+{
+    if (!player)
+        return 0;
+
+    uint32 const classMask = player->GetClassMask();
+    uint32 const raceMask = player->GetRaceMask();
+
+    uint32 total = 0;
+    for (uint32 entry : DepletedMarkEntries)
+    {
+        ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(entry);
+        if (!itemTemplate)
+            continue;
+
+        if (!IsTemplateEligibleForPlayer(itemTemplate, classMask, raceMask))
+            continue;
+
+        total += player->GetItemCount(entry, includeBank);
+    }
+
+    return total;
+}
+
+bool HasEnoughEligibleDepletedMarks(Player const* player, uint32 requiredCount, bool includeBank)
+{
+    return GetTotalEligibleDepletedMarkCount(player, includeBank) >= requiredCount;
+}
+
+bool ConsumeEligibleDepletedMarks(Player* player, uint32 amount)
+{
+    if (!player || amount == 0)
+        return false;
+
+    if (!HasEnoughEligibleDepletedMarks(player, amount, false))
+        return false;
+
+    while (amount > 0)
+    {
+        uint32 const entry = GetOwnedEligibleDepletedMarkEntry(player);
+        if (!entry)
+            break;
+
+        player->DestroyItemCount(entry, 1, true);
+        --amount;
+    }
+
+    return amount == 0;
+}
+
+uint32 GetOwnedEligibleDepletedMarkEntry(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    uint32 const classMask = player->GetClassMask();
+    uint32 const raceMask = player->GetRaceMask();
+
+    uint32 bestEntry = 0;
+    uint8 bestScore = 0;
+
+    for (uint32 entry : DepletedMarkEntries)
+    {
+        if (!player->GetItemCount(entry))
+            continue;
+
+        ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(entry);
+        if (!itemTemplate)
+            continue;
+
+        if (!IsTemplateEligibleForPlayer(itemTemplate, classMask, raceMask))
+            continue;
+
+        uint8 const classScore = GetSpecificityScore(itemTemplate->AllowableClass, classMask);
+        uint8 const raceScore = GetSpecificityScore(itemTemplate->AllowableRace, raceMask);
+        uint8 const score = classScore * 3 + raceScore;
+
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestEntry = entry;
+        }
+    }
+
+    return bestEntry;
+}
+
 uint32 GetDepletedMarkEntryForPlayer(Player const* player)
 {
     if (!player)
