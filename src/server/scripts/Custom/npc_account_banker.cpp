@@ -16,8 +16,10 @@
  */
 
 #include "AccountBankMgr.h"
+#include "Creature.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "ScriptedCreature.h"
 #include "WorldSession.h"
 
 class npc_account_banker : public CreatureScript
@@ -25,22 +27,32 @@ class npc_account_banker : public CreatureScript
 public:
     npc_account_banker() : CreatureScript("npc_account_banker") { }
 
-    bool OnGossipHello(Player* player, Creature* creature) override
+    struct npc_account_bankerAI : public ScriptedAI
     {
-        if (!player || !creature)
-            return false;
+        npc_account_bankerAI(Creature* creature) : ScriptedAI(creature) { }
 
-        if (!AccountBank::OpenAccountBank(player, creature->GetGUID()))
+        bool OnGossipHello(Player* player) override
         {
+            if (!player)
+                return false;
+
+            if (!AccountBank::OpenAccountBank(player, me->GetGUID()))
+            {
+                if (WorldSession* session = player->GetSession())
+                    session->SendNotification("Unable to open the shared account bank.");
+                return false;
+            }
+
             if (WorldSession* session = player->GetSession())
-                session->SendNotification("Unable to open the shared account bank.");
-            return false;
+                session->SendShowBank(me->GetGUID());
+
+            return true;
         }
+    };
 
-        if (WorldSession* session = player->GetSession())
-            session->SendShowBank(creature->GetGUID());
-
-        return true;
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new npc_account_bankerAI(creature);
     }
 };
 
@@ -48,11 +60,6 @@ class account_bank_player_script : public PlayerScript
 {
 public:
     account_bank_player_script() : PlayerScript("account_bank_player_script") { }
-
-    void OnUpdate(Player* player, uint32 /*diff*/) override
-    {
-        AccountBank::UpdateAccountBankSession(player);
-    }
 
     void OnLogout(Player* player) override
     {
@@ -65,8 +72,20 @@ public:
     }
 };
 
+class account_bank_world_script : public WorldScript
+{
+public:
+    account_bank_world_script() : WorldScript("account_bank_world_script") { }
+
+    void OnUpdate(uint32 /*diff*/) override
+    {
+        AccountBank::UpdateAccountBankSessions();
+    }
+};
+
 void AddSC_npc_account_banker()
 {
     new npc_account_banker();
     new account_bank_player_script();
+    new account_bank_world_script();
 }

@@ -580,4 +580,24 @@ bool IsAccountBankOpen(Player const* player)
 {
     return GetSession(player) != nullptr;
 }
+
+void UpdateAccountBankSessions()
+{
+    if (AccountSessions.empty())
+        return;
+
+    std::vector<ObjectGuid::LowType> sessionOwners;
+    sessionOwners.reserve(AccountSessions.size());
+    for (auto const& session : AccountSessions)
+        sessionOwners.push_back(session.first);
+
+    for (ObjectGuid::LowType guidLow : sessionOwners)
+    {
+        ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(guidLow);
+        if (Player* player = ObjectAccessor::FindPlayer(guid))
+            UpdateAccountBankSession(player);
+        else
+            AccountSessions.erase(guidLow);
+    }
+}
 }

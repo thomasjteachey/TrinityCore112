@@ -49,7 +49,7 @@
 #include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
-#include "Util.h"
+#include "Tokenize.h"
 #include "Transport.h"
 #include "Weather.h"
 #include "WeatherMgr.h"
