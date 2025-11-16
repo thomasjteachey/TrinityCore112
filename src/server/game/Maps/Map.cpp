@@ -70,7 +70,7 @@ static uint16 const holetab_v[4] = { 0x000F, 0x00F0, 0x0F00, 0xF000 };
 GridState* si_GridStates[MAX_GRID_STATE];
 
 ZoneDynamicInfo::ZoneDynamicInfo() : MusicId(0), DefaultWeather(nullptr), WeatherId(WEATHER_STATE_FINE),
-    Intensity(0.0f) { }
+    Intensity(0.0f), LastCustomWeatherUpdateTime(0) { }
 
 RespawnInfo::~RespawnInfo() = default;
 
@@ -4731,51 +4731,64 @@ void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player
     if (GetId() == 489) // Warsong Gulch
     {
         Map* self = const_cast<Map*>(this);
+        ZoneDynamicInfo& mutableZoneInfo = const_cast<ZoneDynamicInfo&>(zoneDynamicInfo);
 
         uint32 zoneId = player->GetZoneId(); // your .gps showed 3277
         if (Weather* wz = self->GetOrGenerateZoneDefaultWeather(zoneId))
         {
             if (WeatherData const* wd = WeatherMgr::GetWeatherData(zoneId))
             {
-                // work out the current season (same formula TC uses)
-                time_t gtime = GameTime::GetGameTime();
-                tm lt;
-                localtime_r(&gtime, &lt);
-                uint32 season = ((lt.tm_yday - 78 + 365) / 91) % 4;
+                uint32 changeIntervalMs = uint32(sWorld->getIntConfig(CONFIG_INTERVAL_CHANGEWEATHER));
+                time_t changeInterval = time_t(changeIntervalMs / IN_MILLISECONDS);
+                if (changeInterval == 0)
+                    changeInterval = 1;
 
-                WeatherSeasonChances const& sc = wd->data[season];
-                // sc.rainChance / sc.snowChance / sc.stormChance are 0..100
-
-                // roll 0..99
-                uint32 roll = urand(0, 99);
-
-                WeatherType toSet = WEATHER_TYPE_FINE;
-                uint32 accum = sc.rainChance;
-
-                if (roll < accum)
+                time_t const now = GameTime::GetGameTime();
+                if (!mutableZoneInfo.LastCustomWeatherUpdateTime ||
+                    now - mutableZoneInfo.LastCustomWeatherUpdateTime >= changeInterval)
                 {
-                    toSet = WEATHER_TYPE_RAIN;
-                }
-                else
-                {
-                    accum += sc.snowChance;
+                    // work out the current season (same formula TC uses)
+                    time_t gtime = now;
+                    tm lt;
+                    localtime_r(&gtime, &lt);
+                    uint32 season = ((lt.tm_yday - 78 + 365) / 91) % 4;
+
+                    WeatherSeasonChances const& sc = wd->data[season];
+                    // sc.rainChance / sc.snowChance / sc.stormChance are 0..100
+
+                    // roll 0..99
+                    uint32 roll = urand(0, 99);
+
+                    WeatherType toSet = WEATHER_TYPE_FINE;
+                    uint32 accum = sc.rainChance;
+
                     if (roll < accum)
                     {
-                        toSet = WEATHER_TYPE_SNOW;
+                        toSet = WEATHER_TYPE_RAIN;
                     }
                     else
                     {
-                        accum += sc.stormChance;
+                        accum += sc.snowChance;
                         if (roll < accum)
-                            toSet = WEATHER_TYPE_STORM;
-                        // else stay FINE
+                        {
+                            toSet = WEATHER_TYPE_SNOW;
+                        }
+                        else
+                        {
+                            accum += sc.stormChance;
+                            if (roll < accum)
+                                toSet = WEATHER_TYPE_STORM;
+                            // else stay FINE
+                        }
                     }
-                }
 
-                if (toSet != WEATHER_TYPE_FINE)
-                    wz->SetWeather(toSet, 0.9999f); // max intensity so it's visible
-                else
-                    wz->SetWeather(WEATHER_TYPE_FINE, 0.0f);
+                    if (toSet != WEATHER_TYPE_FINE)
+                        wz->SetWeather(toSet, 0.9999f); // max intensity so it's visible
+                    else
+                        wz->SetWeather(WEATHER_TYPE_FINE, 0.0f);
+
+                    mutableZoneInfo.LastCustomWeatherUpdateTime = now;
+                }
             }
 
             wz->SendWeatherUpdateToPlayer(player);
