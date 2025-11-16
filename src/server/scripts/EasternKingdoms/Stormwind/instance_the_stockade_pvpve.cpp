@@ -39,6 +39,12 @@
 namespace StockadesPvPvE
 {
 constexpr uint32 StockadesMapId = 34;
+constexpr uint32 StockadesExteriorMapId = 0;
+
+namespace
+{
+Position const kStockadesExteriorPosition = { -8779.9f, 834.349f, 94.6801f, 0.653013f };
+}
 
 namespace
 {
@@ -136,7 +142,19 @@ public:
                 return;
 
             if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+            {
+                if (!player->IsGameMaster())
+                {
+                    if (WorldSession* session = player->GetSession())
+                        session->SendNotification("The Stockades are only accessible through the PvPvE queue.");
+
+                    player->TeleportTo(StockadesExteriorMapId, kStockadesExteriorPosition.GetPositionX(),
+                        kStockadesExteriorPosition.GetPositionY(), kStockadesExteriorPosition.GetPositionZ(),
+                        kStockadesExteriorPosition.GetOrientation());
+                }
+
                 return;
+            }
 
             if (PvpveDungeonRun* run = PvpveDungeonMgr::instance()->GetRunForPlayer(player->GetGUID()))
             {
