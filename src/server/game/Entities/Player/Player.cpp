@@ -11825,9 +11825,10 @@ InventoryResult Player::CanBankItem(uint8 bag, uint8 slot, ItemPosCountVec& dest
 
     if (AccountBank::IsAccountBankOpen(this))
     {
+        bool const usingAutoPlacement = (bag == NULL_BAG) && (slot == NULL_SLOT);
         bool const targetIsAccountSlot = (bag == INVENTORY_SLOT_BAG_0) && (slot >= BANK_SLOT_ITEM_START) &&
             (slot < BANK_SLOT_ITEM_START + AccountBank::MAX_SLOTS);
-        if (!targetIsAccountSlot)
+        if (!usingAutoPlacement && !targetIsAccountSlot)
             return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
 
         if (!IsBankPos(pItem->GetBagSlot(), pItem->GetSlot()) && !AccountBank::IsDepositable(pItem))
