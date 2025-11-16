@@ -240,6 +240,26 @@ void EnsureHiddenBonusSummons(Player* player, HiddenItemsetBonus const& bonus)
     player->CastSpell(player, bonus.spellId, true);
 }
 
+void ResummonHiddenBonusCreatures(Player* player)
+{
+    if (!player)
+        return;
+
+    uint64 guid = player->GetGUID().GetRawValue();
+    auto itr = s_PlayerActiveHiddenItemsets.find(guid);
+    if (itr == s_PlayerActiveHiddenItemsets.end())
+        return;
+
+    for (uint32 itemsetId : itr->second)
+    {
+        auto bonusItr = s_HiddenItemsetBonuses.find(itemsetId);
+        if (bonusItr == s_HiddenItemsetBonuses.end())
+            continue;
+
+        EnsureHiddenBonusSummons(player, bonusItr->second);
+    }
+}
+
 void RecalcHiddenItemsetBonuses(Player* player)
 {
     if (!player)
@@ -365,7 +385,7 @@ public:
 
     void OnPlayerResurrect(Player* player) override
     {
-        RecalcHiddenItemsetBonuses(player);
+        ResummonHiddenBonusCreatures(player);
     }
 };
 
