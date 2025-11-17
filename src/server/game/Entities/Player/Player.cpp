@@ -22530,23 +22530,29 @@ void Player::VerifyStarfireSnare()
     if (!_verifyStarfireSnareNextUpdate)
         return;
 
-    _verifyStarfireSnareNextUpdate = false;
-
     if (!HasActiveStarfireSnare())
+    {
+        _verifyStarfireSnareNextUpdate = false;
         return;
+    }
 
     float const desiredRate = std::clamp(_activeStarfireSnareSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
     if (desiredRate <= 0.0f)
+    {
+        _verifyStarfireSnareNextUpdate = false;
         return;
+    }
 
     for (UnitMoveType moveType : StarfireSnareMoveTypes)
     {
         if (GetSpeedRate(moveType) > desiredRate)
         {
             ApplyActiveStarfireSnare();
-            break;
+            return;
         }
     }
+
+    _verifyStarfireSnareNextUpdate = false;
 }
 
 bool Player::HasActiveStarfireSnare() const
