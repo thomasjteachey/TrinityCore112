@@ -16,6 +16,7 @@
  */
 
 #include "Player.h"
+#include <algorithm>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
 #include "AchievementMgr.h"
@@ -107,6 +108,13 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "WorldStatePackets.h"
+
+namespace
+{
+    constexpr float MinStarfireSnareSpeedRate = 0.01f;
+    constexpr float MaxStarfireSnareSpeedRate = 1.0f;
+    UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+}
 #include "ArenaSpectator.h"
 
 #include <array>
@@ -351,6 +359,8 @@ Player::Player(WorldSession* session) : Unit(true)
     m_raidMapDifficulty = RAID_DIFFICULTY_10MAN_NORMAL;
 
     m_lastPotionId = 0;
+    _activeStarfireSnareSpeedRate = 0.0f;
+    _activeStarfireSnareRefCount = 0;
 
     m_activeSpec = 0;
     m_specsCount = 1;
@@ -22423,6 +22433,75 @@ void Player::UpdatePotionCooldown(Spell* spell)
     }
 
     m_lastPotionId = 0;
+}
+
+bool Player::AddStarfireSnareRef(float speedRate)
+{
+    float const clampedRate = std::clamp(speedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+    if (clampedRate <= 0.0f)
+        return false;
+
+    if (!_activeStarfireSnareRefCount || clampedRate < _activeStarfireSnareSpeedRate)
+        _activeStarfireSnareSpeedRate = clampedRate;
+
+    ++_activeStarfireSnareRefCount;
+    ApplyActiveStarfireSnare();
+    return true;
+}
+
+void Player::RemoveStarfireSnareRef()
+{
+    if (!_activeStarfireSnareRefCount)
+        return;
+
+    --_activeStarfireSnareRefCount;
+    if (!_activeStarfireSnareRefCount)
+    {
+        _activeStarfireSnareSpeedRate = 0.0f;
+        for (UnitMoveType moveType : StarfireSnareMoveTypes)
+            UpdateSpeed(moveType);
+
+        return;
+    }
+
+    ApplyActiveStarfireSnare();
+}
+
+void Player::HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType)
+{
+    if (!_activeStarfireSnareRefCount)
+        return;
+
+    for (UnitMoveType snareMoveType : StarfireSnareMoveTypes)
+    {
+        if (snareMoveType == moveType)
+        {
+            ApplyActiveStarfireSnare(moveType);
+            break;
+        }
+    }
+}
+
+void Player::ApplyActiveStarfireSnare()
+{
+    if (!_activeStarfireSnareRefCount)
+        return;
+
+    for (UnitMoveType moveType : StarfireSnareMoveTypes)
+        ApplyActiveStarfireSnare(moveType);
+}
+
+void Player::ApplyActiveStarfireSnare(UnitMoveType moveType)
+{
+    if (!_activeStarfireSnareRefCount)
+        return;
+
+    float const desiredRate = std::clamp(_activeStarfireSnareSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+    if (desiredRate <= 0.0f)
+        return;
+
+    if (GetSpeedRate(moveType) > desiredRate)
+        SetSpeedRate(moveType, desiredRate);
 }
 
 void Player::SetResurrectRequestData(WorldObject const* caster, uint32 health, uint32 mana, uint32 appliedAura)

@@ -73,66 +73,12 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
-    constexpr float MinStarfireSnareSpeedRate = 0.01f;
-    constexpr float MaxStarfireSnareSpeedRate = 1.0f;
-    UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
-
     bool IsTrapGameObject(GameObject const* caster)
     {
         if (!caster)
             return false;
 
         return caster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
-    }
-
-    bool ApplyStarfireSnare(Player* player, float requestedSpeedRate)
-    {
-        float const clampedSpeedRate = std::clamp(requestedSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
-        if (clampedSpeedRate <= 0.0f)
-            return false;
-
-        bool snared = false;
-
-        for (UnitMoveType moveType : StarfireSnareMoveTypes)
-        {
-            if (player->GetSpeedRate(moveType) > clampedSpeedRate)
-            {
-                player->SetSpeedRate(moveType, clampedSpeedRate);
-                snared = true;
-            }
-        }
-
-        return snared;
-    }
-
-    bool HasConcurrentStarfireSnareCast(Player* player, Spell const* ignoredSpell)
-    {
-        if (!player)
-            return false;
-
-        Spell* currentSpell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
-        if (!currentSpell || currentSpell == ignoredSpell)
-            return false;
-
-        if (currentSpell->getState() == SPELL_STATE_FINISHED)
-            return false;
-
-        if (!currentSpell->GetSpellInfo()->IsStarfire())
-            return false;
-
-        return player->GetStarfireSnareSpeedRate() > 0.0f;
-    }
-
-    void RemoveStarfireSnare(Player* player, Spell const* ignoredSpell)
-    {
-        if (!player)
-            return;
-
-        if (HasConcurrentStarfireSnareCast(player, ignoredSpell))
-            return;
-
-        for (UnitMoveType moveType : StarfireSnareMoveTypes)
-            player->UpdateSpeed(moveType);
     }
 
     // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
@@ -3375,9 +3321,9 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
-    if (starfireSnareSpeedRate > 0.0f)
+    if (starfireSnareSpeedRate > 0.0f && playerCaster)
     {
-        if (ApplyStarfireSnare(playerCaster, starfireSnareSpeedRate))
+        if (playerCaster->AddStarfireSnareRef(starfireSnareSpeedRate))
             m_resetStarfireSnareAfterCast = true;
     }
 
@@ -4130,7 +4076,7 @@ void Spell::finish(bool ok)
     if (m_resetStarfireSnareAfterCast)
     {
         if (Player* playerCaster = unitCaster->ToPlayer())
-            RemoveStarfireSnare(playerCaster, this);
+            playerCaster->RemoveStarfireSnareRef();
 
         m_resetStarfireSnareAfterCast = false;
     }
