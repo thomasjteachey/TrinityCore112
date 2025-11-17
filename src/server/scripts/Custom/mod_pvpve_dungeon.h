@@ -83,6 +83,7 @@ struct QueuedTeam
     time_t QueueTime = 0;
     std::vector<ObjectGuid> Members;
     bool Ready = false;
+    uint64 PreferredRunId = 0;
 };
 
 class PvpveDungeonMgr
@@ -101,8 +102,8 @@ public:
 
     uint64 CreateTeam(std::vector<Player*> const& players, uint32 templateId);
     void RemoveTeam(uint64 teamId);
-    bool QueueTeam(uint64 teamId);
-    bool QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids);
+    bool QueueTeam(uint64 teamId, uint64 preferredRunId = 0);
+    bool QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids, uint64 preferredRunId = 0);
     void CancelQueue(uint64 teamId);
 
     void Update(uint32 diff);
