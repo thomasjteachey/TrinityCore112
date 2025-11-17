@@ -73,42 +73,12 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
-    constexpr float MinStarfireSnareSpeedRate = 0.01f;
-    constexpr float MaxStarfireSnareSpeedRate = 1.0f;
-    UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
-
     bool IsTrapGameObject(GameObject const* caster)
     {
         if (!caster)
             return false;
 
         return caster->GetGoType() == GAMEOBJECT_TYPE_TRAP;
-    }
-
-    bool ApplyStarfireSnare(Player* player, float requestedSpeedRate)
-    {
-        float const clampedSpeedRate = std::clamp(requestedSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
-        if (clampedSpeedRate <= 0.0f)
-            return false;
-
-        bool snared = false;
-
-        for (UnitMoveType moveType : StarfireSnareMoveTypes)
-        {
-            if (player->GetSpeedRate(moveType) > clampedSpeedRate)
-            {
-                player->SetSpeedRate(moveType, clampedSpeedRate);
-                snared = true;
-            }
-        }
-
-        return snared;
-    }
-
-    void RemoveStarfireSnare(Player* player)
-    {
-        for (UnitMoveType moveType : StarfireSnareMoveTypes)
-            player->UpdateSpeed(moveType);
     }
 
     // Allow trap game objects to continue casting regardless of target check failures so feedback is handled during hit resolution.
@@ -3325,19 +3295,24 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
+    bool const isStarfire = m_spellInfo->IsStarfire();
     float starfireSnareSpeedRate = 0.0f;
-    if (playerCaster && m_casttime && m_spellInfo->IsStarfire())
+    if (playerCaster && m_casttime && isStarfire)
         starfireSnareSpeedRate = playerCaster->GetStarfireSnareSpeedRate();
+
+    bool const starfireMovementAllowed = isStarfire && starfireSnareSpeedRate > 0.0f;
+    bool const needsStarfireMovementInterrupt = isStarfire && !starfireMovementAllowed;
+    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt;
 
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
     // (even if they are interrupted on moving, spells with almost immediate effect get to have their effect processed before movement interrupter kicks in)
-    if ((m_spellInfo->IsChanneled() || m_casttime) && m_caster->GetTypeId() == TYPEID_PLAYER && !(m_caster->ToPlayer()->IsCharmed() && m_caster->ToPlayer()->GetCharmerGUID().IsCreature()) && m_caster->ToPlayer()->isMoving() && (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT))
+    if ((m_spellInfo->IsChanneled() || m_casttime) && m_caster->GetTypeId() == TYPEID_PLAYER && !(m_caster->ToPlayer()->IsCharmed() && m_caster->ToPlayer()->GetCharmerGUID().IsCreature()) && m_caster->ToPlayer()->isMoving() && requiresMovementInterrupt)
     {
         // 1. Has casttime, 2. Or doesn't have flag to allow movement during channel
         if (m_casttime || !m_spellInfo->IsMoveAllowedChannel())
         {
-            if (!(starfireSnareSpeedRate > 0.0f && m_spellInfo->IsStarfire()))
+            if (!starfireMovementAllowed)
             {
                 SendCastResult(SPELL_FAILED_MOVING);
                 finish(false);
@@ -3346,9 +3321,9 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
-    if (starfireSnareSpeedRate > 0.0f)
+    if (starfireSnareSpeedRate > 0.0f && playerCaster)
     {
-        if (ApplyStarfireSnare(playerCaster, starfireSnareSpeedRate))
+        if (playerCaster->AddStarfireSnareRef(starfireSnareSpeedRate))
             m_resetStarfireSnareAfterCast = true;
     }
 
@@ -4005,10 +3980,13 @@ void Spell::update(uint32 difftime)
     {
         Player* playerCaster = m_caster->ToPlayer();
         bool const playerMoved = playerCaster->isMoving();
-        bool const starfireMovementAllowed = m_spellInfo->IsStarfire() && playerCaster->GetStarfireSnareSpeedRate() > 0.0f;
+        bool const isStarfire = m_spellInfo->IsStarfire();
+        bool const starfireMovementAllowed = isStarfire && playerCaster->GetStarfireSnareSpeedRate() > 0.0f;
+        bool const needsStarfireMovementInterrupt = isStarfire && !starfireMovementAllowed;
+        bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
 
         if (playerMoved && !starfireMovementAllowed &&
-            m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT &&
+            (hasMovementInterruptFlag || needsStarfireMovementInterrupt) &&
             (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
         {
             // don't cancel for melee, autorepeat, triggered and instant spells
@@ -4098,7 +4076,7 @@ void Spell::finish(bool ok)
     if (m_resetStarfireSnareAfterCast)
     {
         if (Player* playerCaster = unitCaster->ToPlayer())
-            RemoveStarfireSnare(playerCaster);
+            playerCaster->RemoveStarfireSnareRef();
 
         m_resetStarfireSnareAfterCast = false;
     }
@@ -7539,7 +7517,9 @@ void Spell::Delayed() // only called in DealDamage()
         return;
 
     // spells not losing casting time
-    if (!(m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_PUSH_BACK))
+    bool const hasPushbackInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_PUSH_BACK;
+    bool const needsStarfirePushbackInterrupt = m_spellInfo->IsStarfire() && playerCaster->GetStarfireSnareSpeedRate() <= 0.0f;
+    if (!hasPushbackInterruptFlag && !needsStarfirePushbackInterrupt)
         return;
 
     //check pushback reduce
