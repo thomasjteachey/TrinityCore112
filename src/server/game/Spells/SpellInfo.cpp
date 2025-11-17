@@ -1255,15 +1255,15 @@ float SpellInfo::GetStarfireSnareSpeedRate() const
 {
     switch (Id)
     {
-        case 16814: // Starlight Wrath (Rank 1)
+        case 16858: // Feral Aggression (Rank 1)
             return 0.05f;
-        case 16815: // Rank 2
+        case 16859: // Rank 2
             return 0.10f;
-        case 16816: // Rank 3
+        case 16860: // Rank 3
             return 0.15f;
-        case 16817: // Rank 4
+        case 16861: // Rank 4
             return 0.20f;
-        case 16818: // Rank 5
+        case 16862: // Rank 5
             return 0.25f;
         default:
             break;

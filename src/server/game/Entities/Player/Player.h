@@ -1522,6 +1522,14 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SetLastPotionId(uint32 item_id) { m_lastPotionId = item_id; }
         void UpdatePotionCooldown(Spell* spell = nullptr);
 
+        bool AddStarfireSnareRef(float speedRate);
+        void RemoveStarfireSnareRef();
+        void HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType);
+        void UpdateStarfireSnare();
+        void VerifyStarfireSnare();
+
+        bool HasActiveStarfireSnare() const;
+
         void SetResurrectRequestData(WorldObject const* caster, uint32 health, uint32 mana, uint32 appliedAura);
 
         void ClearResurrectRequestData()
@@ -2407,6 +2415,10 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         PlayerSpellMap m_spells;
         PlayerTalentMap* m_talents[MAX_TALENT_SPECS];
         uint32 m_lastPotionId;                              // last used health/mana potion in combat, that block next potion use
+        float _activeStarfireSnareSpeedRate;
+        uint8 _activeStarfireSnareRefCount;
+        bool _pendingStarfireSnareRemoval;
+        bool _verifyStarfireSnareNextUpdate;
 
         uint32 m_enchantmentFlatMod[MAX_ATTACK]; // TODO: Stat system - incorporate generically, exposes a required hidden weapon stat that does not apply when unarmed
 
@@ -2519,6 +2531,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         TimeTracker m_groupUpdateTimer;
 
     private:
+        void ApplyActiveStarfireSnare();
+        void ApplyActiveStarfireSnare(UnitMoveType moveType);
+
         // internal common parts for CanStore/StoreItem functions
         InventoryResult CanStoreItem_InSpecificSlot(uint8 bag, uint8 slot, ItemPosCountVec& dest, ItemTemplate const* pProto, uint32& count, bool swap, Item* pSrcItem) const;
         InventoryResult CanStoreItem_InBag(uint8 bag, ItemPosCountVec& dest, ItemTemplate const* pProto, uint32& count, bool merge, bool non_specialized, Item* pSrcItem, uint8 skip_bag, uint8 skip_slot) const;

@@ -8812,6 +8812,9 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
     }
 
     SetSpeedRate(mtype, speed);
+
+    if (Player* player = ToPlayer())
+        player->HandleStarfireSnareOnSpeedUpdate(mtype);
 }
 
 float Unit::GetSpeed(UnitMoveType mtype) const
