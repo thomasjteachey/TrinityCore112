@@ -362,6 +362,7 @@ Player::Player(WorldSession* session) : Unit(true)
     _activeStarfireSnareSpeedRate = 0.0f;
     _activeStarfireSnareRefCount = 0;
     _pendingStarfireSnareRemoval = false;
+    _verifyStarfireSnareNextUpdate = false;
 
     m_activeSpec = 0;
     m_specsCount = 1;
@@ -1096,6 +1097,7 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(false);
 
     UpdateStarfireSnare();
+    VerifyStarfireSnare();
 
     time_t now = GameTime::GetGameTime();
 
@@ -22451,6 +22453,7 @@ bool Player::AddStarfireSnareRef(float speedRate)
 
     ++_activeStarfireSnareRefCount;
     ApplyActiveStarfireSnare();
+    _verifyStarfireSnareNextUpdate = true;
     return true;
 }
 
@@ -22520,6 +22523,30 @@ void Player::UpdateStarfireSnare()
 
     for (UnitMoveType moveType : StarfireSnareMoveTypes)
         UpdateSpeed(moveType);
+}
+
+void Player::VerifyStarfireSnare()
+{
+    if (!_verifyStarfireSnareNextUpdate)
+        return;
+
+    _verifyStarfireSnareNextUpdate = false;
+
+    if (!HasActiveStarfireSnare())
+        return;
+
+    float const desiredRate = std::clamp(_activeStarfireSnareSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+    if (desiredRate <= 0.0f)
+        return;
+
+    for (UnitMoveType moveType : StarfireSnareMoveTypes)
+    {
+        if (GetSpeedRate(moveType) > desiredRate)
+        {
+            ApplyActiveStarfireSnare();
+            break;
+        }
+    }
 }
 
 bool Player::HasActiveStarfireSnare() const
