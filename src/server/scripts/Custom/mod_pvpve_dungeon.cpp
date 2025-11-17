@@ -726,6 +726,15 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     if (!IsPlayerInPvpveRun(player))
         return;
 
+    WorldLocation savedLocation;
+    bool hasSavedLocation = false;
+    if (WorldLocation const* storedLocation = GetReturnLocation(player->GetGUID()))
+    {
+        savedLocation = *storedLocation;
+        hasSavedLocation = true;
+        ClearReturnLocation(player->GetGUID());
+    }
+
     ClearPvpveFfaState(player);
     player->SetInstanceValidityOverride(false);
 
@@ -761,6 +770,44 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
         _playerRunLockouts[guid] = run->Id;
 
     EvaluateRunState(*run);
+
+    if (hasSavedLocation && player->IsInWorld())
+    {
+        player->TeleportTo(savedLocation.GetMapId(),
+            savedLocation.GetPositionX(), savedLocation.GetPositionY(), savedLocation.GetPositionZ(), savedLocation.GetOrientation());
+    }
+}
+
+WorldLocation const* PvpveDungeonMgr::GetReturnLocation(ObjectGuid const& guid) const
+{
+    auto itr = _playerReturnLocations.find(guid);
+    if (itr == _playerReturnLocations.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+void PvpveDungeonMgr::StoreReturnLocation(Player* player)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+    if (!guid)
+        return;
+
+    if (_playerReturnLocations.find(guid) != _playerReturnLocations.end())
+        return;
+
+    _playerReturnLocations.emplace(guid, player->GetWorldLocation());
+}
+
+void PvpveDungeonMgr::ClearReturnLocation(ObjectGuid const& guid)
+{
+    if (!guid)
+        return;
+
+    _playerReturnLocations.erase(guid);
 }
 
 WorldLocation const* PvpveDungeonMgr::GetReturnLocation(ObjectGuid const& guid) const
@@ -1094,13 +1141,9 @@ private:
             ClearPendingState(player->GetGUID());
             return;
         }
-
-        bool const firstElimination = MarkPlayerEliminated(player);
-        if (firstElimination)
-            sPvpveDungeonMgr->OnPlayerEliminated(player);
-
-        ForceRelease(player);
-        ScheduleTeleportOut(player);
+        // Do not mark players eliminated on death; they may still receive a
+        // resurrection from teammates. Elimination is handled when they release
+        // (OnPlayerRepop) or otherwise leave the dungeon.
     }
 
     bool MarkPlayerEliminated(Player* player)
@@ -1163,8 +1206,16 @@ private:
                 return;
             }
 
-            if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            {
+                player->ResurrectPlayer(1.0f);
+                player->SpawnCorpseBones();
+            }
+            else if (!player->IsAlive())
+            {
                 player->RepopAtGraveyard();
+                return;
+            }
 
             TeleportDestination const destination = GetTeleportLocation(player);
             player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
