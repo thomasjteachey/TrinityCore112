@@ -129,6 +129,7 @@ PvpveDungeonMgr::PvpveDungeonMgr()
     _templates.clear();
     _spawns.clear();
     _queuedPlayers.clear();
+    _playerReturnLocations.clear();
     _lastStatsLog = 0;
 }
 
@@ -454,6 +455,8 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
         _lastStatsLog = now;
         LogQueueStats(now);
     }
+
+    ProcessTeamEliminationTimers(now);
 }
 
 void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued)
@@ -522,6 +525,8 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         if (instanceSave)
             player->BindToInstance(instanceSave, false);
 
+        StoreReturnLocation(player);
+
         if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
 
@@ -569,6 +574,18 @@ PvpveDungeonRun* PvpveDungeonMgr::GetRunForPlayer(ObjectGuid const& guid)
         return nullptr;
 
     return GetRun(itr->second);
+}
+
+PvpveDungeonRun* PvpveDungeonMgr::GetRunForTeam(uint64 teamId)
+{
+    for (auto& runPair : _runs)
+    {
+        auto teamItr = std::find(runPair.second.Teams.begin(), runPair.second.Teams.end(), teamId);
+        if (teamItr != runPair.second.Teams.end())
+            return &runPair.second;
+    }
+
+    return nullptr;
 }
 
 uint8 PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run)
@@ -658,25 +675,56 @@ void PvpveDungeonMgr::EvaluateRunState(PvpveDungeonRun& run)
     for (uint64 teamId : run.Teams)
     {
         PvpveTeam* team = GetTeam(teamId);
-        if (!team)
+        if (!team || team->Eliminated)
             continue;
 
         if (!TeamHasActiveMembers(*team, dungeonTemplate))
-        {
-            if (!team->Eliminated)
-            {
-                team->Eliminated = true;
-                TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (no active members).", team->Id, run.Id);
-            }
-
             continue;
-        }
 
-        if (!team->Eliminated)
-            ++activeTeams;
+        ++activeTeams;
     }
 
     // Runs now finish when the instance boss is defeated; elimination merely tracks team status.
+}
+
+void PvpveDungeonMgr::OnPlayerDeath(Player* player)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+    auto runItr = _playerToRun.find(guid);
+    if (runItr == _playerToRun.end())
+        return;
+
+    PvpveDungeonRun* run = GetRun(runItr->second);
+    if (!run)
+        return;
+
+    auto teamItr = _playerToTeam.find(guid);
+    if (teamItr == _playerToTeam.end())
+        return;
+
+    PvpveTeam* team = GetTeam(teamItr->second);
+    if (!team || team->Eliminated)
+        return;
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId);
+    if (!dungeonTemplate)
+        return;
+
+    if (TeamHasActiveMembers(*team, dungeonTemplate))
+    {
+        _teamEliminationDeadlines.erase(team->Id);
+        return;
+    }
+
+    if (_teamEliminationDeadlines.find(team->Id) != _teamEliminationDeadlines.end())
+        return;
+
+    time_t const deadline = std::time(nullptr) + 10;
+    _teamEliminationDeadlines[team->Id] = deadline;
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} has no living members in run {}; elimination in 10 seconds unless they recover.", team->Id, run->Id);
 }
 
 void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
@@ -710,6 +758,7 @@ void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
         return;
 
     team->Eliminated = true;
+    _teamEliminationDeadlines.erase(team->Id);
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (triggered by player {}).", team->Id, run->Id, guid.ToString());
 
     EvaluateRunState(*run);
@@ -722,6 +771,15 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
 
     if (!IsPlayerInPvpveRun(player))
         return;
+
+    WorldLocation savedLocation;
+    bool hasSavedLocation = false;
+    if (WorldLocation const* storedLocation = GetReturnLocation(player->GetGUID()))
+    {
+        savedLocation = *storedLocation;
+        hasSavedLocation = true;
+        ClearReturnLocation(player->GetGUID());
+    }
 
     ClearPvpveFfaState(player);
     player->SetInstanceValidityOverride(false);
@@ -757,6 +815,117 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
         _playerRunLockouts[guid] = run->Id;
 
     EvaluateRunState(*run);
+
+    if (hasSavedLocation && player->IsInWorld())
+    {
+        player->TeleportTo(savedLocation.GetMapId(),
+            savedLocation.GetPositionX(), savedLocation.GetPositionY(), savedLocation.GetPositionZ(), savedLocation.GetOrientation());
+    }
+}
+
+WorldLocation const* PvpveDungeonMgr::GetReturnLocation(ObjectGuid const& guid) const
+{
+    auto itr = _playerReturnLocations.find(guid);
+    if (itr == _playerReturnLocations.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+void PvpveDungeonMgr::StoreReturnLocation(Player* player)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+    if (!guid)
+        return;
+
+    if (_playerReturnLocations.find(guid) != _playerReturnLocations.end())
+        return;
+
+    _playerReturnLocations.emplace(guid, player->GetWorldLocation());
+}
+
+void PvpveDungeonMgr::ClearReturnLocation(ObjectGuid const& guid)
+{
+    if (!guid)
+        return;
+
+    _playerReturnLocations.erase(guid);
+}
+
+void PvpveDungeonMgr::ProcessTeamEliminationTimers(time_t now)
+{
+    if (_teamEliminationDeadlines.empty())
+        return;
+
+    for (auto itr = _teamEliminationDeadlines.begin(); itr != _teamEliminationDeadlines.end();)
+    {
+        uint64 const teamId = itr->first;
+        PvpveTeam* team = GetTeam(teamId);
+        if (!team || team->Eliminated)
+        {
+            itr = _teamEliminationDeadlines.erase(itr);
+            continue;
+        }
+
+        PvpveDungeonRun* run = GetRunForTeam(teamId);
+        if (!run || run->Finished)
+        {
+            itr = _teamEliminationDeadlines.erase(itr);
+            continue;
+        }
+
+        DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId);
+        if (!dungeonTemplate)
+        {
+            itr = _teamEliminationDeadlines.erase(itr);
+            continue;
+        }
+
+        if (TeamHasActiveMembers(*team, dungeonTemplate))
+        {
+            TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: team {} regained a living member before the elimination timer expired.", teamId);
+            itr = _teamEliminationDeadlines.erase(itr);
+            continue;
+        }
+
+        if (now < itr->second)
+        {
+            ++itr;
+            continue;
+        }
+
+        TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated from run {} after remaining dead for 10 seconds.", teamId, run->Id);
+        ForceEliminateTeam(*team, *run);
+        itr = _teamEliminationDeadlines.erase(itr);
+    }
+}
+
+void PvpveDungeonMgr::ForceEliminateTeam(PvpveTeam& team, PvpveDungeonRun& /*run*/)
+{
+    for (ObjectGuid const& memberGuid : team.Members)
+    {
+        Player* member = ObjectAccessor::FindPlayer(memberGuid);
+        if (!member)
+            continue;
+
+        if (!IsPlayerInPvpveRun(member))
+            continue;
+
+        if (member->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        {
+            member->ResurrectPlayer(1.0f);
+            member->SpawnCorpseBones();
+        }
+        else if (!member->IsAlive())
+        {
+            member->ResurrectPlayer(1.0f);
+        }
+
+        OnPlayerLeftMap(member);
+    }
 }
 
 void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
@@ -1059,12 +1228,12 @@ private:
             return;
         }
 
-        bool const firstElimination = MarkPlayerEliminated(player);
-        if (firstElimination)
-            sPvpveDungeonMgr->OnPlayerEliminated(player);
+        sPvpveDungeonMgr->OnPlayerDeath(player);
 
-        ForceRelease(player);
-        ScheduleTeleportOut(player);
+        // Do not mark players eliminated on death; they may still receive a
+        // resurrection from teammates. Elimination is handled when they release
+        // (OnPlayerRepop), the team-wide dead timer expires, or they otherwise
+        // leave the dungeon.
     }
 
     bool MarkPlayerEliminated(Player* player)
@@ -1088,6 +1257,18 @@ private:
     {
         if (!player)
             return kAllianceTeleportDestination;
+
+        if (WorldLocation const* savedLocation = sPvpveDungeonMgr->GetReturnLocation(player->GetGUID()))
+        {
+            return TeleportDestination
+            {
+                savedLocation->GetMapId(),
+                savedLocation->GetPositionX(),
+                savedLocation->GetPositionY(),
+                savedLocation->GetPositionZ(),
+                savedLocation->GetOrientation()
+            };
+        }
 
         return player->GetTeamId() == TEAM_ALLIANCE ? kAllianceTeleportDestination : kHordeTeleportDestination;
     }
@@ -1115,8 +1296,16 @@ private:
                 return;
             }
 
-            if (!player->IsAlive() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            {
+                player->ResurrectPlayer(1.0f);
+                player->SpawnCorpseBones();
+            }
+            else if (!player->IsAlive())
+            {
                 player->RepopAtGraveyard();
+                return;
+            }
 
             TeleportDestination const destination = GetTeleportLocation(player);
             player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);

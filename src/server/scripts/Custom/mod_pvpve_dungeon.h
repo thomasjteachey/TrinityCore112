@@ -2,6 +2,7 @@
 #define MOD_PVPVE_DUNGEON_H
 
 #include "ObjectGuid.h"
+#include "Position.h"
 
 #include <cstdint>
 #include <ctime>
@@ -116,10 +117,12 @@ public:
     void OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid);
     bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
     bool IsPlayerInPvpveRun(Player const* player) const;
+    WorldLocation const* GetReturnLocation(ObjectGuid const& guid) const;
 
     PvpveDungeonRun* GetRun(uint64 runId);
     PvpveTeam* GetTeam(uint64 teamId);
     PvpveDungeonRun* GetRunForPlayer(ObjectGuid const& guid);
+    PvpveDungeonRun* GetRunForTeam(uint64 teamId);
 
     void Reset();
 
@@ -142,6 +145,10 @@ private:
     void LogQueueStats(time_t now) const;
     uint32 CountActiveRuns() const;
     void ClearRunLockouts(uint64 runId);
+    void StoreReturnLocation(Player* player);
+    void ClearReturnLocation(ObjectGuid const& guid);
+    void ProcessTeamEliminationTimers(time_t now);
+    void ForceEliminateTeam(PvpveTeam& team, PvpveDungeonRun& run);
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
@@ -150,6 +157,7 @@ private:
     using PlayerTeamMap = std::map<ObjectGuid, uint64>;
     using TemplateContainer = std::map<uint32, DungeonTemplate>;
     using SpawnContainer = std::map<uint32, std::vector<SpawnPoint>>;
+    using PlayerLocationMap = std::map<ObjectGuid, WorldLocation>;
 
     QueueContainer _queue;
     RunContainer _runs;
@@ -160,6 +168,8 @@ private:
     TemplateContainer _templates;
     SpawnContainer _spawns;
     GuidSet _queuedPlayers;
+    PlayerLocationMap _playerReturnLocations;
+    std::map<uint64, time_t> _teamEliminationDeadlines;
     uint64 _nextRunId = 1;
     uint64 _nextTeamId = 1;
     time_t _lastStatsLog = 0;
