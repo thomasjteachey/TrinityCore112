@@ -142,7 +142,7 @@ void PvpveDungeonMgr::LoadConfigFromDB()
             entry.Enabled = fields[2].GetBool();
             entry.MinLevel = fields[3].GetUInt8();
             entry.MaxLevel = fields[4].GetUInt8();
-            entry.MaxTeams = std::max<uint8>(1, fields[5].GetUInt8());
+            entry.MaxTeams = fields[5].GetUInt8();
             entry.MinPlayers = fields[6].GetUInt8();
             entry.MaxPlayers = fields[7].GetUInt8();
             entry.MaxRuntimeSecs = fields[8].GetUInt32();
@@ -180,7 +180,7 @@ void PvpveDungeonMgr::LoadConfigFromDB()
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: loaded spawn point data for {} templates.", _spawns.size());
 }
 
-bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids)
+bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids, uint64 preferredRunId)
 {
     if (memberGuids.empty())
     {
@@ -254,7 +254,7 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
     for (ObjectGuid const& guid : memberGuids)
         _playerToTeam[guid] = teamId;
 
-    if (!QueueTeam(teamId))
+    if (!QueueTeam(teamId, preferredRunId))
     {
         for (ObjectGuid const& guid : memberGuids)
             _playerToTeam.erase(guid);
@@ -266,7 +266,7 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
     return true;
 }
 
-bool PvpveDungeonMgr::QueueTeam(uint64 teamId)
+bool PvpveDungeonMgr::QueueTeam(uint64 teamId, uint64 preferredRunId)
 {
     auto teamItr = _teams.find(teamId);
     if (teamItr == _teams.end())
@@ -306,6 +306,7 @@ bool PvpveDungeonMgr::QueueTeam(uint64 teamId)
     queued.QueueTime = std::time(nullptr);
     queued.Members = teamItr->second.Members;
     queued.Ready = teamItr->second.Ready;
+    queued.PreferredRunId = preferredRunId;
 
     auto queueItr = _queue.find(teamId);
     if (queueItr != _queue.end())
@@ -371,18 +372,16 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 continue;
             }
 
-            PvpveDungeonRun* selectedRun = nullptr;
-            for (auto& runPair : _runs)
+            auto const runEligible = [&](PvpveDungeonRun& candidate)
             {
-                PvpveDungeonRun& candidate = runPair.second;
                 if (candidate.TemplateId != dungeonTemplate->Id)
-                    continue;
+                    return false;
 
                 if (candidate.Completed)
-                    continue;
+                    return false;
 
-                if (candidate.Teams.size() >= dungeonTemplate->MaxTeams)
-                    continue;
+                if (dungeonTemplate->MaxTeams && candidate.Teams.size() >= dungeonTemplate->MaxTeams)
+                    return false;
 
                 bool const memberHasLockout = std::any_of(queueItr->second.Members.begin(), queueItr->second.Members.end(),
                     [this, &candidate](ObjectGuid const& guid)
@@ -391,11 +390,28 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                     return lockoutItr != _playerRunLockouts.end() && lockoutItr->second == candidate.Id;
                 });
 
-                if (memberHasLockout)
-                    continue;
+                return !memberHasLockout;
+            };
 
-                selectedRun = &candidate;
-                break;
+            PvpveDungeonRun* selectedRun = nullptr;
+            if (queueItr->second.PreferredRunId)
+            {
+                auto runItr = _runs.find(queueItr->second.PreferredRunId);
+                if (runItr != _runs.end() && runEligible(runItr->second))
+                    selectedRun = &runItr->second;
+            }
+
+            if (!selectedRun)
+            {
+                for (auto& runPair : _runs)
+                {
+                    PvpveDungeonRun& candidate = runPair.second;
+                    if (!runEligible(candidate))
+                        continue;
+
+                    selectedRun = &candidate;
+                    break;
+                }
             }
 
             if (!selectedRun)

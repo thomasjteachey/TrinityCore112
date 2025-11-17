@@ -31,7 +31,8 @@
 namespace
 {
 constexpr uint32 ACTION_QUEUE = GOSSIP_ACTION_INFO_DEF + 1;
-constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 2;
+constexpr uint32 ACTION_INVADE = GOSSIP_ACTION_INFO_DEF + 2;
+constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 3;
 constexpr uint32 STOCKADES_TEMPLATE_ID = 1;
 
 void SendQueueError(Player* player, char const* text)
@@ -72,6 +73,7 @@ public:
 
             ClearGossipMenuFor(player);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Queue for Stockades PvPvE", GOSSIP_SENDER_MAIN, ACTION_QUEUE);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Invade a targeted player's Stockades run", GOSSIP_SENDER_MAIN, ACTION_INVADE);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -86,7 +88,10 @@ public:
             switch (action)
             {
                 case ACTION_QUEUE:
-                    HandleQueue(player);
+                    HandleQueue(player, 0);
+                    return true;
+                case ACTION_INVADE:
+                    HandleInvade(player);
                     return true;
                 case ACTION_CLOSE:
                     CloseGossipMenuFor(player);
@@ -99,7 +104,7 @@ public:
         }
 
     private:
-        void HandleQueue(Player* player)
+        void HandleQueue(Player* player, uint64 preferredRunId)
         {
             if (!player)
                 return;
@@ -109,6 +114,28 @@ public:
             {
                 SendQueueError(player, "The Stockades PvPvE queue is currently unavailable.");
                 return;
+            }
+
+            if (preferredRunId)
+            {
+                PvpveDungeonRun* preferredRun = PvpveDungeonMgr::instance()->GetRun(preferredRunId);
+                if (!preferredRun || preferredRun->TemplateId != STOCKADES_TEMPLATE_ID)
+                {
+                    SendQueueError(player, "That run is no longer available for invasion.");
+                    return;
+                }
+
+                if (preferredRun->Completed)
+                {
+                    SendQueueError(player, "That run has already finished.");
+                    return;
+                }
+
+                if (dungeonTemplate->MaxTeams && preferredRun->Teams.size() >= dungeonTemplate->MaxTeams)
+                {
+                    SendQueueError(player, "That run already has the maximum number of teams.");
+                    return;
+                }
             }
 
             Group* group = player->GetGroup();
@@ -177,18 +204,49 @@ public:
                 }
             }
 
-            if (!PvpveDungeonMgr::instance()->QueueTeam(STOCKADES_TEMPLATE_ID, memberGuids))
+            if (!PvpveDungeonMgr::instance()->QueueTeam(STOCKADES_TEMPLATE_ID, memberGuids, preferredRunId))
             {
                 SendQueueError(player, "Failed to join the queue. Please try again shortly.");
                 return;
             }
 
+            char const* successText = preferredRunId ? "You are preparing to invade an active Stockades PvPvE run!" :
+                "You have joined the Stockades PvPvE queue!";
+
             if (group)
-                BroadcastToGroup(group, "You have joined the Stockades PvPvE queue!");
+                BroadcastToGroup(group, successText);
             else if (WorldSession* session = player->GetSession())
-                session->SendNotification("You have joined the Stockades PvPvE queue!");
+                session->SendNotification("%s", successText);
 
             CloseGossipMenuFor(player);
+        }
+
+        void HandleInvade(Player* player)
+        {
+            if (!player)
+                return;
+
+            Player* target = player->GetSelectedPlayer();
+            if (!target)
+            {
+                SendQueueError(player, "You must target a player that is already inside the Stockades PvPvE instance.");
+                return;
+            }
+
+            if (target == player)
+            {
+                SendQueueError(player, "You cannot invade your own run.");
+                return;
+            }
+
+            PvpveDungeonRun* targetRun = PvpveDungeonMgr::instance()->GetRunForPlayer(target->GetGUID());
+            if (!targetRun || targetRun->TemplateId != STOCKADES_TEMPLATE_ID)
+            {
+                SendQueueError(player, "Your target is not inside an active Stockades PvPvE run.");
+                return;
+            }
+
+            HandleQueue(player, targetRun->Id);
         }
     };
 
