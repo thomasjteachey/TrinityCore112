@@ -808,6 +808,7 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     _playerToRun.erase(runItr);
 
     _playerToTeam.erase(guid);
+    ClearReturnLocation(guid);
 
     if (run->Finished)
         _playerRunLockouts.erase(guid);

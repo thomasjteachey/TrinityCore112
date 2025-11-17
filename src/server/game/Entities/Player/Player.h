@@ -2418,6 +2418,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         float _activeStarfireSnareSpeedRate;
         uint8 _activeStarfireSnareRefCount;
         bool _pendingStarfireSnareRemoval;
+        uint8 _starfireSnareRemovalGraceUpdates;
         bool _verifyStarfireSnareNextUpdate;
 
         uint32 m_enchantmentFlatMod[MAX_ATTACK]; // TODO: Stat system - incorporate generically, exposes a required hidden weapon stat that does not apply when unarmed
