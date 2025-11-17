@@ -17,6 +17,7 @@
 
 #include "mod_pvpve_dungeon.h"
 
+#include "Chat.h"
 #include "Duration.h"
 #include "DatabaseEnv.h"
 #include "InstanceSaveMgr.h"
@@ -96,6 +97,17 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
     // ejected for not being in the instance owner’s party.
     player->m_InstanceValid = true;
     player->SetInstanceValidityOverride(true);
+
+    if (WorldSession* session = player->GetSession())
+    {
+        uint32 instanceId = player->GetInstanceId();
+        if (!instanceId)
+            if (Map* map = player->GetMap())
+                instanceId = map->GetInstanceId();
+
+        if (instanceId)
+            ChatHandler(session).PSendSysMessage("PvPvE Stockades instance ID: %u", instanceId);
+    }
 }
 
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()
@@ -117,6 +129,7 @@ PvpveDungeonMgr::PvpveDungeonMgr()
     _templates.clear();
     _spawns.clear();
     _queuedPlayers.clear();
+    _playerReturnLocations.clear();
     _lastStatsLog = 0;
 }
 
@@ -142,7 +155,7 @@ void PvpveDungeonMgr::LoadConfigFromDB()
             entry.Enabled = fields[2].GetBool();
             entry.MinLevel = fields[3].GetUInt8();
             entry.MaxLevel = fields[4].GetUInt8();
-            entry.MaxTeams = std::max<uint8>(1, fields[5].GetUInt8());
+            entry.MaxTeams = fields[5].GetUInt8();
             entry.MinPlayers = fields[6].GetUInt8();
             entry.MaxPlayers = fields[7].GetUInt8();
             entry.MaxRuntimeSecs = fields[8].GetUInt32();
@@ -180,7 +193,7 @@ void PvpveDungeonMgr::LoadConfigFromDB()
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: loaded spawn point data for {} templates.", _spawns.size());
 }
 
-bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids)
+bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids, uint64 preferredRunId)
 {
     if (memberGuids.empty())
     {
@@ -254,7 +267,7 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
     for (ObjectGuid const& guid : memberGuids)
         _playerToTeam[guid] = teamId;
 
-    if (!QueueTeam(teamId))
+    if (!QueueTeam(teamId, preferredRunId))
     {
         for (ObjectGuid const& guid : memberGuids)
             _playerToTeam.erase(guid);
@@ -266,7 +279,7 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
     return true;
 }
 
-bool PvpveDungeonMgr::QueueTeam(uint64 teamId)
+bool PvpveDungeonMgr::QueueTeam(uint64 teamId, uint64 preferredRunId)
 {
     auto teamItr = _teams.find(teamId);
     if (teamItr == _teams.end())
@@ -306,6 +319,7 @@ bool PvpveDungeonMgr::QueueTeam(uint64 teamId)
     queued.QueueTime = std::time(nullptr);
     queued.Members = teamItr->second.Members;
     queued.Ready = teamItr->second.Ready;
+    queued.PreferredRunId = preferredRunId;
 
     auto queueItr = _queue.find(teamId);
     if (queueItr != _queue.end())
@@ -371,18 +385,16 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 continue;
             }
 
-            PvpveDungeonRun* selectedRun = nullptr;
-            for (auto& runPair : _runs)
+            auto const runEligible = [&](PvpveDungeonRun& candidate)
             {
-                PvpveDungeonRun& candidate = runPair.second;
                 if (candidate.TemplateId != dungeonTemplate->Id)
-                    continue;
+                    return false;
 
                 if (candidate.Completed)
-                    continue;
+                    return false;
 
-                if (candidate.Teams.size() >= dungeonTemplate->MaxTeams)
-                    continue;
+                if (dungeonTemplate->MaxTeams && candidate.Teams.size() >= dungeonTemplate->MaxTeams)
+                    return false;
 
                 bool const memberHasLockout = std::any_of(queueItr->second.Members.begin(), queueItr->second.Members.end(),
                     [this, &candidate](ObjectGuid const& guid)
@@ -391,11 +403,28 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                     return lockoutItr != _playerRunLockouts.end() && lockoutItr->second == candidate.Id;
                 });
 
-                if (memberHasLockout)
-                    continue;
+                return !memberHasLockout;
+            };
 
-                selectedRun = &candidate;
-                break;
+            PvpveDungeonRun* selectedRun = nullptr;
+            if (queueItr->second.PreferredRunId)
+            {
+                auto runItr = _runs.find(queueItr->second.PreferredRunId);
+                if (runItr != _runs.end() && runEligible(runItr->second))
+                    selectedRun = &runItr->second;
+            }
+
+            if (!selectedRun)
+            {
+                for (auto& runPair : _runs)
+                {
+                    PvpveDungeonRun& candidate = runPair.second;
+                    if (!runEligible(candidate))
+                        continue;
+
+                    selectedRun = &candidate;
+                    break;
+                }
             }
 
             if (!selectedRun)
@@ -493,6 +522,8 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
         player->SetInstanceValidityOverride(true);
         if (instanceSave)
             player->BindToInstance(instanceSave, false);
+
+        StoreReturnLocation(player);
 
         if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
@@ -722,6 +753,7 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     _playerToRun.erase(runItr);
 
     _playerToTeam.erase(guid);
+    ClearReturnLocation(guid);
 
     if (run->Finished)
         _playerRunLockouts.erase(guid);
@@ -729,6 +761,38 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
         _playerRunLockouts[guid] = run->Id;
 
     EvaluateRunState(*run);
+}
+
+WorldLocation const* PvpveDungeonMgr::GetReturnLocation(ObjectGuid const& guid) const
+{
+    auto itr = _playerReturnLocations.find(guid);
+    if (itr == _playerReturnLocations.end())
+        return nullptr;
+
+    return &itr->second;
+}
+
+void PvpveDungeonMgr::StoreReturnLocation(Player* player)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+    if (!guid)
+        return;
+
+    if (_playerReturnLocations.find(guid) != _playerReturnLocations.end())
+        return;
+
+    _playerReturnLocations.emplace(guid, player->GetWorldLocation());
+}
+
+void PvpveDungeonMgr::ClearReturnLocation(ObjectGuid const& guid)
+{
+    if (!guid)
+        return;
+
+    _playerReturnLocations.erase(guid);
 }
 
 void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
@@ -1060,6 +1124,18 @@ private:
     {
         if (!player)
             return kAllianceTeleportDestination;
+
+        if (WorldLocation const* savedLocation = sPvpveDungeonMgr->GetReturnLocation(player->GetGUID()))
+        {
+            return TeleportDestination
+            {
+                savedLocation->GetMapId(),
+                savedLocation->GetPositionX(),
+                savedLocation->GetPositionY(),
+                savedLocation->GetPositionZ(),
+                savedLocation->GetOrientation()
+            };
+        }
 
         return player->GetTeamId() == TEAM_ALLIANCE ? kAllianceTeleportDestination : kHordeTeleportDestination;
     }
