@@ -122,6 +122,7 @@ public:
     PvpveDungeonRun* GetRun(uint64 runId);
     PvpveTeam* GetTeam(uint64 teamId);
     PvpveDungeonRun* GetRunForPlayer(ObjectGuid const& guid);
+    PvpveDungeonRun* GetRunForTeam(uint64 teamId);
 
     void Reset();
 
@@ -146,6 +147,8 @@ private:
     void ClearRunLockouts(uint64 runId);
     void StoreReturnLocation(Player* player);
     void ClearReturnLocation(ObjectGuid const& guid);
+    void ProcessTeamEliminationTimers(time_t now);
+    void ForceEliminateTeam(PvpveTeam& team, PvpveDungeonRun& run);
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
@@ -166,6 +169,7 @@ private:
     SpawnContainer _spawns;
     GuidSet _queuedPlayers;
     PlayerLocationMap _playerReturnLocations;
+    std::map<uint64, time_t> _teamEliminationDeadlines;
     uint64 _nextRunId = 1;
     uint64 _nextTeamId = 1;
     time_t _lastStatsLog = 0;
