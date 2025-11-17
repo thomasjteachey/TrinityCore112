@@ -17,6 +17,7 @@
 
 #include "mod_pvpve_dungeon.h"
 
+#include "Chat.h"
 #include "Duration.h"
 #include "DatabaseEnv.h"
 #include "InstanceSaveMgr.h"
@@ -96,6 +97,17 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
     // ejected for not being in the instance owner’s party.
     player->m_InstanceValid = true;
     player->SetInstanceValidityOverride(true);
+
+    if (WorldSession* session = player->GetSession())
+    {
+        uint32 instanceId = player->GetInstanceId();
+        if (!instanceId)
+            if (Map* map = player->GetMap())
+                instanceId = map->GetInstanceId();
+
+        if (instanceId)
+            ChatHandler(session).PSendSysMessage("PvPvE Stockades instance ID: %u", instanceId);
+    }
 }
 
 PvpveDungeonMgr* PvpveDungeonMgr::Instance()

@@ -18,6 +18,8 @@
 #include "Group.h"
 #include "GroupReference.h"
 #include "Map.h"
+#include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
@@ -73,7 +75,8 @@ public:
 
             ClearGossipMenuFor(player);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Queue for Stockades PvPvE", GOSSIP_SENDER_MAIN, ACTION_QUEUE);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Invade a targeted player's Stockades run", GOSSIP_SENDER_MAIN, ACTION_INVADE);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Invade someone's Stockades run", GOSSIP_SENDER_MAIN, ACTION_INVADE,
+                "Enter the name of a player who is already inside the Stockades PvPvE instance:", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -91,10 +94,28 @@ public:
                     HandleQueue(player, 0);
                     return true;
                 case ACTION_INVADE:
-                    HandleInvade(player);
+                    SendQueueError(player, "You must enter a player name to invade their run.");
                     return true;
                 case ACTION_CLOSE:
                     CloseGossipMenuFor(player);
+                    return true;
+                default:
+                    break;
+            }
+
+            return false;
+        }
+
+        bool OnGossipSelectCode(Player* player, uint32 /*menuId*/, uint32 gossipListId, char const* code) override
+        {
+            if (!player)
+                return false;
+
+            uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+            switch (action)
+            {
+                case ACTION_INVADE:
+                    HandleInvade(player, code ? code : "");
                     return true;
                 default:
                     break;
@@ -221,15 +242,31 @@ public:
             CloseGossipMenuFor(player);
         }
 
-        void HandleInvade(Player* player)
+        void HandleInvade(Player* player, std::string targetName)
         {
             if (!player)
                 return;
 
-            Player* target = player->GetSelectedPlayer();
+            auto firstNonSpace = targetName.find_first_not_of(" \t\r\n");
+            if (firstNonSpace == std::string::npos)
+            {
+                SendQueueError(player, "You must enter a player name to invade their run.");
+                return;
+            }
+
+            auto lastNonSpace = targetName.find_last_not_of(" \t\r\n");
+            targetName = targetName.substr(firstNonSpace, lastNonSpace - firstNonSpace + 1);
+
+            if (!normalizePlayerName(targetName))
+            {
+                SendQueueError(player, "That is not a valid player name.");
+                return;
+            }
+
+            Player* target = ObjectAccessor::FindPlayerByName(targetName);
             if (!target)
             {
-                SendQueueError(player, "You must target a player that is already inside the Stockades PvPvE instance.");
+                SendQueueError(player, "That player is not currently online.");
                 return;
             }
 
