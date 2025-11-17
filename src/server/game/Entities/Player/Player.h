@@ -1525,6 +1525,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool AddStarfireSnareRef(float speedRate);
         void RemoveStarfireSnareRef();
         void HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType);
+        void UpdateStarfireSnare();
+
+        bool HasActiveStarfireSnare() const;
 
         void SetResurrectRequestData(WorldObject const* caster, uint32 health, uint32 mana, uint32 appliedAura);
 
@@ -2413,6 +2416,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_lastPotionId;                              // last used health/mana potion in combat, that block next potion use
         float _activeStarfireSnareSpeedRate;
         uint8 _activeStarfireSnareRefCount;
+        bool _pendingStarfireSnareRemoval;
 
         uint32 m_enchantmentFlatMod[MAX_ATTACK]; // TODO: Stat system - incorporate generically, exposes a required hidden weapon stat that does not apply when unarmed
 

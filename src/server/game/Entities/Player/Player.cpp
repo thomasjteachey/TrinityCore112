@@ -361,6 +361,7 @@ Player::Player(WorldSession* session) : Unit(true)
     m_lastPotionId = 0;
     _activeStarfireSnareSpeedRate = 0.0f;
     _activeStarfireSnareRefCount = 0;
+    _pendingStarfireSnareRemoval = false;
 
     m_activeSpec = 0;
     m_specsCount = 1;
@@ -1093,6 +1094,8 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
+
+    UpdateStarfireSnare();
 
     time_t now = GameTime::GetGameTime();
 
@@ -22441,6 +22444,8 @@ bool Player::AddStarfireSnareRef(float speedRate)
     if (clampedRate <= 0.0f)
         return false;
 
+    _pendingStarfireSnareRemoval = false;
+
     if (!_activeStarfireSnareRefCount || clampedRate < _activeStarfireSnareSpeedRate)
         _activeStarfireSnareSpeedRate = clampedRate;
 
@@ -22457,10 +22462,7 @@ void Player::RemoveStarfireSnareRef()
     --_activeStarfireSnareRefCount;
     if (!_activeStarfireSnareRefCount)
     {
-        _activeStarfireSnareSpeedRate = 0.0f;
-        for (UnitMoveType moveType : StarfireSnareMoveTypes)
-            UpdateSpeed(moveType);
-
+        _pendingStarfireSnareRemoval = true;
         return;
     }
 
@@ -22469,7 +22471,7 @@ void Player::RemoveStarfireSnareRef()
 
 void Player::HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType)
 {
-    if (!_activeStarfireSnareRefCount)
+    if (!HasActiveStarfireSnare())
         return;
 
     for (UnitMoveType snareMoveType : StarfireSnareMoveTypes)
@@ -22484,7 +22486,7 @@ void Player::HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType)
 
 void Player::ApplyActiveStarfireSnare()
 {
-    if (!_activeStarfireSnareRefCount)
+    if (!HasActiveStarfireSnare())
         return;
 
     for (UnitMoveType moveType : StarfireSnareMoveTypes)
@@ -22493,7 +22495,7 @@ void Player::ApplyActiveStarfireSnare()
 
 void Player::ApplyActiveStarfireSnare(UnitMoveType moveType)
 {
-    if (!_activeStarfireSnareRefCount)
+    if (!HasActiveStarfireSnare())
         return;
 
     float const desiredRate = std::clamp(_activeStarfireSnareSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
@@ -22502,6 +22504,27 @@ void Player::ApplyActiveStarfireSnare(UnitMoveType moveType)
 
     if (GetSpeedRate(moveType) > desiredRate)
         SetSpeedRate(moveType, desiredRate);
+}
+
+void Player::UpdateStarfireSnare()
+{
+    if (!_pendingStarfireSnareRemoval || _activeStarfireSnareRefCount)
+        return;
+
+    if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
+        if (spell->GetSpellInfo()->IsStarfire())
+            return;
+
+    _pendingStarfireSnareRemoval = false;
+    _activeStarfireSnareSpeedRate = 0.0f;
+
+    for (UnitMoveType moveType : StarfireSnareMoveTypes)
+        UpdateSpeed(moveType);
+}
+
+bool Player::HasActiveStarfireSnare() const
+{
+    return _activeStarfireSnareRefCount > 0 || _pendingStarfireSnareRemoval;
 }
 
 void Player::SetResurrectRequestData(WorldObject const* caster, uint32 health, uint32 mana, uint32 appliedAura)
