@@ -32,6 +32,12 @@ namespace
 {
     uint32 constexpr ChromieEntry = 27915;
     char const* const ChromieName = "Chromie";
+    uint32 constexpr StormwindCityZoneId = 1519;
+    uint32 constexpr GurubashiArenaFallbackMap = 0;
+    float constexpr GurubashiArenaFallbackX = -13204.609f;
+    float constexpr GurubashiArenaFallbackY = 272.2056f;
+    float constexpr GurubashiArenaFallbackZ = 21.858f;
+    float constexpr GurubashiArenaFallbackO = 1.022f;
 
     struct ZoneAreaKey
     {
@@ -167,7 +173,22 @@ static void EnforceZoneRuleForPlayer(Player* player)
     {
         if (!player->IsBeingTeleported())
         {
-            player->TeleportTo(rule.tpMap, rule.tpX, rule.tpY, rule.tpZ, rule.tpO);
+            uint32 teleportMap = rule.tpMap;
+            float teleportX = rule.tpX;
+            float teleportY = rule.tpY;
+            float teleportZ = rule.tpZ;
+            float teleportO = rule.tpO;
+
+            if (teleportMap == 0 && teleportX == 0.0f && teleportY == 0.0f && teleportZ == 0.0f && teleportO == 0.0f && rule.zoneId == StormwindCityZoneId)
+            {
+                teleportMap = GurubashiArenaFallbackMap;
+                teleportX = GurubashiArenaFallbackX;
+                teleportY = GurubashiArenaFallbackY;
+                teleportZ = GurubashiArenaFallbackZ;
+                teleportO = GurubashiArenaFallbackO;
+            }
+
+            player->TeleportTo(teleportMap, teleportX, teleportY, teleportZ, teleportO);
 
             std::string requirementText;
             if (rule.minMembers == rule.maxMembers)
