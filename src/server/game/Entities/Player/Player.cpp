@@ -113,6 +113,7 @@ namespace
 {
     constexpr float MinStarfireSnareSpeedRate = 0.01f;
     constexpr float MaxStarfireSnareSpeedRate = 1.0f;
+    constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
 }
 #include "ArenaSpectator.h"
@@ -362,6 +363,7 @@ Player::Player(WorldSession* session) : Unit(true)
     _activeStarfireSnareSpeedRate = 0.0f;
     _activeStarfireSnareRefCount = 0;
     _pendingStarfireSnareRemoval = false;
+    _starfireSnareRemovalGraceUpdates = 0;
     _verifyStarfireSnareNextUpdate = false;
 
     m_activeSpec = 0;
@@ -22447,6 +22449,7 @@ bool Player::AddStarfireSnareRef(float speedRate)
         return false;
 
     _pendingStarfireSnareRemoval = false;
+    _starfireSnareRemovalGraceUpdates = 0;
 
     if (!_activeStarfireSnareRefCount || clampedRate < _activeStarfireSnareSpeedRate)
         _activeStarfireSnareSpeedRate = clampedRate;
@@ -22466,6 +22469,7 @@ void Player::RemoveStarfireSnareRef()
     if (!_activeStarfireSnareRefCount)
     {
         _pendingStarfireSnareRemoval = true;
+        _starfireSnareRemovalGraceUpdates = StarfireSnareRemovalGraceUpdates;
         return;
     }
 
@@ -22514,11 +22518,18 @@ void Player::UpdateStarfireSnare()
     if (!_pendingStarfireSnareRemoval || _activeStarfireSnareRefCount)
         return;
 
+    if (_starfireSnareRemovalGraceUpdates)
+    {
+        --_starfireSnareRemovalGraceUpdates;
+        return;
+    }
+
     if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
         if (spell->GetSpellInfo()->IsStarfire())
             return;
 
     _pendingStarfireSnareRemoval = false;
+    _starfireSnareRemovalGraceUpdates = 0;
     _activeStarfireSnareSpeedRate = 0.0f;
 
     for (UnitMoveType moveType : StarfireSnareMoveTypes)
