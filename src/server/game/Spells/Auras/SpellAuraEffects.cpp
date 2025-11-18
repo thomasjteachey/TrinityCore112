@@ -2246,14 +2246,11 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         for (auto& pair : target->GetThreatManager().GetThreatenedByMeList())
           pair.second->ScaleThreat(0.0f);
 
-        if (target->GetMap()->IsDungeon()) // feign death does not remove combat in dungeons
-        {
-            target->AttackStop();
-            if (Player* targetPlayer = target->ToPlayer())
-                targetPlayer->SendAttackSwingCancelAttack();
-        }
-        else
-            target->CombatStop(false, false);
+        target->AttackStop();
+        if (Player* targetPlayer = target->ToPlayer())
+            targetPlayer->SendAttackSwingCancelAttack();
+
+        target->CombatStop(false, false);
 
         target->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
 
