@@ -247,6 +247,16 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} is already assigned to a PvPvE team.", guid.ToString());
             return false;
         }
+
+        if (preferredRunId)
+        {
+            auto lockoutItr = _playerRunLockouts.find(guid);
+            if (lockoutItr != _playerRunLockouts.end() && lockoutItr->second == preferredRunId)
+            {
+                TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} was eliminated from run {} and cannot rejoin it.", guid.ToString(), preferredRunId);
+                return false;
+            }
+        }
     }
 
     PvpveTeam team;
@@ -286,6 +296,23 @@ bool PvpveDungeonMgr::QueueTeam(uint64 teamId, uint64 preferredRunId)
     {
         TC_LOG_ERROR("server.custom", "PvpveDungeonMgr: unable to queue unknown team {}.", teamId);
         return false;
+    }
+
+    if (preferredRunId)
+    {
+        for (ObjectGuid const& guid : teamItr->second.Members)
+        {
+            if (!guid)
+                continue;
+
+            auto lockoutItr = _playerRunLockouts.find(guid);
+            if (lockoutItr != _playerRunLockouts.end() && lockoutItr->second == preferredRunId)
+            {
+                TC_LOG_WARN("server.custom", "PvpveDungeonMgr: cannot queue team {} for run {}; player {} has already been eliminated from it.",
+                    teamId, preferredRunId, guid.ToString());
+                return false;
+            }
+        }
     }
 
     DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(teamItr->second.TemplateId);
@@ -684,7 +711,11 @@ void PvpveDungeonMgr::EvaluateRunState(PvpveDungeonRun& run)
         ++activeTeams;
     }
 
-    // Runs now finish when the instance boss is defeated; elimination merely tracks team status.
+    if (activeTeams)
+        return;
+
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: ending run {} because all teams have been eliminated.", run.Id);
+    FinishRun(run, 0);
 }
 
 void PvpveDungeonMgr::OnPlayerDeath(Player* player)
