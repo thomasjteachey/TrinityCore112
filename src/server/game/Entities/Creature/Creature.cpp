@@ -2709,7 +2709,7 @@ void Creature::Respawn(bool force)
 
             uint32 poolid = GetSpawnId() ? sPoolMgr->IsPartOfAPool<Creature>(GetSpawnId()) : 0;
             if (poolid)
-                sPoolMgr->UpdatePool<Creature>(poolid, GetSpawnId());
+                sPoolMgr->UpdatePool<Creature>(poolid, GetSpawnId(), GetMap());
         }
         UpdateObjectVisibility();
     }
