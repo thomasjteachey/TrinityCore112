@@ -117,6 +117,7 @@ public:
     void OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid);
     bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
     bool IsPlayerInPvpveRun(Player const* player) const;
+    bool IsPvpveDungeonMap(uint32 mapId) const;
     WorldLocation const* GetReturnLocation(ObjectGuid const& guid) const;
 
     PvpveDungeonRun* GetRun(uint64 runId);
@@ -149,6 +150,7 @@ private:
     void ClearReturnLocation(ObjectGuid const& guid);
     void ProcessTeamEliminationTimers(time_t now);
     void ForceEliminateTeam(PvpveTeam& team, PvpveDungeonRun& run);
+    void MaintainActivePlayerPvpState();
 
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;

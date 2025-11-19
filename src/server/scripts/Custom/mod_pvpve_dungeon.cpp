@@ -26,9 +26,11 @@
 #include "MapInstanced.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
+#include "Pet.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "WorldSession.h"
 
 #include <algorithm>
 #include <ctime>
@@ -45,6 +47,35 @@ char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, Posit
 
 constexpr uint32 kPvpveFfaAuraSpellId = 0;
 constexpr UnitPVPStateFlags kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
+
+void SnapPetToLocation(Player* player, uint32 mapId, float x, float y, float z, float orientation)
+{
+    if (!player)
+        return;
+
+    Pet* pet = player->GetPet();
+    if (!pet)
+        return;
+
+    ObjectGuid const ownerGuid = player->GetGUID();
+    ObjectGuid const petGuid = pet->GetGUID();
+
+    player->m_Events.AddEventAtOffset([ownerGuid, petGuid, mapId, x, y, z, orientation]()
+    {
+        Player* owner = ObjectAccessor::FindPlayer(ownerGuid);
+        if (!owner)
+            return;
+
+        Pet* ownedPet = owner->GetPet();
+        if (!ownedPet || ownedPet->GetGUID() != petGuid)
+            return;
+
+        if (ownedPet->GetMapId() != mapId)
+            return;
+
+        ownedPet->NearTeleportTo(x, y, z, orientation);
+    }, 250ms);
+}
 }
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
@@ -73,6 +104,24 @@ bool PvpveDungeonMgr::IsPlayerInPvpveRun(ObjectGuid const& guid) const
 bool PvpveDungeonMgr::IsPlayerInPvpveRun(Player const* player) const
 {
     return player && IsPlayerInPvpveRun(player->GetGUID());
+}
+
+bool PvpveDungeonMgr::IsPvpveDungeonMap(uint32 mapId) const
+{
+    if (!mapId)
+        return false;
+
+    for (auto const& templatePair : _templates)
+    {
+        DungeonTemplate const& dungeonTemplate = templatePair.second;
+        if (!dungeonTemplate.Enabled)
+            continue;
+
+        if (dungeonTemplate.MapId == mapId)
+            return true;
+    }
+
+    return false;
 }
 
 void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript)
@@ -484,6 +533,7 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
     }
 
     ProcessTeamEliminationTimers(now);
+    MaintainActivePlayerPvpState();
 }
 
 void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued)
@@ -556,6 +606,8 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
 
         if (!player->TeleportTo(dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O))
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: teleport failed for player {} joining run {}.", memberGuid.ToString(), run.Id);
+        else
+            SnapPetToLocation(player, dungeonTemplate->MapId, spawnItr->X, spawnItr->Y, spawnItr->Z, spawnItr->O);
 
         if (std::find(run.Players.begin(), run.Players.end(), memberGuid) == run.Players.end())
             run.Players.push_back(memberGuid);
@@ -935,6 +987,31 @@ void PvpveDungeonMgr::ProcessTeamEliminationTimers(time_t now)
     }
 }
 
+void PvpveDungeonMgr::MaintainActivePlayerPvpState()
+{
+    if (_playerToRun.empty())
+        return;
+
+    for (auto const& entry : _playerToRun)
+    {
+        Player* player = ObjectAccessor::FindPlayer(entry.first);
+        if (!player)
+            continue;
+
+        if (player->IsGameMaster())
+            continue;
+
+        bool hasFfaState = false;
+        if (kPvpveFfaAuraSpellId)
+            hasFfaState = player->HasAura(kPvpveFfaAuraSpellId);
+        else
+            hasFfaState = player->HasPvpFlag(kPvpveFfaPvpFlag);
+
+        if (!player->pvpInfo.IsInFFAPvPArea || !hasFfaState)
+            ApplyPvpveFfaState(player);
+    }
+}
+
 void PvpveDungeonMgr::ForceEliminateTeam(PvpveTeam& team, PvpveDungeonRun& /*run*/)
 {
     for (ObjectGuid const& memberGuid : team.Members)
@@ -1233,6 +1310,46 @@ public:
             ApplyPvpveFfaState(player);
     }
 
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+        if (!guid)
+            return;
+
+        if (sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+        {
+            ApplyPvpveFfaState(player);
+            return;
+        }
+
+        if (!sPvpveDungeonMgr->IsPvpveDungeonMap(player->GetMapId()))
+            return;
+
+        player->m_Events.AddEventAtOffset([this, guid]()
+        {
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            if (!player)
+                return;
+
+            if (sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+                return;
+
+            if (!sPvpveDungeonMgr->IsPvpveDungeonMap(player->GetMapId()))
+                return;
+
+            ClearPvpveFfaState(player);
+
+            if (WorldSession* session = player->GetSession())
+                session->SendNotification("The PvPvE Stockades run ended while you were offline. You have been eliminated.");
+
+            TeleportOutImmediately(player);
+            ClearPendingState(guid);
+        }, 1s);
+    }
+
     void OnLogout(Player* player) override
     {
         if (!player)
@@ -1340,7 +1457,8 @@ private:
             }
 
             TeleportDestination const destination = GetTeleportLocation(player);
-            player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
+            if (player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O))
+                SnapPetToLocation(player, destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
         }, 1s);
     }
 
@@ -1352,7 +1470,8 @@ private:
         ForceRelease(player);
 
         TeleportDestination const destination = GetTeleportLocation(player);
-        player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
+        if (player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O))
+            SnapPetToLocation(player, destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
     }
 
     void ClearPendingState(ObjectGuid const& guid)
