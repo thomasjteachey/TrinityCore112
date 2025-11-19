@@ -4379,6 +4379,23 @@ Metric.OverallStatusInterval = 1
 
 #
 ###################################################################################################
+# PVPVE DUNGEON SETTINGS
+#
+#    PvPvEDungeon.Stockades.Enable
+#        Description: Enables enforcement that unsafe disconnects inside The Stockades PvPvE dungeon
+#                     result in elimination and teleporting the player outside.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    PvPvEDungeon.Stockades.EliminationMessage
+#        Description: Message shown to players who are eliminated because the server ended while
+#                     they were still inside The Stockades PvPvE dungeon.
+#        Default:     "The Stockades PvPvE dungeon ended while you were offline; you have been eliminated."
+#
+PvPvEDungeon.Stockades.Enable = 0
+PvPvEDungeon.Stockades.EliminationMessage = "The Stockades PvPvE dungeon ended while you were offline; you have been eliminated."
+
+###################################################################################################
 
 ###################################################################################################
 # PVP SETTINGS
