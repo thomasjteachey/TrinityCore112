@@ -17,6 +17,7 @@
 
 #include "custom_loot_chest_helper.h"
 
+#include "Bag.h"
 #include "Item.h"
 #include "Log.h"
 #include "ObjectGuid.h"
