@@ -36,7 +36,7 @@
 #include "SharedDefines.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
-#include "custom_loot_chest_helper.h"
+#include "../../Custom/custom_loot_chest_helper.h"
 
 #include "../../Custom/mod_pvpve_dungeon.h"
 
