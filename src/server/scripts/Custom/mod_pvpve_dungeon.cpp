@@ -472,6 +472,23 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 if (dungeonTemplate->MaxTeams && candidate.Teams.size() >= dungeonTemplate->MaxTeams)
                     return false;
 
+                std::vector<SpawnPoint> const* candidateSpawns = GetSpawnPoints(candidate.TemplateId);
+                if (!candidateSpawns || candidateSpawns->empty())
+                    return false;
+
+                std::set<uint8> usedIndices = candidate.UsedSpawnIndices;
+                if (usedIndices.empty())
+                {
+                    for (uint64 teamId : candidate.Teams)
+                    {
+                        if (PvpveTeam* team = GetTeam(teamId))
+                            usedIndices.insert(team->SpawnIndex);
+                    }
+                }
+
+                if (usedIndices.size() >= candidateSpawns->size())
+                    return false;
+
                 bool const memberHasLockout = std::any_of(queueItr->second.Members.begin(), queueItr->second.Members.end(),
                     [this, &candidate](ObjectGuid const& guid)
                 {
@@ -569,7 +586,13 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
             TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} is tracking instance {} but no InstanceSave exists yet.", run.Id, runInstanceId);
     }
 
-    uint8 spawnIndex = PickSpawnIndex(run);
+    uint8 spawnIndex = 0;
+    if (!PickSpawnIndex(run, spawnIndex))
+    {
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} has exhausted its spawn points; queueing team {} elsewhere.", run.Id, queued.TeamId);
+        return;
+    }
+
     auto spawnItr = std::find_if(spawnList->begin(), spawnList->end(), [spawnIndex](SpawnPoint const& spawn)
     {
         return spawn.Index == spawnIndex;
@@ -588,6 +611,8 @@ void PvpveDungeonMgr::AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& qu
     team.SpawnIndex = spawnIndex;
     team.CreatedTime = std::time(nullptr);
     team.Ready = queued.Ready;
+
+    run.UsedSpawnIndices.insert(spawnIndex);
 
     for (ObjectGuid const& memberGuid : team.Members)
     {
@@ -667,30 +692,55 @@ PvpveDungeonRun* PvpveDungeonMgr::GetRunForTeam(uint64 teamId)
     return nullptr;
 }
 
-uint8 PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run)
+bool PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run, uint8& outIndex)
 {
     auto spawnList = GetSpawnPoints(run.TemplateId);
     if (!spawnList || spawnList->empty())
-        return 0;
+        return false;
 
-    std::set<uint8> usedIndices;
-    for (uint64 teamId : run.Teams)
+    std::set<uint8> usedIndices = run.UsedSpawnIndices;
+    if (usedIndices.empty())
     {
-        if (PvpveTeam* team = GetTeam(teamId))
-            usedIndices.insert(team->SpawnIndex);
+        for (uint64 teamId : run.Teams)
+        {
+            if (PvpveTeam* team = GetTeam(teamId))
+                usedIndices.insert(team->SpawnIndex);
+        }
     }
 
+    std::vector<uint8> available;
+    available.reserve(spawnList->size());
     for (SpawnPoint const& spawn : *spawnList)
     {
         if (!usedIndices.count(spawn.Index))
-            return spawn.Index;
+            available.push_back(spawn.Index);
     }
 
-    uint32 randomIdx = urand(0, spawnList->size() - 1);
-    uint8 fallback = (*spawnList)[randomIdx].Index;
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: reusing spawn index {} for template {} due to exhausted slots.",
-        uint32(fallback), run.TemplateId);
-    return fallback;
+    if (available.empty())
+        return false;
+
+    outIndex = available[urand(0, available.size() - 1)];
+    return true;
+}
+
+void PvpveDungeonMgr::HandleServerShutdown()
+{
+    if (_playerToRun.empty())
+        return;
+
+    std::vector<ObjectGuid> participants;
+    participants.reserve(_playerToRun.size());
+    for (auto const& entry : _playerToRun)
+        participants.push_back(entry.first);
+
+    for (ObjectGuid const& guid : participants)
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player)
+            continue;
+
+        OnPlayerLeftMap(player);
+    }
 }
 
 void PvpveDungeonMgr::OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId)
@@ -1498,6 +1548,11 @@ struct PvpveDungeonWorldScript : WorldScript
     void OnUpdate(uint32 diff) override
     {
         PvpveDungeonMgr::instance()->Update(diff);
+    }
+
+    void OnShutdown() override
+    {
+        PvpveDungeonMgr::instance()->HandleServerShutdown();
     }
 };
 }

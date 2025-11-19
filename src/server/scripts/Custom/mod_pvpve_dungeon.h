@@ -75,6 +75,7 @@ struct PvpveDungeonRun
     std::vector<ObjectGuid> Players;
     std::map<ObjectGuid, uint8> PlayerSpawns;
     std::vector<uint64> Teams;
+    std::set<uint8> UsedSpawnIndices;
 };
 
 struct QueuedTeam
@@ -126,13 +127,14 @@ public:
     PvpveDungeonRun* GetRunForTeam(uint64 teamId);
 
     void Reset();
+    void HandleServerShutdown();
 
 private:
     PvpveDungeonMgr();
 
     void StartNextRun();
     void AssignTeamToRun(PvpveDungeonRun& run, QueuedTeam const& queued);
-    uint8 PickSpawnIndex(PvpveDungeonRun const& run);
+    bool PickSpawnIndex(PvpveDungeonRun const& run, uint8& outIndex);
     void CleanupRun(uint64 runId);
     void CleanupPlayer(ObjectGuid const& guid);
     void OnPlayerEliminated(Player* player);
