@@ -22,10 +22,17 @@
 #include "GameObject.h"
 #include "Loot.h"
 #include "Player.h"
+#include "SharedDefines.h"
 #include <vector>
 
 namespace CustomLootChests
 {
+struct ItemLocation
+{
+    uint8 Bag = INVENTORY_SLOT_BAG_0;
+    uint8 Slot = 0;
+};
+
 class PlayerChestBuilder
 {
 public:
@@ -45,6 +52,8 @@ private:
     Seconds _despawnTime = Seconds(0);
     mutable std::vector<LootItem> _items;
 };
+
+void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems);
 }
 
 #endif // CUSTOM_LOOT_CHEST_HELPER_H

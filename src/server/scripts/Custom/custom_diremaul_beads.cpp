@@ -46,6 +46,7 @@ namespace DireMaulBeads
     static constexpr uint32 KalimdorMapId = 1;
     static constexpr uint32 DefaultOgreBeadItemId = 21982;
     static constexpr uint32 DefaultOgreBeadAuraId = 90002;
+    static constexpr uint32 HonorTokenItemId = 100529;
     static constexpr char const* DefaultAreaIdList = "495,496,498,2557,3217";
     static constexpr uint32 DefaultChestGameObjectId = 0;
     static constexpr uint32 DefaultChestDespawnSeconds = 300;
@@ -223,11 +224,21 @@ namespace DireMaulBeads
             return;
 
         CustomLootChests::PlayerChestBuilder chest(victim, chestEntry, GetChestDespawnDuration());
+        uint32 const honorTokenCount = victim->GetItemCount(HonorTokenItemId, false);
+        std::vector<CustomLootChests::ItemLocation> artifactItems;
+
         chest.AddStackableItem(beadItemId, beadCount);
+        if (honorTokenCount)
+            chest.AddStackableItem(HonorTokenItemId, honorTokenCount);
+        CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems);
 
         if (GameObject* spawnedChest = chest.Summon())
         {
             victim->DestroyItemCount(beadItemId, beadCount, true);
+            if (honorTokenCount)
+                victim->DestroyItemCount(HonorTokenItemId, honorTokenCount, true);
+            for (CustomLootChests::ItemLocation const& removed : artifactItems)
+                victim->RemoveItem(removed.Bag, removed.Slot, true);
             UpdateBeadAura(victim);
         }
     }

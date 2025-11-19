@@ -17,6 +17,7 @@
 
 #include "custom_loot_chest_helper.h"
 
+#include "Item.h"
 #include "Log.h"
 #include "ObjectGuid.h"
 #include <algorithm>
@@ -95,5 +96,41 @@ GameObject* PlayerChestBuilder::Summon() const
     chest->ForceValuesUpdateAtIndex(GAMEOBJECT_DYNAMIC);
     chest->ForceValuesUpdateAtIndex(GAMEOBJECT_FLAGS);
     return chest;
+}
+
+void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems)
+{
+    if (!player)
+        return;
+
+    auto const tryStoreItem = [&](Item* item, uint8 bag, uint8 slot)
+    {
+        if (!item)
+            return;
+
+        if (ItemTemplate const* proto = item->GetTemplate())
+        {
+            if (proto->Quality == quality)
+            {
+                chest.AddItem(item);
+                removedItems.push_back({ bag, slot });
+            }
+        }
+    };
+
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+        tryStoreItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot), INVENTORY_SLOT_BAG_0, slot);
+
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        tryStoreItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot), INVENTORY_SLOT_BAG_0, slot);
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+    {
+        if (Bag* bag = player->GetBagByPos(bagSlot))
+        {
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+                tryStoreItem(bag->GetItemByPos(slot), bagSlot, slot);
+        }
+    }
 }
 }

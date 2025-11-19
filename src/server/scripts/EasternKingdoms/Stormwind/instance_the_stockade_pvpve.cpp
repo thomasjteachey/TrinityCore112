@@ -288,12 +288,6 @@ struct KeyDropGroup
     bool KeyDropped = false;
 };
 
-struct ItemLocation
-{
-    uint8 Bag = INVENTORY_SLOT_BAG_0;
-    uint8 Slot = 0;
-};
-
 void RemoveBossKeys(Player* player)
 {
     if (!player)
@@ -302,42 +296,6 @@ void RemoveBossKeys(Player* player)
     uint32 const keyCount = player->GetItemCount(StockadesPvPvE::BossKeyItemId, false);
     if (keyCount)
         player->DestroyItemCount(StockadesPvPvE::BossKeyItemId, keyCount, true);
-}
-
-void CollectArtifactItems(Player* player, CustomLootChests::PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems)
-{
-    if (!player)
-        return;
-
-    auto const tryStoreItem = [&](Item* item, uint8 bag, uint8 slot)
-    {
-        if (!item)
-            return;
-
-        if (ItemTemplate const* proto = item->GetTemplate())
-        {
-            if (proto->Quality == ITEM_QUALITY_ARTIFACT)
-            {
-                chest.AddItem(item);
-                removedItems.push_back({ bag, slot });
-            }
-        }
-    };
-
-    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
-        tryStoreItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot), INVENTORY_SLOT_BAG_0, slot);
-
-    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
-        tryStoreItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot), INVENTORY_SLOT_BAG_0, slot);
-
-    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
-    {
-        if (Bag* bag = player->GetBagByPos(bagSlot))
-        {
-            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
-                tryStoreItem(bag->GetItemByPos(slot), bagSlot, slot);
-        }
-    }
 }
 
 void DropDeathChest(Player* victim)
@@ -365,8 +323,8 @@ void DropDeathChest(Player* victim)
     if (bossKeyCount)
         chest.AddStackableItem(StockadesPvPvE::BossKeyItemId, bossKeyCount);
 
-    std::vector<ItemLocation> artifactItems;
-    CollectArtifactItems(victim, chest, artifactItems);
+    std::vector<CustomLootChests::ItemLocation> artifactItems;
+    CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems);
 
     if (GameObject* chestGO = chest.Summon())
     {
@@ -379,7 +337,7 @@ void DropDeathChest(Player* victim)
         if (bossKeyCount)
             victim->DestroyItemCount(StockadesPvPvE::BossKeyItemId, bossKeyCount, true);
 
-        for (ItemLocation const& removed : artifactItems)
+        for (CustomLootChests::ItemLocation const& removed : artifactItems)
             victim->RemoveItem(removed.Bag, removed.Slot, true);
 
         if (beadCount)
