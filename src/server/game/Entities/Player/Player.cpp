@@ -2976,8 +2976,8 @@ void Player::InitStatsForLevel(bool reapplyMods)
 
     if (GetClass() == CLASS_ROGUE || GetClass() == CLASS_DRUID)
     {
-        SetFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER + POWER_ENERGY, -10.f);
-        SetFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER + POWER_ENERGY, -10.f);
+        SetFloatValue(UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER + uint16(POWER_ENERGY), -10.f);
+        SetFloatValue(UNIT_FIELD_POWER_REGEN_INTERRUPTED_FLAT_MODIFIER + uint16(POWER_ENERGY), -10.f);
     }
 }
 

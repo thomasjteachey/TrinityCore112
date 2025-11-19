@@ -801,9 +801,9 @@ void Creature::Update(uint32 diff)
             if (GetMapId() == 34 && IsAIEnabled() && IsInCombat() && !IsEngaged())
             {
                 if (Unit* victim = GetVictim())
-                    AI()->EngagementStart(victim);
+                    AI()->EnsureEngaged(victim);
                 else if (Unit* victim = GetThreatManager().GetCurrentVictim())
-                    AI()->EngagementStart(victim);
+                    AI()->EnsureEngaged(victim);
             }
 
             if (_spellFocusInfo.Delay)

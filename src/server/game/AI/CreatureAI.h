@@ -250,6 +250,8 @@ class TC_GAME_API CreatureAI : public UnitAI
         static bool IsInBounds(CreatureBoundary const& boundary, Position const* who);
         bool IsInBoundary(Position const* who = nullptr) const;
 
+        void EnsureEngaged(Unit* who);
+
     protected:
         void EngagementStart(Unit* who);
         void EngagementOver();
