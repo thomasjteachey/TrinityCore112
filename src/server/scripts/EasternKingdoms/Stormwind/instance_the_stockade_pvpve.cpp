@@ -17,29 +17,47 @@
 
 #include "ScriptMgr.h"
 
+#include "Bag.h"
 #include "Configuration/Config.h"
+#include "Containers.h"
+#include "Creature.h"
 #include "Duration.h"
 #include "GameObject.h"
-#include "Creature.h"
-#include "Map.h"
+#include "GameObjectAI.h"
+#include "Group.h"
 #include "InstanceScript.h"
 #include "Log.h"
+#include "Loot.h"
+#include "Item.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Position.h"
 #include "SharedDefines.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
-#include "Group.h"
+#include "custom_loot_chest_helper.h"
 
 #include "../../Custom/mod_pvpve_dungeon.h"
 
+#include <algorithm>
+#include <charconv>
 #include <string>
+#include <unordered_set>
+#include <vector>
+
+namespace DireMaulBeads
+{
+uint32 GetOgreBeadItemId();
+void UpdateBeadAura(Player* player);
+}
 
 namespace StockadesPvPvE
 {
 constexpr uint32 StockadesMapId = 34;
 constexpr uint32 StockadesExteriorMapId = 0;
+constexpr uint32 BossKeyItemId = 43650;
+constexpr uint32 HonorTokenItemId = 100529;
 
 namespace
 {
@@ -50,11 +68,18 @@ namespace
 {
 constexpr uint32 DefaultChestDespawnSeconds = 300;
 Position const DefaultChestPosition = { 71.879f, -15.478f, -20.215f, 0.0f };
+constexpr uint32 DefaultDeathChestDespawnSeconds = 300;
 
 uint32 s_ChestGameObjectId = 0;
 Seconds s_ChestDespawn = Seconds(DefaultChestDespawnSeconds);
 Position s_ChestPosition = DefaultChestPosition;
 uint32 s_BossCreatureEntry = 0;
+uint32 s_DeathChestGameObjectId = 0;
+Seconds s_DeathChestDespawn = Seconds(DefaultDeathChestDespawnSeconds);
+
+std::vector<uint32> s_ScarletDefenderEntries;
+std::vector<uint32> s_BigBadWolfEntries;
+std::vector<uint32> s_WrathboneSkeletonEntries;
 
 void LoadConfig()
 {
@@ -65,17 +90,45 @@ void LoadConfig()
     float const configuredZ = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnZ", DefaultChestPosition.GetPositionZ());
     float const configuredO = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnO", DefaultChestPosition.GetOrientation());
     int32 const configuredBoss = sConfigMgr->GetIntDefault("StockadesPvPvE.BossCreatureEntry", 0);
+    int32 const configuredDeathChest = sConfigMgr->GetIntDefault("StockadesPvPvE.DeathChestGameObjectId", 0);
+    int32 const configuredDeathDespawn = sConfigMgr->GetIntDefault("StockadesPvPvE.DeathChestDespawnSeconds", int32(DefaultDeathChestDespawnSeconds));
+    std::string const scarletEntries = sConfigMgr->GetStringDefault("StockadesPvPvE.ScarletDefenderEntries", "");
+    std::string const wolfEntries = sConfigMgr->GetStringDefault("StockadesPvPvE.BigBadWolfEntries", "");
+    std::string const skeletonEntries = sConfigMgr->GetStringDefault("StockadesPvPvE.WrathboneSkeletonEntries", "");
 
     s_ChestGameObjectId = configuredEntry > 0 ? uint32(configuredEntry) : 0u;
     s_ChestDespawn = Seconds(configuredDespawn >= 0 ? uint32(configuredDespawn) : DefaultChestDespawnSeconds);
     s_ChestPosition.Relocate(configuredX, configuredY, configuredZ, configuredO);
     s_BossCreatureEntry = configuredBoss > 0 ? uint32(configuredBoss) : 0u;
+    s_DeathChestGameObjectId = configuredDeathChest > 0 ? uint32(configuredDeathChest) : 0u;
+    s_DeathChestDespawn = Seconds(configuredDeathDespawn >= 0 ? uint32(configuredDeathDespawn) : DefaultDeathChestDespawnSeconds);
+
+    auto const loadEntries = [](std::string const& rawList, std::vector<uint32>& destination, char const* label)
+    {
+        destination.clear();
+        for (std::string_view token : Trinity::Tokenize(rawList, ',', false))
+        {
+            uint32 value = 0;
+            if (!token.empty() && std::from_chars(token.data(), token.data() + token.size(), value).ec == std::errc())
+                destination.push_back(value);
+        }
+
+        if (destination.empty())
+            TC_LOG_WARN("server.custom", "Stockades PvPvE: no entries configured for {} key group; boss keys will not drop for that group.", label);
+    };
+
+    loadEntries(scarletEntries, s_ScarletDefenderEntries, "Scarlet Defender");
+    loadEntries(wolfEntries, s_BigBadWolfEntries, "Big Bad Wolf");
+    loadEntries(skeletonEntries, s_WrathboneSkeletonEntries, "Wrathbone Skeleton");
 
     if (!s_ChestGameObjectId)
         TC_LOG_WARN("server.custom", "Stockades PvPvE: reward chest entry is 0; chest spawning is disabled.");
 
     if (!s_BossCreatureEntry)
         TC_LOG_WARN("server.custom", "Stockades PvPvE: boss creature entry is 0; boss defeat tracking is disabled.");
+
+    if (!s_DeathChestGameObjectId)
+        TC_LOG_WARN("server.custom", "Stockades PvPvE: death chest entry is 0; death loot chests are disabled.");
 }
 
 QuaternionData GetChestRotation()
@@ -118,6 +171,181 @@ QuaternionData GetChestQuaternion()
 {
     return GetChestRotation();
 }
+
+uint32 GetDeathChestGameObjectId()
+{
+    return s_DeathChestGameObjectId;
+}
+
+Seconds GetDeathChestDespawnTime()
+{
+    return s_DeathChestDespawn;
+}
+
+std::vector<uint32> const& GetScarletDefenderEntries()
+{
+    return s_ScarletDefenderEntries;
+}
+
+std::vector<uint32> const& GetBigBadWolfEntries()
+{
+    return s_BigBadWolfEntries;
+}
+
+std::vector<uint32> const& GetWrathboneSkeletonEntries()
+{
+    return s_WrathboneSkeletonEntries;
+}
+}
+
+namespace
+{
+struct KeyDropGroup
+{
+    KeyDropGroup(char const* name, std::vector<uint32> const& entries) : Label(name), EntrySet(entries.begin(), entries.end()) { }
+
+    bool Matches(uint32 entry) const
+    {
+        return EntrySet.contains(entry);
+    }
+
+    void AddMember(Creature* creature)
+    {
+        if (!creature)
+            return;
+
+        Members.push_back(creature->GetGUID());
+    }
+
+    void RemoveMember(ObjectGuid const& guid)
+    {
+        Members.erase(std::remove(Members.begin(), Members.end(), guid), Members.end());
+        if (KeyCarrier == guid)
+            KeyCarrier.Clear();
+    }
+
+    void EnsureCarrier(Map* map)
+    {
+        if (KeyDropped || KeyCarrier || EntrySet.empty() || !map)
+            return;
+
+        std::vector<Creature*> available;
+        available.reserve(Members.size());
+        for (ObjectGuid const& guid : Members)
+        {
+            if (Creature* candidate = map->GetCreature(guid))
+            {
+                if (candidate->IsAlive())
+                    available.push_back(candidate);
+            }
+        }
+
+        if (available.empty())
+            return;
+
+        KeyCarrier = Trinity::Containers::SelectRandomContainerElement(available)->GetGUID();
+    }
+
+    void AddKeyToLoot(Creature* creature) const
+    {
+        if (!creature)
+            return;
+
+        Loot& loot = creature->loot;
+        LootItem lootItem;
+        lootItem.itemid = StockadesPvPvE::BossKeyItemId;
+        lootItem.itemIndex = static_cast<uint32>(loot.items.size());
+        lootItem.count = 1;
+        lootItem.freeforall = false;
+        lootItem.follow_loot_rules = false;
+
+        loot.items.push_back(lootItem);
+        ++loot.unlootedCount;
+    }
+
+    void HandleDeath(Creature* creature)
+    {
+        if (!creature || KeyDropped)
+            return;
+
+        RemoveMember(creature->GetGUID());
+
+        if (!KeyCarrier)
+            KeyCarrier = creature->GetGUID();
+
+        if (KeyCarrier == creature->GetGUID())
+        {
+            AddKeyToLoot(creature);
+            KeyDropped = true;
+            KeyCarrier.Clear();
+        }
+    }
+
+    std::string const Label;
+    std::unordered_set<uint32> const EntrySet;
+    std::vector<ObjectGuid> Members;
+    ObjectGuid KeyCarrier;
+    bool KeyDropped = false;
+};
+
+void RemoveBossKeys(Player* player)
+{
+    if (!player)
+        return;
+
+    uint32 const keyCount = player->GetItemCount(StockadesPvPvE::BossKeyItemId, false);
+    if (keyCount)
+        player->DestroyItemCount(StockadesPvPvE::BossKeyItemId, keyCount, true);
+}
+
+void DropDeathChest(Player* victim)
+{
+    if (!victim || victim->GetMapId() != StockadesPvPvE::StockadesMapId)
+        return;
+
+    uint32 const chestEntry = StockadesPvPvE::GetDeathChestGameObjectId();
+    if (!chestEntry)
+        return;
+
+    CustomLootChests::PlayerChestBuilder chest(victim, chestEntry, StockadesPvPvE::GetDeathChestDespawnTime());
+
+    uint32 const beadItemId = DireMaulBeads::GetOgreBeadItemId();
+    uint32 const beadCount = beadItemId ? victim->GetItemCount(beadItemId, false) : 0;
+    uint32 const honorTokenCount = victim->GetItemCount(StockadesPvPvE::HonorTokenItemId, false);
+    uint32 const bossKeyCount = victim->GetItemCount(StockadesPvPvE::BossKeyItemId, false);
+
+    if (beadCount)
+        chest.AddStackableItem(beadItemId, beadCount);
+
+    if (honorTokenCount)
+        chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId, honorTokenCount);
+
+    if (bossKeyCount)
+        chest.AddStackableItem(StockadesPvPvE::BossKeyItemId, bossKeyCount);
+
+    std::vector<CustomLootChests::ItemLocation> artifactItems;
+    CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems);
+
+    if (GameObject* chestGO = chest.Summon())
+    {
+        if (beadCount)
+            victim->DestroyItemCount(beadItemId, beadCount, true);
+
+        if (honorTokenCount)
+            victim->DestroyItemCount(StockadesPvPvE::HonorTokenItemId, honorTokenCount, true);
+
+        if (bossKeyCount)
+            victim->DestroyItemCount(StockadesPvPvE::BossKeyItemId, bossKeyCount, true);
+
+        for (CustomLootChests::ItemLocation const& removed : artifactItems)
+            victim->RemoveItem(removed.Bag, removed.Slot, true);
+
+        if (beadCount)
+            DireMaulBeads::UpdateBeadAura(victim);
+
+        chestGO->SetLootRecipient(nullptr);
+    }
+}
 }
 
 class instance_the_stockade_pvpve : public InstanceMapScript
@@ -132,7 +360,13 @@ public:
 
     struct instance_the_stockade_pvpve_InstanceMapScript : public InstanceScript, public PvpveDungeonInstance
     {
-        instance_the_stockade_pvpve_InstanceMapScript(InstanceMap* map) : InstanceScript(map) { }
+        instance_the_stockade_pvpve_InstanceMapScript(InstanceMap* map)
+            : InstanceScript(map),
+            _scarletDefenders("Scarlet Defenders", StockadesPvPvE::GetScarletDefenderEntries()),
+            _bigBadWolves("Big Bad Wolves", StockadesPvPvE::GetBigBadWolfEntries()),
+            _wrathboneSkeletons("Wrathbone Skeletons", StockadesPvPvE::GetWrathboneSkeletonEntries())
+        {
+        }
 
         void OnPlayerEnter(Player* player) override
         {
@@ -181,6 +415,8 @@ public:
 
             if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
                 return;
+
+            RemoveBossKeys(player);
         }
 
         void OnPvpveRunFinished(uint32 runId, PvpveTeam const& winningTeam) override
@@ -204,6 +440,9 @@ public:
             Creature* creature = unit->ToCreature();
             if (!creature)
                 return;
+
+            if (KeyDropGroup* group = GetKeyDropGroup(creature->GetEntry()))
+                group->HandleDeath(creature);
 
             uint32 const bossEntry = StockadesPvPvE::GetBossCreatureEntry();
             if (!bossEntry || creature->GetEntry() != bossEntry)
@@ -317,14 +556,92 @@ public:
             }
         }
 
+        void OnCreatureCreate(Creature* creature) override
+        {
+            InstanceScript::OnCreatureCreate(creature);
+
+            if (KeyDropGroup* group = GetKeyDropGroup(creature->GetEntry()))
+            {
+                group->AddMember(creature);
+                group->EnsureCarrier(instance);
+            }
+        }
+
+        void OnCreatureRemove(Creature* creature) override
+        {
+            if (KeyDropGroup* group = GetKeyDropGroup(creature->GetEntry()))
+                group->RemoveMember(creature->GetGUID());
+
+            InstanceScript::OnCreatureRemove(creature);
+        }
+
+        KeyDropGroup* GetKeyDropGroup(uint32 entry)
+        {
+            if (_scarletDefenders.Matches(entry))
+                return &_scarletDefenders;
+
+            if (_bigBadWolves.Matches(entry))
+                return &_bigBadWolves;
+
+            if (_wrathboneSkeletons.Matches(entry))
+                return &_wrathboneSkeletons;
+
+            return nullptr;
+        }
+
         ObjectGuid _rewardChestGuid;
         uint32 _rewardChestRunId = 0;
         uint64 _pvpveRunId = 0;
+        KeyDropGroup _scarletDefenders;
+        KeyDropGroup _bigBadWolves;
+        KeyDropGroup _wrathboneSkeletons;
     };
+};
+
+class stockades_pvpve_player : public PlayerScript
+{
+public:
+    stockades_pvpve_player() : PlayerScript("stockades_pvpve_player") { }
+
+    void OnPVPKill(Player* /*killer*/, Player* victim) override
+    {
+        DropDeathChest(victim);
+    }
+
+    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* victim) override
+    {
+        DropDeathChest(victim);
+    }
+};
+
+struct go_stockades_boss_doorAI : public GameObjectAI
+{
+    using GameObjectAI::GameObjectAI;
+
+    bool OnReportUse(Player* player) override
+    {
+        if (player && player->GetMapId() == StockadesPvPvE::StockadesMapId)
+            RemoveBossKeys(player);
+
+        return false;
+    }
+};
+
+class go_stockades_boss_door : public GameObjectScript
+{
+public:
+    go_stockades_boss_door() : GameObjectScript("go_stockades_boss_door") { }
+
+    GameObjectAI* GetAI(GameObject* go) const override
+    {
+        return new go_stockades_boss_doorAI(go);
+    }
 };
 
 void AddSC_instance_the_stockade_pvpve()
 {
     StockadesPvPvE::EnsureConfigLoaded();
     new instance_the_stockade_pvpve();
+    new stockades_pvpve_player();
+    new go_stockades_boss_door();
 }

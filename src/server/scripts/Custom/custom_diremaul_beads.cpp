@@ -30,6 +30,7 @@
 #include "SpellAuraEffects.h"
 #include "UpdateFields.h"
 #include "Util.h"
+#include "custom_loot_chest_helper.h"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -45,6 +46,7 @@ namespace DireMaulBeads
     static constexpr uint32 KalimdorMapId = 1;
     static constexpr uint32 DefaultOgreBeadItemId = 21982;
     static constexpr uint32 DefaultOgreBeadAuraId = 90002;
+    static constexpr uint32 HonorTokenItemId = 100529;
     static constexpr char const* DefaultAreaIdList = "495,496,498,2557,3217";
     static constexpr uint32 DefaultChestGameObjectId = 0;
     static constexpr uint32 DefaultChestDespawnSeconds = 300;
@@ -204,56 +206,6 @@ namespace DireMaulBeads
         return Seconds(s_BeadChestDespawnSeconds);
     }
 
-    GameObject* SpawnBeadChest(Player* player, uint32 beadCount)
-    {
-        if (!player || !beadCount)
-            return nullptr;
-
-        uint32 const beadItemId = GetOgreBeadItemId();
-        uint32 const chestEntry = GetBeadChestGameObjectId();
-        if (!beadItemId || !chestEntry)
-            return nullptr;
-
-        GameObject* chest = player->SummonGameObject(chestEntry, player->GetPosition(), QuaternionData(), GetChestDespawnDuration(), GO_SUMMON_TIMED_DESPAWN);
-        if (!chest)
-        {
-            TC_LOG_WARN("scripts", "DireMaulBeads: failed to summon bead chest {} for player {} ({})", chestEntry, player->GetName(), player->GetGUID().ToString());
-            return nullptr;
-        }
-
-        player->RemoveGameObject(chest, false);
-        chest->SetOwnerGUID(ObjectGuid::Empty);
-
-        Loot& loot = chest->loot;
-        loot.clear();
-        loot.loot_type = LOOT_CORPSE;
-        loot.lootOwnerGUID.Clear();
-
-        uint32 remaining = beadCount;
-        while (remaining && loot.items.size() < MAX_NR_LOOT_ITEMS)
-        {
-            uint8 const stack = static_cast<uint8>(std::min<uint32>(remaining, 255));
-
-            LootItem lootItem;
-            lootItem.itemid = beadItemId;
-            lootItem.itemIndex = static_cast<uint32>(loot.items.size());
-            lootItem.count = stack;
-            lootItem.freeforall = false;
-            lootItem.follow_loot_rules = false;
-
-            loot.items.push_back(lootItem);
-            ++loot.unlootedCount;
-            remaining -= stack;
-        }
-
-        chest->SetLootRecipient(nullptr);
-        chest->SetLootState(GO_READY);
-        chest->SetGoState(GO_STATE_READY);
-        chest->ForceValuesUpdateAtIndex(GAMEOBJECT_DYNAMIC);
-        chest->ForceValuesUpdateAtIndex(GAMEOBJECT_FLAGS);
-        return chest;
-    }
-
     void DropBeadChest(Player* victim)
     {
         if (!victim)
@@ -271,11 +223,24 @@ namespace DireMaulBeads
         if (!beadCount)
             return;
 
-        if (!SpawnBeadChest(victim, beadCount))
-            return;
+        CustomLootChests::PlayerChestBuilder chest(victim, chestEntry, GetChestDespawnDuration());
+        uint32 const honorTokenCount = victim->GetItemCount(HonorTokenItemId, false);
+        std::vector<CustomLootChests::ItemLocation> artifactItems;
 
-        victim->DestroyItemCount(beadItemId, beadCount, true);
-        UpdateBeadAura(victim);
+        chest.AddStackableItem(beadItemId, beadCount);
+        if (honorTokenCount)
+            chest.AddStackableItem(HonorTokenItemId, honorTokenCount);
+        CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems);
+
+        if (GameObject* spawnedChest = chest.Summon())
+        {
+            victim->DestroyItemCount(beadItemId, beadCount, true);
+            if (honorTokenCount)
+                victim->DestroyItemCount(HonorTokenItemId, honorTokenCount, true);
+            for (CustomLootChests::ItemLocation const& removed : artifactItems)
+                victim->RemoveItem(removed.Bag, removed.Slot, true);
+            UpdateBeadAura(victim);
+        }
     }
 
     void OnItemStored(Player* player, uint32 itemId, uint32 count)
