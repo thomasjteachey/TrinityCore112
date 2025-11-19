@@ -74,6 +74,9 @@ public:
                 return false;
 
             ClearGossipMenuFor(player);
+
+            if (me->IsQuestGiver())
+                player->PrepareQuestMenu(me->GetGUID());
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Queue for Stockades PvPvE", GOSSIP_SENDER_MAIN, ACTION_QUEUE);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Invade someone's Stockades run", GOSSIP_SENDER_MAIN, ACTION_INVADE,
                 "Enter the name of a player who is already inside the Stockades PvPvE instance:", 0, true);
