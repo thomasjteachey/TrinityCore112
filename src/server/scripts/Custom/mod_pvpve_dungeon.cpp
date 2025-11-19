@@ -943,7 +943,19 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     _playerToTeam.erase(guid);
     ClearReturnLocation(guid);
 
-    if (run->Finished)
+    if (DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId))
+    {
+        if (run->Finished)
+        {
+            player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
+            _playerRunLockouts.erase(guid);
+        }
+        else
+        {
+            _playerRunLockouts[guid] = run->Id;
+        }
+    }
+    else if (run->Finished)
         _playerRunLockouts.erase(guid);
     else
         _playerRunLockouts[guid] = run->Id;
