@@ -213,6 +213,10 @@ void CreatureAI::JustEnteredCombat(Unit* who)
 
 void CreatureAI::EnterEvadeMode(EvadeReason why)
 {
+    // Hack requested by user: disable evade for Stockades (map 34)
+    if (me->GetMapId() == 34)
+        return;
+
     if (!_EnterEvadeMode(why))
         return;
 
