@@ -3285,7 +3285,7 @@ void Map::ProcessRespawns()
             GetRespawnMapForType(next->type).erase(next->spawnId);
 
             // step 2: tell pooling logic to do its thing
-            sPoolMgr->UpdatePool(poolId, next->type, next->spawnId);
+            sPoolMgr->UpdatePool(poolId, next->type, next->spawnId, this);
 
             // step 3: get rid of the actual entry
             RemoveRespawnTime(next->type, next->spawnId, nullptr, true);

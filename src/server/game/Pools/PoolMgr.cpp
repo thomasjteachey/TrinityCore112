@@ -19,6 +19,7 @@
 #include "Containers.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
+#include "Map.h"
 #include "MapManager.h"
 #include "ObjectMgr.h"
 
@@ -435,6 +436,24 @@ void PoolMgr::Initialize()
 {
     mGameobjectSearchMap.clear();
     mCreatureSearchMap.clear();
+    mSpawnedData.clear();
+}
+
+ActivePoolData& PoolMgr::GetActivePoolData(Map* map) const
+{
+    return mSpawnedData[GetActivePoolDataKey(map)];
+}
+
+uint64 PoolMgr::GetActivePoolDataKey(Map* map) const
+{
+    if (!map)
+        return 0;
+
+    uint64 key = static_cast<uint64>(map->GetId()) << 32;
+    if (map->Instanceable())
+        key |= static_cast<uint64>(map->GetInstanceId());
+
+    return key;
 }
 
 PoolMgr* PoolMgr::instance()
@@ -743,31 +762,31 @@ void PoolMgr::LoadFromDB()
 // Call to spawn a pool, if cache if true the method will spawn only if cached entry is different
 // If it's same, the creature is respawned only (added back to map)
 template<>
-void PoolMgr::SpawnPool<Creature>(uint32 pool_id, uint32 db_guid)
+void PoolMgr::SpawnPool<Creature>(uint32 pool_id, uint32 db_guid, Map* map)
 {
     auto it = mPoolCreatureGroups.find(pool_id);
     if (it != mPoolCreatureGroups.end() && !it->second.isEmpty())
-        it->second.SpawnObject(mSpawnedData, mPoolTemplate[pool_id].MaxLimit, db_guid);
+        it->second.SpawnObject(GetActivePoolData(map), mPoolTemplate[pool_id].MaxLimit, db_guid);
 }
 
 // Call to spawn a pool, if cache if true the method will spawn only if cached entry is different
 // If it's same, the gameobject is respawned only (added back to map)
 template<>
-void PoolMgr::SpawnPool<GameObject>(uint32 pool_id, uint32 db_guid)
+void PoolMgr::SpawnPool<GameObject>(uint32 pool_id, uint32 db_guid, Map* map)
 {
     auto it = mPoolGameobjectGroups.find(pool_id);
     if (it != mPoolGameobjectGroups.end() && !it->second.isEmpty())
-        it->second.SpawnObject(mSpawnedData, mPoolTemplate[pool_id].MaxLimit, db_guid);
+        it->second.SpawnObject(GetActivePoolData(map), mPoolTemplate[pool_id].MaxLimit, db_guid);
 }
 
 // Call to spawn a pool, if cache if true the method will spawn only if cached entry is different
 // If it's same, the pool is respawned only
 template<>
-void PoolMgr::SpawnPool<Pool>(uint32 pool_id, uint32 sub_pool_id)
+void PoolMgr::SpawnPool<Pool>(uint32 pool_id, uint32 sub_pool_id, Map* map)
 {
     auto it = mPoolPoolGroups.find(pool_id);
     if (it != mPoolPoolGroups.end() && !it->second.isEmpty())
-        it->second.SpawnObject(mSpawnedData, mPoolTemplate[pool_id].MaxLimit, sub_pool_id);
+        it->second.SpawnObject(GetActivePoolData(map), mPoolTemplate[pool_id].MaxLimit, sub_pool_id);
 }
 
 void PoolMgr::SpawnPool(uint32 pool_id)
@@ -780,20 +799,21 @@ void PoolMgr::SpawnPool(uint32 pool_id)
 // Call to despawn a pool, all gameobjects/creatures in this pool are removed
 void PoolMgr::DespawnPool(uint32 pool_id, bool alwaysDeleteRespawnTime)
 {
+    ActivePoolData& activePoolData = GetActivePoolData(nullptr);
     {
         auto it = mPoolCreatureGroups.find(pool_id);
         if (it != mPoolCreatureGroups.end() && !it->second.isEmpty())
-            it->second.DespawnObject(mSpawnedData, 0, alwaysDeleteRespawnTime);
+            it->second.DespawnObject(activePoolData, 0, alwaysDeleteRespawnTime);
     }
     {
         auto it = mPoolGameobjectGroups.find(pool_id);
         if (it != mPoolGameobjectGroups.end() && !it->second.isEmpty())
-            it->second.DespawnObject(mSpawnedData, 0, alwaysDeleteRespawnTime);
+            it->second.DespawnObject(activePoolData, 0, alwaysDeleteRespawnTime);
     }
     {
         auto it = mPoolPoolGroups.find(pool_id);
         if (it != mPoolPoolGroups.end() && !it->second.isEmpty())
-            it->second.DespawnObject(mSpawnedData, 0, alwaysDeleteRespawnTime);
+            it->second.DespawnObject(activePoolData, 0, alwaysDeleteRespawnTime);
     }
 }
 
@@ -837,27 +857,27 @@ bool PoolMgr::CheckPool(uint32 pool_id) const
 // Here we cache only the creature/gameobject whose guid is passed as parameter
 // Then the spawn pool call will use this cache to decide
 template<typename T>
-void PoolMgr::UpdatePool(uint32 pool_id, uint32 db_guid_or_pool_id)
+void PoolMgr::UpdatePool(uint32 pool_id, uint32 db_guid_or_pool_id, Map* map)
 {
     if (uint32 motherpoolid = IsPartOfAPool<Pool>(pool_id))
-        SpawnPool<Pool>(motherpoolid, pool_id);
+        SpawnPool<Pool>(motherpoolid, pool_id, map);
     else
-        SpawnPool<T>(pool_id, db_guid_or_pool_id);
+        SpawnPool<T>(pool_id, db_guid_or_pool_id, map);
 }
 
-template void PoolMgr::UpdatePool<Pool>(uint32 pool_id, uint32 db_guid_or_pool_id);
-template void PoolMgr::UpdatePool<GameObject>(uint32 pool_id, uint32 db_guid_or_pool_id);
-template void PoolMgr::UpdatePool<Creature>(uint32 pool_id, uint32 db_guid_or_pool_id);
+template void PoolMgr::UpdatePool<Pool>(uint32 pool_id, uint32 db_guid_or_pool_id, Map* map);
+template void PoolMgr::UpdatePool<GameObject>(uint32 pool_id, uint32 db_guid_or_pool_id, Map* map);
+template void PoolMgr::UpdatePool<Creature>(uint32 pool_id, uint32 db_guid_or_pool_id, Map* map);
 
-void PoolMgr::UpdatePool(uint32 pool_id, SpawnObjectType type, uint32 spawnId)
+void PoolMgr::UpdatePool(uint32 pool_id, SpawnObjectType type, uint32 spawnId, Map* map)
 {
     switch (type)
     {
         case SPAWN_TYPE_CREATURE:
-            UpdatePool<Creature>(pool_id, spawnId);
+            UpdatePool<Creature>(pool_id, spawnId, map);
             break;
         case SPAWN_TYPE_GAMEOBJECT:
-            UpdatePool<GameObject>(pool_id, spawnId);
+            UpdatePool<GameObject>(pool_id, spawnId, map);
             break;
         default:
             ABORT_MSG("Invalid spawn type %u passed to PoolMgr::IsPartOfPool (with spawnId %u)", uint32(type), spawnId);
