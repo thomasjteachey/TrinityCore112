@@ -4392,8 +4392,24 @@ Metric.OverallStatusInterval = 1
 #                     they were still inside The Stockades PvPvE dungeon.
 #        Default:     "The Stockades PvPvE dungeon ended while you were offline; you have been eliminated."
 #
+#    PvPvEDungeon.Stockades.SpawnPoints
+#        Description: Semicolon-separated list of spawn coordinates (X Y Z O) used to randomly place
+#                     players when they first enter the Stockades PvPvE instance. Each entry must
+#                     include at least X Y Z values; orientation (O) is optional. Once a spawn entry is
+#                     consumed it will not be reused for that instance, preventing additional players
+#                     from entering when the list is exhausted.
+#        Example:     "-27.16 -11.85 -14.89 3.14; -14.24 -4.72 -15.02 0.00"
+#        Default:     ""
+#
+#    PvPvEDungeon.Stockades.SpawnsFullMessage
+#        Description: Message sent to players who attempt to enter when all configured spawn points
+#                     have been consumed.
+#        Default:     "The Stockades PvPvE dungeon is currently full. Please wait for the next run."
+#
 PvPvEDungeon.Stockades.Enable = 0
 PvPvEDungeon.Stockades.EliminationMessage = "The Stockades PvPvE dungeon ended while you were offline; you have been eliminated."
+PvPvEDungeon.Stockades.SpawnPoints = ""
+PvPvEDungeon.Stockades.SpawnsFullMessage = "The Stockades PvPvE dungeon is currently full. Please wait for the next run."
 
 ###################################################################################################
 
