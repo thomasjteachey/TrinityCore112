@@ -211,6 +211,12 @@ void CreatureAI::JustEnteredCombat(Unit* who)
         EngagementStart(who);
 }
 
+void CreatureAI::EnsureEngaged(Unit* who)
+{
+    if (!IsEngaged() && who)
+        EngagementStart(who);
+}
+
 void CreatureAI::EnterEvadeMode(EvadeReason why)
 {
     // Hack requested by user: disable evade for Stockades (map 34)

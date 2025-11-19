@@ -794,6 +794,18 @@ void Creature::Update(uint32 diff)
                 break;
 
             GetThreatManager().Update(diff);
+
+            // Stockade creatures (map 34) should remain engaged once aggroed so
+            // they do not reset into out-of-combat regeneration while players are
+            // still fighting them.
+            if (GetMapId() == 34 && IsAIEnabled() && IsInCombat() && !IsEngaged())
+            {
+                if (Unit* victim = GetVictim())
+                    AI()->EnsureEngaged(victim);
+                else if (Unit* victim = GetThreatManager().GetCurrentVictim())
+                    AI()->EnsureEngaged(victim);
+            }
+
             if (_spellFocusInfo.Delay)
             {
                 if (_spellFocusInfo.Delay <= diff)
