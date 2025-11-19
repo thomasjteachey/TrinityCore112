@@ -120,6 +120,17 @@ bool ShouldHandle(Player* player)
     return IsPvPvEEnabled() && player && !player->IsGameMaster() && player->GetMapId() == StockadesMapId;
 }
 
+ObjectGuid GetTeamIdentifier(Player* player)
+{
+    if (!player)
+        return ObjectGuid::Empty;
+
+    if (Group* group = player->GetGroup())
+        return group->GetGUID();
+
+    return player->GetGUID();
+}
+
 void NotifySpawnsFull(Player* player)
 {
     if (!player)
@@ -161,7 +172,7 @@ public:
         void Initialize() override
         {
             InstanceScript::Initialize();
-            _playerSpawnAssignments.clear();
+            _teamSpawnAssignments.clear();
             _availableSpawnIndices.clear();
 
             if (!IsPvPvEEnabled())
@@ -183,29 +194,37 @@ public:
             if (std::vector<Position> const& spawnPoints = GetConfiguredSpawnPoints(); spawnPoints.empty())
                 return;
 
-            ObjectGuid const guid = player->GetGUID();
-
-            if (_playerSpawnAssignments.find(guid) != _playerSpawnAssignments.end())
+            ObjectGuid const teamGuid = GetTeamIdentifier(player);
+            if (!teamGuid)
                 return;
 
-            if (_availableSpawnIndices.empty())
+            auto const teamAssignment = _teamSpawnAssignments.find(teamGuid);
+            uint32 spawnIndex = 0;
+            if (teamAssignment != _teamSpawnAssignments.end())
             {
-                NotifySpawnsFull(player);
-                TeleportPlayerOut(player);
-                return;
+                spawnIndex = teamAssignment->second;
             }
+            else
+            {
+                if (_availableSpawnIndices.empty())
+                {
+                    NotifySpawnsFull(player);
+                    TeleportPlayerOut(player);
+                    return;
+                }
 
-            uint32 const randomSlotIndex = urand(0, _availableSpawnIndices.size() - 1);
-            uint32 const spawnIndex = _availableSpawnIndices[randomSlotIndex];
-            _availableSpawnIndices.erase(_availableSpawnIndices.begin() + randomSlotIndex);
-            _playerSpawnAssignments.emplace(guid, spawnIndex);
+                uint32 const randomSlotIndex = urand(0, _availableSpawnIndices.size() - 1);
+                spawnIndex = _availableSpawnIndices[randomSlotIndex];
+                _availableSpawnIndices.erase(_availableSpawnIndices.begin() + randomSlotIndex);
+                _teamSpawnAssignments.emplace(teamGuid, spawnIndex);
+            }
 
             if (spawnIndex < spawnPoints.size())
                 player->NearTeleportTo(spawnPoints[spawnIndex]);
         }
 
     private:
-        std::unordered_map<ObjectGuid, uint32, ObjectGuid::Hash> _playerSpawnAssignments;
+        std::unordered_map<ObjectGuid, uint32, ObjectGuid::Hash> _teamSpawnAssignments;
         std::vector<uint32> _availableSpawnIndices;
     };
 

@@ -4394,10 +4394,11 @@ Metric.OverallStatusInterval = 1
 #
 #    PvPvEDungeon.Stockades.SpawnPoints
 #        Description: Semicolon-separated list of spawn coordinates (X Y Z O) used to randomly place
-#                     players when they first enter the Stockades PvPvE instance. Each entry must
-#                     include at least X Y Z values; orientation (O) is optional. Once a spawn entry is
-#                     consumed it will not be reused for that instance, preventing additional players
-#                     from entering when the list is exhausted.
+#                     teams when they first enter the Stockades PvPvE instance. Each entry must
+#                     include at least X Y Z values; orientation (O) is optional. The first member of a
+#                     team (party) that zones in claims one of the entries, all of their teammates are
+#                     teleported to the same location, and the point cannot be reused by invading teams.
+#                     Once every configured entry is consumed, additional players are denied entry.
 #        Example:     "-27.16 -11.85 -14.89 3.14; -14.24 -4.72 -15.02 0.00"
 #        Default:     ""
 #
