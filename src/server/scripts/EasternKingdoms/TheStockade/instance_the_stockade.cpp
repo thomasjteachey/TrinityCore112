@@ -18,12 +18,14 @@
 #include "Config.h"
 #include "InstanceScript.h"
 #include "Log.h"
+#include "MapManager.h"
 #include "Optional.h"
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
 #include "StringConvert.h"
 #include "Util.h"
+#include "WorldLocation.h"
 #include "the_stockade.h"
 #include <algorithm>
 #include <string>
@@ -41,20 +43,10 @@ DungeonEncounterData const encounters[] =
 namespace
 {
 constexpr uint32 StockadesMapId = 34;
-constexpr uint32 StockadesFailMapId = 0;
-Position const StockadesFailTeleport = { -8762.38f, 848.01f, 86.3139f, 0.0f };
 
 bool IsPvPvEEnabled()
 {
     return sConfigMgr->GetOption<bool>("PvPvEDungeon.Stockades.Enable", false);
-}
-
-std::string const& GetSpawnsFullMessage()
-{
-    static std::string const message = sConfigMgr->GetOption<std::string>(
-        "PvPvEDungeon.Stockades.SpawnsFullMessage",
-        "The Stockades PvPvE dungeon is currently full. Please wait for the next run.");
-    return message;
 }
 
 bool TryParseSpawnEntry(std::string_view entry, Position& out)
@@ -131,32 +123,10 @@ ObjectGuid GetTeamIdentifier(Player* player)
     return player->GetGUID();
 }
 
-void NotifySpawnsFull(Player* player)
-{
-    if (!player)
-        return;
-
-    if (WorldSession* session = player->GetSession())
-    {
-        std::string const& message = GetSpawnsFullMessage();
-        if (!message.empty())
-            session->SendNotification("%s", message.c_str());
-    }
-}
-
-void TeleportPlayerOut(Player* player)
-{
-    if (!player)
-        return;
-
-    if (!player->IsBeingTeleported())
-        player->TeleportTo(StockadesFailMapId, StockadesFailTeleport.GetPositionX(), StockadesFailTeleport.GetPositionY(),
-            StockadesFailTeleport.GetPositionZ(), StockadesFailTeleport.GetOrientation());
-}
 }
 
 class instance_the_stockade : public InstanceMapScript
-{ 
+{
 public:
     instance_the_stockade() : InstanceMapScript("instance_the_stockade", StockadesMapId) { }
 
@@ -208,8 +178,7 @@ public:
             {
                 if (_availableSpawnIndices.empty())
                 {
-                    NotifySpawnsFull(player);
-                    TeleportPlayerOut(player);
+                    RedirectTeamToFreshInstance(player, teamGuid);
                     return;
                 }
 
@@ -224,8 +193,32 @@ public:
         }
 
     private:
+        void RedirectTeamToFreshInstance(Player* player, ObjectGuid const& teamGuid)
+        {
+            if (!player || !teamGuid)
+                return;
+
+            uint32 redirectInstanceId = 0;
+            if (auto const redirect = _teamRedirectInstanceIds.find(teamGuid); redirect != _teamRedirectInstanceIds.end())
+            {
+                redirectInstanceId = redirect->second;
+            }
+            else
+            {
+                redirectInstanceId = sMapMgr->GenerateInstanceId();
+                _teamRedirectInstanceIds.emplace(teamGuid, redirectInstanceId);
+            }
+
+            if (!player->IsBeingTeleported())
+            {
+                WorldLocation const currentLocation = player->GetWorldLocation();
+                player->TeleportTo(currentLocation, TELE_TO_NONE, redirectInstanceId);
+            }
+        }
+
         std::unordered_map<ObjectGuid, uint32, ObjectGuid::Hash> _teamSpawnAssignments;
         std::vector<uint32> _availableSpawnIndices;
+        std::unordered_map<ObjectGuid, uint32, ObjectGuid::Hash> _teamRedirectInstanceIds;
     };
 
     InstanceScript* GetInstanceScript(InstanceMap* map) const override

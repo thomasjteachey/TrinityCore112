@@ -4398,19 +4398,14 @@ Metric.OverallStatusInterval = 1
 #                     include at least X Y Z values; orientation (O) is optional. The first member of a
 #                     team (party) that zones in claims one of the entries, all of their teammates are
 #                     teleported to the same location, and the point cannot be reused by invading teams.
-#                     Once every configured entry is consumed, additional players are denied entry.
+#                     Once every configured entry is consumed, subsequent teams are automatically
+#                     redirected into a brand new Stockades instance.
 #        Example:     "-27.16 -11.85 -14.89 3.14; -14.24 -4.72 -15.02 0.00"
 #        Default:     ""
-#
-#    PvPvEDungeon.Stockades.SpawnsFullMessage
-#        Description: Message sent to players who attempt to enter when all configured spawn points
-#                     have been consumed.
-#        Default:     "The Stockades PvPvE dungeon is currently full. Please wait for the next run."
 #
 PvPvEDungeon.Stockades.Enable = 0
 PvPvEDungeon.Stockades.EliminationMessage = "The Stockades PvPvE dungeon ended while you were offline; you have been eliminated."
 PvPvEDungeon.Stockades.SpawnPoints = ""
-PvPvEDungeon.Stockades.SpawnsFullMessage = "The Stockades PvPvE dungeon is currently full. Please wait for the next run."
 
 ###################################################################################################
 
