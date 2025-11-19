@@ -58,6 +58,7 @@ constexpr uint32 StockadesMapId = 34;
 constexpr uint32 StockadesExteriorMapId = 0;
 constexpr uint32 BossKeyItemId = 43650;
 constexpr uint32 HonorTokenItemId = 100529;
+constexpr uint32 HonorTokenKillBonus = 10;
 
 namespace
 {
@@ -317,8 +318,7 @@ void DropDeathChest(Player* victim)
     if (beadCount)
         chest.AddStackableItem(beadItemId, beadCount);
 
-    if (honorTokenCount)
-        chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId, honorTokenCount);
+    chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId, honorTokenCount + StockadesPvPvE::HonorTokenKillBonus);
 
     if (bossKeyCount)
         chest.AddStackableItem(StockadesPvPvE::BossKeyItemId, bossKeyCount);
