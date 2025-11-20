@@ -748,16 +748,6 @@ public:
     {
         HandleStockadesPveHonorKill(killer, killed);
     }
-
-    // PvE kills from pet
-    void OnCreatureKilledByPet(Pet* pet, Creature* killed) override
-    {
-        if (!pet)
-            return;
-
-        if (Player* owner = pet->GetOwner())
-            HandleStockadesPveHonorKill(owner, killed);
-    }
 };
 
 struct go_stockades_boss_doorAI : public GameObjectAI
