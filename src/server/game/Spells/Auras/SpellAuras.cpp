@@ -1864,15 +1864,33 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     {
         switch (m_spellInfo->Id)
         {
-        case 24148: // Presence of Might (warrior)
-        case 24151: // Syncretist's Sigil (paladin)
-        case 24153: // Death's Embrace (rogue)
-        case 24154: // Falcon's Call (hunter)
-        case 24155: // Vodouisant's Vigilant Embrace (shaman)
-        case 24156: // Presence of Sight (mage)
-        case 24157: // Hoodoo Hex (warlock)
-        case 24158: // Prophetic Aura (priest)
-        case 24159: // Animist's Caress (druid)
+            // Warrior ? Presence of Might
+        case 24148:
+        case 24149:
+            // Paladin ? Syncretist's Sigil
+        case 24151:
+        case 24160:
+            // Rogue ? Death's Embrace
+        case 24153:
+        case 24161:
+            // Hunter ? Falcon's Call
+        case 24154:
+        case 24162:
+            // Warlock/Shaman ? Vodouisant's Vigilant Embrace
+        case 24155:
+        case 24163:
+            // Mage ? Presence of Sight
+        case 24156:
+        case 24164:
+            // Warlock ? Hoodoo Hex
+        case 24157:
+        case 24165:
+            // Priest ? Prophetic Aura
+        case 24158:
+        case 24167:
+            // Druid ? Animist's Caress
+        case 24159:
+        case 24168:
             return true;
         default:
             break;
