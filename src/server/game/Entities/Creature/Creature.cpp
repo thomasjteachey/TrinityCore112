@@ -862,6 +862,8 @@ void Creature::Update(uint32 diff)
             if (CanNotReachTarget() && !IsInEvadeMode() && !GetMap()->IsRaid())
             {
                 m_cannotReachTimer += diff;
+                if (GetMapId() == 34)
+                    break;
                 if (m_cannotReachTimer >= CREATURE_NOPATH_EVADE_TIME)
                     if (CreatureAI* ai = AI())
                         ai->EnterEvadeMode(CreatureAI::EVADE_REASON_NO_PATH);
