@@ -661,29 +661,38 @@ public:
             if (!invadingPlayer || !instance)
                 return;
 
-            // Invader also gets the creepy vibe.
-            if (WorldSession* invSession = invadingPlayer->GetSession())
-                invSession->SendNotification("You sense an evil presence");
-
             Map::PlayerList const& players = instance->GetPlayers();
             if (players.isEmpty())
                 return;
 
             Group const* invadingGroup = invadingPlayer->GetGroup();
+            bool hasOpponents = false;
+
+            // First pass: notify all *other* players not in invader's group,
+            // and track if we actually found any opponents.
             for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
             {
                 Player* target = itr->GetSource();
                 if (!target || target == invadingPlayer)
                     continue;
 
-                // Don?t spam the invader's own group (if you ever do multi-team invades, tweak here).
                 if (invadingGroup && target->GetGroup() == invadingGroup)
                     continue;
+
+                hasOpponents = true;
 
                 if (WorldSession* session = target->GetSession())
                     session->SendNotification("You sense an evil presence");
             }
+
+            // Only if we actually found opponents do we tell the invading player.
+            if (hasOpponents)
+            {
+                if (WorldSession* invSession = invadingPlayer->GetSession())
+                    invSession->SendNotification("You sense an evil presence");
+            }
         }
+
 
         void OnCreatureCreate(Creature* creature) override
         {
