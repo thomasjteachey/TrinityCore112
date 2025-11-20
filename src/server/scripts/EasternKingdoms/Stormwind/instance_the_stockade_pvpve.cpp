@@ -661,6 +661,10 @@ public:
             if (!invadingPlayer || !instance)
                 return;
 
+            // Invader also gets the creepy vibe.
+            if (WorldSession* invSession = invadingPlayer->GetSession())
+                invSession->SendNotification("You sense an evil presence");
+
             Map::PlayerList const& players = instance->GetPlayers();
             if (players.isEmpty())
                 return;
@@ -672,6 +676,7 @@ public:
                 if (!target || target == invadingPlayer)
                     continue;
 
+                // Don?t spam the invader's own group (if you ever do multi-team invades, tweak here).
                 if (invadingGroup && target->GetGroup() == invadingGroup)
                     continue;
 
