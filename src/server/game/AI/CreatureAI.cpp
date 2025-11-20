@@ -313,7 +313,7 @@ bool CreatureAI::_EnterEvadeMode(EvadeReason /*why*/)
     }
 
     if (me->GetMapId() == 34)
-        return;
+        return false;
 
     me->RemoveAurasOnEvade();
     me->ClearComboPointHolders(); // Remove all combo points targeting this unit
