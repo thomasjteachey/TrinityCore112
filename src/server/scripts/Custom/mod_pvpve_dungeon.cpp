@@ -1334,6 +1334,22 @@ public:
         ScheduleTeleportOut(player);
     }
 
+    void EnsureAliveForTeleport(Player* player)
+    {
+        if (!player)
+            return;
+
+        if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        {
+            player->ResurrectPlayer(1.0f);
+            player->SpawnCorpseBones();
+        }
+        else if (!player->IsAlive())
+        {
+            player->ResurrectPlayer(1.0f);
+        }
+    }
+
     void OnMapChanged(Player* player) override
     {
         if (!player)
@@ -1501,16 +1517,8 @@ private:
                 return;
             }
 
-            if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-            {
-                player->ResurrectPlayer(1.0f);
-                player->SpawnCorpseBones();
-            }
-            else if (!player->IsAlive())
-            {
-                player->RepopAtGraveyard();
-                return;
-            }
+            // They have chosen to release at this point; now we kick them out and rez them.
+            EnsureAliveForTeleport(player);
 
             TeleportDestination const destination = GetTeleportLocation(player);
             if (player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O))
@@ -1523,7 +1531,7 @@ private:
         if (!player)
             return;
 
-        ForceRelease(player);
+        EnsureAliveForTeleport(player);
 
         TeleportDestination const destination = GetTeleportLocation(player);
         if (player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O))

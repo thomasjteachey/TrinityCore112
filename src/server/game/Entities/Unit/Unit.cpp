@@ -11407,8 +11407,20 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         }
         else if (Creature* killerCre = attacker->ToCreature())
         {
+            // Player killed by creature -> normal hook
             if (Player* killed = victim->ToPlayer())
+            {
                 sScriptMgr->OnPlayerKilledByCreature(killerCre, killed);
+            }
+            // NEW: pet killed a creature -> treat as owner killing a creature
+            else if (Pet* pet = killerCre->ToPet())
+            {
+                if (Player* owner = pet->GetOwner())
+                {
+                    if (Creature* killedCre = victim->ToCreature())
+                        sScriptMgr->OnCreatureKill(owner, killedCre);
+                }
+            }
         }
     }
 }
