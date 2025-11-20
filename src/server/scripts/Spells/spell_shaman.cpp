@@ -1528,16 +1528,6 @@ class spell_sha_static_shock : public AuraScript
     }
 };
 
-class spell_lightning_shield_defense : public AuraScript
-{
-    PrepareAuraScript(spell_lightning_shield_defense);
-
-    void Register() override
-    {
-        OnEffectProc += AuraEffectProcFn(spell_lightning_shield_defense::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
-    }
-};
-
 // 55198 - Tidal Force
 class spell_sha_tidal_force_dummy : public AuraScript
 {
@@ -2020,5 +2010,4 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_windfury_weapon);
     RegisterSpellScript(spell_sha_healing_wave);
     RegisterSpellScript(spell_sha_windfury_totem);
-    RegisterSpellScript(spell_lightning_shield_defense);
 }
