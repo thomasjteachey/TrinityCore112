@@ -361,9 +361,9 @@ namespace
         // Bosses: 8 tokens each kill
         switch (entry)
         {
-        case 23970:
+        case 1716:
         case 25447:
-        case 31123:
+        case 23970:
             return 8;
         default:
             break;
@@ -372,8 +372,8 @@ namespace
         // Minibosses: 2 tokens each kill
         switch (entry)
         {
-        case 11197:
-        case 16303:
+        case 4298:
+        case 8:
         case 17521:
             return 2;
         default:
