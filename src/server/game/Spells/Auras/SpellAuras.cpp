@@ -1858,6 +1858,26 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     if (this == existingAura)
         return true;
 
+    // HACK: Allow Prophetic Aura (spell 24167) to stack with itself
+    // (e.g. from helm + legs both enchanted)
+    switch (m_spellInfo->Id)
+    {
+    case 24148: // Presence of Might (warrior)
+    case 24151: // Syncretist's Sigil (paladin)
+    case 24153: // Death's Embrace (rogue)
+    case 24154: // Falcon's Call (hunter)
+    case 24155: // Vodouisant's Vigilant Embrace (shaman)
+    case 24156: // Presence of Sight (mage)
+    case 24157: // Hoodoo Hex (warlock)
+    case 24158: // Prophetic Aura (priest)
+    case 24159: // Animist's Caress (druid)
+        return true;
+    default:
+        break;
+    }
+    if (m_spellInfo->Id == 24167 && existingAura->GetSpellInfo()->Id == 24167)
+        return true;
+
     bool sameCaster = GetCasterGUID() == existingAura->GetCasterGUID();
     SpellInfo const* existingSpellInfo = existingAura->GetSpellInfo();
 

@@ -1518,11 +1518,11 @@ private:
             }
 
             // They have chosen to release at this point; now we kick them out and rez them.
+            EnsureAliveForTeleport(player);
 
             TeleportDestination const destination = GetTeleportLocation(player);
             if (player->TeleportTo(destination.MapId, destination.X, destination.Y, destination.Z, destination.O))
                 SnapPetToLocation(player, destination.MapId, destination.X, destination.Y, destination.Z, destination.O);
-                EnsureAliveForTeleport(player);
         }, 1s);
     }
 
