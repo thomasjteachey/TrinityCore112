@@ -1,5 +1,5 @@
 /*
- * This file is part of the the TrinityCore Project. See AUTHORS file for Copyright information
+ * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -45,8 +45,8 @@ namespace
     char const* const kSpawnQuery = "SELECT TemplateId, SpawnIndex, PositionX, PositionY, PositionZ, Orientation "
         "FROM pvpve_dungeon_spawn ORDER BY TemplateId, SpawnIndex";
 
-    constexpr uint32 kPvpveFfaAuraSpellId = 0;
-    constexpr UnitPVPStateFlags kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
+    constexpr uint32             kPvpveFfaAuraSpellId = 0;
+    constexpr UnitPVPStateFlags  kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
 
     void SnapPetToLocation(Player* player, uint32 mapId, float x, float y, float z, float orientation)
     {
@@ -76,7 +76,7 @@ namespace
             ownedPet->NearTeleportTo(x, y, z, orientation);
         }, 250ms);
     }
-}
+} // anonymous namespace
 
 DungeonTemplate const* PvpveDungeonMgr::GetDungeonTemplate(uint32 templateId) const
 {
@@ -429,7 +429,6 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
 
     if (!_queue.empty())
     {
-        // TrinityCore executes world updates on a single thread; no explicit locking needed here.
         std::vector<uint64> queuedIds;
         queuedIds.reserve(_queue.size());
         for (auto const& entry : _queue)
@@ -464,10 +463,7 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 if (candidate.TemplateId != dungeonTemplate->Id)
                     return false;
 
-                // IMPORTANT: a run is only considered "ended" for queue/invasion
-                // once it is marked Finished. Boss kills and team eliminations
-                // no longer automatically finish the run.
-                if (candidate.Finished)
+                if (candidate.Completed)
                     return false;
 
                 if (dungeonTemplate->MaxTeams && candidate.Teams.size() >= dungeonTemplate->MaxTeams)
@@ -480,10 +476,10 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 std::set<uint8> usedIndices = candidate.UsedSpawnIndices;
                 if (usedIndices.empty())
                 {
-                    for (uint64 teamId : candidate.Teams)
+                    for (uint64 cid : candidate.Teams)
                     {
-                        if (PvpveTeam* team = GetTeam(teamId))
-                            usedIndices.insert(team->SpawnIndex);
+                        if (PvpveTeam* t = GetTeam(cid))
+                            usedIndices.insert(t->SpawnIndex);
                     }
                 }
 
@@ -527,15 +523,6 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 newRun.Id = _nextRunId++;
                 newRun.TemplateId = dungeonTemplate->Id;
                 newRun.CreatedTime = std::time(nullptr);
-                newRun.InstanceId = 0;
-                newRun.InstanceMap = nullptr;
-                newRun.InstanceScript = nullptr;
-                newRun.StartTime = 0;
-                newRun.Active = false;
-                newRun.Completed = false;
-                newRun.Finished = false;
-                newRun.BossDefeated = false;
-                newRun.TimeoutWarningSent = false;
                 auto [runItr, inserted] = _runs.emplace(newRun.Id, std::move(newRun));
                 selectedRun = &runItr->second;
                 if (inserted)
@@ -713,7 +700,7 @@ bool PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run, uint8& outIndex
     {
         for (uint64 teamId : run.Teams)
         {
-            if (PvpveTeam* team = const_cast<PvpveDungeonMgr*>(this)->GetTeam(teamId))
+            if (PvpveTeam* team = GetTeam(teamId))
                 usedIndices.insert(team->SpawnIndex);
         }
     }
@@ -800,43 +787,32 @@ bool PvpveDungeonMgr::TeamHasActiveMembers(PvpveTeam const& team, DungeonTemplat
 
 void PvpveDungeonMgr::EvaluateRunState(PvpveDungeonRun& run)
 {
-    // IMPORTANT:
-    //
-    // We NO LONGER finish the run here when all teams are eliminated.
-    // A PvPvE run is considered "ended" (Finished=true) only when the last
-    // PvPvE participant actually leaves the instance (see OnPlayerLeftMap).
-    //
-    // This makes it possible to queue and invade a run as long as at least
-    // one player is still in the dungeon, regardless of boss state.
-    if (run.Finished)
+    // Important: we only end a run automatically once all teams are *marked eliminated*.
+    // We do NOT prematurely end just because nobody is currently alive or on the map ?
+    // elimination (death + timer, or explicitly leaving the map) is what flips the switch.
+
+    if (run.Completed || run.Finished)
         return;
 
     if (run.Teams.empty())
         return;
 
-    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run.TemplateId);
-    if (!dungeonTemplate)
-        return;
-
-    uint32 activeTeams = 0;
+    uint32 remainingTeams = 0;
     for (uint64 teamId : run.Teams)
     {
         PvpveTeam* team = GetTeam(teamId);
-        if (!team || team->Eliminated)
+        if (!team)
             continue;
 
-        if (!TeamHasActiveMembers(*team, dungeonTemplate))
-            continue;
-
-        ++activeTeams;
+        if (!team->Eliminated)
+            ++remainingTeams;
     }
 
-    if (!activeTeams)
-    {
-        TC_LOG_INFO("server.custom",
-            "PvpveDungeonMgr: run {} currently has no active (alive) teams; waiting for players to leave the instance before finishing the run.",
-            run.Id);
-    }
+    if (remainingTeams > 0)
+        return;
+
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: ending run {} because all teams have been eliminated.", run.Id);
+    FinishRun(run, 0);
 }
 
 void PvpveDungeonMgr::OnPlayerDeath(Player* player)
@@ -950,69 +926,36 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
 
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: player {} left PvPvE map, treating as elimination in run {}.", guid.ToString(), run->Id);
 
-    // Mark elimination for this player / team
     OnPlayerEliminated(player);
 
-    // Remove from run-level tracking
     auto playerListItr = std::find(run->Players.begin(), run->Players.end(), guid);
     if (playerListItr != run->Players.end())
         run->Players.erase(playerListItr);
 
     run->PlayerSpawns.erase(guid);
     _playerToRun.erase(runItr);
+
     _playerToTeam.erase(guid);
     ClearReturnLocation(guid);
 
-    bool const lastPlayer = run->Players.empty();
-
-    // Re-evaluate team states (but do NOT end the run here)
-    EvaluateRunState(*run);
-
-    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId);
-
-    if (lastPlayer && !run->Finished)
+    if (DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId))
     {
-        // This is the moment the run is considered truly "ended" for gameplay.
-        // Decide a preferred winner if the boss was defeated and a non-eliminated
-        // team still exists.
-        uint64 preferredWinner = 0;
-        if (run->BossDefeated)
-        {
-            for (uint64 teamId : run->Teams)
-            {
-                PvpveTeam* team = GetTeam(teamId);
-                if (team && !team->Eliminated)
-                {
-                    preferredWinner = teamId;
-                    break;
-                }
-            }
-        }
-
-        TC_LOG_INFO("server.custom",
-            "PvpveDungeonMgr: player {} was the last participant in run {}; marking run finished (preferred winner: {}).",
-            guid.ToString(), run->Id, preferredWinner);
-
-        FinishRun(*run, preferredWinner);
-
-        // For the last player leaving a finished run, clear their lockout
-        // and unbind the instance.
-        if (dungeonTemplate)
+        if (run->Finished)
         {
             player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
             _playerRunLockouts.erase(guid);
         }
         else
-            _playerRunLockouts.erase(guid);
+        {
+            _playerRunLockouts[guid] = run->Id;
+        }
     }
+    else if (run->Finished)
+        _playerRunLockouts.erase(guid);
     else
-    {
-        // Run is still in progress; this player may not rejoin the same run.
-        if (dungeonTemplate)
-            _playerRunLockouts[guid] = run->Id;
-        else
-            _playerRunLockouts[guid] = run->Id;
-    }
+        _playerRunLockouts[guid] = run->Id;
+
+    EvaluateRunState(*run);
 
     if (hasSavedLocation && player->IsInWorld())
     {
@@ -1167,7 +1110,6 @@ void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
     }
 
     run->BossDefeated = true;
-    run->Completed = true; // objective complete, but run may remain open while players are inside
 
     uint64 preferredWinner = 0;
     if (!creditGuid.IsEmpty())
@@ -1183,14 +1125,8 @@ void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
         }
     }
 
-    TC_LOG_INFO("server.custom",
-        "PvpveDungeonMgr: boss defeated for run {} (credit team: {}). Run will be marked finished once the last player leaves the instance.",
-        runId, preferredWinner);
-
-    // NOTE:
-    // We no longer call FinishRun() here. The run is only considered
-    // "finished" for queue/invasion purposes once the last PvPvE
-    // participant leaves the dungeon (see OnPlayerLeftMap).
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: boss defeated for run {} (credit team: {}).", runId, preferredWinner);
+    FinishRun(*run, preferredWinner);
 }
 
 void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
@@ -1199,10 +1135,7 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
         return;
 
     run.Finished = true;
-    // 'Completed' is already set when the boss is defeated. For non-boss
-    // endings (e.g. everyone leaves early), it may remain false.
-    if (!run.Completed)
-        run.Completed = run.BossDefeated;
+    run.Completed = true;
 
     std::vector<uint64> winningTeams;
     winningTeams.reserve(run.Teams.size());
@@ -1274,7 +1207,7 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
 
 void PvpveDungeonMgr::ClearRunLockouts(uint64 runId)
 {
-    for (auto itr = _playerRunLockouts.begin(); itr != _playerRunLockouts.end(); )
+    for (auto itr = _playerRunLockouts.begin(); itr != _playerRunLockouts.end();)
     {
         if (itr->second == runId)
             itr = _playerRunLockouts.erase(itr);
@@ -1324,7 +1257,8 @@ void PvpveDungeonMgr::CheckRunRuntime(PvpveDungeonRun& run, time_t now)
     if (!run.TimeoutWarningSent)
     {
         run.TimeoutWarningSent = true;
-        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s) but will remain active until all players leave.", run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: run {} exceeded max runtime ({}s / {}s) but will remain active until the boss is defeated.",
+            run.Id, elapsed, dungeonTemplate->MaxRuntimeSecs);
     }
 }
 
@@ -1342,12 +1276,14 @@ uint32 PvpveDungeonMgr::CountActiveRuns() const
 
 void PvpveDungeonMgr::LogQueueStats(time_t now) const
 {
-    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: status @{} queueTeams={} queuedPlayers={} runs={} activeRuns={}", now, _queue.size(), _queuedPlayers.size(), _runs.size(), CountActiveRuns());
+    TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: status @{} queueTeams={} queuedPlayers={} runs={} activeRuns={}",
+        now, _queue.size(), _queuedPlayers.size(), _runs.size(), CountActiveRuns());
 
     for (auto const& runPair : _runs)
     {
         PvpveDungeonRun const& run = runPair.second;
-        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} template {} teams={} players={} completed={} finished={} startTime={}", run.Id, run.TemplateId, run.Teams.size(), run.Players.size(), run.Completed, run.Finished, uint64(run.StartTime));
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: run {} template {} teams={} players={} completed={} finished={} startTime={}",
+            run.Id, run.TemplateId, run.Teams.size(), run.Players.size(), run.Completed, run.Finished, uint64(run.StartTime));
     }
 }
 
@@ -1356,10 +1292,10 @@ namespace
     struct TeleportDestination
     {
         uint32 MapId;
-        float X;
-        float Y;
-        float Z;
-        float O;
+        float  X;
+        float  Y;
+        float  Z;
+        float  O;
     };
 
     TeleportDestination const kAllianceTeleportDestination{ 0, -8833.38f, 628.62f, 94.0066f, 1.0646f };
@@ -1502,11 +1438,7 @@ private:
         }
 
         sPvpveDungeonMgr->OnPlayerDeath(player);
-
-        // Do not mark players eliminated on death; they may still receive a
-        // resurrection from teammates. Elimination is handled when they release
-        // (OnPlayerRepop), the team-wide dead timer expires, or they otherwise
-        // leave the dungeon.
+        // Actual elimination is handled on release / timeout / leaving map.
     }
 
     bool MarkPlayerEliminated(Player* player)

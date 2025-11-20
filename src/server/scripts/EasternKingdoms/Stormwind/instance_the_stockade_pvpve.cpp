@@ -36,6 +36,8 @@
 #include "SharedDefines.h"
 #include "StringFormat.h"
 #include "WorldSession.h"
+#include "Pet.h"
+
 #include "../../Custom/custom_loot_chest_helper.h"
 #include "../../Custom/mod_pvpve_dungeon.h"
 
@@ -67,15 +69,15 @@ namespace StockadesPvPvE
     namespace
     {
         constexpr uint32 DefaultChestDespawnSeconds = 300;
-        Position const    DefaultChestPosition = { 71.879f, -15.478f, -20.215f, 0.0f };
-        constexpr uint32  DefaultDeathChestDespawnSeconds = 300;
+        Position const   DefaultChestPosition = { 71.879f, -15.478f, -20.215f, 0.0f };
+        constexpr uint32 DefaultDeathChestDespawnSeconds = 300;
 
-        uint32  s_ChestGameObjectId = 0;
-        Seconds s_ChestDespawn = Seconds(DefaultChestDespawnSeconds);
+        uint32   s_ChestGameObjectId = 0;
+        Seconds  s_ChestDespawn = Seconds(DefaultChestDespawnSeconds);
         Position s_ChestPosition = DefaultChestPosition;
-        uint32  s_BossCreatureEntry = 0;
-        uint32  s_DeathChestGameObjectId = 0;
-        Seconds s_DeathChestDespawn = Seconds(DefaultDeathChestDespawnSeconds);
+        uint32   s_BossCreatureEntry = 0;
+        uint32   s_DeathChestGameObjectId = 0;
+        Seconds  s_DeathChestDespawn = Seconds(DefaultDeathChestDespawnSeconds);
 
         std::vector<uint32> s_ScarletDefenderEntries;
         std::vector<uint32> s_BigBadWolfEntries;
@@ -135,7 +137,7 @@ namespace StockadesPvPvE
         {
             return QuaternionData::fromEulerAnglesZYX(s_ChestPosition.GetOrientation(), 0.0f, 0.0f);
         }
-    } // anonymous namespace
+    }
 
     void EnsureConfigLoaded()
     {
@@ -283,11 +285,11 @@ namespace
             }
         }
 
-        std::string const             Label;
+        std::string const              Label;
         std::unordered_set<uint32> const EntrySet;
-        std::vector<ObjectGuid>       Members;
-        ObjectGuid                    KeyCarrier;
-        bool                          KeyDropped = false;
+        std::vector<ObjectGuid>        Members;
+        ObjectGuid                     KeyCarrier;
+        bool                           KeyDropped = false;
     };
 
     void RemoveBossKeys(Player* player)
@@ -319,7 +321,8 @@ namespace
         if (beadCount)
             chest.AddStackableItem(beadItemId, beadCount);
 
-        chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId, honorTokenCount + StockadesPvPvE::HonorTokenKillBonus);
+        chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId,
+            honorTokenCount + StockadesPvPvE::HonorTokenKillBonus);
 
         if (bossKeyCount)
             chest.AddStackableItem(StockadesPvPvE::BossKeyItemId, bossKeyCount);
@@ -347,6 +350,120 @@ namespace
             chestGO->SetLootRecipient(nullptr);
         }
     }
+
+    // ---------------------------------------------------------------------------
+    // Honor token helpers (bosses / minibosses -> team-wide honor on kill)
+    // ---------------------------------------------------------------------------
+
+    // Return how many honor tokens this creature entry should award per kill.
+    uint32 GetHonorTokensForCreatureEntry(uint32 entry)
+    {
+        // Bosses: 8 tokens each kill
+        switch (entry)
+        {
+        case 23970:
+        case 25447:
+        case 31123:
+            return 8;
+        default:
+            break;
+        }
+
+        // Minibosses: 2 tokens each kill
+        switch (entry)
+        {
+        case 11197:
+        case 16303:
+        case 17521:
+            return 2;
+        default:
+            break;
+        }
+
+        return 0;
+    }
+
+    // Find the killer's team inside its current run
+    static PvpveTeam* FindTeamForPlayerInRun(PvpveDungeonRun* run, ObjectGuid const& playerGuid)
+    {
+        if (!run)
+            return nullptr;
+
+        for (uint64 teamId : run->Teams)
+        {
+            PvpveTeam* team = sPvpveDungeonMgr->GetTeam(teamId);
+            if (!team)
+                continue;
+
+            for (ObjectGuid const& memberGuid : team->Members)
+            {
+                if (memberGuid == playerGuid)
+                    return team;
+            }
+        }
+
+        return nullptr;
+    }
+
+    // Give `amount` honor tokens to every active member of killer?s PvPvE team.
+    void AwardHonorTokensToKillerTeam(Player* killer, uint32 amount)
+    {
+        if (!killer || !amount)
+            return;
+
+        // If somehow not in a PvPvE run, just reward the killer.
+        if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(killer))
+        {
+            killer->AddItem(StockadesPvPvE::HonorTokenItemId, amount);
+            return;
+        }
+
+        PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(killer->GetGUID());
+        if (!run)
+        {
+            killer->AddItem(StockadesPvPvE::HonorTokenItemId, amount);
+            return;
+        }
+
+        PvpveTeam* team = FindTeamForPlayerInRun(run, killer->GetGUID());
+        if (!team)
+        {
+            killer->AddItem(StockadesPvPvE::HonorTokenItemId, amount);
+            return;
+        }
+
+        for (ObjectGuid const& guid : team->Members)
+        {
+            Player* member = ObjectAccessor::FindPlayer(guid);
+            if (!member)
+                continue;
+
+            // Only reward players still participating in the run and in Stockades.
+            if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(member))
+                continue;
+
+            if (member->GetMapId() != StockadesPvPvE::StockadesMapId)
+                continue;
+
+            member->AddItem(StockadesPvPvE::HonorTokenItemId, amount);
+        }
+    }
+
+    // Central handler for PvE honor on kill
+    void HandleStockadesPveHonorKill(Player* killer, Creature* killed)
+    {
+        if (!killer || !killed)
+            return;
+
+        if (killed->GetMapId() != StockadesPvPvE::StockadesMapId)
+            return;
+
+        uint32 const tokens = GetHonorTokensForCreatureEntry(killed->GetEntry());
+        if (!tokens)
+            return; // this mob doesn't award tokens
+
+        AwardHonorTokensToKillerTeam(killer, tokens);
+    }
 } // anonymous namespace
 
 class instance_the_stockade_pvpve : public InstanceMapScript
@@ -371,9 +488,6 @@ public:
         {
         }
 
-        // --------------------------------------------------------------------
-        // Player lifecycle
-        // --------------------------------------------------------------------
         void OnPlayerEnter(Player* player) override
         {
             InstanceScript::OnPlayerEnter(player);
@@ -381,7 +495,6 @@ public:
             if (!player)
                 return;
 
-            // Only PvPvE-queued players are allowed, except GMs.
             if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
             {
                 if (!player->IsGameMaster())
@@ -389,8 +502,7 @@ public:
                     if (WorldSession* session = player->GetSession())
                         session->SendNotification("The Stockades are only accessible through the PvPvE queue.");
 
-                    player->TeleportTo(
-                        StockadesPvPvE::StockadesExteriorMapId,
+                    player->TeleportTo(StockadesPvPvE::StockadesExteriorMapId,
                         StockadesPvPvE::kStockadesExteriorPosition.GetPositionX(),
                         StockadesPvPvE::kStockadesExteriorPosition.GetPositionY(),
                         StockadesPvPvE::kStockadesExteriorPosition.GetPositionZ(),
@@ -404,9 +516,6 @@ public:
             {
                 _pvpveRunId = run->Id;
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
-
-                AddActivePlayer(player);
-                _runEnded = false; // run is active as long as we have active players
             }
 
             NotifyOpposingPlayersOfInvasion(player);
@@ -428,32 +537,16 @@ public:
                 return;
 
             RemoveBossKeys(player);
-            RemoveActivePlayer(player);
-            MaybeNotifyRunEnded();
         }
 
-        // --------------------------------------------------------------------
-        // PvpveDungeonInstance callback from manager
-        // --------------------------------------------------------------------
         void OnPvpveRunFinished(uint32 runId, PvpveTeam const& winningTeam) override
         {
-            // At this point the manager has decided the run is finished.
-            // This is called AFTER we notified OnBossDefeated when the last
-            // PvPvE player left the instance.
             AnnounceVictory(runId, winningTeam);
             SummonRewardChest(runId, winningTeam);
             ClearFfaState(winningTeam);
-
             _pvpveRunId = 0;
-            _bossDefeated = false;
-            _bossCreditGuid.Clear();
-            _runEnded = true;
-            _activePlayers.clear();
         }
 
-        // --------------------------------------------------------------------
-        // World events
-        // --------------------------------------------------------------------
         void OnUnitDeath(Unit* unit) override
         {
             InstanceScript::OnUnitDeath(unit);
@@ -472,29 +565,17 @@ public:
                 group->HandleDeath(creature);
 
             uint32 const bossEntry = StockadesPvPvE::GetBossCreatureEntry();
-            if (!bossEntry || creature->GetEntry() != bossEntry)
-                return;
+            if (bossEntry && creature->GetEntry() == bossEntry)
+            {
+                ObjectGuid creditGuid = ObjectGuid::Empty;
+                if (Player* killer = creature->GetLootRecipient())
+                    creditGuid = killer->GetGUID();
 
-            // Boss died, but we DO NOT immediately tell the manager that the run is finished.
-            // We just remember that the boss was defeated and who should get credit.
-            ObjectGuid creditGuid = ObjectGuid::Empty;
-            if (Player* killer = creature->GetLootRecipient())
-                creditGuid = killer->GetGUID();
-
-            _bossDefeated = true;
-            _bossCreditGuid = creditGuid;
-
-            TC_LOG_INFO("server.custom",
-                "Stockades PvPvE: Boss %u defeated in run %llu (credit: %s). Run will be considered ended when the last player leaves.",
-                bossEntry,
-                static_cast<unsigned long long>(_pvpveRunId),
-                _bossCreditGuid ? ObjectAccessor::FindPlayer(_bossCreditGuid)->GetName().c_str() : "<none>");
+                sPvpveDungeonMgr->OnBossDefeated(_pvpveRunId, creditGuid);
+            }
         }
 
     private:
-        // --------------------------------------------------------------------
-        // Helper: PvPvE team / victory messaging
-        // --------------------------------------------------------------------
         std::string CollectMemberNames(PvpveTeam const& team) const
         {
             std::string result;
@@ -550,8 +631,7 @@ public:
                 return;
             }
 
-            if (GameObject* chest = summoner->SummonGameObject(
-                chestEntry,
+            if (GameObject* chest = summoner->SummonGameObject(chestEntry,
                 StockadesPvPvE::GetChestPosition(),
                 StockadesPvPvE::GetChestQuaternion(),
                 StockadesPvPvE::GetChestDespawnTime(),
@@ -600,9 +680,6 @@ public:
             }
         }
 
-        // --------------------------------------------------------------------
-        // Creature lifecycle (for key groups)
-        // --------------------------------------------------------------------
         void OnCreatureCreate(Creature* creature) override
         {
             InstanceScript::OnCreatureCreate(creature);
@@ -636,85 +713,21 @@ public:
             return nullptr;
         }
 
-        // --------------------------------------------------------------------
-        // Active player tracking & run-end notification
-        // --------------------------------------------------------------------
-        void AddActivePlayer(Player* player)
-        {
-            if (!player)
-                return;
-
-            ObjectGuid guid = player->GetGUID();
-            auto it = std::find(_activePlayers.begin(), _activePlayers.end(), guid);
-            if (it == _activePlayers.end())
-                _activePlayers.push_back(guid);
-        }
-
-        void RemoveActivePlayer(Player* player)
-        {
-            if (!player)
-                return;
-
-            ObjectGuid guid = player->GetGUID();
-            _activePlayers.erase(std::remove(_activePlayers.begin(), _activePlayers.end(), guid), _activePlayers.end());
-        }
-
-        bool HasActivePlayers() const
-        {
-            return !_activePlayers.empty();
-        }
-
-        void MaybeNotifyRunEnded()
-        {
-            if (_runEnded || !_pvpveRunId)
-                return;
-
-            if (HasActivePlayers())
-                return;
-
-            // Instance is now empty of PvPvE participants. At this point we tell
-            // the manager that the run is finished. This is the ONLY point where
-            // we call OnBossDefeated, so queue/invade logic can treat the run as
-            // "open" until here.
-            ObjectGuid creditGuid = _bossDefeated ? _bossCreditGuid : ObjectGuid::Empty;
-
-            TC_LOG_INFO("server.custom",
-                "Stockades PvPvE: run %llu instance %u has no remaining PvPvE players; notifying manager that run has ended (creditGuid: %s).",
-                static_cast<unsigned long long>(_pvpveRunId),
-                instance ? instance->GetInstanceId() : 0,
-                creditGuid ? "non-empty" : "empty");
-
-            sPvpveDungeonMgr->OnBossDefeated(_pvpveRunId, creditGuid);
-            _runEnded = true;
-        }
-
-        // --------------------------------------------------------------------
-        // State
-        // --------------------------------------------------------------------
         ObjectGuid   _rewardChestGuid;
         uint32       _rewardChestRunId = 0;
         uint64       _pvpveRunId = 0;
-
-        bool         _bossDefeated = false;
-        ObjectGuid   _bossCreditGuid;
-        bool         _runEnded = false;
-
-        std::vector<ObjectGuid> _activePlayers;
-
         KeyDropGroup _scarletDefenders;
         KeyDropGroup _bigBadWolves;
         KeyDropGroup _wrathboneSkeletons;
     };
 };
 
-// --------------------------------------------------------------------------
-// Player script: death handling
-// --------------------------------------------------------------------------
 class stockades_pvpve_player : public PlayerScript
 {
 public:
     stockades_pvpve_player() : PlayerScript("stockades_pvpve_player") {}
 
+    // PvP deaths -> drop death chest
     void OnPVPKill(Player* /*killer*/, Player* victim) override
     {
         DropDeathChest(victim);
@@ -724,11 +737,24 @@ public:
     {
         DropDeathChest(victim);
     }
+
+    // PvE kills from player
+    void OnCreatureKill(Player* killer, Creature* killed) override
+    {
+        HandleStockadesPveHonorKill(killer, killed);
+    }
+
+    // PvE kills from pet
+    void OnCreatureKilledByPet(Pet* pet, Creature* killed) override
+    {
+        if (!pet)
+            return;
+
+        if (Player* owner = pet->GetOwner())
+            HandleStockadesPveHonorKill(owner, killed);
+    }
 };
 
-// --------------------------------------------------------------------------
-// Boss door: cleans up boss keys on use
-// --------------------------------------------------------------------------
 struct go_stockades_boss_doorAI : public GameObjectAI
 {
     using GameObjectAI::GameObjectAI;
@@ -738,7 +764,6 @@ struct go_stockades_boss_doorAI : public GameObjectAI
         if (player && player->GetMapId() == StockadesPvPvE::StockadesMapId)
             RemoveBossKeys(player);
 
-        // Do not block normal door behavior.
         return false;
     }
 };
@@ -754,9 +779,6 @@ public:
     }
 };
 
-// --------------------------------------------------------------------------
-// Script registration
-// --------------------------------------------------------------------------
 void AddSC_instance_the_stockade_pvpve()
 {
     StockadesPvPvE::EnsureConfigLoaded();
