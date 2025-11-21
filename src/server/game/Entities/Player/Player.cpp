@@ -5099,6 +5099,11 @@ void Player::RepopAtGraveyard()
         SpawnCorpseBones();
     }
 
+    // The Stockade sends players to a graveyard on another map; revive them automatically so they
+    // do not remain ghosts after the teleport.
+    if (!shouldResurrect && !IsAlive() && GetMapId() == 34)
+        shouldResurrect = true;
+
     WorldSafeLocsEntry const* ClosestGrave;
 
     // Special handle for battleground maps
