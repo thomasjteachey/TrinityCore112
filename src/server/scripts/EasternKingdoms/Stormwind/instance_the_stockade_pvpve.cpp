@@ -564,9 +564,13 @@ public:
             if (KeyDropGroup* group = GetKeyDropGroup(creature->GetEntry()))
                 group->HandleDeath(creature);
 
-            uint32 const bossEntry = StockadesPvPvE::GetBossCreatureEntry();
-            if (bossEntry && creature->GetEntry() == bossEntry)
+            uint32 const honorTokens = GetHonorTokensForCreatureEntry(creature->GetEntry());
+            bool const isStockadesBoss = honorTokens == 8;
+
+            if (isStockadesBoss)
             {
+                DoSendNotifyToInstance("The Stockades boss has been defeated!");
+
                 ObjectGuid creditGuid = ObjectGuid::Empty;
                 if (Player* killer = creature->GetLootRecipient())
                     creditGuid = killer->GetGUID();
