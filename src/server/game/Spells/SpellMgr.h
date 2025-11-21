@@ -737,6 +737,7 @@ class TC_GAME_API SpellMgr
 
 
 bool IsNaturesGraspAura(uint32 spellId);
+bool IsZulGurubClassEnchant(uint32 spellId);
 
 #define sSpellMgr SpellMgr::instance()
 
