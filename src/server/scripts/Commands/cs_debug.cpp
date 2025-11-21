@@ -29,6 +29,7 @@ EndScriptData */
 #include "CellImpl.h"
 #include "Channel.h"
 #include "Chat.h"
+#include "Errors.h"
 #include "GameTime.h"
 #include "GossipDef.h"
 #include "GridNotifiersImpl.h"
@@ -115,6 +116,7 @@ public:
             { "neargraveyard",      HandleDebugNearGraveyard,              rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "instancespawn",      HandleDebugInstanceSpawns,             rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "dummy",              HandleDebugDummyCommand,               rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
+            { "crash",              HandleDebugCrashCommand,               rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
             { "asan memoryleak",    HandleDebugMemoryLeak,                 rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
             { "asan outofbounds",   HandleDebugOutOfBounds,                rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
             { "guidlimits",         HandleDebugGuidLimitsCommand,          rbac::RBAC_PERM_COMMAND_DEBUG,   Console::Yes },
@@ -1827,6 +1829,12 @@ public:
     {
         handler->SendSysMessage("This command does nothing right now. Edit your local core (cs_debug.cpp) to make it do whatever you need for testing.");
         return true;
+    }
+
+    static bool HandleDebugCrashCommand(ChatHandler* handler)
+    {
+        handler->SendSysMessage("Simulating a server crash now; the process will terminate.");
+        ABORT_MSG("Crash triggered manually by %s", handler->GetNameLink().c_str());
     }
 };
 
