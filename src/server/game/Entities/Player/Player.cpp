@@ -11846,7 +11846,10 @@ InventoryResult Player::CanBankItem(uint8 bag, uint8 slot, ItemPosCountVec& dest
         return EQUIP_ERR_DONT_OWN_THAT_ITEM;
 
     if (pItem->GetTemplate()->Quality == 6)
-        return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
+    {
+        if (pItem->IsSoulBound() || pItem->IsBoundAccountWide() || pItem->IsBoundByEnchant())
+            return EQUIP_ERR_ITEM_DOESNT_GO_TO_SLOT;
+    }
 
     if (AccountBank::IsAccountBankOpen(this))
     {
