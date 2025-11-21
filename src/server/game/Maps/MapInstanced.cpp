@@ -24,6 +24,7 @@
 #include "MapManager.h"
 #include "MMapFactory.h"
 #include "ObjectMgr.h"
+#include "PoolMgr.h"
 #include "Player.h"
 #include "VMapFactory.h"
 #include "VMapManager2.h"
@@ -234,6 +235,8 @@ InstanceMap* MapInstanced::CreateInstance(uint32 InstanceId, InstanceSave* save,
     bool load_data = save != nullptr;
     map->CreateInstanceData(load_data);
 
+    sPoolMgr->EnsurePoolDataForMap(map);
+
     if (sWorld->getBoolConfig(CONFIG_INSTANCEMAP_LOAD_GRIDS))
         map->LoadAllCells();
 
@@ -286,6 +289,9 @@ bool MapInstanced::DestroyInstance(InstancedMaps::iterator &itr)
         // so in the next map creation, (EnsureGridCreated actually) VMaps will be reloaded
         Map::UnloadAll();
     }
+
+    if (!sInstanceSaveMgr->GetInstanceSave(itr->second->GetInstanceId()))
+        sPoolMgr->ClearPoolDataForMap(itr->second);
 
     // Free up the instance id and allow it to be reused for bgs and arenas (other instances are handled in the InstanceSaveMgr)
     if (itr->second->IsBattlegroundOrArena())
