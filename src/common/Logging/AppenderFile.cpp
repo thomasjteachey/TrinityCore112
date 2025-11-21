@@ -21,6 +21,8 @@
 #include "StringConvert.h"
 #include "Util.h"
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 
 AppenderFile::AppenderFile(uint8 id, std::string const& name, LogLevel level, AppenderFlags flags, std::vector<std::string_view> const& args) :
     Appender(id, name, level, flags),
@@ -114,6 +116,8 @@ FILE* AppenderFile::OpenFile(std::string const& filename, std::string const& mod
         _fileSize = ftell(ret);
         return ret;
     }
+
+    fprintf(stderr, "AppenderFile: could not open '%s' with mode '%s': %s\n", fullName.c_str(), mode.c_str(), std::strerror(errno));
 
     return nullptr;
 }
