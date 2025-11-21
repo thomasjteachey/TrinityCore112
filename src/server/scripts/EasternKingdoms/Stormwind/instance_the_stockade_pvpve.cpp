@@ -64,6 +64,7 @@ namespace StockadesPvPvE
     namespace
     {
         Position const kStockadesExteriorPosition = { -8779.9f, 834.349f, 94.6801f, 0.653013f };
+        Position const kStockadesBossPosition = { 163.445999f, 0.974434f, -25.606199f, 3.168689f };
     }
 
     namespace
@@ -76,6 +77,7 @@ namespace StockadesPvPvE
         Seconds  s_ChestDespawn = Seconds(DefaultChestDespawnSeconds);
         Position s_ChestPosition = DefaultChestPosition;
         uint32   s_BossCreatureEntry = 0;
+        std::vector<uint32> s_BossEntries;
         uint32   s_DeathChestGameObjectId = 0;
         Seconds  s_DeathChestDespawn = Seconds(DefaultDeathChestDespawnSeconds);
 
@@ -92,6 +94,7 @@ namespace StockadesPvPvE
             float const configuredZ = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnZ", DefaultChestPosition.GetPositionZ());
             float const configuredO = sConfigMgr->GetFloatDefault("StockadesPvPvE.ChestSpawnO", DefaultChestPosition.GetOrientation());
             int32 const configuredBoss = sConfigMgr->GetIntDefault("StockadesPvPvE.BossCreatureEntry", 0);
+            std::string const bossEntries = sConfigMgr->GetStringDefault("StockadesPvPvE.BossEntries", "");
             int32 const configuredDeathChest = sConfigMgr->GetIntDefault("StockadesPvPvE.DeathChestGameObjectId", 0);
             int32 const configuredDeathDespawn = sConfigMgr->GetIntDefault("StockadesPvPvE.DeathChestDespawnSeconds", int32(DefaultDeathChestDespawnSeconds));
             std::string const scarletEntries = sConfigMgr->GetStringDefault("StockadesPvPvE.ScarletDefenderEntries", "");
@@ -99,12 +102,6 @@ namespace StockadesPvPvE
             std::string const skeletonEntries = sConfigMgr->GetStringDefault("StockadesPvPvE.WrathboneSkeletonEntries", "");
 
             s_ChestGameObjectId = configuredEntry > 0 ? uint32(configuredEntry) : 0u;
-            s_ChestDespawn = Seconds(configuredDespawn >= 0 ? uint32(configuredDespawn) : DefaultChestDespawnSeconds);
-            s_ChestPosition.Relocate(configuredX, configuredY, configuredZ, configuredO);
-            s_BossCreatureEntry = configuredBoss > 0 ? uint32(configuredBoss) : 0u;
-            s_DeathChestGameObjectId = configuredDeathChest > 0 ? uint32(configuredDeathChest) : 0u;
-            s_DeathChestDespawn = Seconds(configuredDeathDespawn >= 0 ? uint32(configuredDeathDespawn) : DefaultDeathChestDespawnSeconds);
-
             auto const loadEntries = [](std::string const& rawList, std::vector<uint32>& destination, char const* label)
             {
                 destination.clear();
@@ -119,15 +116,25 @@ namespace StockadesPvPvE
                     TC_LOG_WARN("server.custom", "Stockades PvPvE: no entries configured for {} key group; boss keys will not drop for that group.", label);
             };
 
+            s_ChestDespawn = Seconds(configuredDespawn >= 0 ? uint32(configuredDespawn) : DefaultChestDespawnSeconds);
+            s_ChestPosition.Relocate(configuredX, configuredY, configuredZ, configuredO);
+            s_BossCreatureEntry = configuredBoss > 0 ? uint32(configuredBoss) : 0u;
+            s_DeathChestGameObjectId = configuredDeathChest > 0 ? uint32(configuredDeathChest) : 0u;
+            s_DeathChestDespawn = Seconds(configuredDeathDespawn >= 0 ? uint32(configuredDeathDespawn) : DefaultDeathChestDespawnSeconds);
+
             loadEntries(scarletEntries, s_ScarletDefenderEntries, "Scarlet Defender");
             loadEntries(wolfEntries, s_BigBadWolfEntries, "Big Bad Wolf");
             loadEntries(skeletonEntries, s_WrathboneSkeletonEntries, "Wrathbone Skeleton");
+            loadEntries(bossEntries, s_BossEntries, "Boss");
+
+            if (s_BossEntries.empty() && s_BossCreatureEntry)
+                s_BossEntries.push_back(s_BossCreatureEntry);
 
             if (!s_ChestGameObjectId)
                 TC_LOG_WARN("server.custom", "Stockades PvPvE: reward chest entry is 0; chest spawning is disabled.");
 
-            if (!s_BossCreatureEntry)
-                TC_LOG_WARN("server.custom", "Stockades PvPvE: boss creature entry is 0; boss defeat tracking is disabled.");
+            if (!s_BossCreatureEntry && s_BossEntries.empty())
+                TC_LOG_WARN("server.custom", "Stockades PvPvE: boss creature entries are not configured; boss defeat tracking is disabled.");
 
             if (!s_DeathChestGameObjectId)
                 TC_LOG_WARN("server.custom", "Stockades PvPvE: death chest entry is 0; death loot chests are disabled.");
@@ -157,6 +164,16 @@ namespace StockadesPvPvE
     uint32 GetBossCreatureEntry()
     {
         return s_BossCreatureEntry;
+    }
+
+    void SetBossCreatureEntry(uint32 entry)
+    {
+        s_BossCreatureEntry = entry;
+    }
+
+    std::vector<uint32> const& GetBossEntries()
+    {
+        return s_BossEntries;
     }
 
     Seconds GetChestDespawnTime()
@@ -518,6 +535,8 @@ public:
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
             }
 
+            SpawnRandomBoss();
+
             NotifyOpposingPlayersOfInvasion(player);
 
             ApplyPvpveFfaState(player);
@@ -580,6 +599,47 @@ public:
         }
 
     private:
+        void DespawnExistingBosses(std::vector<uint32> const& entries)
+        {
+            if (!instance)
+                return;
+
+            for (CreatureBySpawnIdContainer::value_type const& pair : instance->GetCreatureBySpawnIdStore())
+            {
+                Creature* creature = pair.second;
+                if (!creature)
+                    continue;
+
+                if (std::find(entries.begin(), entries.end(), creature->GetEntry()) != entries.end())
+                    creature->DespawnOrUnsummon();
+            }
+        }
+
+        void SpawnRandomBoss()
+        {
+            if (_bossSpawned)
+                return;
+
+            auto const& bossEntries = StockadesPvPvE::GetBossEntries();
+            if (bossEntries.empty())
+                return;
+
+            _bossSpawned = true;
+
+            DespawnExistingBosses(bossEntries);
+
+            uint32 const entry = Trinity::Containers::SelectRandomContainerElement(bossEntries);
+            if (Creature* boss = instance->SummonCreature(entry, StockadesPvPvE::kStockadesBossPosition))
+            {
+                StockadesPvPvE::SetBossCreatureEntry(entry);
+                _bossGuid = boss->GetGUID();
+            }
+            else
+            {
+                TC_LOG_ERROR("server.custom", "Stockades PvPvE: failed to summon boss entry {} at Stockades PvPvE location.", entry);
+            }
+        }
+
         std::string CollectMemberNames(PvpveTeam const& team) const
         {
             std::string result;
@@ -737,6 +797,8 @@ public:
         KeyDropGroup _scarletDefenders;
         KeyDropGroup _bigBadWolves;
         KeyDropGroup _wrathboneSkeletons;
+        bool         _bossSpawned = false;
+        ObjectGuid   _bossGuid = ObjectGuid::Empty;
     };
 };
 
