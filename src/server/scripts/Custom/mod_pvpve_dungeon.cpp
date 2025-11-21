@@ -30,12 +30,14 @@
 #include "Player.h"
 #include "Random.h"
 #include "ScriptMgr.h"
+#include "Spell.h"
 #include "WorldSession.h"
 
 #include <algorithm>
 #include <ctime>
 #include <set>
 #include <string>
+#include <unordered_set>
 
 namespace
 {
@@ -47,6 +49,7 @@ namespace
 
     constexpr uint32             kPvpveFfaAuraSpellId = 0;
     constexpr UnitPVPStateFlags  kPvpveFfaPvpFlag = UNIT_BYTE2_FLAG_FFA_PVP;
+    constexpr uint32             kStockadesMapId = 34;
 
     void SnapPetToLocation(Player* player, uint32 mapId, float x, float y, float z, float orientation)
     {
@@ -691,6 +694,12 @@ PvpveDungeonRun* PvpveDungeonMgr::GetRunForTeam(uint64 teamId)
 
 bool PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run, uint8& outIndex)
 {
+    if (run.BossDefeated)
+    {
+        TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: spawn points locked for run {}; boss already defeated.", run.Id);
+        return false;
+    }
+
     auto spawnList = GetSpawnPoints(run.TemplateId);
     if (!spawnList || spawnList->empty())
         return false;
@@ -1110,6 +1119,7 @@ void PvpveDungeonMgr::OnBossDefeated(uint64 runId, ObjectGuid const& creditGuid)
     }
 
     run->BossDefeated = true;
+    TC_LOG_INFO("server.custom", "PvpveDungeonMgr: boss defeated for run {}; locking further spawns.", runId);
 
     uint64 preferredWinner = 0;
     if (!creditGuid.IsEmpty())
@@ -1300,12 +1310,69 @@ namespace
 
     TeleportDestination const kAllianceTeleportDestination{ 0, -8833.38f, 628.62f, 94.0066f, 1.0646f };
     TeleportDestination const kHordeTeleportDestination{ 1, 1633.33f, -4439.09f, 15.999f, 5.3178f };
+
+    using TeleportSpellSet = std::unordered_set<uint32>;
+
+    TeleportSpellSet const kMageTeleportSpellIds
+    {
+        // Classic-era mage teleports
+        3561,  // Teleport: Stormwind
+        3562,  // Teleport: Ironforge
+        3563,  // Teleport: Undercity
+        3565,  // Teleport: Darnassus
+        3566,  // Teleport: Thunder Bluff
+        3567,  // Teleport: Orgrimmar
+
+        // Expanded capital teleports (in case the core has them enabled)
+        11416, // Teleport: Ironforge
+        11417, // Teleport: Orgrimmar
+        11418, // Teleport: Undercity
+        11419, // Teleport: Darnassus
+        11420, // Teleport: Thunder Bluff
+        32271, // Teleport: Exodar
+        32272  // Teleport: Silvermoon
+    };
+
+    bool IsStockadesMageTeleport(uint32 spellId)
+    {
+        return kMageTeleportSpellIds.find(spellId) != kMageTeleportSpellIds.end();
+    }
 }
 
 class PvpveDungeonPlayerScript : public PlayerScript
 {
 public:
     PvpveDungeonPlayerScript() : PlayerScript("pvpve_dungeon_player") {}
+
+    void OnSpellCast(Player* player, Spell* spell, bool /*skipCheck*/) override
+    {
+        if (!player || !spell)
+            return;
+
+        if (!sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
+            return;
+
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (!spellInfo)
+            return;
+
+        PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(player->GetGUID());
+        if (!run || run->BossDefeated)
+            return;
+
+        DungeonTemplate const* dungeonTemplate = sPvpveDungeonMgr->GetDungeonTemplate(run->TemplateId);
+        if (!dungeonTemplate || dungeonTemplate->MapId != kStockadesMapId)
+            return;
+
+        if (!IsStockadesMageTeleport(spellInfo->Id))
+            return;
+
+        spell->SendCastResult(SPELL_FAILED_CANT_DO_THAT_RIGHT_NOW);
+        spell->cancel();
+
+        if (WorldSession* session = player->GetSession())
+            session->SendNotification("You cannot teleport out until the Stockades boss has been defeated.");
+    }
 
     void OnPVPKill(Player* /*killer*/, Player* killed) override
     {
