@@ -22,6 +22,8 @@
 #include "Creature.h"
 #include "GameObject.h"
 #include "SpawnData.h"
+#include <unordered_set>
+#include <vector>
 
 struct PoolTemplateData
 {
@@ -114,9 +116,12 @@ class TC_GAME_API PoolMgr
         template<typename T>
         bool IsSpawnedObject(uint32 db_guid_or_pool_id, Map* map = nullptr) const { return GetActivePoolData(map).IsActiveObject<T>(db_guid_or_pool_id); }
 
+        void EnsurePoolDataForMap(Map* map);
+
         bool CheckPool(uint32 pool_id) const;
 
         void SpawnPool(uint32 pool_id);
+        void SpawnPool(uint32 pool_id, Map* map);
         void DespawnPool(uint32 pool_id, bool alwaysDeleteRespawnTime = false);
 
         template<typename T>
@@ -126,6 +131,8 @@ class TC_GAME_API PoolMgr
     private:
         template<typename T>
         void SpawnPool(uint32 pool_id, uint32 db_guid_or_pool_id, Map* map = nullptr);
+
+        bool PoolMatchesMap(uint32 pool_id, uint32 map_id) const;
 
         typedef std::unordered_map<uint32, PoolTemplateData>      PoolTemplateDataMap;
         typedef std::unordered_map<uint32, PoolGroup<Creature>>   PoolGroupCreatureMap;
@@ -141,6 +148,8 @@ class TC_GAME_API PoolMgr
         SearchMap mCreatureSearchMap;
         SearchMap mGameobjectSearchMap;
         SearchMap mPoolSearchMap;
+        std::vector<std::pair<uint32, uint32>> mPoolPoolRelations;
+        std::unordered_map<uint32, std::unordered_set<uint32>> mPoolMapAssociations;
 
         // dynamic data
         ActivePoolData& GetActivePoolData(Map* map) const;
