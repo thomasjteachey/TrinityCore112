@@ -485,7 +485,11 @@ void PoolMgr::EnsurePoolDataForMap(Map* map)
     for (auto const& [poolId, poolTemplate] : mPoolTemplate)
     {
         if (PoolMatchesMap(poolId, map->GetId()))
-            SpawnPool(poolId, map);
+        {
+            // Only spawn top-level pools; child pools are rolled recursively by their parents
+            if (!IsPartOfAPool<Pool>(poolId))
+                SpawnPool(poolId, map);
+        }
     }
 }
 
