@@ -499,7 +499,12 @@ void ThreatManager::ScaleThreat(Unit* target, float factor)
 void ThreatManager::MatchUnitThreatToHighestThreat(Unit* target)
 {
     if (_sortedThreatList->empty())
+    {
+        // Taunts on a target without a threat list entry should still create one so the caster
+        // actually gains aggro instead of only forcing attacks for the aura duration.
+        AddThreat(target, 1.0f, nullptr, true, true);
         return;
+    }
 
     auto it = _sortedThreatList->ordered_begin(), end = _sortedThreatList->ordered_end();
     ThreatReference const* highest = *it;
