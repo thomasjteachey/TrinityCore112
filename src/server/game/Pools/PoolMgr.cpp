@@ -437,6 +437,8 @@ void PoolMgr::Initialize()
     mGameobjectSearchMap.clear();
     mCreatureSearchMap.clear();
     mSpawnedData.clear();
+    mPoolPoolRelations.clear();
+    mPoolMapAssociations.clear();
 }
 
 ActivePoolData& PoolMgr::GetActivePoolData(Map* map) const
@@ -449,10 +451,13 @@ uint64 PoolMgr::GetActivePoolDataKey(Map* map) const
     if (!map)
         return 0;
 
-    uint64 key = static_cast<uint64>(map->GetId()) << 32;
-    if (map->Instanceable())
-        key |= static_cast<uint64>(map->GetInstanceId());
+    return GetActivePoolDataKey(map->GetId(), map->Instanceable() ? map->GetInstanceId() : 0);
+}
 
+uint64 PoolMgr::GetActivePoolDataKey(uint32 mapId, uint32 instanceId) const
+{
+    uint64 key = static_cast<uint64>(mapId) << 32;
+    key |= static_cast<uint64>(instanceId);
     return key;
 }
 
@@ -460,6 +465,48 @@ PoolMgr* PoolMgr::instance()
 {
     static PoolMgr instance;
     return &instance;
+}
+
+bool PoolMgr::PoolMatchesMap(uint32 pool_id, uint32 map_id) const
+{
+    auto const assoc = mPoolMapAssociations.find(pool_id);
+    return assoc != mPoolMapAssociations.end() && assoc->second.count(map_id);
+}
+
+void PoolMgr::EnsurePoolDataForMap(Map* map)
+{
+    if (!map || !map->Instanceable())
+        return;
+
+    uint64 const key = GetActivePoolDataKey(map);
+    if (mSpawnedData.find(key) != mSpawnedData.end())
+        return;
+
+    for (auto const& [poolId, poolTemplate] : mPoolTemplate)
+    {
+        if (PoolMatchesMap(poolId, map->GetId()))
+        {
+            // Only spawn top-level pools; child pools are rolled recursively by their parents
+            if (!IsPartOfAPool<Pool>(poolId))
+                SpawnPool(poolId, map);
+        }
+    }
+}
+
+void PoolMgr::ClearPoolDataForMap(Map* map)
+{
+    if (!map || !map->Instanceable())
+        return;
+
+    ClearPoolDataForMap(map->GetId(), map->GetInstanceId());
+}
+
+void PoolMgr::ClearPoolDataForMap(uint32 mapId, uint32 instanceId)
+{
+    if (!instanceId)
+        return;
+
+    mSpawnedData.erase(GetActivePoolDataKey(mapId, instanceId));
 }
 
 void PoolMgr::LoadFromDB()
@@ -541,6 +588,7 @@ void PoolMgr::LoadFromDB()
                 cregroup.AddEntry(plObject, pPoolTemplate->MaxLimit);
                 SearchPair p(guid, pool_id);
                 mCreatureSearchMap.insert(p);
+                mPoolMapAssociations[pool_id].insert(data->mapId);
 
                 ++count;
             }
@@ -611,6 +659,7 @@ void PoolMgr::LoadFromDB()
                 gogroup.AddEntry(plObject, pPoolTemplate->MaxLimit);
                 SearchPair p(guid, pool_id);
                 mGameobjectSearchMap.insert(p);
+                mPoolMapAssociations[pool_id].insert(data->mapId);
 
                 ++count;
             }
@@ -677,6 +726,7 @@ void PoolMgr::LoadFromDB()
                 plgroup.AddEntry(plObject, pPoolTemplateMother->MaxLimit);
                 SearchPair p(child_pool_id, mother_pool_id);
                 mPoolSearchMap.insert(p);
+                mPoolPoolRelations.emplace_back(mother_pool_id, child_pool_id);
 
                 ++count;
             }
@@ -708,6 +758,24 @@ void PoolMgr::LoadFromDB()
             }
 
             TC_LOG_INFO("server.loading", ">> Loaded {} pools in mother pools in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+        }
+    }
+
+    bool updatedAssociations = true;
+    while (updatedAssociations)
+    {
+        updatedAssociations = false;
+        for (auto const& relation : mPoolPoolRelations)
+        {
+            auto const childMaps = mPoolMapAssociations.find(relation.second);
+            if (childMaps == mPoolMapAssociations.end())
+                continue;
+
+            auto& parentMaps = mPoolMapAssociations[relation.first];
+            size_t const beforeSize = parentMaps.size();
+            parentMaps.insert(childMaps->second.begin(), childMaps->second.end());
+            if (parentMaps.size() != beforeSize)
+                updatedAssociations = true;
         }
     }
 
@@ -791,9 +859,14 @@ void PoolMgr::SpawnPool<Pool>(uint32 pool_id, uint32 sub_pool_id, Map* map)
 
 void PoolMgr::SpawnPool(uint32 pool_id)
 {
-    SpawnPool<Pool>(pool_id, 0);
-    SpawnPool<GameObject>(pool_id, 0);
-    SpawnPool<Creature>(pool_id, 0);
+    SpawnPool(pool_id, nullptr);
+}
+
+void PoolMgr::SpawnPool(uint32 pool_id, Map* map)
+{
+    SpawnPool<Pool>(pool_id, 0, map);
+    SpawnPool<GameObject>(pool_id, 0, map);
+    SpawnPool<Creature>(pool_id, 0, map);
 }
 
 // Call to despawn a pool, all gameobjects/creatures in this pool are removed
