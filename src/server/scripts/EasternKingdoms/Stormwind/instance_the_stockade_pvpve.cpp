@@ -823,6 +823,17 @@ public:
     {
         HandleStockadesPveHonorKill(killer, killed);
     }
+
+    void OnLogout(Player* player) override
+    {
+        if (!player)
+            return;
+
+        if (player->GetMapId() != StockadesPvPvE::StockadesMapId)
+            return;
+
+        DropDeathChest(player);
+    }
 };
 
 struct go_stockades_boss_doorAI : public GameObjectAI
