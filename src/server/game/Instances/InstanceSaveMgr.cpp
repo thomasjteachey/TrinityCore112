@@ -156,7 +156,11 @@ void InstanceSaveManager::RemoveInstanceSave(uint32 InstanceId)
         InstanceSave* save = itr->second;
 
         if (save->CanReset())
-            sPoolMgr->ClearPoolDataForMap(save->GetMapId(), save->GetInstanceId());
+        {
+            // Avoid wiping pool state while the map is still running to prevent duplicate spawns
+            if (!sMapMgr->FindMap(save->GetMapId(), save->GetInstanceId()))
+                sPoolMgr->ClearPoolDataForMap(save->GetMapId(), save->GetInstanceId());
+        }
 
         // save the resettime for normal instances only when they get unloaded
         if (time_t resettime = save->GetResetTimeForDB())
