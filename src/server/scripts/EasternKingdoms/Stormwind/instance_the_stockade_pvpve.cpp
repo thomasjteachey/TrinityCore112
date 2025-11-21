@@ -604,7 +604,7 @@ public:
             if (!instance)
                 return;
 
-            for (CreatureBySpawnIdContainer::value_type const& pair : instance->GetCreatureBySpawnIdStore())
+            for (Map::CreatureBySpawnIdContainer::value_type const& pair : instance->GetCreatureBySpawnIdStore())
             {
                 Creature* creature = pair.second;
                 if (!creature)
