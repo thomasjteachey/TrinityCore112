@@ -118,6 +118,7 @@ class TC_GAME_API PoolMgr
 
         void EnsurePoolDataForMap(Map* map);
         void ClearPoolDataForMap(Map* map);
+        void ClearPoolDataForMap(uint32 mapId, uint32 instanceId);
 
         bool CheckPool(uint32 pool_id) const;
 
@@ -155,6 +156,7 @@ class TC_GAME_API PoolMgr
         // dynamic data
         ActivePoolData& GetActivePoolData(Map* map) const;
         uint64 GetActivePoolDataKey(Map* map) const;
+        uint64 GetActivePoolDataKey(uint32 mapId, uint32 instanceId) const;
         mutable std::unordered_map<uint64, ActivePoolData> mSpawnedData;
 };
 

@@ -451,10 +451,13 @@ uint64 PoolMgr::GetActivePoolDataKey(Map* map) const
     if (!map)
         return 0;
 
-    uint64 key = static_cast<uint64>(map->GetId()) << 32;
-    if (map->Instanceable())
-        key |= static_cast<uint64>(map->GetInstanceId());
+    return GetActivePoolDataKey(map->GetId(), map->Instanceable() ? map->GetInstanceId() : 0);
+}
 
+uint64 PoolMgr::GetActivePoolDataKey(uint32 mapId, uint32 instanceId) const
+{
+    uint64 key = static_cast<uint64>(mapId) << 32;
+    key |= static_cast<uint64>(instanceId);
     return key;
 }
 
@@ -491,7 +494,15 @@ void PoolMgr::ClearPoolDataForMap(Map* map)
     if (!map || !map->Instanceable())
         return;
 
-    mSpawnedData.erase(GetActivePoolDataKey(map));
+    ClearPoolDataForMap(map->GetId(), map->GetInstanceId());
+}
+
+void PoolMgr::ClearPoolDataForMap(uint32 mapId, uint32 instanceId)
+{
+    if (!instanceId)
+        return;
+
+    mSpawnedData.erase(GetActivePoolDataKey(mapId, instanceId));
 }
 
 void PoolMgr::LoadFromDB()
