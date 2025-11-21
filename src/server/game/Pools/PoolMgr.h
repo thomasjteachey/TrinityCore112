@@ -117,6 +117,7 @@ class TC_GAME_API PoolMgr
         bool IsSpawnedObject(uint32 db_guid_or_pool_id, Map* map = nullptr) const { return GetActivePoolData(map).IsActiveObject<T>(db_guid_or_pool_id); }
 
         void EnsurePoolDataForMap(Map* map);
+        void ClearPoolDataForMap(Map* map);
 
         bool CheckPool(uint32 pool_id) const;
 

@@ -486,6 +486,14 @@ void PoolMgr::EnsurePoolDataForMap(Map* map)
     }
 }
 
+void PoolMgr::ClearPoolDataForMap(Map* map)
+{
+    if (!map || !map->Instanceable())
+        return;
+
+    mSpawnedData.erase(GetActivePoolDataKey(map));
+}
+
 void PoolMgr::LoadFromDB()
 {
     // Pool templates
