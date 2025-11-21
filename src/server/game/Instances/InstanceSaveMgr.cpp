@@ -18,6 +18,7 @@
 #include "InstanceSaveMgr.h"
 #include "Common.h"
 #include "Config.h"
+#include "PoolMgr.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "GameTime.h"
@@ -152,8 +153,17 @@ void InstanceSaveManager::RemoveInstanceSave(uint32 InstanceId)
     InstanceSaveHashMap::iterator itr = m_instanceSaveById.find(InstanceId);
     if (itr != m_instanceSaveById.end())
     {
+        InstanceSave* save = itr->second;
+
+        if (save->CanReset())
+        {
+            // Avoid wiping pool state while the map is still running to prevent duplicate spawns
+            if (!sMapMgr->FindMap(save->GetMapId(), save->GetInstanceId()))
+                sPoolMgr->ClearPoolDataForMap(save->GetMapId(), save->GetInstanceId());
+        }
+
         // save the resettime for normal instances only when they get unloaded
-        if (time_t resettime = itr->second->GetResetTimeForDB())
+        if (time_t resettime = save->GetResetTimeForDB())
         {
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_INSTANCE_RESETTIME);
 
@@ -163,7 +173,7 @@ void InstanceSaveManager::RemoveInstanceSave(uint32 InstanceId)
             CharacterDatabase.Execute(stmt);
         }
 
-        itr->second->SetToDelete(true);
+        save->SetToDelete(true);
         m_instanceSaveById.erase(itr);
     }
 }
