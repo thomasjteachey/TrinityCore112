@@ -28,6 +28,7 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include <array>
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"

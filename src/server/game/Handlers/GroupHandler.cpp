@@ -36,6 +36,14 @@
 
 class Aura;
 
+namespace
+{
+bool IsPlayerInsideStockades(Player const* player)
+{
+    return player && player->GetMapId() == 34;
+}
+}
+
 /* differeces from off:
     -you can uninvite yourself - is is useful
     -you can accept invitation even if leader went offline
@@ -76,12 +84,24 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     }
 
     Player* invitingPlayer = GetPlayer();
+    if (IsPlayerInsideStockades(invitingPlayer))
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
+        return;
+    }
+
     Player* invitedPlayer = ObjectAccessor::FindPlayerByName(membername);
 
     // no player
     if (!invitedPlayer)
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_BAD_PLAYER_NAME_S);
+        return;
+    }
+
+    if (IsPlayerInsideStockades(invitedPlayer))
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
         return;
     }
 
@@ -224,6 +244,12 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
 
     if (!group)
         return;
+
+    if (IsPlayerInsideStockades(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
+        return;
+    }
 
     // Remove player from invitees in any case
     group->RemoveInvite(GetPlayer());
@@ -407,6 +433,12 @@ void WorldSession::HandleGroupDisbandOpcode(WorldPacket & /*recvData*/)
     Group* grpInvite = GetPlayer()->GetGroupInvite();
     if (!grp && !grpInvite)
         return;
+
+    if (IsPlayerInsideStockades(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_LEAVE, GetPlayer()->GetName(), ERR_INVITE_RESTRICTED);
+        return;
+    }
 
     if (_player->InBattleground())
     {
