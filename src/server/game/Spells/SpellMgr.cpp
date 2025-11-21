@@ -31,6 +31,7 @@
 #include "Spell.h"
 #include "SpellAuraDefines.h"
 #include "SpellInfo.h"
+#include <array>
 
 bool IsNaturesGraspAura(uint32 spellId)
 {
@@ -48,6 +49,27 @@ bool IsNaturesGraspAura(uint32 spellId)
         default:
             return false;
     }
+}
+
+bool IsZulGurubClassEnchant(uint32 spellId)
+{
+    static constexpr std::array<uint32, 18> zulGurubEnchantSpells = {
+        24148, 24149, // Warrior – Presence of Might
+        24151, 24160, // Paladin – Syncretist's Sigil
+        24153, 24161, // Rogue – Death's Embrace
+        24154, 24162, // Hunter – Falcon's Call
+        24155, 24163, // Warlock/Shaman – Vodouisant's Vigilant Embrace
+        24156, 24164, // Mage – Presence of Sight
+        24157, 24165, // Warlock – Hoodoo Hex
+        24158, 24167, // Priest – Prophetic Aura
+        24159, 24168  // Druid – Animist's Caress
+    };
+
+    for (uint32 zulGurubEnchantSpell : zulGurubEnchantSpells)
+        if (zulGurubEnchantSpell == spellId)
+            return true;
+
+    return false;
 }
 
 bool IsPrimaryProfessionSkill(uint32 skill)
@@ -456,6 +478,9 @@ SpellGroupStackRule SpellMgr::CheckSpellGroupStackRules(SpellInfo const* spellIn
 {
     ASSERT(spellInfo1);
     ASSERT(spellInfo2);
+
+    if (IsZulGurubClassEnchant(spellInfo1->Id) && IsZulGurubClassEnchant(spellInfo2->Id))
+        return SPELL_GROUP_STACK_RULE_DEFAULT;
 
     uint32 spellid_1 = spellInfo1->GetFirstRankSpell()->Id;
     uint32 spellid_2 = spellInfo2->GetFirstRankSpell()->Id;

@@ -1858,44 +1858,10 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     if (this == existingAura)
         return true;
 
-    // HACK: Allow Prophetic Aura (spell 24167) to stack with itself
-    // (e.g. from helm + legs both enchanted)
-    if (m_spellInfo->Id == existingAura->GetSpellInfo()->Id)
-    {
-        switch (m_spellInfo->Id)
-        {
-            // Warrior ? Presence of Might
-        case 24148:
-        case 24149:
-            // Paladin ? Syncretist's Sigil
-        case 24151:
-        case 24160:
-            // Rogue ? Death's Embrace
-        case 24153:
-        case 24161:
-            // Hunter ? Falcon's Call
-        case 24154:
-        case 24162:
-            // Warlock/Shaman ? Vodouisant's Vigilant Embrace
-        case 24155:
-        case 24163:
-            // Mage ? Presence of Sight
-        case 24156:
-        case 24164:
-            // Warlock ? Hoodoo Hex
-        case 24157:
-        case 24165:
-            // Priest ? Prophetic Aura
-        case 24158:
-        case 24167:
-            // Druid ? Animist's Caress
-        case 24159:
-        case 24168:
-            return true;
-        default:
-            break;
-        }
-    }
+    // HACK: Allow ZG class head/leg enchants to stack with each other (e.g. helm + legs)
+    uint32 const existingSpellId = existingAura->GetSpellInfo()->Id;
+    if (IsZulGurubClassEnchant(m_spellInfo->Id) && IsZulGurubClassEnchant(existingSpellId))
+        return true;
 
     bool sameCaster = GetCasterGUID() == existingAura->GetCasterGUID();
     SpellInfo const* existingSpellInfo = existingAura->GetSpellInfo();
