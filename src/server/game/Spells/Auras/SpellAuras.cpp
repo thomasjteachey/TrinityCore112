@@ -1860,28 +1860,8 @@ bool Aura::CanStackWith(Aura const* existingAura) const
         return true;
 
     // HACK: Allow ZG class head/leg enchants to stack with each other (e.g. helm + legs)
-    static constexpr std::array<std::array<uint32, 2>, 9> zulGurubEnchantPairs = {
-        std::array<uint32, 2>{24148, 24149}, // Warrior – Presence of Might
-        std::array<uint32, 2>{24151, 24160}, // Paladin – Syncretist's Sigil
-        std::array<uint32, 2>{24153, 24161}, // Rogue – Death's Embrace
-        std::array<uint32, 2>{24154, 24162}, // Hunter – Falcon's Call
-        std::array<uint32, 2>{24155, 24163}, // Warlock/Shaman – Vodouisant's Vigilant Embrace
-        std::array<uint32, 2>{24156, 24164}, // Mage – Presence of Sight
-        std::array<uint32, 2>{24157, 24165}, // Warlock – Hoodoo Hex
-        std::array<uint32, 2>{24158, 24167}, // Priest – Prophetic Aura
-        std::array<uint32, 2>{24159, 24168}  // Druid – Animist's Caress
-    };
-
-    auto const isZulGurubEnchant = [](uint32 spellId) -> bool
-    {
-        for (auto const& pair : zulGurubEnchantPairs)
-            if (spellId == pair[0] || spellId == pair[1])
-                return true;
-        return false;
-    };
-
     uint32 const existingSpellId = existingAura->GetSpellInfo()->Id;
-    if (isZulGurubEnchant(m_spellInfo->Id) && isZulGurubEnchant(existingSpellId))
+    if (IsZulGurubClassEnchant(m_spellInfo->Id) && IsZulGurubClassEnchant(existingSpellId))
         return true;
 
     bool sameCaster = GetCasterGUID() == existingAura->GetCasterGUID();

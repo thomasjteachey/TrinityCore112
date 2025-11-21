@@ -3308,6 +3308,9 @@ Aura* Unit::_TryStackingOrRefreshingExistingAura(AuraCreateInfo& createInfo)
         // find current aura from spell and change it's stackamount, or refresh it's duration
         if (Aura* foundAura = GetOwnedAura(createInfo.GetSpellInfo()->Id, createInfo.GetSpellInfo()->IsStackableOnOneSlotWithDifferentCasters() ? ObjectGuid::Empty : createInfo.CasterGUID, createInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR0_CU_ENCHANT_PROC) ? castItemGUID : ObjectGuid::Empty))
         {
+            if (sSpellMgr->IsZulGurubClassEnchant(createInfo.GetSpellInfo()->Id) && foundAura->GetCastItemGUID() != castItemGUID)
+                return nullptr;
+
             // effect masks do not match
             // extremely rare case
             // let's just recreate aura
