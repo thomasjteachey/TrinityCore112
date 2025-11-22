@@ -48,6 +48,22 @@ void PlayerChestBuilder::AddStackableItem(uint32 itemId, uint32 count)
     if (!itemId || !count)
         return;
 
+    // First, try to top off any existing stacks of the same item instead of
+    // creating additional entries in the loot list.
+    for (LootItem& item : _items)
+    {
+        if (item.itemid != itemId || item.count >= 255)
+            continue;
+
+        uint32 const room = 255 - item.count;
+        uint32 const toAdd = std::min<uint32>(count, room);
+        item.count += toAdd;
+        count -= toAdd;
+
+        if (!count)
+            return;
+    }
+
     while (count && _items.size() < MAX_NR_LOOT_ITEMS)
     {
         uint8 const stack = static_cast<uint8>(std::min<uint32>(count, 255));
