@@ -1513,6 +1513,21 @@ public:
         PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(guid);
         if (!run)
         {
+            if (sPvpveDungeonMgr->IsPvpveDungeonMap(player->GetMapId()))
+            {
+                bool queuedNewRun = QueueForNewStockadesRun(player);
+
+                if (WorldSession* session = player->GetSession())
+                {
+                    if (queuedNewRun)
+                        session->SendNotification("You have been eliminated from this PvPvE Stockades run. You have been queued for a new run.");
+                    else
+                        session->SendNotification("You have been eliminated from this PvPvE Stockades run.");
+                }
+
+                TeleportOutImmediately(player);
+            }
+
             ClearPendingState(guid);
             return;
         }
@@ -1609,6 +1624,31 @@ private:
 
         sPvpveDungeonMgr->OnPlayerDeath(player);
         // Actual elimination is handled on release / timeout / leaving map.
+    }
+
+    bool QueueForNewStockadesRun(Player* player)
+    {
+        if (!player)
+            return false;
+
+        uint32 templateId = 0;
+        for (auto const& templatePair : sPvpveDungeonMgr->_templates)
+        {
+            DungeonTemplate const& dungeonTemplate = templatePair.second;
+            if (!dungeonTemplate.Enabled || dungeonTemplate.MapId != kStockadesMapId)
+                continue;
+
+            templateId = dungeonTemplate.Id;
+            break;
+        }
+
+        if (!templateId)
+            return false;
+
+        std::vector<ObjectGuid> memberGuids;
+        memberGuids.push_back(player->GetGUID());
+
+        return sPvpveDungeonMgr->QueueTeam(templateId, memberGuids);
     }
 
     bool MarkPlayerEliminated(Player* player)
