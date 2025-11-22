@@ -504,6 +504,19 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                 continue;
             }
 
+            std::unordered_set<uint32> memberInstanceLocks;
+            for (ObjectGuid const& memberGuid : queueItr->second.Members)
+            {
+                if (Player* member = ObjectAccessor::FindPlayer(memberGuid))
+                {
+                    if (InstancePlayerBind* bind = member->GetBoundInstance(dungeonTemplate->MapId, member->GetDifficulty(false)))
+                    {
+                        if (InstanceSave* save = bind->save)
+                            memberInstanceLocks.insert(save->GetInstanceId());
+                    }
+                }
+            }
+
             auto const runEligible = [&](PvpveDungeonRun& candidate)
             {
                 if (candidate.TemplateId != dungeonTemplate->Id)
@@ -543,6 +556,9 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                     auto lockoutItr = _playerRunLockouts.find(guid);
                     return lockoutItr != _playerRunLockouts.end() && lockoutItr->second == candidate.Id;
                 });
+
+                if (!memberInstanceLocks.empty() && candidate.InstanceId && memberInstanceLocks.count(candidate.InstanceId))
+                    return false;
 
                 return !memberHasLockout;
             };
@@ -1444,7 +1460,7 @@ public:
             return;
 
         PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(player->GetGUID());
-        if (!run || run->BossDefeated)
+        if (!run || run->BossDefeated || run->Finished)
             return;
 
         DungeonTemplate const* dungeonTemplate = sPvpveDungeonMgr->GetDungeonTemplate(run->TemplateId);
