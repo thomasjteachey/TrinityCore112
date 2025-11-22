@@ -498,6 +498,25 @@ namespace
             return; // this mob doesn't award tokens
 
         AwardHonorTokensToKillerTeam(killer, tokens);
+
+        // Also treat boss kills as the Stockades completion trigger so teleport
+        // spells unlock even if the instance death hook misses the GUID match.
+        auto const& bossEntries = StockadesPvPvE::GetBossEntries();
+        bool const killedBoss = killed->GetEntry() == StockadesPvPvE::GetBossCreatureEntry() ||
+            std::find(bossEntries.begin(), bossEntries.end(), killed->GetEntry()) != bossEntries.end();
+
+        if (!killedBoss)
+            return;
+
+        PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(killer->GetGUID());
+        if (!run || run->Finished || run->BossDefeated)
+            return;
+
+        DungeonTemplate const* dungeonTemplate = sPvpveDungeonMgr->GetDungeonTemplate(run->TemplateId);
+        if (!dungeonTemplate || dungeonTemplate->MapId != StockadesPvPvE::StockadesMapId)
+            return;
+
+        sPvpveDungeonMgr->OnBossDefeated(run->Id, killer->GetGUID());
     }
 } // anonymous namespace
 
@@ -603,7 +622,8 @@ public:
 
             uint32 const honorTokens = GetHonorTokensForCreatureEntry(creature->GetEntry());
             auto const& bossEntries = StockadesPvPvE::GetBossEntries();
-            bool const isStockadesBoss = std::find(bossEntries.begin(), bossEntries.end(), creature->GetEntry()) != bossEntries.end();
+            bool const isStockadesBoss = creature->GetGUID() == _bossGuid ||
+                std::find(bossEntries.begin(), bossEntries.end(), creature->GetEntry()) != bossEntries.end();
 
             if (isStockadesBoss)
             {
