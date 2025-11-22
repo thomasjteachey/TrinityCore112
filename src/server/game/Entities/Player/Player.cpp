@@ -22567,7 +22567,8 @@ void Player::VerifyStarfireSnare()
 
     for (UnitMoveType moveType : StarfireSnareMoveTypes)
     {
-        if (GetSpeedRate(moveType) > desiredRate)
+        float const allowedSpeed = desiredRate * playerBaseMoveSpeed[moveType];
+        if (GetSpeedRate(moveType) > desiredRate || GetSpeed(moveType) > allowedSpeed)
         {
             ApplyActiveStarfireSnare();
             return;
