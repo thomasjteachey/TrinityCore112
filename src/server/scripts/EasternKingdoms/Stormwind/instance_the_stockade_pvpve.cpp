@@ -598,7 +598,8 @@ public:
                 group->HandleDeath(creature);
 
             uint32 const honorTokens = GetHonorTokensForCreatureEntry(creature->GetEntry());
-            bool const isStockadesBoss = Trinity::Containers::Contains(StockadesPvPvE::GetBossEntries(), creature->GetEntry());
+            auto const& bossEntries = StockadesPvPvE::GetBossEntries();
+            bool const isStockadesBoss = std::find(bossEntries.begin(), bossEntries.end(), creature->GetEntry()) != bossEntries.end();
 
             if (isStockadesBoss)
             {
