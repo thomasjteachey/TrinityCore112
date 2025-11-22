@@ -127,6 +127,7 @@ public:
     PvpveDungeonRun* GetRunForTeam(uint64 teamId);
 
     void Reset();
+    void PurgeDungeonInstances();
     void HandleServerShutdown();
 
 private:

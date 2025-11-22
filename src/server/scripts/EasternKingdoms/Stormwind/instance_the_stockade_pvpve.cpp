@@ -319,9 +319,18 @@ namespace
             player->DestroyItemCount(StockadesPvPvE::BossKeyItemId, keyCount, true);
     }
 
+    GuidSet s_RecentDeathChests;
+
     void DropDeathChest(Player* victim)
     {
         if (!victim || victim->GetMapId() != StockadesPvPvE::StockadesMapId)
+            return;
+
+        ObjectGuid const victimGuid = victim->GetGUID();
+        if (!victimGuid)
+            return;
+
+        if (!s_RecentDeathChests.insert(victimGuid).second)
             return;
 
         uint32 const chestEntry = StockadesPvPvE::GetDeathChestGameObjectId();
@@ -366,6 +375,11 @@ namespace
 
             chestGO->SetLootRecipient(nullptr);
         }
+
+        victim->m_Events.AddEventAtOffset([victimGuid]()
+        {
+            s_RecentDeathChests.erase(victimGuid);
+        }, 1s);
     }
 
     // ---------------------------------------------------------------------------
@@ -584,7 +598,7 @@ public:
                 group->HandleDeath(creature);
 
             uint32 const honorTokens = GetHonorTokensForCreatureEntry(creature->GetEntry());
-            bool const isStockadesBoss = honorTokens == 8;
+            bool const isStockadesBoss = Trinity::Containers::Contains(StockadesPvPvE::GetBossEntries(), creature->GetEntry());
 
             if (isStockadesBoss)
             {

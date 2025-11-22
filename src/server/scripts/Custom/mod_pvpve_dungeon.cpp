@@ -38,6 +38,7 @@
 #include <ctime>
 #include <set>
 #include <string>
+#include <sstream>
 #include <unordered_set>
 
 namespace
@@ -171,6 +172,11 @@ PvpveDungeonMgr* PvpveDungeonMgr::Instance()
 
 PvpveDungeonMgr::PvpveDungeonMgr()
 {
+    Reset();
+}
+
+void PvpveDungeonMgr::Reset()
+{
     _nextRunId = 1;
     _nextTeamId = 1;
     _queue.clear();
@@ -183,6 +189,7 @@ PvpveDungeonMgr::PvpveDungeonMgr()
     _spawns.clear();
     _queuedPlayers.clear();
     _playerReturnLocations.clear();
+    _teamEliminationDeadlines.clear();
     _lastStatsLog = 0;
 }
 
@@ -242,6 +249,40 @@ void PvpveDungeonMgr::LoadConfigFromDB()
     } while (spawnResult->NextRow());
 
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: loaded spawn point data for {} templates.", _spawns.size());
+}
+
+void PvpveDungeonMgr::PurgeDungeonInstances()
+{
+    if (_templates.empty())
+        return;
+
+    std::set<uint32> mapIds;
+    for (auto const& pair : _templates)
+        mapIds.insert(pair.second.MapId);
+
+    if (mapIds.empty())
+        return;
+
+    std::ostringstream mapList;
+    for (auto itr = mapIds.begin(); itr != mapIds.end(); ++itr)
+    {
+        if (itr != mapIds.begin())
+            mapList << ",";
+
+        mapList << *itr;
+    }
+
+    QueryResult result = CharacterDatabase.Query("SELECT id FROM instance WHERE map IN (" + mapList.str() + ")");
+    if (!result)
+        return;
+
+    do
+    {
+        uint32 const instanceId = result->Fetch()[0].GetUInt32();
+        sInstanceSaveMgr->RemoveInstanceSave(instanceId);
+        sInstanceSaveMgr->DeleteInstanceFromDB(instanceId);
+        TC_LOG_INFO("server.custom", "PvpveDungeonMgr: purged stale PvPvE instance {}.", instanceId);
+    } while (result->NextRow());
 }
 
 bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const& memberGuids, uint64 preferredRunId)
@@ -483,7 +524,12 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                     for (uint64 cid : candidate.Teams)
                     {
                         if (PvpveTeam* t = GetTeam(cid))
+                        {
+                            if (t->Eliminated)
+                                continue;
+
                             usedIndices.insert(t->SpawnIndex);
+                        }
                     }
                 }
 
@@ -896,6 +942,7 @@ void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
         return;
 
     team->Eliminated = true;
+    run->UsedSpawnIndices.erase(team->SpawnIndex);
     _teamEliminationDeadlines.erase(team->Id);
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (triggered by player {}).", team->Id, run->Id, guid.ToString());
 
@@ -966,6 +1013,9 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
         _playerRunLockouts[guid] = run->Id;
 
     EvaluateRunState(*run);
+
+    if (run->Finished && run->Players.empty())
+        CleanupRun(run->Id);
 
     if (hasSavedLocation && player->IsInWorld())
     {
@@ -1214,6 +1264,9 @@ void PvpveDungeonMgr::FinishRun(PvpveDungeonRun& run, uint64 preferredWinner)
     TC_LOG_DEBUG("server.custom", "PvpveDungeonMgr: TODO distribute rewards for run {}.", run.Id);
 
     ClearRunLockouts(run.Id);
+
+    if (run.Players.empty())
+        CleanupRun(run.Id);
 }
 
 void PvpveDungeonMgr::ClearRunLockouts(uint64 runId)
@@ -1225,6 +1278,39 @@ void PvpveDungeonMgr::ClearRunLockouts(uint64 runId)
         else
             ++itr;
     }
+}
+
+void PvpveDungeonMgr::CleanupRun(uint64 runId)
+{
+    auto runItr = _runs.find(runId);
+    if (runItr == _runs.end())
+        return;
+
+    PvpveDungeonRun const& run = runItr->second;
+
+    for (ObjectGuid const& guid : run.Players)
+    {
+        _playerToRun.erase(guid);
+        _playerToTeam.erase(guid);
+        _queuedPlayers.erase(guid);
+        _playerReturnLocations.erase(guid);
+    }
+
+    for (uint64 teamId : run.Teams)
+    {
+        _teamEliminationDeadlines.erase(teamId);
+        _teams.erase(teamId);
+    }
+
+    ClearRunLockouts(runId);
+
+    if (run.InstanceId)
+    {
+        sInstanceSaveMgr->RemoveInstanceSave(run.InstanceId);
+        sInstanceSaveMgr->DeleteInstanceFromDB(run.InstanceId);
+    }
+
+    _runs.erase(runItr);
 }
 
 void PvpveDungeonMgr::TrackQueuedMembers(std::vector<ObjectGuid> const& members)
@@ -1624,7 +1710,9 @@ namespace
 
         void OnStartup() override
         {
+            PvpveDungeonMgr::instance()->Reset();
             PvpveDungeonMgr::instance()->LoadConfigFromDB();
+            PvpveDungeonMgr::instance()->PurgeDungeonInstances();
         }
 
         void OnUpdate(uint32 diff) override
