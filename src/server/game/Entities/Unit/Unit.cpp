@@ -11725,7 +11725,7 @@ void Unit::SetTaunted(bool apply)
         if (caster)
         {
             GetMotionMaster()->MoveChase(caster);
-            ToPlayer()->CastStop();
+            CastStop();
             Attack(caster, true);
         }
     }
