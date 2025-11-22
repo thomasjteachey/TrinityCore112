@@ -1036,7 +1036,7 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
             // binding so a future queue attempt cannot reattach them to the same in-progress
             // instance before the lockout check runs.
             player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
-            _playerRunLockouts[guid] = run->Id;
+            _playerRunLockouts[guid] = PlayerRunLockout{ run->Id, runInstanceId };
         }
     }
     else if (run->Finished)
