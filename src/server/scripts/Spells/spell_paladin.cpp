@@ -138,6 +138,8 @@ enum PaladinSpells
     SPELL_PALADIN_LESSER_HAND_OF_FREEDOM = 81277,
     SPELL_PALADIN_IMP_HAND_OF_FREEDOM = 81278,
 
+    SPELL_PALADIN_PARTY_DAMAGE_REDIRECT = 83256,
+
     SPELL_PALADIN_SANCTIFIED_SEALS = 81279
 };
 
@@ -2280,6 +2282,104 @@ class spell_pal_seal_of_justice_wrapper : public SpellScript
     }
 };
 
+class spell_pal_party_damage_redirect : public AuraScript
+{
+    PrepareAuraScript(spell_pal_party_damage_redirect);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PALADIN_PARTY_DAMAGE_REDIRECT });
+    }
+
+    bool IsCasterInBreakableCrowdControl(Unit* caster) const
+    {
+        // Mirror the crowd-control exclusions used by Ignite Spread.
+        return caster->HasAuraWithMechanic((1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_SAPPED));
+    }
+
+    MeleeHitOutcome RollAvoidance(Unit* attacker, Unit* paladin) const
+    {
+        Unit* swingAttacker = attacker ? attacker : paladin;
+
+        float dodgeChance = swingAttacker->GetUnitDodgeChance(BASE_ATTACK, paladin);
+        float parryChance = swingAttacker->GetUnitParryChance(BASE_ATTACK, paladin);
+        float blockChance = swingAttacker->GetUnitBlockChance(BASE_ATTACK, paladin);
+
+        uint32 roll = urand(0, 9999);
+        uint32 cumulativeChance = 0;
+
+        cumulativeChance += static_cast<uint32>(dodgeChance * 100.0f);
+        if (cumulativeChance && roll < cumulativeChance)
+            return MELEE_HIT_DODGE;
+
+        cumulativeChance += static_cast<uint32>(parryChance * 100.0f);
+        if (cumulativeChance && roll < cumulativeChance)
+            return MELEE_HIT_PARRY;
+
+        cumulativeChance += static_cast<uint32>(blockChance * 100.0f);
+        if (cumulativeChance && roll < cumulativeChance)
+            return MELEE_HIT_BLOCK;
+
+        return MELEE_HIT_NORMAL;
+    }
+
+    void Split(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& splitAmount)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target || caster == target)
+            return;
+
+        if (!splitAmount)
+            return;
+
+        if (IsCasterInBreakableCrowdControl(caster))
+        {
+            splitAmount = 0;
+            return;
+        }
+
+        Unit* attacker = dmgInfo.GetAttacker();
+
+        uint32 redirected = std::min(splitAmount, dmgInfo.GetDamage());
+        splitAmount = 0;
+
+        if (!redirected)
+            return;
+
+        dmgInfo.AbsorbDamage(redirected);
+
+        MeleeHitOutcome outcome = RollAvoidance(attacker, caster);
+        if (outcome == MELEE_HIT_DODGE || outcome == MELEE_HIT_PARRY)
+            return;
+
+        uint32 blocked = 0;
+        if (outcome == MELEE_HIT_BLOCK)
+        {
+            blocked = std::min<uint32>(redirected, caster->GetShieldBlockValue());
+            redirected -= blocked;
+        }
+
+        if (!redirected)
+            return;
+
+        uint32 redirectedAbsorb = 0;
+        Unit::DealDamageMods(caster, redirected, &redirectedAbsorb);
+
+        if (attacker)
+            attacker->SendSpellNonMeleeDamageLog(caster, aurEff->GetSpellInfo()->Id, redirected, SPELL_SCHOOL_MASK_NORMAL, redirectedAbsorb, blocked, dmgInfo.GetDamageType() == DOT, 0, false, true);
+
+        CleanDamage cleanDamage(redirected, redirectedAbsorb, BASE_ATTACK, MELEE_HIT_NORMAL);
+        Unit::DealDamage(attacker ? attacker : caster, caster, redirected, &cleanDamage, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, aurEff->GetSpellInfo(), false);
+    }
+
+    void Register() override
+    {
+        OnEffectSplit += AuraEffectSplitFn(spell_pal_party_damage_redirect::Split, EFFECT_0);
+    }
+};
+
+
 
 
 void AddSC_paladin_spell_scripts()
@@ -2343,4 +2443,5 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_pal_hand_of_freedom);
     RegisterSpellScript(spell_pal_seal_of_justice_wrapper);
     RegisterSpellScript(spell_pal_hs_cd_reduce);
+    RegisterSpellScript(spell_pal_party_damage_redirect);
 }
