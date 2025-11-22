@@ -61,6 +61,11 @@ class account_bank_player_script : public PlayerScript
 public:
     account_bank_player_script() : PlayerScript("account_bank_player_script") { }
 
+    void OnLogin(Player* player) override
+    {
+        AccountBank::HandleLogin(player);
+    }
+
     void OnLogout(Player* player) override
     {
         AccountBank::CloseAccountBank(player);

@@ -43,6 +43,7 @@ namespace AccountBank
     void CloseAccountBank(Player* player);
     void UpdateAccountBankSession(Player* player);
     void UpdateAccountBankSessions();
+    void HandleLogin(Player* player);
     bool IsAccountBankOpen(Player const* player);
     bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid);
 }
