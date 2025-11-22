@@ -86,7 +86,7 @@ namespace
 
     void HandleFatalSignal(int signalId, char const* signalName)
     {
-        std::string formattedMessage = StringFormat("\nCaught fatal signal {} ({})\n", signalId, signalName);
+        std::string formattedMessage = Trinity::StringFormat("\nCaught fatal signal {} ({})\n", signalId, signalName);
         LogCrashMessage(formattedMessage);
         fprintf(stderr, "%s", formattedMessage.c_str());
         fflush(stderr);
