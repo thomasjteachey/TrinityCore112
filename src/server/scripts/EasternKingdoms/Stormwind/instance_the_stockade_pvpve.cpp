@@ -354,7 +354,8 @@ namespace
             chest.AddStackableItem(StockadesPvPvE::BossKeyItemId, bossKeyCount);
 
         std::vector<CustomLootChests::ItemLocation> artifactItems;
-        CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems);
+        CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems,
+            { StockadesPvPvE::HonorTokenItemId });
 
         if (GameObject* chestGO = chest.Summon())
         {

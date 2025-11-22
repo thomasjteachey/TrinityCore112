@@ -115,7 +115,8 @@ GameObject* PlayerChestBuilder::Summon() const
     return chest;
 }
 
-void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems)
+void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems,
+    std::unordered_set<uint32> const& excludedEntries)
 {
     if (!player)
         return;
@@ -127,7 +128,7 @@ void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestB
 
         if (ItemTemplate const* proto = item->GetTemplate())
         {
-            if (proto->Quality == quality)
+            if (proto->Quality == quality && !excludedEntries.count(item->GetEntry()))
             {
                 chest.AddItem(item);
                 removedItems.push_back({ bag, slot });

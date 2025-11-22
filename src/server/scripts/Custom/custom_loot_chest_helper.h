@@ -23,6 +23,7 @@
 #include "Loot.h"
 #include "Player.h"
 #include "SharedDefines.h"
+#include <unordered_set>
 #include <vector>
 
 namespace CustomLootChests
@@ -53,7 +54,8 @@ private:
     mutable std::vector<LootItem> _items;
 };
 
-void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems);
+void CollectItemsWithQuality(Player* player, ItemQualities quality, PlayerChestBuilder& chest, std::vector<ItemLocation>& removedItems,
+    std::unordered_set<uint32> const& excludedEntries = {});
 }
 
 #endif // CUSTOM_LOOT_CHEST_HELPER_H
