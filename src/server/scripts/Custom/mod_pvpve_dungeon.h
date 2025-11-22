@@ -155,10 +155,16 @@ private:
     void ForceEliminateTeam(PvpveTeam& team, PvpveDungeonRun& run);
     void MaintainActivePlayerPvpState();
 
+    struct PlayerRunLockout
+    {
+        uint64 RunId = 0;
+        uint32 InstanceId = 0;
+    };
+
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
     using TeamContainer = std::map<uint64, PvpveTeam>;
-    using PlayerRunMap = std::map<ObjectGuid, uint64>;
+    using PlayerRunMap = std::map<ObjectGuid, PlayerRunLockout>;
     using PlayerTeamMap = std::map<ObjectGuid, uint64>;
     using TemplateContainer = std::map<uint32, DungeonTemplate>;
     using SpawnContainer = std::map<uint32, std::vector<SpawnPoint>>;
