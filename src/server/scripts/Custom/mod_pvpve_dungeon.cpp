@@ -17,6 +17,7 @@
 
 #include "mod_pvpve_dungeon.h"
 
+#include "Group.h"
 #include "Chat.h"
 #include "Duration.h"
 #include "DatabaseEnv.h"
@@ -1021,8 +1022,10 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
 
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: player {} left PvPvE map, treating as elimination in run {}.", guid.ToString(), run->Id);
 
+    // Leaving the map is an elimination event.
     OnPlayerEliminated(player);
 
+    // Detach the player from this run?s bookkeeping.
     auto playerListItr = std::find(run->Players.begin(), run->Players.end(), guid);
     if (playerListItr != run->Players.end())
         run->Players.erase(playerListItr);
@@ -1033,18 +1036,29 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     _playerToTeam.erase(guid);
     ClearReturnLocation(guid);
 
-    // Always unbind the player from the Stockades instance when they leave a PvPvE run.
-    // Otherwise, TeleportTo() will keep sending them back to the same instance ID.
+    // Always unbind the player AND their group from this dungeon instance so we
+    // never get shoved back into the same physical Stockades run.
     if (DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId))
     {
-        player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
+        Difficulty const diff = player->GetDifficulty(false);
+
+        // Personal bind
+        player->UnbindInstance(dungeonTemplate->MapId, diff);
+
+        // Group bind ? this is what was causing ?invade same person twice / on their spawn?
+        if (Group* group = player->GetGroup())
+            group->UnbindInstance(dungeonTemplate->MapId, uint8(diff), false);
     }
 
-    // Lockout logic: they may not re-enter this run again while it is active.
+    // Lockout logic: they may not re-enter THIS run again while it is active.
+    uint32 const runInstanceId =
+        run->InstanceId ? run->InstanceId :
+        (run->InstanceMap ? run->InstanceMap->GetInstanceId() : 0u);
+
     if (run->Finished)
         _playerRunLockouts.erase(guid);
     else
-        _playerRunLockouts.emplace(guid, PlayerRunLockout{ run->Id, run->InstanceId });
+        RecordPlayerRunLockout(guid, run->Id, runInstanceId);
 
     EvaluateRunState(*run);
 
