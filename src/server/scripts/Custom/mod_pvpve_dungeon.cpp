@@ -1004,6 +1004,10 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
         }
         else
         {
+            // The player was eliminated while the run is still active. Clear any existing instance
+            // binding so a future queue attempt cannot reattach them to the same in-progress
+            // instance before the lockout check runs.
+            player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
             _playerRunLockouts[guid] = run->Id;
         }
     }
