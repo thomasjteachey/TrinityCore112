@@ -164,7 +164,7 @@ private:
     using QueueContainer = std::map<uint64, QueuedTeam>;
     using RunContainer = std::map<uint64, PvpveDungeonRun>;
     using TeamContainer = std::map<uint64, PvpveTeam>;
-    using PlayerRunMap = std::map<ObjectGuid, PlayerRunLockout>;
+    using PlayerRunMap = std::map<ObjectGuid, uint64>;
     using PlayerTeamMap = std::map<ObjectGuid, uint64>;
     using TemplateContainer = std::map<uint32, DungeonTemplate>;
     using SpawnContainer = std::map<uint32, std::vector<SpawnPoint>>;
