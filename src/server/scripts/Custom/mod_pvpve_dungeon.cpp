@@ -972,6 +972,13 @@ void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
     _teamEliminationDeadlines.erase(team->Id);
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (triggered by player {}).", team->Id, run->Id, guid.ToString());
 
+    uint32 const runInstanceId = run->InstanceId ? run->InstanceId : (run->InstanceMap ? run->InstanceMap->GetInstanceId() : 0u);
+    if (runInstanceId)
+    {
+        for (ObjectGuid const& memberGuid : team->Members)
+            _playerRunLockouts[memberGuid] = PlayerRunLockout{ run->Id, runInstanceId };
+    }
+
     EvaluateRunState(*run);
 }
 
