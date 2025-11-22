@@ -2708,11 +2708,13 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
 
             switch (spellEffectInfo.ApplyAuraName)
             {
+                case SPELL_AURA_BIND_SIGHT:
+                    spellInfo->AttributesEx3 |= SPELL_ATTR3_NO_INITIAL_AGGRO;
+                    [[fallthrough]];
                 case SPELL_AURA_CONVERT_RUNE:   // Can't be saved - aura handler relies on calculated amount and changes it
                 case SPELL_AURA_OPEN_STABLE:    // No point in saving this, since the stable dialog can't be open on aura load anyway.
                 // Auras that require both caster & target to be in world cannot be saved
                 case SPELL_AURA_CONTROL_VEHICLE:
-                case SPELL_AURA_BIND_SIGHT:
                 case SPELL_AURA_MOD_POSSESS:
                 case SPELL_AURA_MOD_POSSESS_PET:
                 case SPELL_AURA_MOD_CHARM:
