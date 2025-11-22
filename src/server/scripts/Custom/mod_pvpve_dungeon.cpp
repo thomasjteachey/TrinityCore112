@@ -344,7 +344,7 @@ bool PvpveDungeonMgr::QueueTeam(uint32 templateId, std::vector<ObjectGuid> const
         if (preferredRunId)
         {
             auto lockoutItr = _playerRunLockouts.find(guid);
-            if (lockoutItr != _playerRunLockouts.end() && lockoutItr->second == preferredRunId)
+            if (lockoutItr != _playerRunLockouts.end() && lockoutItr->second.RunId == preferredRunId)
             {
                 TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} was eliminated from run {} and cannot rejoin it.", guid.ToString(), preferredRunId);
                 return false;
@@ -399,7 +399,7 @@ bool PvpveDungeonMgr::QueueTeam(uint64 teamId, uint64 preferredRunId)
                 continue;
 
             auto lockoutItr = _playerRunLockouts.find(guid);
-            if (lockoutItr != _playerRunLockouts.end() && lockoutItr->second == preferredRunId)
+            if (lockoutItr != _playerRunLockouts.end() && lockoutItr->second.RunId == preferredRunId)
             {
                 TC_LOG_WARN("server.custom", "PvpveDungeonMgr: cannot queue team {} for run {}; player {} has already been eliminated from it.",
                     teamId, preferredRunId, guid.ToString());
@@ -554,7 +554,17 @@ void PvpveDungeonMgr::Update(uint32 /*diff*/)
                     [this, &candidate](ObjectGuid const& guid)
                 {
                     auto lockoutItr = _playerRunLockouts.find(guid);
-                    return lockoutItr != _playerRunLockouts.end() && lockoutItr->second == candidate.Id;
+                    if (lockoutItr == _playerRunLockouts.end())
+                        return false;
+
+                    PlayerRunLockout const& lockout = lockoutItr->second;
+                    if (lockout.RunId && lockout.RunId == candidate.Id)
+                        return true;
+
+                    if (lockout.InstanceId && candidate.InstanceId && lockout.InstanceId == candidate.InstanceId)
+                        return true;
+
+                    return false;
                 });
 
                 if (!memberInstanceLocks.empty() && candidate.InstanceId && memberInstanceLocks.count(candidate.InstanceId))
@@ -1011,6 +1021,8 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     _playerToTeam.erase(guid);
     ClearReturnLocation(guid);
 
+    uint32 const runInstanceId = run->InstanceId ? run->InstanceId : (run->InstanceMap ? run->InstanceMap->GetInstanceId() : player->GetInstanceId());
+
     if (DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId))
     {
         if (run->Finished)
@@ -1020,13 +1032,13 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
         }
         else
         {
-            _playerRunLockouts[guid] = run->Id;
+            _playerRunLockouts[guid] = PlayerRunLockout{ run->Id, runInstanceId };
         }
     }
     else if (run->Finished)
         _playerRunLockouts.erase(guid);
     else
-        _playerRunLockouts[guid] = run->Id;
+        _playerRunLockouts[guid] = PlayerRunLockout{ run->Id, runInstanceId };
 
     EvaluateRunState(*run);
 
@@ -1289,7 +1301,7 @@ void PvpveDungeonMgr::ClearRunLockouts(uint64 runId)
 {
     for (auto itr = _playerRunLockouts.begin(); itr != _playerRunLockouts.end();)
     {
-        if (itr->second == runId)
+        if (itr->second.RunId == runId)
             itr = _playerRunLockouts.erase(itr);
         else
             ++itr;
