@@ -624,8 +624,20 @@ void UpdateAccountBankSessions()
         ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(guidLow);
         if (Player* player = ObjectAccessor::FindPlayer(guid))
             UpdateAccountBankSession(player);
-        else
-            AccountSessions.erase(guidLow);
     }
+}
+
+void HandleLogin(Player* player)
+{
+    if (!player)
+        return;
+
+    SessionState* session = GetSession(player);
+    if (!session)
+        return;
+
+    SaveAccountBankView(player);
+    RestoreCharacterBankItems(player, *session);
+    AccountSessions.erase(player->GetGUID().GetCounter());
 }
 }
