@@ -272,7 +272,8 @@ void PvpveDungeonMgr::PurgeDungeonInstances()
         mapList << *itr;
     }
 
-    QueryResult result = CharacterDatabase.Query("SELECT id FROM instance WHERE map IN (" + mapList.str() + ")");
+    std::string query = "SELECT id FROM instance WHERE map IN (" + mapList.str() + ")";
+    QueryResult result = CharacterDatabase.Query(query.c_str());
     if (!result)
         return;
 
