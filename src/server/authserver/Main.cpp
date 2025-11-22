@@ -84,7 +84,11 @@ variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, s
 int main(int argc, char** argv)
 {
     Trinity::Impl::CurrentServerProcessHolder::_type = SERVER_PROCESS_AUTHSERVER;
+#if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
     signal(SIGABRT, &Trinity::AbortHandler);
+#else
+    Trinity::InitCrashSignalHandlers();
+#endif
 
     Trinity::VerifyOsVersion();
 

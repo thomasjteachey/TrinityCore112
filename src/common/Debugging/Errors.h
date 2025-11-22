@@ -36,6 +36,10 @@ namespace Trinity
     TC_COMMON_API void Warning(char const* file, int line, char const* function, char const* message);
 
     [[noreturn]] TC_COMMON_API void AbortHandler(int sigval);
+#if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
+    TC_COMMON_API void FatalSignalHandler(int sigval);
+    TC_COMMON_API void InitCrashSignalHandlers();
+#endif
 
 } // namespace Trinity
 
