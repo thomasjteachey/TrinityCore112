@@ -18,9 +18,12 @@
 #include "Errors.h"
 #include "Log.h"
 #include "StringFormat.h"
+#include <atomic>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdarg>
+#include <cstring>
 #include <thread>
 #include <sstream>
 
@@ -77,6 +80,18 @@ namespace
         fflush(stderr);
 
         free(symbols);
+    }
+
+    std::atomic_bool HandlingFatalSignal = false;
+
+    void HandleFatalSignal(int signalId, char const* signalName)
+    {
+        std::string formattedMessage = StringFormat("\nCaught fatal signal {} ({})\n", signalId, signalName);
+        LogCrashMessage(formattedMessage);
+        fprintf(stderr, "%s", formattedMessage.c_str());
+        fflush(stderr);
+
+        LogStackTrace();
     }
 #endif
 
@@ -200,6 +215,40 @@ void AbortHandler(int sigval)
     fflush(stderr);
     Crash(formattedMessage.c_str());
 }
+
+#if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
+void FatalSignalHandler(int sigval)
+{
+    // prevent recursive handling that might occur if the crash originates inside the handler itself
+    if (HandlingFatalSignal.exchange(true))
+        raise(sigval);
+
+    char const* name = strsignal(sigval);
+    HandleFatalSignal(sigval, name ? name : "unknown");
+
+    // Restore default handler and re-raise so normal core dumps or debugger hooks still occur
+    signal(sigval, SIG_DFL);
+    raise(sigval);
+}
+
+void InitCrashSignalHandlers()
+{
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = &FatalSignalHandler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESETHAND;
+
+    sigaction(SIGSEGV, &action, nullptr);
+    sigaction(SIGFPE, &action, nullptr);
+    sigaction(SIGILL, &action, nullptr);
+#ifdef SIGBUS
+    sigaction(SIGBUS, &action, nullptr);
+#endif
+
+    signal(SIGABRT, &AbortHandler);
+}
+#endif
 
 } // namespace Trinity
 
