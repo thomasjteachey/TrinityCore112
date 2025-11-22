@@ -129,6 +129,32 @@ bool PvpveDungeonMgr::IsPvpveDungeonMap(uint32 mapId) const
     return false;
 }
 
+bool PvpveDungeonMgr::HasRunLockoutForMap(ObjectGuid const& guid, uint32 mapId) const
+{
+    if (!guid || !mapId)
+        return false;
+
+    auto lockoutItr = _playerRunLockouts.find(guid);
+    if (lockoutItr == _playerRunLockouts.end())
+        return false;
+
+    auto runItr = _runs.find(lockoutItr->second);
+    if (runItr == _runs.end())
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} has a lockout for missing run {}.", guid.ToString(), lockoutItr->second);
+        return true;
+    }
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(runItr->second.TemplateId);
+    if (!dungeonTemplate)
+    {
+        TC_LOG_WARN("server.custom", "PvpveDungeonMgr: player {} has a lockout for run {} with unknown template {}.", guid.ToString(), lockoutItr->second, runItr->second.TemplateId);
+        return true;
+    }
+
+    return dungeonTemplate->MapId == mapId;
+}
+
 void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstance* instanceScript)
 {
     if (!player || !instanceScript)
@@ -1515,14 +1541,24 @@ public:
         {
             if (sPvpveDungeonMgr->IsPvpveDungeonMap(player->GetMapId()))
             {
-                bool queuedNewRun = QueueForNewStockadesRun(player);
+                bool queuedNewRun = false;
 
-                if (WorldSession* session = player->GetSession())
+                if (sPvpveDungeonMgr->HasRunLockoutForMap(guid, player->GetMapId()))
                 {
-                    if (queuedNewRun)
-                        session->SendNotification("You have been eliminated from this PvPvE Stockades run. You have been queued for a new run.");
-                    else
-                        session->SendNotification("You have been eliminated from this PvPvE Stockades run.");
+                    if (WorldSession* session = player->GetSession())
+                        session->SendNotification("You have been eliminated from this PvPvE Stockades run and cannot rejoin this instance.");
+                }
+                else
+                {
+                    queuedNewRun = QueueForNewStockadesRun(player);
+
+                    if (WorldSession* session = player->GetSession())
+                    {
+                        if (queuedNewRun)
+                            session->SendNotification("You have been eliminated from this PvPvE Stockades run. You have been queued for a new run.");
+                        else
+                            session->SendNotification("You have been eliminated from this PvPvE Stockades run.");
+                    }
                 }
 
                 TeleportOutImmediately(player);

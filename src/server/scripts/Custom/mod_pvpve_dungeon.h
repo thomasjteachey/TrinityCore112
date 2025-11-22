@@ -119,6 +119,7 @@ public:
     bool IsPlayerInPvpveRun(ObjectGuid const& guid) const;
     bool IsPlayerInPvpveRun(Player const* player) const;
     bool IsPvpveDungeonMap(uint32 mapId) const;
+    bool HasRunLockoutForMap(ObjectGuid const& guid, uint32 mapId) const;
     WorldLocation const* GetReturnLocation(ObjectGuid const& guid) const;
 
     PvpveDungeonRun* GetRun(uint64 runId);
