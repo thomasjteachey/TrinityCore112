@@ -230,7 +230,12 @@ namespace DireMaulBeads
         chest.AddStackableItem(beadItemId, beadCount);
         if (honorTokenCount)
             chest.AddStackableItem(HonorTokenItemId, honorTokenCount);
-        CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems);
+
+        std::unordered_set<uint32> excludedArtifacts = { HonorTokenItemId };
+        if (beadItemId)
+            excludedArtifacts.insert(beadItemId);
+
+        CustomLootChests::CollectItemsWithQuality(victim, ITEM_QUALITY_ARTIFACT, chest, artifactItems, excludedArtifacts);
 
         if (GameObject* spawnedChest = chest.Summon())
         {
