@@ -768,13 +768,20 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         // Let's copy the list so we can prevent iterator invalidation
         AuraEffectList vCopyDamageCopy(victim->GetAuraEffectsByType(SPELL_AURA_SHARE_DAMAGE_PCT));
         // copy damage to casters of this aura
+        static uint32 const PARTY_DAMAGE_REDIRECT_SPELL_ID = 83256;
+
         for (AuraEffectList::iterator i = vCopyDamageCopy.begin(); i != vCopyDamageCopy.end(); ++i)
         {
             // Check if aura was removed during iteration - we don't need to work on such auras
             if (!((*i)->GetBase()->IsAppliedOnTarget(victim->GetGUID())))
                 continue;
             // check damage school mask
-            if (((*i)->GetMiscValue() & damageSchoolMask) == 0)
+            uint32 splitSchoolMask = (*i)->GetMiscValue();
+            // Party Damage Redirect should share all damage schools but re-route as physical on the paladin.
+            if ((*i)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID)
+                splitSchoolMask = SPELL_SCHOOL_MASK_ALL;
+
+            if ((splitSchoolMask & damageSchoolMask) == 0)
                 continue;
 
             Unit* shareDamageTarget = (*i)->GetCaster();
