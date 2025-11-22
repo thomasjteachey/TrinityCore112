@@ -942,7 +942,6 @@ void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
         return;
 
     team->Eliminated = true;
-    run->UsedSpawnIndices.erase(team->SpawnIndex);
     _teamEliminationDeadlines.erase(team->Id);
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (triggered by player {}).", team->Id, run->Id, guid.ToString());
 
