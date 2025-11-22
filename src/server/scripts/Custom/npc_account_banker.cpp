@@ -61,7 +61,7 @@ class account_bank_player_script : public PlayerScript
 public:
     account_bank_player_script() : PlayerScript("account_bank_player_script") { }
 
-    void OnLogin(Player* player) override
+    void OnLogin(Player* player, bool /*firstLogin*/) override
     {
         AccountBank::HandleLogin(player);
     }
