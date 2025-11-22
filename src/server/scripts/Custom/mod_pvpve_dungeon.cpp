@@ -160,7 +160,15 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
                 instanceId = map->GetInstanceId();
 
         if (instanceId)
+        {
             ChatHandler(session).PSendSysMessage("PvPvE Stockades instance ID: %u", instanceId);
+
+            // Flag the player as locked to this run as soon as they enter the instance so they cannot
+            // re-enter it after leaving, even if they were not eliminated inside the run.
+            _playerRunLockouts[player->GetGUID()] = PlayerRunLockout{ run->Id, instanceId };
+            if (!run->InstanceId)
+                run->InstanceId = instanceId;
+        }
     }
 }
 
