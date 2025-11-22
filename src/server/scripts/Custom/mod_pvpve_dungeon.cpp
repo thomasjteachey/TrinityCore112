@@ -1033,28 +1033,18 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     _playerToTeam.erase(guid);
     ClearReturnLocation(guid);
 
-    uint32 const runInstanceId = run->InstanceId ? run->InstanceId : (run->InstanceMap ? run->InstanceMap->GetInstanceId() : player->GetInstanceId());
-
+    // Always unbind the player from the Stockades instance when they leave a PvPvE run.
+    // Otherwise, TeleportTo() will keep sending them back to the same instance ID.
     if (DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId))
     {
-        if (run->Finished)
-        {
-            player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
-            _playerRunLockouts.erase(guid);
-        }
-        else
-        {
-            // The player was eliminated while the run is still active. Clear any existing instance
-            // binding so a future queue attempt cannot reattach them to the same in-progress
-            // instance before the lockout check runs.
-            player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
-            RecordPlayerRunLockout(guid, run->Id, runInstanceId);
-        }
+        player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
     }
-    else if (run->Finished)
+
+    // Lockout logic: they may not re-enter this run again while it is active.
+    if (run->Finished)
         _playerRunLockouts.erase(guid);
     else
-        RecordPlayerRunLockout(guid, run->Id, runInstanceId);
+        _playerRunLockouts[guid] = run->Id;
 
     EvaluateRunState(*run);
 
@@ -1064,7 +1054,8 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     if (hasSavedLocation && player->IsInWorld())
     {
         player->TeleportTo(savedLocation.GetMapId(),
-            savedLocation.GetPositionX(), savedLocation.GetPositionY(), savedLocation.GetPositionZ(), savedLocation.GetOrientation());
+            savedLocation.GetPositionX(), savedLocation.GetPositionY(),
+            savedLocation.GetPositionZ(), savedLocation.GetOrientation());
     }
 }
 
