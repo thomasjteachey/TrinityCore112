@@ -93,7 +93,7 @@ class TC_GAME_API InstanceSave
             _playerListLock.unlock();
 
             //delete here if needed, after releasing the lock
-            if (m_toDelete)
+            if (m_toDelete && !isStillValid)
                 delete this;
 
             return isStillValid;
@@ -104,7 +104,7 @@ class TC_GAME_API InstanceSave
         {
             m_groupList.remove(group);
             bool isStillValid = UnloadIfEmpty();
-            if (m_toDelete)
+            if (m_toDelete && !isStillValid)
                 delete this;
             return isStillValid;
         }
