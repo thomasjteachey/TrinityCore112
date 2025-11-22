@@ -165,7 +165,7 @@ void PvpveDungeonMgr::OnPlayerEnteredInstance(Player* player, PvpveDungeonInstan
 
             // Flag the player as locked to this run as soon as they enter the instance so they cannot
             // re-enter it after leaving, even if they were not eliminated inside the run.
-            _playerRunLockouts[player->GetGUID()] = PlayerRunLockout{ run->Id, instanceId };
+            RecordPlayerRunLockout(player->GetGUID(), run->Id, instanceId);
             if (!run->InstanceId)
                 run->InstanceId = instanceId;
         }
@@ -981,10 +981,8 @@ void PvpveDungeonMgr::OnPlayerEliminated(Player* player)
     TC_LOG_INFO("server.custom", "PvpveDungeonMgr: team {} eliminated in run {} (triggered by player {}).", team->Id, run->Id, guid.ToString());
 
     uint32 const runInstanceId = run->InstanceId ? run->InstanceId : (run->InstanceMap ? run->InstanceMap->GetInstanceId() : 0u);
-    PlayerRunLockout const lockout{ run->Id, runInstanceId };
-
     for (ObjectGuid const& memberGuid : team->Members)
-        _playerRunLockouts[memberGuid] = lockout;
+        RecordPlayerRunLockout(memberGuid, run->Id, runInstanceId);
 
     EvaluateRunState(*run);
 }
@@ -1050,13 +1048,13 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
             // binding so a future queue attempt cannot reattach them to the same in-progress
             // instance before the lockout check runs.
             player->UnbindInstance(dungeonTemplate->MapId, player->GetDifficulty(false));
-            _playerRunLockouts[guid] = PlayerRunLockout{ run->Id, runInstanceId };
+            RecordPlayerRunLockout(guid, run->Id, runInstanceId);
         }
     }
     else if (run->Finished)
         _playerRunLockouts.erase(guid);
     else
-        _playerRunLockouts[guid] = PlayerRunLockout{ run->Id, runInstanceId };
+        RecordPlayerRunLockout(guid, run->Id, runInstanceId);
 
     EvaluateRunState(*run);
 
@@ -1077,6 +1075,14 @@ WorldLocation const* PvpveDungeonMgr::GetReturnLocation(ObjectGuid const& guid) 
         return nullptr;
 
     return &itr->second;
+}
+
+void PvpveDungeonMgr::RecordPlayerRunLockout(ObjectGuid const& guid, uint64 runId, uint32 instanceId)
+{
+    if (!guid || !runId)
+        return;
+
+    _playerRunLockouts[guid] = PlayerRunLockout{ runId, instanceId };
 }
 
 void PvpveDungeonMgr::StoreReturnLocation(Player* player)
@@ -1598,6 +1604,26 @@ public:
         if (sPvpveDungeonMgr->IsPlayerInPvpveRun(player))
         {
             ApplyPvpveFfaState(player);
+
+            if (PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(guid))
+            {
+                uint32 instanceId = run->InstanceId;
+                if (!instanceId)
+                {
+                    instanceId = player->GetInstanceId();
+                    if (!instanceId)
+                        if (Map* map = player->GetMap())
+                            instanceId = map->GetInstanceId();
+                }
+
+                if (instanceId)
+                {
+                    sPvpveDungeonMgr->RecordPlayerRunLockout(guid, run->Id, instanceId);
+                    if (!run->InstanceId)
+                        run->InstanceId = instanceId;
+                }
+            }
+
             return;
         }
 

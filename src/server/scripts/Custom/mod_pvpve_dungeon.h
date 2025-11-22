@@ -120,6 +120,7 @@ public:
     bool IsPlayerInPvpveRun(Player const* player) const;
     bool IsPvpveDungeonMap(uint32 mapId) const;
     WorldLocation const* GetReturnLocation(ObjectGuid const& guid) const;
+    void RecordPlayerRunLockout(ObjectGuid const& guid, uint64 runId, uint32 instanceId);
 
     PvpveDungeonRun* GetRun(uint64 runId);
     PvpveTeam* GetTeam(uint64 teamId);
