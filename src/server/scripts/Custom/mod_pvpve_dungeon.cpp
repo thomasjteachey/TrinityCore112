@@ -1044,7 +1044,7 @@ void PvpveDungeonMgr::OnPlayerLeftMap(Player* player)
     if (run->Finished)
         _playerRunLockouts.erase(guid);
     else
-        _playerRunLockouts.emplace(guid, run->Id);
+        _playerRunLockouts.emplace(guid, PlayerRunLockout{ run->Id, run->InstanceId });
 
     EvaluateRunState(*run);
 
