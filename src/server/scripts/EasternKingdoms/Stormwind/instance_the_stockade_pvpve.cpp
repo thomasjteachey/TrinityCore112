@@ -603,7 +603,8 @@ public:
 
             uint32 const honorTokens = GetHonorTokensForCreatureEntry(creature->GetEntry());
             auto const& bossEntries = StockadesPvPvE::GetBossEntries();
-            bool const isStockadesBoss = std::find(bossEntries.begin(), bossEntries.end(), creature->GetEntry()) != bossEntries.end();
+            bool const isStockadesBoss = creature->GetGUID() == _bossGuid ||
+                std::find(bossEntries.begin(), bossEntries.end(), creature->GetEntry()) != bossEntries.end();
 
             if (isStockadesBoss)
             {
