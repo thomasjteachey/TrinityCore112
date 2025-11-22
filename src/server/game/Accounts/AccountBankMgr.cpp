@@ -636,6 +636,7 @@ void HandleLogin(Player* player)
     if (!session)
         return;
 
+    SaveAccountBankView(player);
     RestoreCharacterBankItems(player, *session);
     AccountSessions.erase(player->GetGUID().GetCounter());
 }
