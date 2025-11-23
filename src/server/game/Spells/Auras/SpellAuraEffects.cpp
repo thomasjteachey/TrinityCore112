@@ -4475,7 +4475,6 @@ void AuraEffect::HandleAuraDummy(AuraApplication const* aurApp, uint8 mode, bool
                     break;
                 case 355:                                       // Taunt
                 case 62124:                                     // Compel
-                case 81353:                                    // Super Taunt
                 {
                     if (!caster || !target->IsAlive())
                         break;
@@ -4571,7 +4570,6 @@ void AuraEffect::HandleAuraDummy(AuraApplication const* aurApp, uint8 mode, bool
                             break;
                         case 355:   // Taunt
                         case 62124: // Compel
-                        case 81353:                                    // Super Taunt
                         {
                             if (target->GetTypeId() != TYPEID_PLAYER)
                             {
