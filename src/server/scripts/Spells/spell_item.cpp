@@ -3425,7 +3425,13 @@ class spell_item_refocus : public SpellScript
             if (uint32 categoryId = spellInfo->GetCategory())
             {
                 if (processedCategories.insert(categoryId).second)
-                    spellHistory->ResetCategoryCooldown(categoryId, true);
+                {
+                    spellHistory->ResetCooldowns([categoryId](SpellHistory::CooldownStorageType::iterator itr) -> bool
+                    {
+                        SpellInfo const* categorySpellInfo = sSpellMgr->GetSpellInfo(itr->first);
+                        return categorySpellInfo && categorySpellInfo->GetCategory() == categoryId;
+                    }, true);
+                }
             }
 
             if (spellHistory->HasCooldown(spellId))
