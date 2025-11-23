@@ -5787,6 +5787,21 @@ bool Unit::AttackStop()
 {
     Unit* victim = m_attacking;
 
+    // Taunted units must continue engaging their forced target even if they try to stop attacking
+    if (IsAlive() && (HasUnitState(UNIT_STATE_TAUNTED) || HasAuraType(SPELL_AURA_MOD_TAUNT)))
+    {
+        if (Unit* taunter = getAttackerForHelper())
+        {
+            if (taunter->IsAlive())
+            {
+                if (m_attacking != taunter)
+                    Attack(taunter, true);
+
+                return true;
+            }
+        }
+    }
+
     if (!victim)
     {
         if (!HasAuraType(SPELL_AURA_MOD_TAUNT))
@@ -11741,10 +11756,6 @@ void Unit::SetTaunted(bool apply)
 {
     if (apply)
     {
-        // block control to real player in control (eg charmer)
-        if (GetCharmerOrSelfPlayer())
-            GetCharmerOrSelfPlayer()->SetClientControl(this, false);
-
         Unit* caster = nullptr;
         Unit::AuraEffectList const& tauntAuras = GetAuraEffectsByType(SPELL_AURA_MOD_TAUNT);
         if (!tauntAuras.empty())
@@ -11752,7 +11763,7 @@ void Unit::SetTaunted(bool apply)
         if (!caster)
             caster = getAttackerForHelper();
 
-        SetTarget(ObjectGuid::Empty);
+        SetTarget(caster ? caster->GetGUID() : ObjectGuid::Empty);
         if (IsPlayer())
         {
             ToPlayer()->Dismount();
@@ -11775,9 +11786,6 @@ void Unit::SetTaunted(bool apply)
             if (GetVictim())
                 SetTarget(EnsureVictim()->GetGUID());
         }
-        // allow control to real player in control (eg charmer)
-        if (GetCharmerOrSelfPlayer())
-            GetCharmerOrSelfPlayer()->SetClientControl(this, true);
     }
 }
 
