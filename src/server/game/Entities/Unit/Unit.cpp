@@ -11756,6 +11756,10 @@ void Unit::SetTaunted(bool apply)
 {
     if (apply)
     {
+        // block control to real player in control (e.g. charmer)
+        if (GetCharmerOrSelfPlayer())
+            GetCharmerOrSelfPlayer()->SetClientControl(this, false);
+
         Unit* caster = nullptr;
         Unit::AuraEffectList const& tauntAuras = GetAuraEffectsByType(SPELL_AURA_MOD_TAUNT);
         if (!tauntAuras.empty())
@@ -11786,6 +11790,10 @@ void Unit::SetTaunted(bool apply)
             if (GetVictim())
                 SetTarget(EnsureVictim()->GetGUID());
         }
+
+        // allow control to real player in control (e.g. charmer)
+        if (GetCharmerOrSelfPlayer())
+            GetCharmerOrSelfPlayer()->SetClientControl(this, true);
     }
 }
 
