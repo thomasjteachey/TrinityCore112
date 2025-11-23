@@ -38,6 +38,7 @@
 #include "Spell.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
+#include "ThreatManager.h"
 #include "StringFormat.h"
 #include "ThreatManager.h"
 #include "Unit.h"
@@ -2813,22 +2814,6 @@ void AuraEffect::HandleModTaunt(AuraApplication const* aurApp, uint8 mode, bool 
 
     Unit* target = aurApp->GetTarget();
 
-    if (target->IsPlayer() && target->IsAlive())
-    {
-        if (apply)
-        {
-            // call functions which may have additional effects after changing state of unit
-            // Stop cast only spells vs PreventionType == SPELL_PREVENTION_TYPE_SILENCE
-            for (uint32 i = CURRENT_MELEE_SPELL; i < CURRENT_MAX_SPELL; ++i)
-                if (Spell* spell = target->GetCurrentSpell(CurrentSpellTypes(i)))
-                    if (spell->m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE)
-                        // Stop spells on prepare or casting state
-                        target->InterruptSpell(CurrentSpellTypes(i), false);
-        }
-        target->SetControlled(apply, UNIT_STATE_TAUNTED);
-        return;
-    }
-
     if (!target->IsAlive() || !target->CanHaveThreatList())
         return;
 
@@ -4488,6 +4473,40 @@ void AuraEffect::HandleAuraDummy(AuraApplication const* aurApp, uint8 mode, bool
                     if (roll_chance_i(20))                       // backfire stun
                         target->CastSpell(target, 51581, this);
                     break;
+                case 355:                                       // Taunt
+                case 62124:                                     // Compel
+                {
+                    if (!caster || !target->IsAlive())
+                        break;
+
+                    if (target->GetTypeId() != TYPEID_PLAYER)
+                    {
+                        if (!target->IsTotem())
+                        {
+                            if (target->CanHaveThreatList())
+                            {
+                                ThreatManager& manager = target->GetThreatManager();
+                                if (manager.GetCurrentVictim() != caster && !manager.IsThreatListEmpty())
+                                    manager.MatchUnitThreatToHighestThreat(caster);
+
+                                manager.UpdateTauntState(caster, true);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (target->IsAlive())
+                        {
+                            for (uint32 i = CURRENT_MELEE_SPELL; i < CURRENT_MAX_SPELL; ++i)
+                                if (Spell* spell = target->GetCurrentSpell(CurrentSpellTypes(i)))
+                                    if (spell->m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE)
+                                        target->InterruptSpell(CurrentSpellTypes(i), false);
+                        }
+
+                        target->SetControlled(true, UNIT_STATE_TAUNTED);
+                    }
+                    break;
+                }
                 case 43873:                                     // Headless Horseman Laugh
                     target->PlayDistanceSound(11965);
                     break;
@@ -4549,6 +4568,18 @@ void AuraEffect::HandleAuraDummy(AuraApplication const* aurApp, uint8 mode, bool
                             if (aurApp->GetRemoveMode() == AURA_REMOVE_BY_EXPIRE)
                                 target->CastSpell(target, 58601, true);
                             break;
+                        case 355:   // Taunt
+                        case 62124: // Compel
+                        {
+                            if (target->GetTypeId() != TYPEID_PLAYER)
+                            {
+                                if (target->CanHaveThreatList())
+                                    target->GetThreatManager().UpdateTauntState(caster, false);
+                            }
+                            else
+                                target->SetControlled(false, UNIT_STATE_TAUNTED);
+                            break;
+                        }
                     }
                     break;
                 case SPELLFAMILY_DEATHKNIGHT:
