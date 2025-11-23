@@ -757,6 +757,28 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     player->SendDirectMessage(&data);
 }
 
+void SpellHistory::ClampGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds duration)
+{
+    if (!spellInfo || !spellInfo->StartRecoveryCategory || duration.count() <= 0)
+        return;
+
+    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (gcdItr == _globalCooldowns.end())
+        return;
+
+    Clock::time_point now = GameTime::GetSystemTime();
+    Clock::time_point currentEnd = gcdItr->second;
+    if (currentEnd <= now)
+        return;
+
+    Clock::time_point desiredEnd = now + std::chrono::duration_cast<Clock::duration>(duration);
+    if (currentEnd > desiredEnd)
+    {
+        auto reduction = std::chrono::duration_cast<std::chrono::milliseconds>(currentEnd - desiredEnd);
+        ReduceGlobalCooldown(spellInfo, reduction);
+    }
+}
+
 Player* SpellHistory::GetPlayerOwner() const
 {
     return _owner->GetCharmerOrOwnerPlayerOrPlayerItself();
