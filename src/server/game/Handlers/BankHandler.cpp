@@ -192,7 +192,10 @@ void WorldSession::HandleBuyBankSlotOpcode(WorldPackets::Bank::BuyBankSlot& buyB
 void WorldSession::SendShowBank(ObjectGuid guid)
 {
     if (_player && AccountBank::IsAccountBankOpen(_player) && !AccountBank::IsAccountBanker(_player, guid))
+    {
         AccountBank::CloseAccountBank(_player);
+        SendNotification("Switched back to your personal bank.");
+    }
 
     m_currentBankerGUID = guid;
     WorldPackets::Bank::ShowBank packet;

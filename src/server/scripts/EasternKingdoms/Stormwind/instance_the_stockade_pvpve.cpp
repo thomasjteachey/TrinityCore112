@@ -35,6 +35,7 @@
 #include "Position.h"
 #include "SharedDefines.h"
 #include "StringFormat.h"
+#include "World.h"
 #include "WorldSession.h"
 #include "Pet.h"
 
@@ -695,13 +696,31 @@ public:
             return result;
         }
 
+        void SendServerMessageToPlayer(Player* player, std::string const& message) const
+        {
+            if (player)
+                sWorld->SendServerMessage(SERVER_MSG_STRING, message, player);
+        }
+
+        void SendServerMessageToRelevantPlayers(std::string const& message) const
+        {
+            if (!instance)
+                return;
+
+            Map::PlayerList const& players = instance->GetPlayers();
+            for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+                SendServerMessageToPlayer(itr->GetSource(), message);
+        }
+
         void AnnounceVictory(uint32 runId, PvpveTeam const& team)
         {
             std::string const memberNames = CollectMemberNames(team);
-            if (!memberNames.empty())
-                DoSendNotifyToInstance(Trinity::StringFormat("Stockades PvPvE run %u complete! Team %llu (%s) is victorious!", runId, team.Id, memberNames.c_str()).c_str());
-            else
-                DoSendNotifyToInstance(Trinity::StringFormat("Stockades PvPvE run %u complete! Team %llu is victorious!", runId, team.Id).c_str());
+            std::string const victoryMessage = memberNames.empty()
+                ? Trinity::StringFormat("Stockades PvPvE run %u complete! A team is victorious!", runId)
+                : Trinity::StringFormat("Stockades PvPvE run %u complete! Victorious players: %s.", runId, memberNames.c_str());
+
+            DoSendNotifyToInstance(victoryMessage.c_str());
+            SendServerMessageToRelevantPlayers(victoryMessage);
         }
 
         Player* SelectSummoner(PvpveTeam const& team) const
@@ -785,14 +804,20 @@ public:
                 hasOpponents = true;
 
                 if (WorldSession* session = target->GetSession())
+                {
                     session->SendNotification("You sense an evil presence");
+                    SendServerMessageToPlayer(target, "You sense an evil presence");
+                }
             }
 
             // Only if we actually found opponents do we tell the invading player.
             if (hasOpponents)
             {
                 if (WorldSession* invSession = invadingPlayer->GetSession())
+                {
                     invSession->SendNotification("You sense an evil presence");
+                    SendServerMessageToPlayer(invadingPlayer, "You sense an evil presence");
+                }
             }
         }
 

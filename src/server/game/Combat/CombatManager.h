@@ -78,13 +78,13 @@ protected:
     friend class CombatManager;
 };
 
-// Please check Game/Combat/CombatManager.h for documentation on how this class works!
-struct TC_GAME_API PvPCombatReference : public CombatReference
-{
-    static const uint32 PVP_COMBAT_TIMEOUT = 5 * IN_MILLISECONDS;
+    // Please check Game/Combat/CombatManager.h for documentation on how this class works!
+    struct TC_GAME_API PvPCombatReference : public CombatReference
+    {
+        static const uint32 PVP_COMBAT_TIMEOUT = 5 * IN_MILLISECONDS;
 
-private:
-    PvPCombatReference(Unit* first, Unit* second) : CombatReference(first, second, true) { }
+    private:
+        PvPCombatReference(Unit* first, Unit* second) : CombatReference(first, second, true) { }
 
     bool Update(uint32 tdiff);
     void RefreshTimer();
@@ -116,6 +116,7 @@ class TC_GAME_API CombatManager
 
         // return value is the same as calling IsInCombatWith immediately after this returns
         bool SetInCombatWith(Unit* who, bool addSecondUnitSuppressed = false);
+        void RefreshPvPCombatTimer(Unit* who);
         bool IsInCombatWith(ObjectGuid const& who) const;
         bool IsInCombatWith(Unit const* who) const;
         void InheritCombatStatesFrom(Unit const* who);

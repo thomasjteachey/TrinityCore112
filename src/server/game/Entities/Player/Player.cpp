@@ -17719,7 +17719,6 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
             SetArenaTeamInfoField(arena_slot, ArenaTeamInfoType(j), 0);
     }
 
-    SetHonorPoints(fields[45].GetUInt32());
     SetUInt32Value(PLAYER_FIELD_TODAY_CONTRIBUTION, fields[46].GetUInt32());
     SetUInt32Value(PLAYER_FIELD_YESTERDAY_CONTRIBUTION, fields[47].GetUInt32());
     SetUInt32Value(PLAYER_FIELD_LIFETIME_HONORABLE_KILLS, fields[48].GetUInt32());
@@ -18134,6 +18133,8 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadSeasonalQuestStatus(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_SEASONAL_QUEST_STATUS));
     _LoadMonthlyQuestStatus(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_MONTHLY_QUEST_STATUS));
     _LoadRandomBGStatus(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_RANDOM_BG));
+
+    SetHonorPoints(fields[45].GetUInt32());
 
     // after spell and quest load
     InitTalentForLevel();
@@ -19676,6 +19677,9 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
 {
     // delay auto save at any saves (manual, in code, or autosave)
     m_nextSave = sWorld->getIntConfig(CONFIG_INTERVAL_SAVE);
+
+    if (AccountBank::IsAccountBankOpen(this))
+        AccountBank::CloseAccountBank(this);
 
     //lets allow only players in world to be saved
     if (IsBeingTeleportedFar())

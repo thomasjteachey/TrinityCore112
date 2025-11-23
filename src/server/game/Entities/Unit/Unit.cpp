@@ -5785,12 +5785,22 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
 
 bool Unit::AttackStop()
 {
-    if (!m_attacking && !HasAuraType(SPELL_AURA_MOD_TAUNT))
-        return false;
-
     Unit* victim = m_attacking;
 
-    m_attacking->_removeAttacker(this);
+    if (!victim)
+    {
+        if (!HasAuraType(SPELL_AURA_MOD_TAUNT))
+            return false;
+
+        // Nothing to detach but still clear any residual attack state
+        SetTarget(ObjectGuid::Empty);
+        ClearUnitState(UNIT_STATE_MELEE_ATTACKING);
+        InterruptSpell(CURRENT_MELEE_SPELL);
+        SendMeleeAttackStop();
+        return true;
+    }
+
+    victim->_removeAttacker(this);
     m_attacking = nullptr;
 
     // Clear our target
@@ -11277,6 +11287,11 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         TC_LOG_DEBUG("entities.unit", "SET JUST_DIED");
         victim->setDeathState(JUST_DIED);
     }
+
+    if (attacker)
+        if (Player* killerPlayer = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+            if (Player* killedPlayer = victim->ToPlayer())
+                killerPlayer->GetCombatManager().RefreshPvPCombatTimer(killedPlayer);
 
     // Inform pets (if any) when player kills target)
     // MUST come after victim->setDeathState(JUST_DIED); or pet next target
