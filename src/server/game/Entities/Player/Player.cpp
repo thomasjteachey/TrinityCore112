@@ -19678,6 +19678,9 @@ void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false
     // delay auto save at any saves (manual, in code, or autosave)
     m_nextSave = sWorld->getIntConfig(CONFIG_INTERVAL_SAVE);
 
+    if (AccountBank::IsAccountBankOpen(this))
+        AccountBank::CloseAccountBank(this);
+
     //lets allow only players in world to be saved
     if (IsBeingTeleportedFar())
     {
