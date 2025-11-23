@@ -275,6 +275,15 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     return inCombat;
 }
 
+void CombatManager::RefreshPvPCombatTimer(Unit* who)
+{
+    if (PvPCombatReference* existingPvpRef = Trinity::Containers::MapGetValuePtr(_pvpRefs, who->GetGUID()))
+    {
+        existingPvpRef->RefreshTimer();
+        existingPvpRef->Refresh();
+    }
+}
+
 bool CombatManager::IsInCombatWith(ObjectGuid const& guid) const
 {
     return (_pveRefs.find(guid) != _pveRefs.end()) || (_pvpRefs.find(guid) != _pvpRefs.end());
