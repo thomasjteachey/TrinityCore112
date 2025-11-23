@@ -469,6 +469,7 @@ enum AtLoginFlags
     AT_LOGIN_CHANGE_FACTION    = 0x040,
     AT_LOGIN_CHANGE_RACE       = 0x080,
     AT_LOGIN_RESURRECT         = 0x100,
+    AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS = 0x200,
 };
 
 typedef std::map<uint32, QuestStatusData> QuestStatusMap;
@@ -1460,6 +1461,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill = 0);
         void RemoveSpell(uint32 spell_id, bool disabled = false, bool learn_low_rank = true);
         void ResetSpells(bool myClassOnly = false);
+        void ResetNonQuestAndMountSpells();
         void LearnCustomSpells();
         void LearnDefaultSkills();
         void LearnDefaultSkill(uint32 skillId, uint16 rank);
