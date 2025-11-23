@@ -52,6 +52,7 @@ public:
             { "honor",        rbac::RBAC_PERM_COMMAND_RESET_HONOR,        true, &HandleResetHonorCommand,        "" },
             { "level",        rbac::RBAC_PERM_COMMAND_RESET_LEVEL,        true, &HandleResetLevelCommand,        "" },
             { "spells",       rbac::RBAC_PERM_COMMAND_RESET_SPELLS,       true, &HandleResetSpellsCommand,       "" },
+            { "spells_keep_mounts", rbac::RBAC_PERM_COMMAND_RESET_SPELLS_KEEP_MOUNTS, true, &HandleResetSpellsKeepMountsCommand, "" },
             { "stats",        rbac::RBAC_PERM_COMMAND_RESET_STATS,        true, &HandleResetStatsCommand,        "" },
             { "talents",      rbac::RBAC_PERM_COMMAND_RESET_TALENTS,      true, &HandleResetTalentsCommand,      "" },
             { "all",          rbac::RBAC_PERM_COMMAND_RESET_ALL,          true, &HandleResetAllCommand,          "" },
@@ -187,6 +188,36 @@ public:
 
             handler->PSendSysMessage(LANG_RESET_SPELLS_OFFLINE, targetName.c_str());
         }
+
+        return true;
+    }
+
+    static bool HandleResetSpellsKeepMountsCommand(ChatHandler* handler, char const* args)
+    {
+        Player* target;
+        ObjectGuid targetGuid;
+        std::string targetName;
+        if (!handler->extractPlayerTarget((char*)args, &target, &targetGuid, &targetName))
+            return false;
+
+        if (target)
+        {
+            target->ResetNonQuestAndMountSpells();
+            target->SendTalentsInfoData(false);
+            ChatHandler(target->GetSession()).SendSysMessage("Removed all non-mount, non-quest spells and reset talents.");
+
+            if (!handler->GetSession() || handler->GetSession()->GetPlayer() != target)
+                handler->PSendSysMessage("Cleaned non-mount, non-quest spells and talents for %s.", handler->GetNameLink(target).c_str());
+
+            return true;
+        }
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ADD_AT_LOGIN_FLAG);
+        stmt->setUInt16(0, uint16(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS | AT_LOGIN_RESET_TALENTS));
+        stmt->setUInt32(1, targetGuid.GetCounter());
+        CharacterDatabase.Execute(stmt);
+
+        handler->PSendSysMessage("Cleaned non-mount, non-quest spells and talents for %s at next login.", targetName.c_str());
 
         return true;
     }
