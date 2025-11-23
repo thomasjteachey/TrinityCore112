@@ -978,21 +978,24 @@ class spell_warr_disarm_wrapper : public SpellScript
 {
     PrepareSpellScript(spell_warr_disarm_wrapper);
 
-    void HandleDummy()
+    void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        AuraApplication* aa = GetCaster()->GetAuraApplication(81491);
-        if (aa)
+        if (Unit* target = GetHitUnit())
         {
-            GetCaster()->CastSpell(GetExplTargetUnit(), 81493, true);
-        }
-        else
-        {
-            GetCaster()->CastSpell(GetExplTargetUnit(), 676, true);
+            AuraApplication* aa = GetCaster()->GetAuraApplication(81491);
+            if (aa)
+            {
+                GetCaster()->CastSpell(target, 81493, true);
+            }
+            else
+            {
+                GetCaster()->CastSpell(target, 676, true);
+            }
         }
     }
     void Register() override
     {
-        AfterCast += SpellCastFn(spell_warr_disarm_wrapper::HandleDummy);
+        OnEffectHitTarget += SpellEffectFn(spell_warr_disarm_wrapper::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
 
