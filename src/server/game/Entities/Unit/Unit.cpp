@@ -8970,11 +8970,6 @@ void Unit::AtTargetAttacked(Unit* target, bool canInitialAggro)
         return;
     target->EngageWithTarget(this);
 
-    // Totems should always pull their owner into combat when attacked
-    if (target->IsTotem())
-        if (Unit* targetOwner = target->GetCharmerOrOwner())
-            targetOwner->EngageWithTarget(this);
-
     //Patch 3.0.8: All player spells which cause a creature to become aggressive to you will now also immediately cause the creature to be tapped.
     if (Creature* creature = target->ToCreature())
         if (!creature->hasLootRecipient() && GetTypeId() == TYPEID_PLAYER)
@@ -11289,9 +11284,19 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
     }
 
     if (attacker)
+    {
         if (Player* killerPlayer = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
             if (Player* killedPlayer = victim->ToPlayer())
                 killerPlayer->GetCombatManager().RefreshPvPCombatTimer(killedPlayer);
+
+            if (victim->IsTotem())
+                if (Unit* totemOwner = victim->GetCharmerOrOwner())
+                    if (totemOwner->IsControlledByPlayer())
+                        // Keep the attacker in combat for the PvP timeout while not flagging the shaman owner
+                        killerPlayer->GetCombatManager().SetInCombatWith(totemOwner, true);
+        }
+    }
 
     // Inform pets (if any) when player kills target)
     // MUST come after victim->setDeathState(JUST_DIED); or pet next target
