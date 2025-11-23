@@ -399,7 +399,7 @@ void Spell::EffectSchoolDMG()
                 if (m_spellInfo->Id == 23925 || m_spellInfo->Id == 23924 || m_spellInfo->Id == 23923 || m_spellInfo->Id == 23922)
                 {
                     uint8 level = unitCaster->GetLevel();
-                    uint32 block_value = unitCaster->GetShieldBlockValue(uint32(float(level) * 24.5f), uint32(float(level) * 34.5f));
+                    uint32 block_value = unitCaster->GetShieldBlockValue(uint32(float(level) * 50), uint32(float(level) * 50));
                     damage += int32(unitCaster->ApplyEffectModifiers(m_spellInfo, effectInfo->EffectIndex, float(block_value)));
                 }
                 // Victory Rush
