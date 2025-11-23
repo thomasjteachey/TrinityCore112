@@ -11288,6 +11288,11 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         victim->setDeathState(JUST_DIED);
     }
 
+    if (attacker)
+        if (Player* killerPlayer = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+            if (Player* killedPlayer = victim->ToPlayer())
+                killerPlayer->GetCombatManager().RefreshPvPCombatTimer(killedPlayer);
+
     // Inform pets (if any) when player kills target)
     // MUST come after victim->setDeathState(JUST_DIED); or pet next target
     // selection will get stuck on same target and break pet react state
