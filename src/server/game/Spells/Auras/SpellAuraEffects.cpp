@@ -2872,6 +2872,15 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
     if (!(mode & AURA_EFFECT_HANDLE_REAL))
         return;
 
+    if (SpellInfo const* spellInfo = GetSpellInfo())
+    {
+        if (spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME))
+        {
+            HandleModTaunt(aurApp, mode, apply);
+            return;
+        }
+    }
+
     Unit* target = aurApp->GetTarget();
 
     target->SetControlled(apply, UNIT_STATE_FLEEING);
