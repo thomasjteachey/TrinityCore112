@@ -3520,6 +3520,9 @@ float Creature::GetPetChaseDistance() const
 
 void Creature::SetCannotReachTarget(bool cannotReach)
 {
+    if (cannotReach && GetMapId() == 34)
+        return;
+
     if (cannotReach == m_cannotReachTarget)
         return;
     m_cannotReachTarget = cannotReach;
