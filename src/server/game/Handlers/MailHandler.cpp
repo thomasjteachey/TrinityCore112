@@ -134,13 +134,13 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
         if (_player != player)
             return;
 
-        /*
+        
         if (!player->HasEnoughMoney(reqmoney) && !player->IsGameMaster())
         {
             player->SendMailResult(0, MAIL_SEND, MAIL_ERR_NOT_ENOUGH_MONEY);
             return;
         }
-        */
+        
 
         // do not allow to have more than 100 mails in mailbox.. mails count is in opcode uint8!!! - so max can be 255..
         if (mailsCount > 100)
@@ -233,7 +233,7 @@ void WorldSession::HandleSendMail(WorldPackets::Mail::SendMail& sendMail)
 
         player->SendMailResult(0, MAIL_SEND, MAIL_OK);
 
-        //player->ModifyMoney(-int32(reqmoney));
+        player->ModifyMoney(-int32(reqmoney));
         player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL, cost);
 
         bool needItemDelay = false;
