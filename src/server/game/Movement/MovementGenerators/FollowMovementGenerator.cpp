@@ -54,16 +54,14 @@ static bool PositionOkay(Unit* owner, Unit* target, float range, Optional<ChaseA
 
 void FollowMovementGenerator::Initialize(Unit* owner)
 {
-    MovementGenerator::RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
-    MovementGenerator::AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED);
+    RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+    owner->AddUnitState(UNIT_STATE_FLEEING_MOVE);
 
-    if (!owner || !owner->IsAlive())
-        return;
-
-    // TODO: UNIT_FIELD_FLAGS should not be handled by generators
-    owner->SetUnitFlag(UNIT_FLAG_FLEEING);
-
+    owner->StopMoving();
+    UpdatePetSpeed(owner);
     _path = nullptr;
+    _lastTargetPosition.reset();
 }
 
 void FollowMovementGenerator::Reset(Unit* owner)
