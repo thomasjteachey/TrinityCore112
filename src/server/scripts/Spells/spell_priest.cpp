@@ -34,6 +34,9 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "SpellHistory.h"
+#include "WorldPacket.h"
+#include <algorithm>
+#include <chrono>
 
 enum PriestSpells
 {
@@ -82,7 +85,8 @@ enum PriestSpells
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R1        = 81322,
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R2        = 81323,
     SPELL_PRIEST_SPIRIT_OF_REDEMPTION               = 27827,
-    SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356
+    SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356,
+    SPELL_PRIEST_DARKNESS_R1                        = 15259
 };
 
 enum PriestSpellIcons
@@ -1491,7 +1495,7 @@ class spell_pri_dispel_magic : public SpellScript
 
     bool Validate(SpellInfo const* spellInfo) override
     {
-        return true;
+        return ValidateSpellInfo({ SPELL_PRIEST_DARKNESS_R1 });
     }
 
     void HandleSuccessfulDispel(SpellEffIndex effIndex)
@@ -1512,6 +1516,25 @@ class spell_pri_dispel_magic : public SpellScript
         {
             CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
             caster->CastSpell(caster, 81436, args);
+        }
+
+        if (AuraEffect const* darkness = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
+        {
+            uint32 const rank = std::max<uint32>(1, darkness->GetSpellInfo()->GetRank());
+            uint32 const reduction = 100 * rank;
+
+            SpellHistory* spellHistory = caster->GetSpellHistory();
+            spellHistory->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(reduction));
+
+            if (Player* player = caster->ToPlayer())
+            {
+                if (uint32 remaining = spellHistory->GetRemainingGlobalCooldown(GetSpellInfo()))
+                {
+                    WorldPacket data;
+                    spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, GetSpellInfo()->Id, remaining);
+                    player->SendDirectMessage(&data);
+                }
+            }
         }
     }
 
