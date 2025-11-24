@@ -1524,7 +1524,7 @@ class spell_pri_dispel_magic : public SpellScript
             uint32 const reduction = 100 * rank;
 
             SpellHistory* spellHistory = caster->GetSpellHistory();
-            spellHistory->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(-reduction));
+            spellHistory->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(reduction));
         }
     }
 

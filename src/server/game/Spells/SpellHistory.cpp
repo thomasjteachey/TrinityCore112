@@ -669,29 +669,27 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
         return;
 
-    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
-    if (gcdItr == _globalCooldowns.end())
-        return;
-
     Clock::time_point now = GameTime::GetSystemTime();
-    Clock::time_point currentEnd = gcdItr->second;
+    Clock::time_point currentEnd = Clock::time_point(Clock::duration(0));
+
+    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (gcdItr != _globalCooldowns.end())
+        currentEnd = gcdItr->second;
+
     if (currentEnd <= now)
-        return;
+        currentEnd = now + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(spellInfo->StartRecoveryTime));
 
     Clock::duration reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
     Clock::duration currentDuration = currentEnd - now;
-    Clock::time_point newEnd = currentEnd;
+    Clock::time_point newEnd = now;
 
-    if (reductionDuration >= currentDuration)
-    {
-        newEnd = now;
-        _globalCooldowns.erase(gcdItr);
-    }
+    if (currentDuration > reductionDuration)
+        newEnd = now + (currentDuration - reductionDuration);
+
+    if (newEnd <= now)
+        _globalCooldowns.erase(spellInfo->StartRecoveryCategory);
     else
-    {
-        newEnd -= reductionDuration;
-        gcdItr->second = newEnd;
-    }
+        _globalCooldowns[spellInfo->StartRecoveryCategory] = newEnd;
 
     Player* player = GetPlayerOwner();
     if (!player)
