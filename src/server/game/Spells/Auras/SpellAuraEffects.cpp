@@ -55,7 +55,7 @@ namespace
 
         uint32 const followFearSpellId = 83257;
 
-        if (spellInfo->Id == followFearSpellId)
+        if (spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME) || spellInfo->Id == followFearSpellId)
             return true;
 
         SpellSpellGroupMapBounds followFearGroups = sSpellMgr->GetSpellSpellGroupMapBounds(followFearSpellId);
