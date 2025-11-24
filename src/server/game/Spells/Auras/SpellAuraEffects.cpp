@@ -2920,7 +2920,7 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
                 target->GetMotionMaster()->Remove(FOLLOW_MOTION_TYPE);
 
             if (target->HasAuraType(SPELL_AURA_MOD_FEAR))
-                target->SetFeared(true);
+                target->SetControlled(true, UNIT_STATE_FLEEING);
             else
                 target->SetControlled(false, UNIT_STATE_FLEEING);
         }
