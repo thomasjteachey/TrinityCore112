@@ -2437,6 +2437,55 @@ class spell_pal_seal_of_justice_wrapper : public SpellScript
     }
 };
 
+class spell_pal_reckoning_stacks : public AuraScript
+{
+    PrepareAuraScript(spell_pal_reckoning_stacks);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 20178, 32746 });
+    }
+
+    // Called whenever 20178 procs (driven by spell_proc_event row above)
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction(); // core has no default for DUMMY but keep it future-proof
+
+        Unit* owner = GetTarget();
+        if (!owner)
+            return;
+
+        // Safety: don't loop on our own triggered spell
+        if (SpellInfo const* triggeredBy = eventInfo.GetSpellInfo())
+            if (triggeredBy->Id == 32746)
+                return;
+
+        uint8 stacks = GetStackAmount();
+        if (!stacks)
+            return;
+
+        Unit* victim = owner->GetVictim();
+        if (!victim)
+            return;
+
+        // One extra weapon swing
+        owner->CastSpell(victim, 32746, true);
+
+        // Consume exactly one stack
+        ModStackAmount(-1, AURA_REMOVE_BY_DEFAULT);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_pal_reckoning_stacks::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+void AddSC_paladin_spell_custom()
+{
+    new spell_pal_reckoning_stacks();
+}
+
 
 void AddSC_paladin_spell_scripts()
 {
@@ -2500,4 +2549,5 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_pal_hand_of_freedom);
     RegisterSpellScript(spell_pal_seal_of_justice_wrapper);
     RegisterSpellScript(spell_pal_hs_cd_reduce);
+    RegisterSpellScript(spell_pal_reckoning_stacks);
 }
