@@ -2457,7 +2457,7 @@ class spell_pal_reckoning_stacks : public AuraScript
 
         // Safety: don't loop on our own triggered spell
         if (SpellInfo const* triggeredBy = eventInfo.GetSpellInfo())
-            if (triggeredBy->Id == 32746 || triiggeredBy->Id == 20178)
+            if (triggeredBy->Id == 32746 || triggeredBy->Id == 20178)
                 return;
 
         if(extraattacks
