@@ -2460,8 +2460,6 @@ class spell_pal_reckoning_stacks : public AuraScript
             if (triggeredBy->Id == 32746 || triggeredBy->Id == 20178)
                 return;
 
-        if(extraattacks
-
         uint8 stacks = GetStackAmount();
         if (!stacks)
             return;
