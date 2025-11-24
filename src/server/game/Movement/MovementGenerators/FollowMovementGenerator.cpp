@@ -54,16 +54,13 @@ static bool PositionOkay(Unit* owner, Unit* target, float range, Optional<ChaseA
 
 void FollowMovementGenerator::Initialize(Unit* owner)
 {
-    MovementGenerator::RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
-    MovementGenerator::AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED);
+    RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
 
-    if (!owner || !owner->IsAlive())
-        return;
-
-    // TODO: UNIT_FIELD_FLAGS should not be handled by generators
-    owner->SetUnitFlag(UNIT_FLAG_FLEEING);
-
+    owner->StopMoving();
+    UpdatePetSpeed(owner);
     _path = nullptr;
+    _lastTargetPosition.reset();
 }
 
 void FollowMovementGenerator::Reset(Unit* owner)
@@ -75,6 +72,101 @@ void FollowMovementGenerator::Reset(Unit* owner)
 
 bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
 {
+    // owner might be dead or gone
+    if (!owner || !owner->IsAlive())
+        return false;
+
+    // our target might have gone away
+    Unit* const target = GetTarget();
+    if (!target || !target->IsInWorld())
+        return false;
+
+    if (owner->HasUnitState(UNIT_STATE_NOT_MOVE) || owner->IsMovementPreventedByCasting())
+    {
+        _path = nullptr;
+        owner->StopMoving();
+        _lastTargetPosition.reset();
+        return true;
+    }
+
+    _checkTimer.Update(diff);
+    if (_checkTimer.Passed())
+    {
+        _checkTimer.Reset(CHECK_INTERVAL);
+        if (HasFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED) && PositionOkay(owner, target, _range, _angle))
+        {
+            RemoveFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+            _path = nullptr;
+            owner->StopMoving();
+            _lastTargetPosition.reset();
+            DoMovementInform(owner, target);
+            return true;
+        }
+    }
+
+    if (owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) && owner->movespline->Finalized())
+    {
+        RemoveFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+        _path = nullptr;
+        owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
+        DoMovementInform(owner, target);
+    }
+
+    if (!_lastTargetPosition || _lastTargetPosition->GetExactDistSq(target->GetPosition()) > 0.0f)
+    {
+        _lastTargetPosition = target->GetPosition();
+        if (owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) || !PositionOkay(owner, target, _range + FOLLOW_RANGE_TOLERANCE))
+        {
+            if (!_path)
+                _path = std::make_unique<PathGenerator>(owner);
+
+            float x, y, z;
+
+            // select angle
+            float tAngle;
+            float const curAngle = target->GetRelativeAngle(owner);
+            if (_angle.IsAngleOkay(curAngle))
+                tAngle = curAngle;
+            else
+            {
+                float const diffUpper = Position::NormalizeOrientation(curAngle - _angle.UpperBound());
+                float const diffLower = Position::NormalizeOrientation(_angle.LowerBound() - curAngle);
+                if (diffUpper < diffLower)
+                    tAngle = _angle.UpperBound();
+                else
+                    tAngle = _angle.LowerBound();
+            }
+
+            target->GetNearPoint(owner, x, y, z, _range, target->ToAbsoluteAngle(tAngle));
+
+            if (owner->IsHovering())
+                owner->UpdateAllowedPositionZ(x, y, z);
+
+            // pets are allowed to "cheat" on pathfinding when following their master
+            bool allowShortcut = false;
+            if (Pet* oPet = owner->ToPet())
+            {
+                if (target->GetGUID() == oPet->GetOwnerGUID())
+                    allowShortcut = true;
+            }
+
+            bool success = _path->CalculatePath(x, y, z, allowShortcut);
+            if (!success || (_path->GetPathType() & PATHFIND_NOPATH))
+            {
+                owner->StopMoving();
+                return true;
+            }
+
+            owner->AddUnitState(UNIT_STATE_FOLLOW_MOVE);
+            AddFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+
+            Movement::MoveSplineInit init(owner);
+            init.MovebyPath(_path->GetPath());
+            init.SetWalk(target->IsWalking());
+            init.SetFacing(target->GetOrientation());
+            init.Launch();
+        }
+    }
     return true;
 }
 
@@ -82,8 +174,6 @@ void FollowMovementGenerator::Deactivate(Unit* owner)
 {
     AddFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     RemoveFlag(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
-    if (owner)
-        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
     owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
 }
 
@@ -92,8 +182,6 @@ void FollowMovementGenerator::Finalize(Unit* owner, bool active, bool/* movement
     AddFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
     if (active)
     {
-        if (owner)
-            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
         owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
         UpdatePetSpeed(owner);
     }
