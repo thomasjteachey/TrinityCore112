@@ -5789,7 +5789,7 @@ bool Unit::AttackStop()
 
     if (!victim)
     {
-        if (!HasAuraType(SPELL_AURA_MOD_TAUNT))
+        if (!IsTaunted())
             return false;
 
         // Nothing to detach but still clear any residual attack state
@@ -11464,9 +11464,20 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
         }
     }
 }
+bool Unit::HasAttackMeFearAura() const
+{
+    Unit::AuraEffectList const& fearAuras = GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
+
+    for (AuraEffect const* aurEff : fearAuras)
+        if (aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
+            return true;
+
+    return false;
+}
+
 bool Unit::IsTaunted()
 {
-    return HasAuraType(SPELL_AURA_MOD_TAUNT);
+    return HasAttackMeFearAura() || HasUnitState(UNIT_STATE_TAUNTED);
 }
 void Unit::SetControlled(bool apply, UnitState state)
 {
@@ -11552,7 +11563,7 @@ void Unit::SetControlled(bool apply, UnitState state)
                 break;
 
             case UNIT_STATE_TAUNTED:
-                if (HasAuraType(SPELL_AURA_MOD_TAUNT))
+                if (HasAttackMeFearAura())
                     return;
                 ClearUnitState(state);
                 SetTaunted(false);
@@ -11580,7 +11591,7 @@ void Unit::ApplyControlStatesIfNeeded()
     if (HasUnitState(UNIT_STATE_FLEEING) || HasAuraType(SPELL_AURA_MOD_FEAR))
         SetFeared(true);
 
-    if (HasUnitState(UNIT_STATE_TAUNTED) || HasAuraType(SPELL_AURA_MOD_TAUNT))
+    if (HasUnitState(UNIT_STATE_TAUNTED) || HasAttackMeFearAura())
         SetTaunted(true);
 }
 
@@ -11746,9 +11757,15 @@ void Unit::SetTaunted(bool apply)
             GetCharmerOrSelfPlayer()->SetClientControl(this, false);
 
         Unit* caster = nullptr;
-        Unit::AuraEffectList const& tauntAuras = GetAuraEffectsByType(SPELL_AURA_MOD_TAUNT);
-        if (!tauntAuras.empty())
-            caster = ObjectAccessor::GetUnit(*this, tauntAuras.front()->GetCasterGUID());
+        Unit::AuraEffectList const& fearAuras = GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
+        for (AuraEffect const* aurEff : fearAuras)
+        {
+            if (!aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
+                continue;
+
+            caster = ObjectAccessor::GetUnit(*this, aurEff->GetCasterGUID());
+            break;
+        }
         if (!caster)
             caster = getAttackerForHelper();
 
@@ -11765,6 +11782,7 @@ void Unit::SetTaunted(bool apply)
             CastStop();
             Attack(caster, true);
         }
+
     }
     else
     {
@@ -11775,6 +11793,7 @@ void Unit::SetTaunted(bool apply)
             if (GetVictim())
                 SetTarget(EnsureVictim()->GetGUID());
         }
+        RemoveUnitFlag(UNIT_FLAG_TAUNTED);
         // allow control to real player in control (eg charmer)
         if (GetCharmerOrSelfPlayer())
             GetCharmerOrSelfPlayer()->SetClientControl(this, true);
