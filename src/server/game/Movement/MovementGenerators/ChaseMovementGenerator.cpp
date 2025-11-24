@@ -84,7 +84,14 @@ void ChaseMovementGenerator::Initialize(Unit* owner)
         return;
 
     // TODO: UNIT_FIELD_FLAGS should not be handled by generators
-    owner->SetUnitFlag(UNIT_FLAG_FLEEING);
+    owner->RemoveUnitFlag(UNIT_FLAG_TAUNTED);
+    if (owner->HasAttackMeFearAura())
+    {
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
+        owner->SetUnitFlag(UNIT_FLAG_TAUNTED);
+    }
+    else
+        owner->SetUnitFlag(UNIT_FLAG_FLEEING);
 
     _path = nullptr;
     _lastTargetPosition.reset();
