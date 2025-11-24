@@ -47,6 +47,29 @@
 #include "WorldPacket.h"
 #include <numeric>
 
+namespace
+{
+bool IsFollowFearSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    uint32 const followFearSpellId = 83257;
+
+    if (spellInfo->Id == followFearSpellId)
+        return true;
+
+    SpellSpellGroupMapBounds followFearGroups = sSpellMgr->GetSpellSpellGroupMapBounds(followFearSpellId);
+    for (SpellSpellGroupMap::const_iterator itr = followFearGroups.first; itr != followFearGroups.second; ++itr)
+    {
+        if (sSpellMgr->IsSpellMemberOfSpellGroup(spellInfo->Id, itr->second))
+            return true;
+    }
+
+    return false;
+}
+}
+
 //
 // EFFECT HANDLER NOTES
 //
@@ -2873,6 +2896,37 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
         return;
 
     Unit* target = aurApp->GetTarget();
+    bool const followFear = IsFollowFearSpell(GetSpellInfo());
+
+    if (followFear)
+    {
+        if (apply)
+        {
+            target->SetControlled(true, UNIT_STATE_FLEEING);
+
+            target->Dismount();
+            target->RemoveAurasByType(SPELL_AURA_MOUNTED);
+            target->AttackStop();
+
+            if (Unit* caster = GetCaster())
+            {
+                target->GetMotionMaster()->Remove(FLEEING_MOTION_TYPE);
+                target->GetMotionMaster()->MoveFollow(caster, PET_FOLLOW_DIST, target->GetFollowAngle());
+            }
+        }
+        else
+        {
+            if (target->IsAlive())
+                target->GetMotionMaster()->Remove(FOLLOW_MOTION_TYPE);
+
+            if (target->HasAuraType(SPELL_AURA_MOD_FEAR))
+                target->SetControlled(true, UNIT_STATE_FLEEING);
+            else
+                target->SetControlled(false, UNIT_STATE_FLEEING);
+        }
+
+        return;
+    }
 
     target->SetControlled(apply, UNIT_STATE_FLEEING);
 }
