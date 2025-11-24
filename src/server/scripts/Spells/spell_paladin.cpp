@@ -2457,8 +2457,10 @@ class spell_pal_reckoning_stacks : public AuraScript
 
         // Safety: don't loop on our own triggered spell
         if (SpellInfo const* triggeredBy = eventInfo.GetSpellInfo())
-            if (triggeredBy->Id == 32746)
+            if (triggeredBy->Id == 32746 || triiggeredBy->Id == 20178)
                 return;
+
+        if(extraattacks
 
         uint8 stacks = GetStackAmount();
         if (!stacks)
@@ -2480,11 +2482,6 @@ class spell_pal_reckoning_stacks : public AuraScript
         OnEffectProc += AuraEffectProcFn(spell_pal_reckoning_stacks::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
     }
 };
-
-void AddSC_paladin_spell_custom()
-{
-    new spell_pal_reckoning_stacks();
-}
 
 
 void AddSC_paladin_spell_scripts()
