@@ -1523,7 +1523,8 @@ class spell_pri_dispel_magic : public SpellScript
             uint32 const rank = std::max<uint32>(1, darkness->GetSpellInfo()->GetRank());
             uint32 const reduction = 100 * rank;
 
-            caster->GetSpellHistory()->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(reduction));
+            SpellHistory* spellHistory = caster->GetSpellHistory();
+            spellHistory->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(reduction));
         }
     }
 
