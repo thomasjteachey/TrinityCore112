@@ -2441,15 +2441,28 @@ class spell_pal_reckoning_stacks : public AuraScript
 {
     PrepareAuraScript(spell_pal_reckoning_stacks);
 
+    // per-aura instance cooldown timer (ms)
+    uint32 _lastProcTime;
+
+    void Load() override
+    {
+        _lastProcTime = 0;
+    }
+
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ 20178, 32746 });
     }
 
-    // Called whenever 20178 procs (driven by spell_proc_event row above)
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
-        PreventDefaultAction(); // core has no default for DUMMY but keep it future-proof
+        // 0.5s internal cooldown between procs
+        uint32 now = getMSTime();
+        if (_lastProcTime && now - _lastProcTime < 500)
+            return;
+        _lastProcTime = now;
+
+        PreventDefaultAction(); // we fully control the proc
 
         Unit* owner = GetTarget();
         if (!owner)
@@ -2457,11 +2470,10 @@ class spell_pal_reckoning_stacks : public AuraScript
 
         // Safety: don't loop on our own triggered spell
         if (SpellInfo const* triggeredBy = eventInfo.GetSpellInfo())
-            if (triggeredBy->Id == 32746 || triggeredBy->Id == 20178)
+            if (triggeredBy->Id == 32746)
                 return;
 
-        uint8 stacks = GetStackAmount();
-        if (!stacks)
+        if (!GetStackAmount())
             return;
 
         Unit* victim = owner->GetVictim();
@@ -2477,11 +2489,12 @@ class spell_pal_reckoning_stacks : public AuraScript
 
     void Register() override
     {
-        OnEffectProc += AuraEffectProcFn(spell_pal_reckoning_stacks::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+        OnEffectProc += AuraEffectProcFn(
+            spell_pal_reckoning_stacks::HandleProc,
+            EFFECT_0,
+            SPELL_AURA_DUMMY);
     }
 };
-
-
 void AddSC_paladin_spell_scripts()
 {
     RegisterSpellScript(spell_pal_ardent_defender);
