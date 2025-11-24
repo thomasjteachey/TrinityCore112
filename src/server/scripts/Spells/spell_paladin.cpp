@@ -2469,7 +2469,7 @@ class spell_pal_reckoning_stacks : public AuraScript
         OnEffectProc += AuraEffectProcFn(
             spell_pal_reckoning_stacks::HandleProc,
             EFFECT_0,
-            SPELL_AURA_TRIGGER_SPELL);
+            SPELL_AURA_PROC_TRIGGER_SPELL);
     }
 };
 void AddSC_paladin_spell_scripts()
