@@ -2453,12 +2453,12 @@ class spell_pal_reckoning_stacks : public AuraScript
         if (!GetStackAmount())
             return;
 
-        Unit* victim = owner->GetVictim();
+        Unit* victim = GetUnitOwner()->GetVictim();
         if (!victim)
             return;
 
         // One extra weapon swing
-        owner->CastSpell(victim, 32746, true);
+        GetUnitOwner()->CastSpell(victim, 32746, true);
 
         // Consume exactly one stack
         ModStackAmount(-1, AURA_REMOVE_BY_DEFAULT);
