@@ -87,6 +87,12 @@ void FollowMovementGenerator::Deactivate(Unit* owner)
 
 void FollowMovementGenerator::Finalize(Unit* owner, bool active, bool/* movementInform*/)
 {
+    AddFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
+    if (active)
+    {
+        owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
+        UpdatePetSpeed(owner);
+    }
 }
 
 void FollowMovementGenerator::UpdatePetSpeed(Unit* owner)
