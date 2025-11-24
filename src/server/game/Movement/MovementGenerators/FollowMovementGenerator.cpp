@@ -82,6 +82,9 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
     if (!target || !target->IsInWorld())
         return false;
 
+    owner->AddUnitState(UNIT_STATE_FLEEING_MOVE);
+    owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
+
     if (owner->HasUnitState(UNIT_STATE_NOT_MOVE) || owner->IsMovementPreventedByCasting())
     {
         _path = nullptr;
