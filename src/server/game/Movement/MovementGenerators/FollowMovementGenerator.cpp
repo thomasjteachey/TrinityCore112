@@ -56,6 +56,7 @@ void FollowMovementGenerator::Initialize(Unit* owner)
 {
     RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+    owner->AddUnitState(UNIT_STATE_FLEEING_MOVE);
 
     owner->StopMoving();
     UpdatePetSpeed(owner);
