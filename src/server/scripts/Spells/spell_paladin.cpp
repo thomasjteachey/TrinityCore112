@@ -2444,9 +2444,10 @@ class spell_pal_reckoning_stacks : public AuraScript
     // per-aura instance cooldown timer (ms)
     uint32 _lastProcTime;
 
-    void Load() override
+    bool Load() override
     {
         _lastProcTime = 0;
+        return true;
     }
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
