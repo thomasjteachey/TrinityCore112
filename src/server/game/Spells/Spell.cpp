@@ -6605,7 +6605,7 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
         else if ((m_spellInfo->Mechanic & MECHANIC_IMMUNE_SHIELD) && m_caster->ToUnit() && m_caster->ToUnit()->HasAuraWithMechanic(1 << MECHANIC_BANISH))
             result = SPELL_FAILED_STUNNED;
     }
-    else if (unitCaster->HasAuraType(SPELL_AURA_MOD_TAUNT) && !CheckSpellCancelsTaunt(param1))
+    else if (unitCaster->IsTaunted() && !CheckSpellCancelsCharm(param1))
         result = SPELL_FAILED_CHARMED;
     else if (unitflag & UNIT_FLAG_SILENCED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && !CheckSpellCancelsSilence(param1))
         result = SPELL_FAILED_SILENCED;
@@ -6680,7 +6680,34 @@ bool Spell::CheckSpellCancelsCharm(uint32* param1) const
 
 bool Spell::CheckSpellCancelsTaunt(uint32* param1) const
 {
-    return CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_TAUNT, param1);
+    Unit* unitCaster = (m_originalCaster ? m_originalCaster : m_caster->ToUnit());
+    if (!unitCaster)
+        return false;
+
+    Unit::AuraEffectList const& fearAuras = unitCaster->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
+    bool hasAttackMeFear = false;
+
+    for (AuraEffect const* aurEff : fearAuras)
+    {
+        if (!aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
+            continue;
+
+        hasAttackMeFear = true;
+
+        if (m_spellInfo->SpellCancelsAuraEffect(aurEff))
+            continue;
+
+        if (param1)
+        {
+            *param1 = aurEff->GetSpellEffectInfo().Mechanic;
+            if (!*param1)
+                *param1 = aurEff->GetSpellInfo()->Mechanic;
+        }
+
+        return false;
+    }
+
+    return !hasAttackMeFear;
 }
 
 bool Spell::CheckSpellCancelsStun(uint32* param1) const
