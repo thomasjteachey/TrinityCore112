@@ -669,41 +669,34 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
         return;
 
-    Clock::time_point now = GameTime::GetSystemTime();
-    Clock::time_point currentEnd = Clock::time_point(Clock::duration(0));
+    uint32 const remainingMs = GetRemainingGlobalCooldown(spellInfo);
+    if (!remainingMs)
+        return;
 
     auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
-    if (gcdItr != _globalCooldowns.end())
-        currentEnd = gcdItr->second;
+    if (gcdItr == _globalCooldowns.end())
+        return;
 
-    if (currentEnd <= now)
-        currentEnd = now + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(spellInfo->StartRecoveryTime));
+    uint32 const newRemainingMs = reduction.count() >= remainingMs ? 0u : remainingMs - reduction.count();
 
-    Clock::duration reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
-    Clock::duration currentDuration = currentEnd - now;
-    Clock::time_point newEnd = now;
-
-    if (currentDuration > reductionDuration)
-        newEnd = now + (currentDuration - reductionDuration);
-
-    if (newEnd <= now)
-        _globalCooldowns.erase(spellInfo->StartRecoveryCategory);
+    if (!newRemainingMs)
+    {
+        _globalCooldowns.erase(gcdItr);
+    }
     else
-        _globalCooldowns[spellInfo->StartRecoveryCategory] = newEnd;
+    {
+        Clock::duration const reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
+        gcdItr->second -= reductionDuration;
+    }
 
     Player* player = GetPlayerOwner();
     if (!player)
         return;
 
-    bool const cleared = newEnd <= now;
-    uint32 remaining = 0;
-    if (!cleared)
-        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now).count();
-
     std::vector<uint32> eligibleSpells;
     eligibleSpells.reserve(8);
 
-    auto tryAddSpell = [this, spellInfo, now, &eligibleSpells](SpellInfo const* otherInfo)
+    auto tryAddSpell = [this, spellInfo, &eligibleSpells](SpellInfo const* otherInfo)
     {
         if (!otherInfo)
             return;
@@ -720,7 +713,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
             return;
 
         auto const spellCooldown = _spellCooldowns.find(spellId);
-        if (spellCooldown != _spellCooldowns.end() && spellCooldown->second.CooldownEnd > now)
+        if (spellCooldown != _spellCooldowns.end() && spellCooldown->second.CooldownEnd > GameTime::GetSystemTime())
             return;
 
         if (uint32 categoryId = otherInfo->GetCategory())
@@ -729,7 +722,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
             if (categoryCooldown != _categoryCooldowns.end())
             {
                 if (CooldownEntry const* entry = categoryCooldown->second)
-                    if (entry->CategoryEnd > now)
+                    if (entry->CategoryEnd > GameTime::GetSystemTime())
                         return;
             }
         }
@@ -750,7 +743,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (eligibleSpells.empty())
         return;
 
-    if (cleared)
+    if (!newRemainingMs)
     {
         std::vector<int32> clearedCooldowns;
         clearedCooldowns.reserve(eligibleSpells.size());
@@ -764,7 +757,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     PacketCooldowns gcdUpdates;
     gcdUpdates.reserve(eligibleSpells.size());
     for (uint32 spellId : eligibleSpells)
-        gcdUpdates.emplace(spellId, remaining);
+        gcdUpdates.emplace(spellId, newRemainingMs);
 
     WorldPacket data;
     BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, gcdUpdates);
