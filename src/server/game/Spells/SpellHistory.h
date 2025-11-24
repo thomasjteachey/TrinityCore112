@@ -130,7 +130,9 @@ public:
     bool HasGlobalCooldown(SpellInfo const* spellInfo) const;
     void AddGlobalCooldown(SpellInfo const* spellInfo, uint32 duration);
     void CancelGlobalCooldown(SpellInfo const* spellInfo);
+    uint32 GetRemainingGlobalCooldown(SpellInfo const* spellInfo) const;
     void ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds reduction);
+    void ClampGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds duration);
 
     void BuildCooldownPacket(WorldPacket& data, uint8 flags, uint32 spellId, uint32 cooldown) const;
 

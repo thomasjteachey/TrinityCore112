@@ -648,6 +648,22 @@ void SpellHistory::CancelGlobalCooldown(SpellInfo const* spellInfo)
     _globalCooldowns[spellInfo->StartRecoveryCategory] = Clock::time_point(Clock::duration(0));
 }
 
+uint32 SpellHistory::GetRemainingGlobalCooldown(SpellInfo const* spellInfo) const
+{
+    if (!spellInfo || !spellInfo->StartRecoveryCategory)
+        return 0;
+
+    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (itr == _globalCooldowns.end())
+        return 0;
+
+    Clock::time_point now = GameTime::GetSystemTime();
+    if (itr->second <= now)
+        return 0;
+
+    return std::chrono::duration_cast<std::chrono::milliseconds>(itr->second - now).count();
+}
+
 void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds reduction)
 {
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
@@ -755,6 +771,28 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     WorldPacket data;
     BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, gcdUpdates);
     player->SendDirectMessage(&data);
+}
+
+void SpellHistory::ClampGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds duration)
+{
+    if (!spellInfo || !spellInfo->StartRecoveryCategory || duration.count() <= 0)
+        return;
+
+    auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (gcdItr == _globalCooldowns.end())
+        return;
+
+    Clock::time_point now = GameTime::GetSystemTime();
+    Clock::time_point currentEnd = gcdItr->second;
+    if (currentEnd <= now)
+        return;
+
+    Clock::time_point desiredEnd = now + std::chrono::duration_cast<Clock::duration>(duration);
+    if (currentEnd > desiredEnd)
+    {
+        auto reduction = std::chrono::duration_cast<std::chrono::milliseconds>(currentEnd - desiredEnd);
+        ReduceGlobalCooldown(spellInfo, reduction);
+    }
 }
 
 Player* SpellHistory::GetPlayerOwner() const
