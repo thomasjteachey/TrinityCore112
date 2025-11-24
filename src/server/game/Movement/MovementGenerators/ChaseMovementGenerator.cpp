@@ -84,7 +84,14 @@ void ChaseMovementGenerator::Initialize(Unit* owner)
         return;
 
     // TODO: UNIT_FIELD_FLAGS should not be handled by generators
-    owner->SetUnitFlag(UNIT_FLAG_FLEEING);
+    owner->RemoveUnitFlag(UNIT_FLAG_TAUNTED);
+    if (owner->HasAttackMeFearAura())
+    {
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
+        owner->SetUnitFlag(UNIT_FLAG_TAUNTED);
+    }
+    else
+        owner->SetUnitFlag(UNIT_FLAG_FLEEING);
 
     _path = nullptr;
     _lastTargetPosition.reset();
@@ -249,6 +256,8 @@ void ChaseMovementGenerator::Deactivate(Unit* owner)
 {
     AddFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     RemoveFlag(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+    if (owner)
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING | UNIT_FLAG_TAUNTED);
     owner->ClearUnitState(UNIT_STATE_CHASE_MOVE);
     if (Creature* cOwner = owner->ToCreature())
         cOwner->SetCannotReachTarget(false);
@@ -259,6 +268,8 @@ void ChaseMovementGenerator::Finalize(Unit* owner, bool active, bool/* movementI
     AddFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
     if (active)
     {
+        if (owner)
+            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING | UNIT_FLAG_TAUNTED);
         owner->ClearUnitState(UNIT_STATE_CHASE_MOVE);
         if (Creature* cOwner = owner->ToCreature())
             cOwner->SetCannotReachTarget(false);
