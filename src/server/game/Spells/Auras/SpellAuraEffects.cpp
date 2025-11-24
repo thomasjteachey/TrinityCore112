@@ -2904,18 +2904,16 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
 
             target->Dismount();
             target->RemoveAurasByType(SPELL_AURA_MOUNTED);
-            target->AttackStop();
-
-            if (Unit* caster = GetCaster())
-            {
-                target->GetMotionMaster()->Remove(FLEEING_MOTION_TYPE);
-                target->GetMotionMaster()->MoveFollow(caster, PET_FOLLOW_DIST, target->GetFollowAngle());
-            }
+            target->SetFacingToObject(GetCaster(), true);
+            target->GetMotionMaster()->Remove(FLEEING_MOTION_TYPE);
+            target->GetMotionMaster()->MoveChase(GetCaster());
+            target->CastStop();
+            target->Attack(GetCaster(), true);
         }
         else
         {
             if (target->IsAlive())
-                target->GetMotionMaster()->Remove(FOLLOW_MOTION_TYPE);
+                target->GetMotionMaster()->Remove(CHASE_MOTION_TYPE);
 
             if (target->HasAuraType(SPELL_AURA_MOD_FEAR))
                 target->SetControlled(true, UNIT_STATE_FLEEING);
