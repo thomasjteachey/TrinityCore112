@@ -716,9 +716,8 @@ public:
         {
             std::string const memberNames = CollectMemberNames(team);
             std::string const victoryMessage = memberNames.empty()
-                ? Trinity::StringFormat("Stockades PvPvE run %u complete! A team is victorious!", runId)
-                : Trinity::StringFormat("Stockades PvPvE run %u complete! Victorious players: %s.", runId, memberNames.c_str());
-
+                ? Trinity::StringFormat("Stockades PvPvE run {} complete! A team is victorious!", runId)
+                : Trinity::StringFormat("Stockades PvPvE run {} complete! Victorious players: {}.", runId, memberNames);
             DoSendNotifyToInstance(victoryMessage.c_str());
             SendServerMessageToRelevantPlayers(victoryMessage);
         }

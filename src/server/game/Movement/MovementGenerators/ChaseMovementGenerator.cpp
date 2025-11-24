@@ -75,10 +75,18 @@ ChaseMovementGenerator::ChaseMovementGenerator(Unit *target, Optional<ChaseRange
 }
 ChaseMovementGenerator::~ChaseMovementGenerator() = default;
 
-void ChaseMovementGenerator::Initialize(Unit* /*owner*/)
+void ChaseMovementGenerator::Initialize(Unit* owner)
 {
-    RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
-    AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+    MovementGenerator::RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    MovementGenerator::AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED);
+
+    if (!owner || !owner->IsAlive())
+        return;
+
+    if (owner->GetTypeId() == TYPEID_PLAYER)
+        owner->SetUnitFlag(UNIT_FLAG_FLEEING);
+    else
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
 
     _path = nullptr;
     _lastTargetPosition.reset();
@@ -243,6 +251,8 @@ void ChaseMovementGenerator::Deactivate(Unit* owner)
 {
     AddFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     RemoveFlag(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+    if (owner)
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
     owner->ClearUnitState(UNIT_STATE_CHASE_MOVE);
     if (Creature* cOwner = owner->ToCreature())
         cOwner->SetCannotReachTarget(false);
@@ -253,6 +263,8 @@ void ChaseMovementGenerator::Finalize(Unit* owner, bool active, bool/* movementI
     AddFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
     if (active)
     {
+        if (owner)
+            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
         owner->ClearUnitState(UNIT_STATE_CHASE_MOVE);
         if (Creature* cOwner = owner->ToCreature())
             cOwner->SetCannotReachTarget(false);
