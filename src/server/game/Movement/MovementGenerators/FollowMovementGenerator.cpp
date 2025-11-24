@@ -82,6 +82,8 @@ void FollowMovementGenerator::Deactivate(Unit* owner)
 {
     AddFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     RemoveFlag(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+    if (owner)
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
     owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
 }
 
@@ -90,6 +92,8 @@ void FollowMovementGenerator::Finalize(Unit* owner, bool active, bool/* movement
     AddFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
     if (active)
     {
+        if (owner)
+            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
         owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
         UpdatePetSpeed(owner);
     }
