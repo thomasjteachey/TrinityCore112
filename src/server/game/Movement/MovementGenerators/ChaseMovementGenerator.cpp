@@ -82,7 +82,11 @@ void ChaseMovementGenerator::Initialize(Unit* owner)
 
     if (!owner || !owner->IsAlive())
         return;
-    owner->SetUnitFlag(UNIT_FLAG_FLEEING);
+
+    if (owner->GetTypeId() == TYPEID_PLAYER)
+        owner->SetUnitFlag(UNIT_FLAG_FLEEING);
+    else
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
 
     _path = nullptr;
     _lastTargetPosition.reset();
