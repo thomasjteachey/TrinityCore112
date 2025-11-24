@@ -11478,8 +11478,10 @@ void Unit::SetControlled(bool apply, UnitState state)
         if (state & UNIT_STATE_CONTROLLED)
             CastStop();
 
-        if(state != UNIT_STATE_TAUNTED)
+        if (state != UNIT_STATE_TAUNTED)
             AddUnitState(state);
+        else
+            AddUnitState(UNIT_STATE_FLEEING);
 
         switch (state)
         {
@@ -11509,7 +11511,7 @@ void Unit::SetControlled(bool apply, UnitState state)
                 }
                 break;
             case UNIT_STATE_TAUNTED:
-                if (!HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
+                if (!HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED))
                 {
                     SetTaunted(true);
                     break;
@@ -11544,17 +11546,11 @@ void Unit::SetControlled(bool apply, UnitState state)
                 SetConfused(false);
                 break;
             case UNIT_STATE_FLEEING:
-                if (HasAuraType(SPELL_AURA_MOD_FEAR))
+                if (HasAuraType(SPELL_AURA_MOD_FEAR) || HasAuraType(SPELL_AURA_MOD_TAUNT))
                     return;
 
                 ClearUnitState(state);
                 SetFeared(false);
-                break;
-
-            case UNIT_STATE_TAUNTED:
-                if (HasAuraType(SPELL_AURA_MOD_TAUNT))
-                    return;
-                ClearUnitState(state);
                 SetTaunted(false);
                 break;
             default:
