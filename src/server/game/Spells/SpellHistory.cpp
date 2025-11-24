@@ -648,6 +648,22 @@ void SpellHistory::CancelGlobalCooldown(SpellInfo const* spellInfo)
     _globalCooldowns[spellInfo->StartRecoveryCategory] = Clock::time_point(Clock::duration(0));
 }
 
+uint32 SpellHistory::GetRemainingGlobalCooldown(SpellInfo const* spellInfo) const
+{
+    if (!spellInfo || !spellInfo->StartRecoveryCategory)
+        return 0;
+
+    auto itr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
+    if (itr == _globalCooldowns.end())
+        return 0;
+
+    Clock::time_point now = GameTime::GetSystemTime();
+    if (itr->second <= now)
+        return 0;
+
+    return std::chrono::duration_cast<std::chrono::milliseconds>(itr->second - now).count();
+}
+
 void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono::milliseconds reduction)
 {
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
