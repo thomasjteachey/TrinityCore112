@@ -2441,15 +2441,6 @@ class spell_pal_reckoning_stacks : public AuraScript
 {
     PrepareAuraScript(spell_pal_reckoning_stacks);
 
-    // per-aura instance cooldown timer (ms)
-    uint32 _lastProcTime;
-
-    bool Load() override
-    {
-        _lastProcTime = 0;
-        return true;
-    }
-
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
         return ValidateSpellInfo({ 20178, 32746 });
@@ -2457,22 +2448,7 @@ class spell_pal_reckoning_stacks : public AuraScript
 
     void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
     {
-        // 0.5s internal cooldown between procs
-        uint32 now = getMSTime();
-        if (_lastProcTime && now - _lastProcTime < 500)
-            return;
-        _lastProcTime = now;
-
-        PreventDefaultAction(); // we fully control the proc
-
-        Unit* owner = GetTarget();
-        if (!owner)
-            return;
-
-        // Safety: don't loop on our own triggered spell
-        if (SpellInfo const* triggeredBy = eventInfo.GetSpellInfo())
-            if (triggeredBy->Id == 32746)
-                return;
+        PreventDefaultAction();
 
         if (!GetStackAmount())
             return;
@@ -2493,7 +2469,7 @@ class spell_pal_reckoning_stacks : public AuraScript
         OnEffectProc += AuraEffectProcFn(
             spell_pal_reckoning_stacks::HandleProc,
             EFFECT_0,
-            SPELL_AURA_DUMMY);
+            SPELL_AURA_TRIGGER_SPELL);
     }
 };
 void AddSC_paladin_spell_scripts()
