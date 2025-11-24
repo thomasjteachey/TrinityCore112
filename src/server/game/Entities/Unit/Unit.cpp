@@ -11793,6 +11793,8 @@ void Unit::SetTaunted(bool apply)
             if (GetVictim())
                 SetTarget(EnsureVictim()->GetGUID());
         }
+        if (Player* player = ToPlayer())
+            player->HandleAttackStopAfterTaunt();
         RemoveUnitFlag(UNIT_FLAG_TAUNTED);
         // allow control to real player in control (eg charmer)
         if (GetCharmerOrSelfPlayer())

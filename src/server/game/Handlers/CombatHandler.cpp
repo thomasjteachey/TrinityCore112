@@ -58,6 +58,7 @@ void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& pa
         }
     }
 
+    _player->ClearAttackStopRequestAfterTaunt();
     _player->Attack(enemy, true);
 }
 
@@ -68,10 +69,14 @@ void WorldSession::HandleAttackStopOpcode(WorldPackets::Combat::AttackStop& /*pa
         if (Unit* tauntTarget = ObjectAccessor::GetUnit(*_player, GetPlayer()->GetTarget()))
         {
             if (GetPlayer()->IsValidAttackTarget(tauntTarget))
+            {
+                GetPlayer()->RequestAttackStopAfterTaunt();
                 return;
+            }
         }
     }
 
+    GetPlayer()->ClearAttackStopRequestAfterTaunt();
     GetPlayer()->AttackStop();
 }
 
