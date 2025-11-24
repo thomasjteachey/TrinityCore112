@@ -2904,12 +2904,17 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
         {
             target->SetControlled(true, UNIT_STATE_FLEEING);
 
+            // EXPERIMENT: mimic what FleeingMovementGenerator does
+            if (target->IsPlayer())
+                target->SetUnitFlag(UNIT_FLAG_FLEEING);
+
             target->Dismount();
             target->RemoveAurasByType(SPELL_AURA_MOUNTED);
             target->AttackStop();
 
             if (Unit* caster = GetCaster())
             {
+                // don?t care about FLEEING_MOTION_TYPE anymore
                 target->GetMotionMaster()->Remove(FLEEING_MOTION_TYPE);
                 target->GetMotionMaster()->MoveFollow(caster, PET_FOLLOW_DIST, target->GetFollowAngle());
             }
@@ -2919,6 +2924,10 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
             if (target->IsAlive())
                 target->GetMotionMaster()->Remove(FOLLOW_MOTION_TYPE);
 
+            // clear flag when fear ends
+            if (target->IsPlayer())
+                target->RemoveUnitFlag(UNIT_FLAG_FLEEING);
+
             if (target->HasAuraType(SPELL_AURA_MOD_FEAR))
                 target->SetControlled(true, UNIT_STATE_FLEEING);
             else
@@ -2927,7 +2936,6 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
 
         return;
     }
-
     target->SetControlled(apply, UNIT_STATE_FLEEING);
 }
 
