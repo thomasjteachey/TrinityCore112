@@ -2924,6 +2924,9 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
                 target->SetControlled(false, UNIT_STATE_FLEEING);
         }
 
+        if (Player* player = target->ToPlayer())
+            player->HandleAttackStopAfterTaunt();
+
         return;
     }
 

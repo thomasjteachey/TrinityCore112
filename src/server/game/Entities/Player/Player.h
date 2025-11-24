@@ -1572,6 +1572,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void UpdateZone(uint32 newZone, uint32 newArea);
         void UpdateArea(uint32 newArea);
         void SetNeedsZoneUpdate(bool needsUpdate) { m_needsZoneUpdate = needsUpdate; }
+        void RequestAttackStopAfterTaunt() { m_attackStopPendingOnTauntEnd = true; }
+        void HandleAttackStopAfterTaunt();
+        void ClearAttackStopRequestAfterTaunt() { m_attackStopPendingOnTauntEnd = false; }
 
         void UpdateZoneDependentAuras(uint32 zone_id);    // zones
         void UpdateAreaDependentAuras(uint32 area_id);    // subzones
@@ -2530,6 +2533,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint8 m_fishingSteps;
 
         bool m_needsZoneUpdate;
+        bool m_attackStopPendingOnTauntEnd;
 
         TimeTracker m_groupUpdateTimer;
 
