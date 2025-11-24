@@ -669,33 +669,29 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
         return;
 
+    uint32 const remainingMs = GetRemainingGlobalCooldown(spellInfo);
+    if (!remainingMs)
+        return;
+
     auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
     if (gcdItr == _globalCooldowns.end())
         return;
 
-    Clock::duration const reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
-    Clock::time_point const updatedEnd = gcdItr->second - reductionDuration;
-    bool const cleared = updatedEnd <= GameTime::GetSystemTime();
+    uint32 const newRemainingMs = reduction.count() >= remainingMs ? 0u : remainingMs - reduction.count();
 
-    if (cleared)
+    if (!newRemainingMs)
+    {
         _globalCooldowns.erase(gcdItr);
+    }
     else
-        gcdItr->second = updatedEnd;
+    {
+        Clock::duration const reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
+        gcdItr->second -= reductionDuration;
+    }
 
     Player* player = GetPlayerOwner();
     if (!player)
         return;
-
-    uint32 remaining = 0;
-    if (!cleared)
-    {
-        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(gcdItr->second - GameTime::GetSystemTime()).count();
-        if (!remaining)
-        {
-            _globalCooldowns.erase(gcdItr);
-            return;
-        }
-    }
 
     std::vector<uint32> eligibleSpells;
     eligibleSpells.reserve(8);
@@ -747,7 +743,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (eligibleSpells.empty())
         return;
 
-    if (cleared)
+    if (!newRemainingMs)
     {
         std::vector<int32> clearedCooldowns;
         clearedCooldowns.reserve(eligibleSpells.size());
@@ -761,7 +757,7 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     PacketCooldowns gcdUpdates;
     gcdUpdates.reserve(eligibleSpells.size());
     for (uint32 spellId : eligibleSpells)
-        gcdUpdates.emplace(spellId, remaining);
+        gcdUpdates.emplace(spellId, newRemainingMs);
 
     WorldPacket data;
     BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, gcdUpdates);
