@@ -1049,7 +1049,7 @@ void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
         }
 
         //roll for over-threshold item if it's one-player loot
-        if (item->Quality >= uint32(m_lootThreshold))
+        if (item->Quality >= uint32(m_lootThreshold) || item->HasFlag(ITEM_FLAG_IS_BOUND_TO_ACCOUNT))
         {
             ObjectGuid newitemGUID = ObjectGuid::Create<HighGuid::Item>(sObjectMgr->GetGenerator<HighGuid::Item>().Generate());
 
@@ -1200,7 +1200,7 @@ void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
         ASSERT(item);
 
         //roll for over-threshold item if it's one-player loot
-        if (item->Quality >= uint32(m_lootThreshold))
+        if (item->Quality >= uint32(m_lootThreshold) || item->HasFlag(ITEM_FLAG_IS_BOUND_TO_ACCOUNT))
         {
             ObjectGuid newitemGUID = ObjectGuid::Create<HighGuid::Item>(sObjectMgr->GetGenerator<HighGuid::Item>().Generate());
 
