@@ -669,21 +669,25 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
         return;
 
-    Clock::duration const baseDuration = std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(spellInfo->StartRecoveryTime));
-    Clock::duration remainingDuration = baseDuration;
-    Clock::time_point now = GameTime::GetSystemTime();
-
+    Clock::time_point const now = GameTime::GetSystemTime();
     auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
-    if (gcdItr != _globalCooldowns.end() && gcdItr->second > now)
-        remainingDuration = gcdItr->second - now;
+    if (gcdItr == _globalCooldowns.end())
+        return;
 
+    if (gcdItr->second <= now)
+    {
+        _globalCooldowns.erase(gcdItr);
+        return;
+    }
+
+    Clock::duration const remainingDuration = gcdItr->second - now;
     Clock::duration const reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
     bool const cleared = reductionDuration >= remainingDuration;
 
     if (cleared)
-        _globalCooldowns.erase(spellInfo->StartRecoveryCategory);
+        _globalCooldowns.erase(gcdItr);
     else
-        _globalCooldowns[spellInfo->StartRecoveryCategory] = now + (remainingDuration - reductionDuration);
+        gcdItr->second -= reductionDuration;
 
     Player* player = GetPlayerOwner();
     if (!player)
@@ -692,10 +696,10 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     uint32 remaining = 0;
     if (!cleared)
     {
-        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(_globalCooldowns[spellInfo->StartRecoveryCategory] - now).count();
+        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(gcdItr->second - now).count();
         if (!remaining)
         {
-            _globalCooldowns.erase(spellInfo->StartRecoveryCategory);
+            _globalCooldowns.erase(gcdItr);
             return;
         }
     }
