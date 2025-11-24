@@ -472,7 +472,7 @@ void WorldSession::HandleSetSelectionOpcode(WorldPacket& recvData)
     ObjectGuid guid;
     recvData >> guid;
 
-    if (_player->HasAuraType(SPELL_AURA_MOD_TAUNT))
+    if (_player->IsTaunted())
     {
         ObjectGuid const tauntTarget = _player->GetTarget();
         if (!tauntTarget.IsEmpty() && tauntTarget != guid)
