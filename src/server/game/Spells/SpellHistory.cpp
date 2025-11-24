@@ -669,31 +669,36 @@ void SpellHistory::ReduceGlobalCooldown(SpellInfo const* spellInfo, std::chrono:
     if (!spellInfo || !spellInfo->StartRecoveryCategory || !spellInfo->StartRecoveryTime || reduction.count() <= 0)
         return;
 
+    Clock::duration const baseDuration = std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(spellInfo->StartRecoveryTime));
+    Clock::duration remainingDuration = baseDuration;
     Clock::time_point now = GameTime::GetSystemTime();
-    Clock::time_point currentEnd = Clock::time_point(Clock::duration(0));
 
     auto gcdItr = _globalCooldowns.find(spellInfo->StartRecoveryCategory);
-    if (gcdItr != _globalCooldowns.end())
-        currentEnd = gcdItr->second;
+    if (gcdItr != _globalCooldowns.end() && gcdItr->second > now)
+        remainingDuration = gcdItr->second - now;
 
-    if (currentEnd <= now)
-        currentEnd = now + std::chrono::duration_cast<Clock::duration>(std::chrono::milliseconds(spellInfo->StartRecoveryTime));
+    Clock::duration const reductionDuration = std::chrono::duration_cast<Clock::duration>(reduction);
+    bool const cleared = reductionDuration >= remainingDuration;
 
-    Clock::time_point newEnd = currentEnd - std::chrono::duration_cast<Clock::duration>(reduction);
-
-    if (newEnd <= now)
+    if (cleared)
         _globalCooldowns.erase(spellInfo->StartRecoveryCategory);
     else
-        _globalCooldowns[spellInfo->StartRecoveryCategory] = newEnd;
+        _globalCooldowns[spellInfo->StartRecoveryCategory] = now + (remainingDuration - reductionDuration);
 
     Player* player = GetPlayerOwner();
     if (!player)
         return;
 
-    bool const cleared = newEnd <= now;
     uint32 remaining = 0;
     if (!cleared)
-        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(newEnd - now).count();
+    {
+        remaining = std::chrono::duration_cast<std::chrono::milliseconds>(_globalCooldowns[spellInfo->StartRecoveryCategory] - now).count();
+        if (!remaining)
+        {
+            _globalCooldowns.erase(spellInfo->StartRecoveryCategory);
+            return;
+        }
+    }
 
     std::vector<uint32> eligibleSpells;
     eligibleSpells.reserve(8);
