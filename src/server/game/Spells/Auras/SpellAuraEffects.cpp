@@ -2916,7 +2916,7 @@ void AuraEffect::HandleModFear(AuraApplication const* aurApp, uint8 mode, bool a
             {
                 // don?t care about FLEEING_MOTION_TYPE anymore
                 target->GetMotionMaster()->Remove(FLEEING_MOTION_TYPE);
-                target->GetMotionMaster()->MoveFollow(caster, PET_FOLLOW_DIST, target->GetFollowAngle());
+                target->GetMotionMaster()->MoveFleeing(caster, PET_FOLLOW_DIST, target->GetFollowAngle());
             }
         }
         else
