@@ -1521,16 +1521,9 @@ class spell_pri_dispel_magic : public SpellScript
         if (AuraEffect const* darkness = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
         {
             uint32 const rank = std::max<uint32>(1, darkness->GetSpellInfo()->GetRank());
-            uint32 const baseRecoveryTime = GetSpellInfo()->StartRecoveryTime ? GetSpellInfo()->StartRecoveryTime : 1500;
-            uint32 const desiredGcd = baseRecoveryTime > 100 * rank ? baseRecoveryTime - 100 * rank : 0;
-            caster->GetSpellHistory()->ClampGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(desiredGcd));
+            uint32 const reduction = 100 * rank;
 
-            if (Player* player = caster->ToPlayer())
-            {
-                WorldPacket data;
-                caster->GetSpellHistory()->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, GetSpellInfo()->Id, caster->GetSpellHistory()->GetRemainingGlobalCooldown(GetSpellInfo()));
-                player->SendDirectMessage(&data);
-            }
+            caster->GetSpellHistory()->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(reduction));
         }
     }
 
