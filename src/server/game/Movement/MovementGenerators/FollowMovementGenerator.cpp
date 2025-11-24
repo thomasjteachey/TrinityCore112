@@ -37,10 +37,10 @@ static void DoMovementInform(Unit* owner, Unit* target)
 
 FollowMovementGenerator::FollowMovementGenerator(Unit* target, float range, ChaseAngle angle) : AbstractFollower(ASSERT_NOTNULL(target)), _range(range), _angle(angle), _checkTimer(CHECK_INTERVAL)
 {
-    Mode = MOTION_MODE_DEFAULT;
-    Priority = MOTION_PRIORITY_NORMAL;
-    Flags = MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING;
-    BaseUnitState = UNIT_STATE_FOLLOW;
+    this->Mode = MOTION_MODE_DEFAULT;
+    this->Priority = MOTION_PRIORITY_HIGHEST;
+    this->Flags = MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING;
+    this->BaseUnitState = UNIT_STATE_FLEEING;
 }
 FollowMovementGenerator::~FollowMovementGenerator() = default;
 
@@ -54,14 +54,16 @@ static bool PositionOkay(Unit* owner, Unit* target, float range, Optional<ChaseA
 
 void FollowMovementGenerator::Initialize(Unit* owner)
 {
-    RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
-    AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
-    owner->AddUnitState(UNIT_STATE_FLEEING_MOVE);
+    MovementGenerator::RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    MovementGenerator::AddFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED);
 
-    owner->StopMoving();
-    UpdatePetSpeed(owner);
+    if (!owner || !owner->IsAlive())
+        return;
+
+    // TODO: UNIT_FIELD_FLAGS should not be handled by generators
+    owner->SetUnitFlag(UNIT_FLAG_FLEEING);
+
     _path = nullptr;
-    _lastTargetPosition.reset();
 }
 
 void FollowMovementGenerator::Reset(Unit* owner)
