@@ -257,7 +257,7 @@ void ChaseMovementGenerator::Deactivate(Unit* owner)
     AddFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     RemoveFlag(MOVEMENTGENERATOR_FLAG_TRANSITORY | MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
     if (owner)
-        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING | UNIT_FLAG_TAUNTED);
+        owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
     owner->ClearUnitState(UNIT_STATE_CHASE_MOVE);
     if (Creature* cOwner = owner->ToCreature())
         cOwner->SetCannotReachTarget(false);
@@ -269,7 +269,7 @@ void ChaseMovementGenerator::Finalize(Unit* owner, bool active, bool/* movementI
     if (active)
     {
         if (owner)
-            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING | UNIT_FLAG_TAUNTED);
+            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
         owner->ClearUnitState(UNIT_STATE_CHASE_MOVE);
         if (Creature* cOwner = owner->ToCreature())
             cOwner->SetCannotReachTarget(false);

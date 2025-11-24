@@ -11477,7 +11477,7 @@ bool Unit::HasAttackMeFearAura() const
 
 bool Unit::IsTaunted()
 {
-    return HasAttackMeFearAura() || HasUnitFlag(UNIT_FLAG_TAUNTED) || HasUnitState(UNIT_STATE_TAUNTED);
+    return HasAttackMeFearAura() || HasUnitState(UNIT_STATE_TAUNTED);
 }
 void Unit::SetControlled(bool apply, UnitState state)
 {
@@ -11783,8 +11783,6 @@ void Unit::SetTaunted(bool apply)
             Attack(caster, true);
         }
 
-        RemoveUnitFlag(UNIT_FLAG_FLEEING);
-        SetUnitFlag(UNIT_FLAG_TAUNTED);
     }
     else
     {
