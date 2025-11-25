@@ -34,6 +34,9 @@
 #include "SpellScript.h"
 #include "TemporarySummon.h"
 #include "SpellHistory.h"
+#include "WorldPacket.h"
+#include <algorithm>
+#include <chrono>
 
 enum PriestSpells
 {
@@ -82,7 +85,9 @@ enum PriestSpells
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R1        = 81322,
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R2        = 81323,
     SPELL_PRIEST_SPIRIT_OF_REDEMPTION               = 27827,
-    SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356
+    SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356,
+    SPELL_PRIEST_DARKNESS_R1                        = 15259,
+    SPELL_PRIEST_SHADOWFORM                         = 15473
 };
 
 enum PriestSpellIcons
@@ -1489,11 +1494,13 @@ class spell_pri_dispel_magic : public SpellScript
 {
     PrepareSpellScript(spell_pri_dispel_magic);
 
-    bool Validate(SpellInfo const* spellInfo) override
+    bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return true;
+        // Darkness rank 1 is enough to validate the talent
+        return ValidateSpellInfo({ SPELL_PRIEST_DARKNESS_R1 });
     }
 
+    // Keep any "on successful dispel" logic here (81440, etc.).
     void HandleSuccessfulDispel(SpellEffIndex effIndex)
     {
         Unit* caster = GetCaster();
@@ -1502,12 +1509,10 @@ class spell_pri_dispel_magic : public SpellScript
         if (!caster || !target)
             return;
 
-        if (caster->IsFriendlyTo(target))
-            return;
-
         if (GetEffectInfo(effIndex).MiscValue != DISPEL_MAGIC)
             return;
 
+        // Example: your existing 81440 -> 81436 proc
         if (caster->HasAura(81440))
         {
             CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
@@ -1515,11 +1520,104 @@ class spell_pri_dispel_magic : public SpellScript
         }
     }
 
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || caster->GetTypeId() != TYPEID_PLAYER)
+            return;
+
+        Player* player = caster->ToPlayer();
+        SpellInfo const* spellInfo = GetSpellInfo();
+        if (!spellInfo)
+            return;
+
+        // Make sure 527 has a valid StartRecoveryCategory in DBC/DB
+        if (!spellInfo->StartRecoveryCategory)
+            return;
+
+        // Figure out if this cast was offensive or defensive
+        Unit* target = GetExplTargetUnit();
+        bool isOffensive = target && !caster->IsFriendlyTo(target);
+
+        // --- 1) Compute desired "GCD" for this Dispel cast ---
+        uint32 gcdMs = 1500u; // default
+
+        if (isOffensive)
+        {
+            // Only offensive dispel gets Darkness scaling
+            if (AuraEffect const* darkness = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
+            {
+                uint32 rank = darkness->GetSpellInfo()->GetRank();
+                if (rank == 0)
+                    rank = 1;
+                if (rank > 5)
+                    rank = 5;
+
+                uint32 reduction = 100u * rank; // 100 ms per rank
+                if (reduction > 500u)
+                    reduction = 500u;
+
+                uint32 const minGcdMs = 1000u;   // don't go below 1.0s
+                uint32 candidate = 1500u - reduction;
+                if (candidate < minGcdMs)
+                    candidate = minGcdMs;
+
+                gcdMs = candidate;
+            }
+        }
+        // else: defensive dispel stays at 1500 no matter what
+
+        // --- 2) Impose this GCD server-side on Dispel's category ---
+        SpellHistory* history = player->GetSpellHistory();
+        if (!history)
+            return;
+
+        history->AddGlobalCooldown(spellInfo, gcdMs);
+
+        // --- 3) Pick the fake GCD spell ID based on gcdMs ---
+        uint32 triggerSpellId;
+        switch (gcdMs)
+        {
+        case 1500: triggerSpellId = 83258; break; // 1500gcd
+        case 1450: triggerSpellId = 83259; break; // 1450gcd
+        case 1400: triggerSpellId = 83260; break; // 1400gcd
+        case 1350: triggerSpellId = 83261; break; // 1350gcd
+        case 1300: triggerSpellId = 83262; break; // 1300gcd
+        case 1250: triggerSpellId = 83263; break; // 1250gcd
+        case 1200: triggerSpellId = 83264; break; // 1200gcd
+        case 1150: triggerSpellId = 83265; break; // 1150gcd
+        case 1100: triggerSpellId = 83266; break; // 1100gcd
+        case 1050: triggerSpellId = 83267; break; // 1050gcd
+        case 1000: triggerSpellId = 83268; break; // 1000gcd
+        default:   triggerSpellId = 83258; break; // sane fallback
+        }
+
+        // --- 4) Tell the client "use this GCD variant" ---
+        WorldPacket data;
+        history->BuildCooldownPacket(
+            data,
+            SPELL_COOLDOWN_FLAG_INCLUDE_GCD, // use GCD from the fake spell?s DBC
+            triggerSpellId,
+            0                                // no per-spell CD, just GCD
+        );
+        caster->ToPlayer()->SendDirectMessage(&data);
+    }
+
+
     void Register() override
     {
-        OnEffectSuccessfulDispel += SpellEffectFn(spell_pri_dispel_magic::HandleSuccessfulDispel, EFFECT_0, SPELL_EFFECT_DISPEL);
+        OnEffectSuccessfulDispel += SpellEffectFn(
+            spell_pri_dispel_magic::HandleSuccessfulDispel,
+            EFFECT_0,
+            SPELL_EFFECT_DISPEL
+        );
+
+        AfterCast += SpellCastFn(
+            spell_pri_dispel_magic::HandleAfterCast
+        );
     }
 };
+
 
 //81432
 class spell_pre_renew_bonus : public AuraScript
