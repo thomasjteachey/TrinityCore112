@@ -10279,7 +10279,7 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMa
                         StartReactiveTimer(REACTIVE_DEFENSE);
                     }
                     // For Hunters only improved Counterattack
-                    if (GetClass() == CLASS_HUNTER && HasAura(81283))
+                    if (GetClass() == CLASS_HUNTER && HasAura(81283) && roll_chance_i(50))
                     {
                         ModifyAuraState(AURA_STATE_HUNTER_PARRY, true);
                         StartReactiveTimer(REACTIVE_HUNTER_PARRY);
