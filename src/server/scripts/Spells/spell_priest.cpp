@@ -1490,46 +1490,18 @@ class spell_pri_silence : public AuraScript
 };
 
 // 527 - Dispel Magic
+// 527 - Dispel Magic
 class spell_pri_dispel_magic : public SpellScript
 {
     PrepareSpellScript(spell_pri_dispel_magic);
 
-    bool Validate(SpellInfo const* spellInfo) override
+    bool Validate(SpellInfo const* /*spellInfo*/) override
     {
+        // Darkness rank 1 is enough to validate the talent
         return ValidateSpellInfo({ SPELL_PRIEST_DARKNESS_R1 });
     }
 
-    void HandleAfterCast()
-    {
-        Player* playerCaster = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
-        if (!playerCaster)
-            return;
-
-        Unit* target = GetExplTargetUnit();
-        bool const offensiveDispel = target && !playerCaster->IsFriendlyTo(target);
-
-        int32 globalCooldown = 1500;
-
-        if (offensiveDispel)
-        {
-            if (AuraEffect const* darkness = playerCaster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
-            {
-                uint32 const rank = std::max<uint32>(1, darkness->GetSpellInfo()->GetRank());
-                globalCooldown -= int32(100 * rank);
-            }
-        }
-
-        if (globalCooldown <= 0)
-            return;
-
-        SpellHistory* spellHistory = playerCaster->GetSpellHistory();
-        spellHistory->AddGlobalCooldown(GetSpellInfo(), uint32(globalCooldown));
-
-        WorldPacket data;
-        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, GetSpellInfo()->Id, 0);
-        playerCaster->SendDirectMessage(&data);
-    }
-
+    // Keep any "on successful dispel" logic here (81440, etc.).
     void HandleSuccessfulDispel(SpellEffIndex effIndex)
     {
         Unit* caster = GetCaster();
@@ -1538,28 +1510,101 @@ class spell_pri_dispel_magic : public SpellScript
         if (!caster || !target)
             return;
 
-        if (caster->IsFriendlyTo(target))
-            return;
-
         if (GetEffectInfo(effIndex).MiscValue != DISPEL_MAGIC)
             return;
 
+        // Example: your existing 81440 -> 81436 proc
         if (caster->HasAura(81440))
         {
             CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
             caster->CastSpell(caster, 81436, args);
         }
+
+        // NOTE: no GCD logic here anymore
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || caster->GetTypeId() != TYPEID_PLAYER)
+            return;
+
+        Player* player = caster->ToPlayer();
+        SpellInfo const* spellInfo = GetSpellInfo();
+        if (!spellInfo)
+            return;
+
+        // Make sure 527 has a valid StartRecoveryCategory in DBC/DB
+        if (!spellInfo->StartRecoveryCategory)
+            return;
+
+        // Figure out if this cast was offensive or defensive
+        Unit* target = GetExplTargetUnit();
+        bool isOffensive = target && !caster->IsFriendlyTo(target);
+
+        // --- 1) Compute desired "GCD" for this Dispel cast ---
+        uint32 gcdMs = 1500u; // default
+
+        if (isOffensive)
+        {
+            // Only offensive dispel gets Darkness scaling
+            if (AuraEffect const* darkness = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
+            {
+                uint32 rank = darkness->GetSpellInfo()->GetRank();
+                if (rank == 0)
+                    rank = 1;
+                if (rank > 5)
+                    rank = 5;
+
+                uint32 reduction = 100u * rank; // 100 ms per rank
+                if (reduction > 500u)
+                    reduction = 500u;
+
+                uint32 const minGcdMs = 1000u;   // don't go below 1.0s
+                uint32 candidate = 1500u - reduction;
+                if (candidate < minGcdMs)
+                    candidate = minGcdMs;
+
+                gcdMs = candidate;
+            }
+        }
+        // else: defensive dispel stays at 1500 no matter what
+
+        // --- 2) Impose this GCD server-side on Dispel's category ---
+        SpellHistory* history = player->GetSpellHistory();
+        if (!history)
+            return;
+
+        history->AddGlobalCooldown(spellInfo, gcdMs);
+
+        // --- 3) Tell the client "Dispel (527) is on cooldown for gcdMs ms" ---
+        //
+        // Here we treat this as a normal per-spell cooldown
+        // so the button shows a 1.0?1.5s swirl.
+        WorldPacket data;
+        history->BuildCooldownPacket(
+            data,
+            SPELL_COOLDOWN_FLAG_NONE, // we?re supplying the duration explicitly
+            spellInfo->Id,            // 527
+            gcdMs                     // 1500..1000 based on Darkness/offensive
+        );
+        player->SendDirectMessage(&data);
     }
 
     void Register() override
     {
-        AfterCast += SpellCastFn(spell_pri_dispel_magic::HandleAfterCast);
-        OnEffectSuccessfulDispel += SpellEffectFn(spell_pri_dispel_magic::HandleSuccessfulDispel, EFFECT_0, SPELL_EFFECT_DISPEL);
-    }
+        OnEffectSuccessfulDispel += SpellEffectFn(
+            spell_pri_dispel_magic::HandleSuccessfulDispel,
+            EFFECT_0,
+            SPELL_EFFECT_DISPEL
+        );
 
-private:
-    bool _hadShadowform = false;
+        AfterCast += SpellCastFn(
+            spell_pri_dispel_magic::HandleAfterCast
+        );
+    }
 };
+
 
 //81432
 class spell_pre_renew_bonus : public AuraScript
