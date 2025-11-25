@@ -3986,11 +3986,22 @@ bool Player::ResetTalents(bool no_cost)
 
     uint32 talentPointsForLevel = CalculateTalentsPoints();
 
-    if (m_usedTalentCount == 0)
+    // Some characters may have talent data but a stale used-talent count. Re-evaluate
+    // the spent points so a reset always clears existing selections.
+    uint32 usedTalents = m_usedTalentCount;
+    if (usedTalents == 0)
+        if (PlayerTalentMap* talents = m_talents[m_activeSpec])
+            for (auto const& [spellId, talent] : *talents)
+                if (talent && talent->state != PLAYERSPELL_REMOVED)
+                    usedTalents += GetTalentSpellCost(spellId);
+
+    if (usedTalents == 0)
     {
         SetFreeTalentPoints(talentPointsForLevel);
         return false;
     }
+
+    m_usedTalentCount = usedTalents;
 
     uint32 cost = 0;
 
@@ -4050,6 +4061,7 @@ bool Player::ResetTalents(bool no_cost)
     _SaveSpells(trans);
     CharacterDatabase.CommitTransaction(trans);
 
+    m_usedTalentCount = 0;
     SetFreeTalentPoints(talentPointsForLevel);
 
     if (!no_cost)
