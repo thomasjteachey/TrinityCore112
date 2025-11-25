@@ -4197,6 +4197,12 @@ void AuraEffect::HandleAuraModAttackPower(AuraApplication const* aurApp, uint8 m
     Unit* target = aurApp->GetTarget();
 
     target->HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(GetAmount()), apply);
+
+    // Ensure the client attack power display gets refreshed immediately when the debuff is
+    // applied or removed. Some debuffs (e.g. Demoralizing Roar) could leave the old modifier
+    // visible in the character pane after they expire because no update was pushed.
+    if (target->GetTypeId() == TYPEID_PLAYER)
+        target->ToPlayer()->UpdateAttackPowerAndDamage(true);
 }
 
 void AuraEffect::HandleAuraModRangedAttackPower(AuraApplication const* aurApp, uint8 mode, bool apply) const
