@@ -854,14 +854,14 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     if (handledTalentReset)
     {
         pCurrChar->ResetNonQuestAndMountSpells();
-        SendNotification(GetTrinityString(LANG_RESET_SPELLS));
-        SendNotification(GetTrinityString(LANG_RESET_TALENTS));
+        SendNotification(LANG_RESET_SPELLS);
+        SendNotification(LANG_RESET_TALENTS);
     }
 
     if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS))
     {
         pCurrChar->ResetSpells();
-        SendNotification(GetTrinityString(LANG_RESET_SPELLS));
+        SendNotification(LANG_RESET_SPELLS);
     }
 
     if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_TALENTS))
@@ -869,7 +869,7 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         if (!handledTalentReset)
         {
             pCurrChar->ResetTalents(true);
-            SendNotification(GetTrinityString(LANG_RESET_TALENTS));
+            SendNotification(LANG_RESET_TALENTS);
         }
         else
             pCurrChar->RemoveAtLoginFlag(AT_LOGIN_RESET_TALENTS, true);
