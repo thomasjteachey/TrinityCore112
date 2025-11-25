@@ -850,13 +850,12 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     // Apply at_login requests before initial packets so the client receives the
     // cleaned spell/talent state in the initial spell list and talent data.
-    bool handledTalentReset = false;
-    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS))
+    bool const handledTalentReset = pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS);
+    if (handledTalentReset)
     {
         pCurrChar->ResetNonQuestAndMountSpells();
         SendNotification(LANG_RESET_SPELLS);
         SendNotification(LANG_RESET_TALENTS);
-        handledTalentReset = true;
     }
 
     if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS))
