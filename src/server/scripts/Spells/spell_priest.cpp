@@ -1583,7 +1583,7 @@ class spell_pri_dispel_magic : public SpellScript
             data,
             SPELL_COOLDOWN_FLAG_INCLUDE_GCD, // we?re supplying the duration explicitly
             6119,            // 6119
-            0                     // 1500..1000 based on Darkness/offensive
+            gcdMs                    // 1500..1000 based on Darkness/offensive
         );
     }
 
