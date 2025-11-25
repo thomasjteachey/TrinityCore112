@@ -23681,7 +23681,19 @@ void Player::ResetNonQuestAndMountSpells()
         if (!HasSpell(spellId))
             LearnSpell(spellId, true);
 
-    ResetTalents(true);
+    uint8 const activeSpec = GetActiveSpec();
+    uint8 const specsCount = GetSpecsCount();
+
+    for (uint8 i = 0; i < specsCount; ++i)
+    {
+        SetActiveSpec(i);
+        ResetTalents(true);
+    }
+
+    SetActiveSpec(activeSpec);
+    m_usedTalentCount = 0;
+    SetFreeTalentPoints(CalculateTalentsPoints());
+
     SendTalentsInfoData(false);
 }
 
