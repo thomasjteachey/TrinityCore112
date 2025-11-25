@@ -43,12 +43,89 @@ int32 PetAI::Permissible(Creature const* creature)
     return PERMIT_BASE_NO;
 }
 
-PetAI::PetAI(Creature* creature) : CreatureAI(creature), _tracker(TIME_INTERVAL_LOOK), _lastCrowdControlledVictim(ObjectGuid::Empty)
+PetAI::PetAI(Creature* creature) : CreatureAI(creature), _tracker(TIME_INTERVAL_LOOK), _lastCrowdControlledVictim(ObjectGuid::Empty), _queuedSpellTarget(ObjectGuid::Empty), _queuedSpellId(0)
 {
     if (!me->GetCharmInfo())
         throw InvalidAIException("Creature doesn't have a valid charm info");
 
     UpdateAllies();
+}
+
+void PetAI::QueueSpell(uint32 spellId, SpellCastTargets const& targets)
+{
+    _queuedSpellId = spellId;
+    _queuedSpellTargets = targets;
+    _queuedSpellTarget = targets.GetUnitTargetGUID();
+
+    if (Unit* target = _queuedSpellTargets.GetUnitTarget())
+        _AttackStart(target);
+}
+
+void PetAI::ClearQueuedSpell()
+{
+    _queuedSpellTargets = SpellCastTargets();
+    _queuedSpellTarget.Clear();
+    _queuedSpellId = 0;
+}
+
+void PetAI::ProcessSpellQueue()
+{
+    if (!_queuedSpellId || me->HasUnitState(UNIT_STATE_CASTING))
+        return;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(_queuedSpellId);
+    if (!spellInfo)
+    {
+        ClearQueuedSpell();
+        return;
+    }
+
+    Unit* target = _queuedSpellTargets.GetUnitTarget();
+    if (!target && !_queuedSpellTarget.IsEmpty())
+        target = ObjectAccessor::GetUnit(*me, _queuedSpellTarget);
+
+    if (!target || !target->IsAlive())
+    {
+        ClearQueuedSpell();
+        return;
+    }
+
+    _queuedSpellTargets.SetUnitTarget(target);
+
+    Spell* spell = new Spell(me, spellInfo, TRIGGERED_NONE);
+    spell->m_targets = _queuedSpellTargets;
+
+    SpellCastResult result = spell->CheckPetCast(target);
+
+    if (result == SPELL_CAST_OK)
+    {
+        spell->prepare(spell->m_targets);
+        ClearQueuedSpell();
+        return;
+    }
+
+    float minRange = spellInfo->GetMinRange(false);
+    float maxRange = spellInfo->GetMaxRange(false);
+
+    spell->finish(false);
+    delete spell;
+
+    if (result == SPELL_FAILED_OUT_OF_RANGE)
+    {
+        _AttackStart(target);
+        float chaseRange = maxRange > 0.0f ? maxRange : me->GetAttackDistance(target);
+        me->GetMotionMaster()->MoveChase(target, chaseRange);
+        return;
+    }
+
+    if (result == SPELL_FAILED_TOO_CLOSE)
+    {
+        float chaseRange = minRange > 0.0f ? minRange : me->GetAttackDistance(target);
+        me->GetMotionMaster()->MoveChase(target, chaseRange);
+        return;
+    }
+
+    ClearQueuedSpell();
 }
 
 void PetAI::UpdateAI(uint32 diff)
@@ -57,6 +134,8 @@ void PetAI::UpdateAI(uint32 diff)
         return;
 
     Unit* owner = me->GetCharmerOrOwner();
+
+    ProcessSpellQueue();
 
     if (_updateAlliesTimer <= diff)
         // UpdateAllies self set update timer
