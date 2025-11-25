@@ -768,13 +768,20 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         // Let's copy the list so we can prevent iterator invalidation
         AuraEffectList vCopyDamageCopy(victim->GetAuraEffectsByType(SPELL_AURA_SHARE_DAMAGE_PCT));
         // copy damage to casters of this aura
+        static uint32 const PARTY_DAMAGE_REDIRECT_SPELL_ID = 83256;
+
         for (AuraEffectList::iterator i = vCopyDamageCopy.begin(); i != vCopyDamageCopy.end(); ++i)
         {
             // Check if aura was removed during iteration - we don't need to work on such auras
             if (!((*i)->GetBase()->IsAppliedOnTarget(victim->GetGUID())))
                 continue;
             // check damage school mask
-            if (((*i)->GetMiscValue() & damageSchoolMask) == 0)
+            uint32 splitSchoolMask = (*i)->GetMiscValue();
+            // Party Damage Redirect should share all damage schools but re-route as physical on the paladin.
+            if ((*i)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID)
+                splitSchoolMask = SPELL_SCHOOL_MASK_ALL;
+
+            if ((splitSchoolMask & damageSchoolMask) == 0)
                 continue;
 
             Unit* shareDamageTarget = (*i)->GetCaster();
@@ -1959,6 +1966,8 @@ void Unit::HandleEmoteCommand(Emote emoteId)
     // split damage auras - only when not damaging self
     if (damageInfo.GetVictim() != damageInfo.GetAttacker())
     {
+        static uint32 const PARTY_DAMAGE_REDIRECT_SPELL_ID = 83256;
+
         // We're going to call functions which can modify content of the list during iteration over it's elements
         // Let's copy the list so we can prevent iterator invalidation
         AuraEffectList vSplitDamageFlatCopy(damageInfo.GetVictim()->GetAuraEffectsByType(SPELL_AURA_SPLIT_DAMAGE_FLAT));
@@ -1968,7 +1977,11 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             if (!((*itr)->GetBase()->IsAppliedOnTarget(damageInfo.GetVictim()->GetGUID())))
                 continue;
             // check damage school mask
-            if (!((*itr)->GetMiscValue() & damageInfo.GetSchoolMask()))
+            uint32 splitSchoolMask = (*itr)->GetMiscValue();
+            if ((*itr)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID)
+                splitSchoolMask = SPELL_SCHOOL_MASK_ALL;
+
+            if (!(splitSchoolMask & damageInfo.GetSchoolMask()))
                 continue;
 
             // Damage can be splitted only if aura has an alive caster
@@ -2012,7 +2025,11 @@ void Unit::HandleEmoteCommand(Emote emoteId)
                 continue;
 
             // check damage school mask
-            if (!((*itr)->GetMiscValue() & damageInfo.GetSchoolMask()))
+            uint32 splitSchoolMask = (*itr)->GetMiscValue();
+            if ((*itr)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID)
+                splitSchoolMask = SPELL_SCHOOL_MASK_ALL;
+
+            if (!(splitSchoolMask & damageInfo.GetSchoolMask()))
                 continue;
 
             // Damage can be splitted only if aura has an alive caster

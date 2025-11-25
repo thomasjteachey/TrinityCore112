@@ -137,6 +137,7 @@ enum PaladinSpells
     SPELL_PALADIN_HAND_OF_FREEDOM = 1044,
     SPELL_PALADIN_LESSER_HAND_OF_FREEDOM = 81277,
     SPELL_PALADIN_IMP_HAND_OF_FREEDOM = 81278,
+    SPELL_PALADIN_PARTY_DAMAGE_REDIRECT          = 83256,
 
     SPELL_PALADIN_SANCTIFIED_SEALS = 81279
 };
@@ -774,6 +775,172 @@ class spell_pal_hand_of_sacrifice : public AuraScript
     void Register() override
     {
         OnEffectSplit += AuraEffectSplitFn(spell_pal_hand_of_sacrifice::Split, EFFECT_0);
+    }
+};
+
+// 81280 - Party Damage Redirect
+class spell_pal_party_damage_redirect : public AuraScript
+{
+    PrepareAuraScript(spell_pal_party_damage_redirect);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PALADIN_PARTY_DAMAGE_REDIRECT });
+    }
+
+    bool IsInBreakableCrowdControl(Unit* unit) const
+    {
+        // Mirror the crowd-control exclusions used by Ignite Spread.
+        return unit && unit->HasAuraWithMechanic((1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_SAPPED));
+    }
+
+    MeleeHitOutcome RollAvoidance(Unit* attacker, Unit* paladin) const
+    {
+        Unit* swingAttacker = attacker ? attacker : paladin;
+
+        float dodgeChance = swingAttacker->GetUnitDodgeChance(BASE_ATTACK, paladin);
+        float parryChance = swingAttacker->GetUnitParryChance(BASE_ATTACK, paladin);
+        float blockChance = swingAttacker->GetUnitBlockChance(BASE_ATTACK, paladin);
+
+        uint32 roll = urand(0, 9999);
+        uint32 cumulativeChance = 0;
+
+        cumulativeChance += static_cast<uint32>(dodgeChance * 100.0f);
+        if (cumulativeChance && roll < cumulativeChance)
+            return MELEE_HIT_DODGE;
+
+        cumulativeChance += static_cast<uint32>(parryChance * 100.0f);
+        if (cumulativeChance && roll < cumulativeChance)
+            return MELEE_HIT_PARRY;
+
+        cumulativeChance += static_cast<uint32>(blockChance * 100.0f);
+        if (cumulativeChance && roll < cumulativeChance)
+            return MELEE_HIT_BLOCK;
+
+        return MELEE_HIT_NORMAL;
+    }
+
+    void Split(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& splitAmount)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target || caster == target)
+            return;
+
+        if (!splitAmount)
+            return;
+
+        if (IsInBreakableCrowdControl(caster) || IsInBreakableCrowdControl(dmgInfo.GetAttacker()))
+        {
+            splitAmount = 0;
+            return;
+        }
+
+        Unit* attacker = dmgInfo.GetAttacker();
+
+        uint32 redirected = std::min(splitAmount, dmgInfo.GetDamage());
+        splitAmount = 0;
+
+        if (!redirected)
+            return;
+
+        dmgInfo.AbsorbDamage(redirected);
+
+        CalcDamageInfo redirectInfo{};
+        redirectInfo.Attacker = attacker ? attacker : caster;
+        redirectInfo.Target = caster;
+        redirectInfo.Damages[0].DamageSchoolMask = SPELL_SCHOOL_MASK_NORMAL;
+        redirectInfo.Damages[0].Damage = redirected;
+        redirectInfo.Damages[1].DamageSchoolMask = SPELL_SCHOOL_MASK_NORMAL;
+        redirectInfo.AttackType = BASE_ATTACK;
+        redirectInfo.ProcAttacker = PROC_FLAG_DONE_MELEE_AUTO_ATTACK | PROC_FLAG_DONE_MAINHAND_ATTACK;
+        redirectInfo.ProcVictim = PROC_FLAG_TAKEN_MELEE_AUTO_ATTACK;
+        redirectInfo.HitInfo = HITINFO_NORMALSWING;
+
+        MeleeHitOutcome outcome = RollAvoidance(attacker, caster);
+        redirectInfo.HitOutCome = outcome;
+
+        uint32 const preBlockDamage = redirectInfo.Damages[0].Damage;
+
+        switch (outcome)
+        {
+            case MELEE_HIT_DODGE:
+                redirectInfo.TargetState = VICTIMSTATE_DODGE;
+                redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
+                redirectInfo.Damages[0].Damage = 0;
+                break;
+            case MELEE_HIT_PARRY:
+                redirectInfo.TargetState = VICTIMSTATE_PARRY;
+                redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
+                redirectInfo.Damages[0].Damage = 0;
+                break;
+            case MELEE_HIT_BLOCK:
+            {
+                redirectInfo.TargetState = VICTIMSTATE_HIT;
+                redirectInfo.HitInfo |= HITINFO_BLOCK;
+                redirectInfo.Blocked = caster->GetShieldBlockValue();
+                if (caster->IsBlockCritical())
+                    redirectInfo.Blocked *= 2;
+
+                uint32 remainingBlock = redirectInfo.Blocked;
+                if (remainingBlock >= redirectInfo.Damages[0].Damage)
+                {
+                    redirectInfo.TargetState = VICTIMSTATE_BLOCKS;
+                    redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
+                    redirectInfo.Damages[0].Damage = 0;
+                    redirectInfo.Blocked = preBlockDamage;
+                }
+                else
+                {
+                    redirectInfo.CleanDamage = remainingBlock;
+                    redirectInfo.Damages[0].Damage -= remainingBlock;
+                }
+                break;
+            }
+            default:
+                redirectInfo.TargetState = VICTIMSTATE_HIT;
+                break;
+        }
+
+        if (redirectInfo.Damages[0].Damage && redirectInfo.HitOutCome == MELEE_HIT_NORMAL)
+        {
+            bool const wasCritical = (dmgInfo.GetHitMask() & PROC_HIT_CRITICAL) != 0;
+            if (wasCritical)
+            {
+                redirectInfo.HitOutCome = MELEE_HIT_CRIT;
+                redirectInfo.HitInfo |= HITINFO_CRITICALHIT;
+            }
+        }
+
+        if (redirectInfo.Damages[0].Damage)
+        {
+            uint32 redirectedAbsorb = 0;
+            Unit::DealDamageMods(caster, redirectInfo.Damages[0].Damage, &redirectedAbsorb);
+            redirectInfo.Damages[0].Absorb = redirectedAbsorb;
+        }
+
+        redirectInfo.CleanDamage += redirectInfo.Damages[0].Absorb;
+
+        redirectInfo.ProcVictim |= PROC_FLAG_TAKEN_DAMAGE;
+
+        redirectInfo.Damages[1].Damage = 0;
+
+        if (redirectInfo.Target->IsAlive())
+        {
+            redirectInfo.Blocked = std::min<uint32>(redirectInfo.Blocked, preBlockDamage);
+
+            redirectInfo.Attacker->SendAttackStateUpdate(&redirectInfo);
+            redirectInfo.Attacker->DealMeleeDamage(&redirectInfo, false);
+
+            DamageInfo procDamage(redirectInfo);
+            Unit::ProcSkillsAndAuras(redirectInfo.Attacker, redirectInfo.Target, redirectInfo.ProcAttacker, redirectInfo.ProcVictim, PROC_SPELL_TYPE_NONE, PROC_SPELL_PHASE_NONE, procDamage.GetHitMask(), nullptr, &procDamage, nullptr);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectSplit += AuraEffectSplitFn(spell_pal_party_damage_redirect::Split, EFFECT_0);
+        OnEffectSplit += AuraEffectSplitFn(spell_pal_party_damage_redirect::Split, EFFECT_1);
     }
 };
 
@@ -2325,6 +2492,7 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_pal_judgements_of_the_wise);
     RegisterSpellScript(spell_pal_lay_on_hands);
     RegisterSpellScript(spell_pal_light_s_beacon);
+    RegisterSpellScript(spell_pal_party_damage_redirect);
     RegisterSpellScript(spell_pal_righteous_defense);
     RegisterSpellScript(spell_pal_righteous_vengeance);
     RegisterSpellScript(spell_pal_sacred_shield);
