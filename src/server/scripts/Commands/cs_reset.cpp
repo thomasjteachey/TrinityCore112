@@ -203,8 +203,8 @@ public:
         if (target)
         {
             target->ResetNonQuestAndMountSpells();
-            target->SendTalentsInfoData(false);
-            ChatHandler(target->GetSession()).SendSysMessage("Removed all non-mount, non-quest spells and reset talents.");
+            ChatHandler(target->GetSession()).SendSysMessage(LANG_RESET_SPELLS);
+            ChatHandler(target->GetSession()).SendSysMessage(LANG_RESET_TALENTS);
 
             if (!handler->GetSession() || handler->GetSession()->GetPlayer() != target)
                 handler->PSendSysMessage("Cleaned non-mount, non-quest spells and talents for %s.", handler->GetNameLink(target).c_str());
