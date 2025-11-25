@@ -23625,6 +23625,10 @@ void Player::ResetNonQuestAndMountSpells()
             preservedSpells.insert(itr->first);
     }
 
+    // Preserve base race/class spells and racials from playercreateinfo_spell_custom
+    if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
+        preservedSpells.insert(info->customSpells.begin(), info->customSpells.end());
+
     // Preserve spells rewarded by completed quests
     for (RewardedQuestSet::const_iterator itr = m_RewardedQuests.begin(); itr != m_RewardedQuests.end(); ++itr)
     {
@@ -23652,6 +23656,7 @@ void Player::ResetNonQuestAndMountSpells()
         if (preservedSpells.find(itr->first) != preservedSpells.end())
             continue;
 
+        RemoveAurasDueToSpell(itr->first);
         RemoveSpell(itr->first, false, false);
     }
 
