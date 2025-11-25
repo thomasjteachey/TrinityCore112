@@ -254,6 +254,7 @@ Player::Player(WorldSession* session) : Unit(true)
     m_team = 0;
 
     m_needsZoneUpdate = false;
+    m_attackStopPendingOnTauntEnd = false;
 
     m_nextSave = sWorld->getIntConfig(CONFIG_INTERVAL_SAVE);
 
@@ -7314,6 +7315,15 @@ void Player::UpdateArea(uint32 newArea)
         SetRestFlag(REST_FLAG_IN_FACTION_AREA);
     else
         RemoveRestFlag(REST_FLAG_IN_FACTION_AREA);
+}
+
+void Player::HandleAttackStopAfterTaunt()
+{
+    if (!m_attackStopPendingOnTauntEnd)
+        return;
+
+    m_attackStopPendingOnTauntEnd = false;
+    AttackStop();
 }
 
 void Player::UpdateZone(uint32 newZone, uint32 newArea)
