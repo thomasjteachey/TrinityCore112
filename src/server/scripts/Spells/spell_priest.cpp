@@ -1518,8 +1518,6 @@ class spell_pri_dispel_magic : public SpellScript
             CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
             caster->CastSpell(caster, 81436, args);
         }
-
-        // NOTE: no GCD logic here anymore
     }
 
     void HandleAfterCast()
@@ -1583,10 +1581,11 @@ class spell_pri_dispel_magic : public SpellScript
         WorldPacket data;
         history->BuildCooldownPacket(
             data,
-            SPELL_COOLDOWN_FLAG_NONE, // we?re supplying the duration explicitly
+            SPELL_COOLDOWN_FLAG_INCLUDE_GCD, // we?re supplying the duration explicitly
             spellInfo->Id,            // 527
             gcdMs                     // 1500..1000 based on Darkness/offensive
         );
+
         player->SendDirectMessage(&data);
     }
 
