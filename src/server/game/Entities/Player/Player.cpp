@@ -23625,6 +23625,10 @@ void Player::ResetNonQuestAndMountSpells()
 
     PlayerSpellMap spells = GetSpellMap();
     std::unordered_set<uint32> mountSpells;
+    std::unordered_set<uint32> customSpells;
+
+    if (PlayerInfo const* playerInfo = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
+        customSpells.insert(playerInfo->customSpells.begin(), playerInfo->customSpells.end());
 
     // Preserve mount spells explicitly so class spell pruning does not remove them.
     for (PlayerSpellMap::const_iterator itr = spells.begin(); itr != spells.end(); ++itr)
@@ -23646,6 +23650,9 @@ void Player::ResetNonQuestAndMountSpells()
             continue;
 
         if (mountSpells.find(itr->first) != mountSpells.end())
+            continue;
+
+        if (customSpells.find(itr->first) != customSpells.end())
             continue;
 
         // Only clear class spells/talents so languages, racials, attack command, and quest spells stay intact.
