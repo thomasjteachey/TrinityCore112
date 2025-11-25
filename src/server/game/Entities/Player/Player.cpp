@@ -26052,6 +26052,28 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false);
+    if (SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid))
+    {
+        // Only auto-learn ranks for activatable spells
+        if (!talentSpellInfo->IsPassive())
+        {
+            uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(spellid);
+            while (nextRankSpellId)
+            {
+                SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
+                if (!nextRankSpellInfo)
+                    break;
+
+                // Stop if next rank requires a higher level
+                uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
+                if (requiredLevel && requiredLevel > GetLevel())
+                    break;
+
+                LearnSpell(nextRankSpellId, false);
+                nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
+            }
+        }
+    }
     AddTalent(spellid, m_activeSpec, true);
 
     TC_LOG_DEBUG("misc", "Player::LearnTalent: TalentID: {} Spell: {} Group: {}\n", talentId, spellid, uint32(m_activeSpec));
