@@ -26052,6 +26052,50 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false);
+    if (SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid))
+    {
+        auto learnNextActivatableRanks = [this](uint32 currentRankSpellId)
+        {
+            uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
+            while (nextRankSpellId)
+            {
+                SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
+                if (!nextRankSpellInfo)
+                    break;
+
+                // Stop if next rank requires a higher level
+                uint32 requiredLevel = std::max(nextRankSpellInfo->BaseLevel, nextRankSpellInfo->SpellLevel);
+                if (requiredLevel && requiredLevel > GetLevel())
+                    break;
+
+                LearnSpell(nextRankSpellId, false);
+                nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
+            }
+        };
+
+        // Only auto-learn ranks and dependencies for activatable spells
+        if (!talentSpellInfo->IsPassive())
+        {
+            learnNextActivatableRanks(spellid);
+
+            SpellsRequiringSpellMapBounds spellsRequiringSpell = sSpellMgr->GetSpellsRequiringSpellBounds(spellid);
+            for (SpellsRequiringSpellMap::const_iterator itr = spellsRequiringSpell.first; itr != spellsRequiringSpell.second; ++itr)
+            {
+                uint32 dependentSpellId = itr->second;
+                SpellInfo const* dependentSpellInfo = sSpellMgr->GetSpellInfo(dependentSpellId);
+
+                if (!dependentSpellInfo || dependentSpellInfo->IsPassive())
+                    continue;
+
+                uint32 requiredLevel = std::max(dependentSpellInfo->BaseLevel, dependentSpellInfo->SpellLevel);
+                if (requiredLevel && requiredLevel > GetLevel())
+                    continue;
+
+                LearnSpell(dependentSpellId, false);
+                learnNextActivatableRanks(dependentSpellId);
+            }
+        }
+    }
     AddTalent(spellid, m_activeSpec, true);
 
     TC_LOG_DEBUG("misc", "Player::LearnTalent: TalentID: {} Spell: {} Group: {}\n", talentId, spellid, uint32(m_activeSpec));
