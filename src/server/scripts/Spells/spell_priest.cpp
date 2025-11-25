@@ -1582,7 +1582,7 @@ class spell_pri_dispel_magic : public SpellScript
         history->BuildCooldownPacket(
             data,
             SPELL_COOLDOWN_FLAG_INCLUDE_GCD, // we?re supplying the duration explicitly
-            spellInfo->Id,            // 527
+            6119,            // 6119
             0                     // 1500..1000 based on Darkness/offensive
         );
     }
