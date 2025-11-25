@@ -1793,7 +1793,8 @@ class spell_int_cd_reduce : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        uint32 cdreduce = GetEffectValue();
+        //uint32 cdreduce = GetEffectValue();
+        uint32 cdreduce = -10000;
         GetCaster()->GetSpellHistory()->ModifyCooldown(19577, cdreduce);
     }
 
