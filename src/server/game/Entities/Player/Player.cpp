@@ -26052,6 +26052,14 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false);
+
+    // Talent-granted spells should provide the entire spell rank chain
+    for (uint32 rankSpell = sSpellMgr->GetFirstSpellInChain(spellid); rankSpell; rankSpell = sSpellMgr->GetNextSpellInChain(rankSpell))
+    {
+        if (rankSpell != spellid)
+            LearnSpell(rankSpell, false);
+    }
+
     AddTalent(spellid, m_activeSpec, true);
 
     TC_LOG_DEBUG("misc", "Player::LearnTalent: TalentID: {} Spell: {} Group: {}\n", talentId, spellid, uint32(m_activeSpec));
