@@ -848,6 +848,35 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         }
     }
 
+    // Apply at_login requests before initial packets so the client receives the
+    // cleaned spell/talent state in the initial spell list and talent data.
+    bool handledTalentReset = pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS);
+    if (handledTalentReset)
+    {
+        pCurrChar->ResetNonQuestAndMountSpells();
+        SendNotification(LANG_RESET_SPELLS);
+        SendNotification(LANG_RESET_TALENTS);
+    }
+
+    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS))
+    {
+        pCurrChar->ResetSpells();
+        SendNotification(LANG_RESET_SPELLS);
+    }
+
+    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_TALENTS))
+    {
+        if (!handledTalentReset)
+        {
+            pCurrChar->ResetTalents(true);
+            SendNotification(LANG_RESET_TALENTS);
+        }
+        else
+            pCurrChar->RemoveAtLoginFlag(AT_LOGIN_RESET_TALENTS, true);
+
+        pCurrChar->SendTalentsInfoData(false);              // original talents send already in to SendInitialPacketsBeforeAddToMap, resend reset state
+    }
+
     WorldPacket data(SMSG_LEARNED_DANCE_MOVES, 4+4);
     data << uint32(0);
     data << uint32(0);
@@ -936,35 +965,6 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     if (pCurrChar->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_CONTESTED_PVP))
         pCurrChar->SetContestedPvP();
-
-    // Apply at_login requests
-    bool handledTalentReset = false;
-    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS))
-    {
-        pCurrChar->ResetNonQuestAndMountSpells();
-        SendNotification(LANG_RESET_SPELLS);
-        SendNotification(LANG_RESET_TALENTS);
-        handledTalentReset = true;
-    }
-
-    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS))
-    {
-        pCurrChar->ResetSpells();
-        SendNotification(LANG_RESET_SPELLS);
-    }
-
-    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_TALENTS))
-    {
-        if (!handledTalentReset)
-        {
-            pCurrChar->ResetTalents(true);
-            SendNotification(LANG_RESET_TALENTS);
-        }
-        else
-            pCurrChar->RemoveAtLoginFlag(AT_LOGIN_RESET_TALENTS, true);
-
-        pCurrChar->SendTalentsInfoData(false);              // original talents send already in to SendInitialPacketsBeforeAddToMap, resend reset state
-    }
 
     bool firstLogin = pCurrChar->HasAtLoginFlag(AT_LOGIN_FIRST);
     if (firstLogin)
