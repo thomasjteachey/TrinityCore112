@@ -1555,7 +1555,7 @@ class spell_pri_dispel_magic : public SpellScript
                 if (rank > 5)
                     rank = 5;
 
-                uint32 reduction = 50u * rank; // 100 ms per rank
+                uint32 reduction = 100u * rank; // 100 ms per rank
                 if (reduction > 500u)
                     reduction = 500u;
 
