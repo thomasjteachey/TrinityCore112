@@ -4480,12 +4480,6 @@ void Spell::EffectResurrect()
 
 void Spell::EffectAddExtraAttacks()
 {
-    //reckoning
-    if (m_caster && m_caster->IsUnit() && m_spellInfo->Id == 32746)
-    {
-        int aurCount = m_caster->ToUnit()->GetAuraCount(20178);
-        damage = aurCount;
-    }
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 

@@ -2437,7 +2437,41 @@ class spell_pal_seal_of_justice_wrapper : public SpellScript
     }
 };
 
+class spell_pal_reckoning_stacks : public AuraScript
+{
+    PrepareAuraScript(spell_pal_reckoning_stacks);
 
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 20178, 32746 });
+    }
+
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        PreventDefaultAction();
+
+        if (!GetStackAmount())
+            return;
+
+        Unit* victim = GetUnitOwner()->GetVictim();
+        if (!victim)
+            return;
+
+        // One extra weapon swing
+        GetUnitOwner()->CastSpell(victim, 32746, true);
+
+        // Consume exactly one stack
+        ModStackAmount(-1, AURA_REMOVE_BY_DEFAULT);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(
+            spell_pal_reckoning_stacks::HandleProc,
+            EFFECT_0,
+            SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
 void AddSC_paladin_spell_scripts()
 {
     RegisterSpellScript(spell_pal_ardent_defender);
@@ -2500,4 +2534,5 @@ void AddSC_paladin_spell_scripts()
     RegisterSpellScript(spell_pal_hand_of_freedom);
     RegisterSpellScript(spell_pal_seal_of_justice_wrapper);
     RegisterSpellScript(spell_pal_hs_cd_reduce);
+    RegisterSpellScript(spell_pal_reckoning_stacks);
 }
