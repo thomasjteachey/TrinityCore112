@@ -1574,19 +1574,35 @@ class spell_pri_dispel_magic : public SpellScript
 
         history->AddGlobalCooldown(spellInfo, gcdMs);
 
-        // --- 3) Tell the client "Dispel (527) is on cooldown for gcdMs ms" ---
-        //
-        // Here we treat this as a normal per-spell cooldown
-        // so the button shows a 1.0?1.5s swirl.
+        // --- 3) Pick the fake GCD spell ID based on gcdMs ---
+        uint32 triggerSpellId;
+        switch (gcdMs)
+        {
+        case 1500: triggerSpellId = 83258; break; // 1500gcd
+        case 1450: triggerSpellId = 83259; break; // 1450gcd
+        case 1400: triggerSpellId = 83260; break; // 1400gcd
+        case 1350: triggerSpellId = 83261; break; // 1350gcd
+        case 1300: triggerSpellId = 83262; break; // 1300gcd
+        case 1250: triggerSpellId = 83263; break; // 1250gcd
+        case 1200: triggerSpellId = 83264; break; // 1200gcd
+        case 1150: triggerSpellId = 83265; break; // 1150gcd
+        case 1100: triggerSpellId = 83266; break; // 1100gcd
+        case 1050: triggerSpellId = 83267; break; // 1050gcd
+        case 1000: triggerSpellId = 83268; break; // 1000gcd
+        default:   triggerSpellId = 83258; break; // sane fallback
+        }
+
+        // --- 4) Tell the client "use this GCD variant" ---
         WorldPacket data;
         history->BuildCooldownPacket(
             data,
-            SPELL_COOLDOWN_FLAG_INCLUDE_GCD, // we?re supplying the duration explicitly
-            6119,            // 6119
-            gcdMs                    // 1500..1000 based on Darkness/offensive
+            SPELL_COOLDOWN_FLAG_INCLUDE_GCD, // use GCD from the fake spell?s DBC
+            triggerSpellId,
+            0                                // no per-spell CD, just GCD
         );
         caster->ToPlayer()->SendDirectMessage(&data);
     }
+
 
     void Register() override
     {
