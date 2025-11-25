@@ -1494,14 +1494,6 @@ class spell_pri_dispel_magic : public SpellScript
 {
     PrepareSpellScript(spell_pri_dispel_magic);
 
-    bool Load() override
-    {
-        if (Unit* caster = GetCaster())
-            _hadShadowform = caster->HasAura(SPELL_PRIEST_SHADOWFORM);
-
-        return true;
-    }
-
     bool Validate(SpellInfo const* spellInfo) override
     {
         return ValidateSpellInfo({ SPELL_PRIEST_DARKNESS_R1 });
@@ -1556,13 +1548,6 @@ class spell_pri_dispel_magic : public SpellScript
         {
             CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
             caster->CastSpell(caster, 81436, args);
-        }
-
-        if (_hadShadowform && !caster->HasAura(SPELL_PRIEST_SHADOWFORM))
-        {
-            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-            args.TriggerFlags |= TRIGGERED_IGNORE_POWER_AND_REAGENT_COST;
-            caster->CastSpell(caster, SPELL_PRIEST_SHADOWFORM, args);
         }
     }
 
