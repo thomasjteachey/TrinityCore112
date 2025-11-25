@@ -938,6 +938,15 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         pCurrChar->SetContestedPvP();
 
     // Apply at_login requests
+    bool handledTalentReset = false;
+    if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS))
+    {
+        pCurrChar->ResetNonQuestAndMountSpells();
+        SendNotification(LANG_RESET_SPELLS);
+        SendNotification(LANG_RESET_TALENTS);
+        handledTalentReset = true;
+    }
+
     if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_SPELLS))
     {
         pCurrChar->ResetSpells();
@@ -946,9 +955,15 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
 
     if (pCurrChar->HasAtLoginFlag(AT_LOGIN_RESET_TALENTS))
     {
-        pCurrChar->ResetTalents(true);
+        if (!handledTalentReset)
+        {
+            pCurrChar->ResetTalents(true);
+            SendNotification(LANG_RESET_TALENTS);
+        }
+        else
+            pCurrChar->RemoveAtLoginFlag(AT_LOGIN_RESET_TALENTS, true);
+
         pCurrChar->SendTalentsInfoData(false);              // original talents send already in to SendInitialPacketsBeforeAddToMap, resend reset state
-        SendNotification(LANG_RESET_TALENTS);
     }
 
     bool firstLogin = pCurrChar->HasAtLoginFlag(AT_LOGIN_FIRST);
