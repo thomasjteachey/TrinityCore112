@@ -104,16 +104,25 @@ void PetAI::ProcessSpellQueue()
         return;
     }
 
+    float desiredRange = spellInfo->GetMinRange(false);
+
     spell->finish(false);
     delete spell;
 
-    if (result != SPELL_FAILED_OUT_OF_RANGE)
+    if (result == SPELL_FAILED_OUT_OF_RANGE)
     {
-        ClearQueuedSpell();
+        _AttackStart(target);
+        me->GetMotionMaster()->MoveChase(target, desiredRange);
         return;
     }
 
-    _AttackStart(target);
+    if (result == SPELL_FAILED_TOO_CLOSE)
+    {
+        me->GetMotionMaster()->MoveChase(target, desiredRange);
+        return;
+    }
+
+    ClearQueuedSpell();
 }
 
 void PetAI::UpdateAI(uint32 diff)
