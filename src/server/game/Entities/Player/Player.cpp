@@ -3986,11 +3986,22 @@ bool Player::ResetTalents(bool no_cost)
 
     uint32 talentPointsForLevel = CalculateTalentsPoints();
 
-    if (m_usedTalentCount == 0)
+    // Some characters may have talent data but a stale used-talent count. Re-evaluate
+    // the spent points so a reset always clears existing selections.
+    uint32 usedTalents = m_usedTalentCount;
+    if (usedTalents == 0)
+        if (PlayerTalentMap* talents = m_talents[m_activeSpec])
+            for (auto const& [spellId, talent] : *talents)
+                if (talent && talent->state != PLAYERSPELL_REMOVED)
+                    usedTalents += GetTalentSpellCost(spellId);
+
+    if (usedTalents == 0)
     {
         SetFreeTalentPoints(talentPointsForLevel);
         return false;
     }
+
+    m_usedTalentCount = usedTalents;
 
     uint32 cost = 0;
 
@@ -4050,6 +4061,7 @@ bool Player::ResetTalents(bool no_cost)
     _SaveSpells(trans);
     CharacterDatabase.CommitTransaction(trans);
 
+    m_usedTalentCount = 0;
     SetFreeTalentPoints(talentPointsForLevel);
 
     if (!no_cost)
@@ -23612,9 +23624,9 @@ void Player::ResetNonQuestAndMountSpells()
         RemoveAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS, true);
 
     PlayerSpellMap spells = GetSpellMap();
-    std::unordered_set<uint32> preservedSpells;
+    std::unordered_set<uint32> mountSpells;
 
-    // Preserve mount spells
+    // Preserve mount spells explicitly so class spell pruning does not remove them.
     for (PlayerSpellMap::const_iterator itr = spells.begin(); itr != spells.end(); ++itr)
     {
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(itr->first);
@@ -23622,46 +23634,48 @@ void Player::ResetNonQuestAndMountSpells()
             continue;
 
         if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
-            preservedSpells.insert(itr->first);
+            mountSpells.insert(itr->first);
     }
 
-    // Preserve base race/class spells and racials from playercreateinfo_spell_custom
-    if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
-        preservedSpells.insert(info->customSpells.begin(), info->customSpells.end());
-
-    // Preserve spells rewarded by completed quests
-    for (RewardedQuestSet::const_iterator itr = m_RewardedQuests.begin(); itr != m_RewardedQuests.end(); ++itr)
-    {
-        Quest const* quest = sObjectMgr->GetQuestTemplate(*itr);
-        if (!quest)
-            continue;
-
-        int32 rewardSpellId = quest->GetRewSpellCast();
-        if (rewardSpellId <= 0)
-            continue;
-
-        SpellInfo const* rewardSpellInfo = sSpellMgr->GetSpellInfo(rewardSpellId);
-        if (!rewardSpellInfo)
-            continue;
-
-        for (SpellEffectInfo const& spellEffectInfo : rewardSpellInfo->GetEffects())
-        {
-            if (spellEffectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && spellEffectInfo.TriggerSpell)
-                preservedSpells.insert(uint32(spellEffectInfo.TriggerSpell));
-        }
-    }
+    ChrClassesEntry const* classEntry = sChrClassesStore.LookupEntry(GetClass());
 
     for (PlayerSpellMap::const_iterator itr = spells.begin(); itr != spells.end(); ++itr)
     {
-        if (preservedSpells.find(itr->first) != preservedSpells.end())
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(itr->first);
+        if (!spellInfo)
             continue;
 
-        RemoveAurasDueToSpell(itr->first);
-        RemoveSpell(itr->first, false, false);
+        if (mountSpells.find(itr->first) != mountSpells.end())
+            continue;
+
+        // Only clear class spells/talents so languages, racials, attack command, and quest spells stay intact.
+        if (!classEntry || spellInfo->SpellFamilyName != classEntry->SpellClassSet)
+            continue;
+
+        // skip server-side/triggered spells
+        if (spellInfo->SpellLevel == 0)
+            continue;
+
+        // skip wrong class/race skills
+        if (!IsSpellFitByClassAndRace(spellInfo->Id))
+            continue;
+
+        uint32 const firstRank = spellInfo->GetFirstRankSpell()->Id;
+        // remove talent-learned spells too
+        if (GetTalentSpellCost(firstRank) > 0 || SpellMgr::IsSpellValid(spellInfo, this, false))
+        {
+            RemoveAurasDueToSpell(itr->first);
+            RemoveSpell(itr->first, false, false);
+        }
     }
 
+    // Ensure preserved mounts remain available.
+    for (uint32 spellId : mountSpells)
+        if (!HasSpell(spellId))
+            LearnSpell(spellId, true);
+
     ResetTalents(true);
-    SetAtLoginFlag(AT_LOGIN_RESET_TALENTS);
+    SendTalentsInfoData(false);
 }
 
 void Player::LearnCustomSpells()
