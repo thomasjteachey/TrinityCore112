@@ -1490,7 +1490,6 @@ class spell_pri_silence : public AuraScript
 };
 
 // 527 - Dispel Magic
-// 527 - Dispel Magic
 class spell_pri_dispel_magic : public SpellScript
 {
     PrepareSpellScript(spell_pri_dispel_magic);
@@ -1556,7 +1555,7 @@ class spell_pri_dispel_magic : public SpellScript
                 if (rank > 5)
                     rank = 5;
 
-                uint32 reduction = 100u * rank; // 100 ms per rank
+                uint32 reduction = 50u * rank; // 100 ms per rank
                 if (reduction > 500u)
                     reduction = 500u;
 
