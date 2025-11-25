@@ -26066,10 +26066,9 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     LearnSpell(spellid, false);
     if (SpellInfo const* talentSpellInfo = sSpellMgr->GetSpellInfo(spellid))
     {
-        // Only auto-learn ranks for activatable spells
-        if (!talentSpellInfo->IsPassive())
+        auto learnNextActivatableRanks = [this](uint32 currentRankSpellId)
         {
-            uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(spellid);
+            uint32 nextRankSpellId = sSpellMgr->GetNextSpellInChain(currentRankSpellId);
             while (nextRankSpellId)
             {
                 SpellInfo const* nextRankSpellInfo = sSpellMgr->GetSpellInfo(nextRankSpellId);
@@ -26083,6 +26082,29 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
                 LearnSpell(nextRankSpellId, false);
                 nextRankSpellId = sSpellMgr->GetNextSpellInChain(nextRankSpellId);
+            }
+        };
+
+        // Only auto-learn ranks and dependencies for activatable spells
+        if (!talentSpellInfo->IsPassive())
+        {
+            learnNextActivatableRanks(spellid);
+
+            SpellsRequiringSpellMapBounds spellsRequiringSpell = sSpellMgr->GetSpellsRequiringSpellBounds(spellid);
+            for (SpellsRequiringSpellMap::const_iterator itr = spellsRequiringSpell.first; itr != spellsRequiringSpell.second; ++itr)
+            {
+                uint32 dependentSpellId = itr->second;
+                SpellInfo const* dependentSpellInfo = sSpellMgr->GetSpellInfo(dependentSpellId);
+
+                if (!dependentSpellInfo || dependentSpellInfo->IsPassive())
+                    continue;
+
+                uint32 requiredLevel = std::max(dependentSpellInfo->BaseLevel, dependentSpellInfo->SpellLevel);
+                if (requiredLevel && requiredLevel > GetLevel())
+                    continue;
+
+                LearnSpell(dependentSpellId, false);
+                learnNextActivatableRanks(dependentSpellId);
             }
         }
     }
