@@ -86,7 +86,8 @@ enum PriestSpells
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R2        = 81323,
     SPELL_PRIEST_SPIRIT_OF_REDEMPTION               = 27827,
     SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356,
-    SPELL_PRIEST_DARKNESS_R1                        = 15259
+    SPELL_PRIEST_DARKNESS_R1                        = 15259,
+    SPELL_PRIEST_SHADOWFORM                         = 15473
 };
 
 enum PriestSpellIcons
@@ -1493,9 +1494,48 @@ class spell_pri_dispel_magic : public SpellScript
 {
     PrepareSpellScript(spell_pri_dispel_magic);
 
+    bool Load() override
+    {
+        if (Unit* caster = GetCaster())
+            _hadShadowform = caster->HasAura(SPELL_PRIEST_SHADOWFORM);
+
+        return true;
+    }
+
     bool Validate(SpellInfo const* spellInfo) override
     {
         return ValidateSpellInfo({ SPELL_PRIEST_DARKNESS_R1 });
+    }
+
+    void HandleAfterCast()
+    {
+        Player* playerCaster = GetCaster() ? GetCaster()->ToPlayer() : nullptr;
+        if (!playerCaster)
+            return;
+
+        Unit* target = GetExplTargetUnit();
+        bool const offensiveDispel = target && !playerCaster->IsFriendlyTo(target);
+
+        int32 globalCooldown = 1500;
+
+        if (offensiveDispel)
+        {
+            if (AuraEffect const* darkness = playerCaster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
+            {
+                uint32 const rank = std::max<uint32>(1, darkness->GetSpellInfo()->GetRank());
+                globalCooldown -= int32(100 * rank);
+            }
+        }
+
+        if (globalCooldown <= 0)
+            return;
+
+        SpellHistory* spellHistory = playerCaster->GetSpellHistory();
+        spellHistory->AddGlobalCooldown(GetSpellInfo(), uint32(globalCooldown));
+
+        WorldPacket data;
+        spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, GetSpellInfo()->Id, 0);
+        playerCaster->SendDirectMessage(&data);
     }
 
     void HandleSuccessfulDispel(SpellEffIndex effIndex)
@@ -1518,20 +1558,22 @@ class spell_pri_dispel_magic : public SpellScript
             caster->CastSpell(caster, 81436, args);
         }
 
-        if (AuraEffect const* darkness = caster->GetAuraEffectOfRankedSpell(SPELL_PRIEST_DARKNESS_R1, EFFECT_0))
+        if (_hadShadowform && !caster->HasAura(SPELL_PRIEST_SHADOWFORM))
         {
-            uint32 const rank = std::max<uint32>(1, darkness->GetSpellInfo()->GetRank());
-            uint32 const reduction = 100 * rank;
-
-            SpellHistory* spellHistory = caster->GetSpellHistory();
-            spellHistory->ReduceGlobalCooldown(GetSpellInfo(), std::chrono::milliseconds(reduction));
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.TriggerFlags |= TRIGGERED_IGNORE_POWER_AND_REAGENT_COST;
+            caster->CastSpell(caster, SPELL_PRIEST_SHADOWFORM, args);
         }
     }
 
     void Register() override
     {
+        AfterCast += SpellCastFn(spell_pri_dispel_magic::HandleAfterCast);
         OnEffectSuccessfulDispel += SpellEffectFn(spell_pri_dispel_magic::HandleSuccessfulDispel, EFFECT_0, SPELL_EFFECT_DISPEL);
     }
+
+private:
+    bool _hadShadowform = false;
 };
 
 //81432
