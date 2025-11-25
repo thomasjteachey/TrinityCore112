@@ -17,6 +17,7 @@
 
 #include "Player.h"
 #include <algorithm>
+#include <unordered_set>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
 #include "AchievementMgr.h"
@@ -23593,6 +23594,64 @@ void Player::ResetSpells(bool myClassOnly)
     LearnDefaultSkills();
     LearnCustomSpells();
     LearnQuestRewardedSpells();
+}
+
+void Player::ResetNonQuestAndMountSpells()
+{
+    if (HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS))
+        RemoveAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS, true);
+
+    PlayerSpellMap spells = GetSpellMap();
+    std::unordered_set<uint32> preservedSpells;
+
+    // Preserve mount spells
+    for (PlayerSpellMap::const_iterator itr = spells.begin(); itr != spells.end(); ++itr)
+    {
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(itr->first);
+        if (!spellInfo)
+            continue;
+
+        if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
+            preservedSpells.insert(itr->first);
+    }
+
+    // Preserve base race/class spells and racials from playercreateinfo_spell_custom
+    if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
+        preservedSpells.insert(info->customSpells.begin(), info->customSpells.end());
+
+    // Preserve spells rewarded by completed quests
+    for (RewardedQuestSet::const_iterator itr = m_RewardedQuests.begin(); itr != m_RewardedQuests.end(); ++itr)
+    {
+        Quest const* quest = sObjectMgr->GetQuestTemplate(*itr);
+        if (!quest)
+            continue;
+
+        int32 rewardSpellId = quest->GetRewSpellCast();
+        if (rewardSpellId <= 0)
+            continue;
+
+        SpellInfo const* rewardSpellInfo = sSpellMgr->GetSpellInfo(rewardSpellId);
+        if (!rewardSpellInfo)
+            continue;
+
+        for (SpellEffectInfo const& spellEffectInfo : rewardSpellInfo->GetEffects())
+        {
+            if (spellEffectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && spellEffectInfo.TriggerSpell)
+                preservedSpells.insert(uint32(spellEffectInfo.TriggerSpell));
+        }
+    }
+
+    for (PlayerSpellMap::const_iterator itr = spells.begin(); itr != spells.end(); ++itr)
+    {
+        if (preservedSpells.find(itr->first) != preservedSpells.end())
+            continue;
+
+        RemoveAurasDueToSpell(itr->first);
+        RemoveSpell(itr->first, false, false);
+    }
+
+    ResetTalents(true);
+    SetAtLoginFlag(AT_LOGIN_RESET_TALENTS);
 }
 
 void Player::LearnCustomSpells()
