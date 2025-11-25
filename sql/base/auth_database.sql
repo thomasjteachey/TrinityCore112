@@ -1098,6 +1098,7 @@ INSERT INTO `rbac_linked_permissions` VALUES
 (199,525),
 (199,534),
 (199,797),
+(199,883),
 (199,882);
 /*!40000 ALTER TABLE `rbac_linked_permissions` ENABLE KEYS */;
 UNLOCK TABLES;
@@ -1676,6 +1677,7 @@ INSERT INTO `rbac_permissions` VALUES
 (712,'Command: reset honor'),
 (713,'Command: reset level'),
 (714,'Command: reset spells'),
+(883,'Command: reset spells_keep_mounts'),
 (715,'Command: reset stats'),
 (716,'Command: reset talents'),
 (717,'Command: reset all'),
