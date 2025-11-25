@@ -23625,6 +23625,10 @@ void Player::ResetNonQuestAndMountSpells()
 
     PlayerSpellMap spells = GetSpellMap();
     std::unordered_set<uint32> mountSpells;
+    std::unordered_set<uint32> customSpells;
+
+    if (PlayerInfo const* playerInfo = sObjectMgr->GetPlayerInfo(GetRace(), GetClass()))
+        customSpells.insert(playerInfo->customSpells.begin(), playerInfo->customSpells.end());
 
     // Preserve mount spells explicitly so class spell pruning does not remove them.
     for (PlayerSpellMap::const_iterator itr = spells.begin(); itr != spells.end(); ++itr)
@@ -23648,6 +23652,9 @@ void Player::ResetNonQuestAndMountSpells()
         if (mountSpells.find(itr->first) != mountSpells.end())
             continue;
 
+        if (customSpells.find(itr->first) != customSpells.end())
+            continue;
+
         // Only clear class spells/talents so languages, racials, attack command, and quest spells stay intact.
         if (!classEntry || spellInfo->SpellFamilyName != classEntry->SpellClassSet)
             continue;
@@ -23661,12 +23668,17 @@ void Player::ResetNonQuestAndMountSpells()
             continue;
 
         uint32 const firstRank = spellInfo->GetFirstRankSpell()->Id;
-        // remove talent-learned spells too
-        if (GetTalentSpellCost(firstRank) > 0 || SpellMgr::IsSpellValid(spellInfo, this, false))
-        {
-            RemoveAurasDueToSpell(itr->first);
-            RemoveSpell(itr->first, false, false);
-        }
+        // Only strip spells that are explicitly learned from talent ranks. Trainer-learned spells
+        // (including higher ranks of a talent ability) should stay learned so re-speccing will
+        // grant all previously acquired ranks again without visiting a trainer.
+        if (GetTalentSpellCost(firstRank) == 0)
+            continue;
+
+        if (!SpellMgr::IsSpellValid(spellInfo, this, false))
+            continue;
+
+        RemoveAurasDueToSpell(itr->first);
+        RemoveSpell(itr->first, false, false);
     }
 
     // Ensure preserved mounts remain available.
@@ -26045,12 +26057,48 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 
     // learn! (other talent ranks will unlearned at learning)
     LearnSpell(spellid, false);
+    AutoLearnHighestTalentRank(sSpellMgr->GetSpellInfo(spellid));
     AddTalent(spellid, m_activeSpec, true);
 
     TC_LOG_DEBUG("misc", "Player::LearnTalent: TalentID: {} Spell: {} Group: {}\n", talentId, spellid, uint32(m_activeSpec));
 
     // update free talent points
     SetFreeTalentPoints(CurTalentPoints - (talentRank - curtalent_maxrank + 1));
+}
+
+void Player::AutoLearnHighestTalentRank(SpellInfo const* learnedSpell)
+{
+    if (!learnedSpell)
+        return;
+
+    SpellInfo const* firstRank = learnedSpell->GetFirstRankSpell();
+    if (!firstRank)
+        return;
+
+    // Only consider spells that originate from talents. This avoids touching trainer-only abilities
+    // while still restoring any trainer-upgraded ranks tied to the talent chain.
+    if (GetTalentSpellCost(firstRank->Id) == 0)
+        return;
+
+    SpellInfo const* highestRank = nullptr;
+
+    for (SpellInfo const* rankInfo = firstRank; rankInfo; rankInfo = rankInfo->GetNextRankSpell())
+    {
+        if (!IsSpellFitByClassAndRace(rankInfo->Id))
+            continue;
+
+        // Ranks are ordered; stop when we exceed the player's level.
+        if (rankInfo->SpellLevel > getLevel())
+            break;
+
+        highestRank = rankInfo;
+
+        if (rankInfo->GetNextRankSpell() == rankInfo)
+            break;
+    }
+
+    if (highestRank && !HasSpell(highestRank->Id))
+        LearnSpell(highestRank->Id, false);
 }
 
 void Player::LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRank)

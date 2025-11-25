@@ -1481,6 +1481,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void BuildPetTalentsInfoData(WorldPacket* data);
         void SendTalentsInfoData(bool pet);
         void LearnTalent(uint32 talentId, uint32 talentRank);
+        void AutoLearnHighestTalentRank(SpellInfo const* learnedSpell);
         void LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRank);
         void SendTameFailure(uint8 result);
 
