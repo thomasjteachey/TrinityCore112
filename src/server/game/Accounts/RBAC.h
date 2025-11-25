@@ -583,6 +583,7 @@ enum RBACPermissions
     RBAC_PERM_COMMAND_RESET_STATS                            = 715,
     RBAC_PERM_COMMAND_RESET_TALENTS                          = 716,
     RBAC_PERM_COMMAND_RESET_ALL                              = 717,
+    RBAC_PERM_COMMAND_RESET_SPELLS_KEEP_MOUNTS               = 883,
     RBAC_PERM_COMMAND_SERVER                                 = 718,
     RBAC_PERM_COMMAND_SERVER_CORPSES                         = 719,
     RBAC_PERM_COMMAND_SERVER_EXIT                            = 720,
