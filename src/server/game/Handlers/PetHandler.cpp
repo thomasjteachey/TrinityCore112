@@ -808,6 +808,7 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPacket& recvPacket)
     spell->m_targets = targets;
 
     SpellCastResult result = spell->CheckPetCast(nullptr);
+    SpellCastTargets queuedTargets = spell->m_targets;
 
     if (result == SPELL_CAST_OK)
     {
@@ -828,6 +829,17 @@ void WorldSession::HandlePetCastSpellOpcode(WorldPacket& recvPacket)
     }
     else
     {
+        if (result == SPELL_FAILED_OUT_OF_RANGE)
+        {
+            if (Creature* creature = caster->ToCreature())
+                if (PetAI* petAI = dynamic_cast<PetAI*>(creature->AI()))
+                    petAI->QueueSpell(spellId, queuedTargets);
+
+            spell->finish(false);
+            delete spell;
+            return;
+        }
+
         spell->SendPetCastResult(result);
 
         if (!caster->GetSpellHistory()->HasCooldown(spellId))

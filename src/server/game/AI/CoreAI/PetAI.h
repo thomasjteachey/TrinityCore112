@@ -21,6 +21,7 @@
 #include "CreatureAI.h"
 #include "ObjectGuid.h"
 #include "Timer.h"
+#include "Spell.h"
 
 class Creature;
 class Spell;
@@ -48,6 +49,7 @@ class TC_GAME_API PetAI : public CreatureAI
         void JustEnteredCombat(Unit* who) override { EngagementStart(who); }
         void JustExitedCombat() override { EngagementOver(); }
         void OnCharmed(bool isNew) override;
+        void QueueSpell(uint32 spellId, SpellCastTargets const& targets);
 
         // The following aren't used by the PetAI but need to be defined to override
         // default CreatureAI functions which interfere with the PetAI
@@ -59,6 +61,8 @@ class TC_GAME_API PetAI : public CreatureAI
         void HandleReturnMovement();
 
     private:
+        void ClearQueuedSpell();
+        void ProcessSpellQueue();
         bool NeedToStop();
         void StopAttack();
         void UpdateAllies();
@@ -72,6 +76,9 @@ class TC_GAME_API PetAI : public CreatureAI
         GuidSet _allySet;
         uint32 _updateAlliesTimer;
         ObjectGuid _lastCrowdControlledVictim;
+        ObjectGuid _queuedSpellTarget;
+        SpellCastTargets _queuedSpellTargets;
+        uint32 _queuedSpellId;
 };
 
 #endif
