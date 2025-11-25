@@ -788,10 +788,10 @@ class spell_pal_party_damage_redirect : public AuraScript
         return ValidateSpellInfo({ SPELL_PALADIN_PARTY_DAMAGE_REDIRECT });
     }
 
-    bool IsCasterInBreakableCrowdControl(Unit* caster) const
+    bool IsInBreakableCrowdControl(Unit* unit) const
     {
         // Mirror the crowd-control exclusions used by Ignite Spread.
-        return caster->HasAuraWithMechanic((1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_SAPPED));
+        return unit && unit->HasAuraWithMechanic((1 << MECHANIC_DISORIENTED) | (1 << MECHANIC_POLYMORPH) | (1 << MECHANIC_SAPPED));
     }
 
     MeleeHitOutcome RollAvoidance(Unit* attacker, Unit* paladin) const
@@ -830,7 +830,7 @@ class spell_pal_party_damage_redirect : public AuraScript
         if (!splitAmount)
             return;
 
-        if (IsCasterInBreakableCrowdControl(caster))
+        if (IsInBreakableCrowdControl(caster) || IsInBreakableCrowdControl(target))
         {
             splitAmount = 0;
             return;
