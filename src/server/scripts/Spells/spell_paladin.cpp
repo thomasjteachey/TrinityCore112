@@ -790,24 +790,7 @@ class spell_pal_party_damage_redirect : public AuraScript
 
     bool IsInBreakableCrowdControl(Unit* unit) const
     {
-        if (!unit)
-            return false;
-
-        // Primary: use UnitState ? this is what Sap / Poly / fears actually set.
-        if (unit->HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING))
-            return true;
-
-        // Secondary: DBC mechanics for classic breakable CC
-        static uint32 const mechanicMask =
-            (1u << MECHANIC_DISORIENTED) |
-            (1u << MECHANIC_POLYMORPH) |
-            (1u << MECHANIC_SAPPED) |
-            (1u << MECHANIC_DISORIENTED) |
-            (1u << MECHANIC_SLEEP) |
-            (1u << MECHANIC_KNOCKOUT) |
-            (1u << MECHANIC_FREEZE);
-
-        return unit->HasAuraWithMechanic(mechanicMask);
+        return unit->HasBreakableByDamageCrowdControlAura();
     }
 
     MeleeHitOutcome RollAvoidance(Unit* attacker, Unit* paladin) const
