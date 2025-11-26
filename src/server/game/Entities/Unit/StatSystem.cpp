@@ -452,10 +452,10 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         }
     }
 
-    SetStatFlatModifier(unitMod, BASE_VALUE, val2);
+        SetStatFlatModifier(unitMod, BASE_VALUE, val2);
 
-    float base_attPower = GetFlatModifierValue(unitMod, BASE_VALUE) * GetPctModifierValue(unitMod, BASE_PCT);
-    float attPowerMod = GetFlatModifierValue(unitMod, TOTAL_VALUE);
+    float base_attPower  = GetFlatModifierValue(unitMod, BASE_VALUE) * GetPctModifierValue(unitMod, BASE_PCT);
+    float attPowerMod    = GetFlatModifierValue(unitMod, TOTAL_VALUE);
 
     // --- BEGIN: desync guard for stuck negative AP debuffs (e.g. leftover Demo Roar) ---
 
@@ -471,6 +471,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     // modifier, it almost certainly means a debuff (Demoralizing Roar / Shout) didn?t fully unwind.
     if (attPowerFlatFromAuras == 0.0f && attPowerMod < 0.0f)
     {
+        /*
         TC_LOG_ERROR("spells",
             "AP flat negative desync for player %s (GUID %s, ranged=%u): "
             "UnitMod TOTAL_VALUE=%.1f but no SPELL_AURA_MOD_%sATTACK_POWER auras active. "
@@ -482,6 +483,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
             ranged ? "RANGED_" : "");
 
         attPowerMod = 0.0f;
+        */
     }
 
     // --- END: desync guard ---
