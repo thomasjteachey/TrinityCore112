@@ -778,7 +778,6 @@ class spell_pal_hand_of_sacrifice : public AuraScript
     }
 };
 
-// 81280 - Party Damage Redirect
 class spell_pal_party_damage_redirect : public AuraScript
 {
     PrepareAuraScript(spell_pal_party_damage_redirect);
@@ -790,7 +789,7 @@ class spell_pal_party_damage_redirect : public AuraScript
 
     bool IsInBreakableCrowdControl(Unit* unit) const
     {
-        return unit->HasBreakableByDamageCrowdControlAura();
+        return unit && unit->HasBreakableByDamageCrowdControlAura();
     }
 
     MeleeHitOutcome RollAvoidance(Unit* attacker, Unit* paladin) const
@@ -819,10 +818,8 @@ class spell_pal_party_damage_redirect : public AuraScript
         return MELEE_HIT_NORMAL;
     }
 
-    void Split(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& splitAmount)
+    void Split(AuraEffect* /*aurEff*/, DamageInfo& dmgInfo, uint32& splitAmount)
     {
-        PreventDefaultAction();
-
         Unit* caster = GetCaster();
         Unit* target = GetTarget();
         if (!caster || !target || caster == target)
@@ -831,16 +828,18 @@ class spell_pal_party_damage_redirect : public AuraScript
         if (!splitAmount)
             return;
 
+        // --- NEW: if either paladin or target is in breakable CC,
+        //          DISABLE redirect for this hit.
+        // We do this by setting splitAmount = 0 and NOT calling PreventDefaultAction(),
+        // so the core's default logic sees "nothing to split".
         if (IsInBreakableCrowdControl(caster) || IsInBreakableCrowdControl(target))
         {
-            uint32 redirected = std::min(splitAmount, dmgInfo.GetDamage());
-            splitAmount = 0;
-
-            if (redirected)
-                dmgInfo.AbsorbDamage(redirected);
-
-            return;
+            splitAmount = 0;     // no redirect happens
+            return;              // damage goes through normally
         }
+
+        // From here on, we take full control and override default split handling
+        PreventDefaultAction();
 
         Unit* attacker = dmgInfo.GetAttacker();
 
@@ -850,6 +849,7 @@ class spell_pal_party_damage_redirect : public AuraScript
         if (!redirected)
             return;
 
+        // Original victim takes (damage - redirected); we absorb the redirected portion there
         dmgInfo.AbsorbDamage(redirected);
 
         CalcDamageInfo redirectInfo{};
@@ -870,42 +870,42 @@ class spell_pal_party_damage_redirect : public AuraScript
 
         switch (outcome)
         {
-            case MELEE_HIT_DODGE:
-                redirectInfo.TargetState = VICTIMSTATE_DODGE;
-                redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
-                redirectInfo.Damages[0].Damage = 0;
-                break;
-            case MELEE_HIT_PARRY:
-                redirectInfo.TargetState = VICTIMSTATE_PARRY;
-                redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
-                redirectInfo.Damages[0].Damage = 0;
-                break;
-            case MELEE_HIT_BLOCK:
-            {
-                redirectInfo.TargetState = VICTIMSTATE_HIT;
-                redirectInfo.HitInfo |= HITINFO_BLOCK;
-                redirectInfo.Blocked = caster->GetShieldBlockValue();
-                if (caster->IsBlockCritical())
-                    redirectInfo.Blocked *= 2;
+        case MELEE_HIT_DODGE:
+            redirectInfo.TargetState = VICTIMSTATE_DODGE;
+            redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
+            redirectInfo.Damages[0].Damage = 0;
+            break;
+        case MELEE_HIT_PARRY:
+            redirectInfo.TargetState = VICTIMSTATE_PARRY;
+            redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
+            redirectInfo.Damages[0].Damage = 0;
+            break;
+        case MELEE_HIT_BLOCK:
+        {
+            redirectInfo.TargetState = VICTIMSTATE_HIT;
+            redirectInfo.HitInfo |= HITINFO_BLOCK;
+            redirectInfo.Blocked = caster->GetShieldBlockValue();
+            if (caster->IsBlockCritical())
+                redirectInfo.Blocked *= 2;
 
-                uint32 remainingBlock = redirectInfo.Blocked;
-                if (remainingBlock >= redirectInfo.Damages[0].Damage)
-                {
-                    redirectInfo.TargetState = VICTIMSTATE_BLOCKS;
-                    redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
-                    redirectInfo.Damages[0].Damage = 0;
-                    redirectInfo.Blocked = preBlockDamage;
-                }
-                else
-                {
-                    redirectInfo.CleanDamage = remainingBlock;
-                    redirectInfo.Damages[0].Damage -= remainingBlock;
-                }
-                break;
+            uint32 remainingBlock = redirectInfo.Blocked;
+            if (remainingBlock >= redirectInfo.Damages[0].Damage)
+            {
+                redirectInfo.TargetState = VICTIMSTATE_BLOCKS;
+                redirectInfo.CleanDamage = redirectInfo.Damages[0].Damage;
+                redirectInfo.Damages[0].Damage = 0;
+                redirectInfo.Blocked = preBlockDamage;
             }
-            default:
-                redirectInfo.TargetState = VICTIMSTATE_HIT;
-                break;
+            else
+            {
+                redirectInfo.CleanDamage = remainingBlock;
+                redirectInfo.Damages[0].Damage -= remainingBlock;
+            }
+            break;
+        }
+        default:
+            redirectInfo.TargetState = VICTIMSTATE_HIT;
+            break;
         }
 
         if (redirectInfo.Damages[0].Damage)
@@ -916,9 +916,7 @@ class spell_pal_party_damage_redirect : public AuraScript
         }
 
         redirectInfo.CleanDamage += redirectInfo.Damages[0].Absorb;
-
         redirectInfo.ProcVictim |= PROC_FLAG_TAKEN_DAMAGE;
-
         redirectInfo.Damages[1].Damage = 0;
 
         if (redirectInfo.Target->IsAlive())
@@ -929,7 +927,17 @@ class spell_pal_party_damage_redirect : public AuraScript
             redirectInfo.Attacker->DealMeleeDamage(&redirectInfo, false);
 
             DamageInfo procDamage(redirectInfo);
-            Unit::ProcSkillsAndAuras(redirectInfo.Attacker, redirectInfo.Target, redirectInfo.ProcAttacker, redirectInfo.ProcVictim, PROC_SPELL_TYPE_NONE, PROC_SPELL_PHASE_NONE, procDamage.GetHitMask(), nullptr, &procDamage, nullptr);
+            Unit::ProcSkillsAndAuras(
+                redirectInfo.Attacker,
+                redirectInfo.Target,
+                redirectInfo.ProcAttacker,
+                redirectInfo.ProcVictim,
+                PROC_SPELL_TYPE_NONE,
+                PROC_SPELL_PHASE_NONE,
+                procDamage.GetHitMask(),
+                nullptr,
+                &procDamage,
+                nullptr);
         }
     }
 
@@ -938,6 +946,7 @@ class spell_pal_party_damage_redirect : public AuraScript
         OnEffectSplit += AuraEffectSplitFn(spell_pal_party_damage_redirect::Split, EFFECT_0);
     }
 };
+
 
 // 1038 - Hand of Salvation
 class spell_pal_hand_of_salvation : public AuraScript
