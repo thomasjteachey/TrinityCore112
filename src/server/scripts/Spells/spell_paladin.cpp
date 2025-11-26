@@ -821,6 +821,7 @@ class spell_pal_party_damage_redirect : public AuraScript
 
     void Split(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& splitAmount)
     {
+        PreventDefaultAction();
         Unit* caster = GetCaster();
         Unit* target = GetTarget();
         if (!caster || !target || caster == target)
