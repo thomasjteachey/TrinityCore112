@@ -4195,9 +4195,61 @@ void AuraEffect::HandleAuraModAttackPower(AuraApplication const* aurApp, uint8 m
         return;
 
     Unit* target = aurApp->GetTarget();
+    if (!target)
+        return;
 
+    // BEFORE: what does the server think the flat AP mod is?
+    float beforeFlat = target->GetFlatModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE);
+
+    if (Player* player = target->ToPlayer())
+    {
+        // Only log the interesting stuff (demo roar/shout etc.), otherwise this is super spammy.
+        // Add more IDs here if you want:
+        switch (GetId())
+        {
+        case 7400:  // example: Demoralizing Roar lower ranks
+        case 9898:  // Demoralizing Roar rank 5
+        case 25202: // Demoralizing Shout rank 7
+            TC_LOG_ERROR("spells",
+                "AuraModAttackPower %s: spell=%u eff=%u player=%s flatBefore=%.1f amount=%d",
+                apply ? "APPLY" : "REMOVE",
+                GetId(), GetEffIndex(),
+                player->GetName().c_str(),
+                beforeFlat, GetAmount());
+            break;
+        default:
+            break;
+        }
+    }
+
+    // Apply/remove the actual flat AP modifier
     target->HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(GetAmount()), apply);
+
+    if (Player* player = target->ToPlayer())
+    {
+        float afterFlat = target->GetFlatModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE);
+
+        switch (GetId())
+        {
+        case 7400:
+        case 9898:
+        case 25202:
+            TC_LOG_ERROR("spells",
+                "AuraModAttackPower %s: spell=%u eff=%u player=%s flatAfter=%.1f",
+                apply ? "APPLY" : "REMOVE",
+                GetId(), GetEffIndex(),
+                player->GetName().c_str(),
+                afterFlat);
+            break;
+        default:
+            break;
+        }
+
+        // Force a recalculation + client update for melee AP
+        player->UpdateAttackPowerAndDamage(false);
+    }
 }
+
 
 void AuraEffect::HandleAuraModRangedAttackPower(AuraApplication const* aurApp, uint8 mode, bool apply) const
 {

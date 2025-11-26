@@ -454,10 +454,39 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
     SetStatFlatModifier(unitMod, BASE_VALUE, val2);
 
-    float base_attPower  = GetFlatModifierValue(unitMod, BASE_VALUE) * GetPctModifierValue(unitMod, BASE_PCT);
+    float base_attPower = GetFlatModifierValue(unitMod, BASE_VALUE) * GetPctModifierValue(unitMod, BASE_PCT);
     float attPowerMod = GetFlatModifierValue(unitMod, TOTAL_VALUE);
 
-    //add dynamic flat mods
+    // --- BEGIN: desync guard for stuck negative AP debuffs (e.g. leftover Demo Roar) ---
+
+    // Sum all flat AP auras of the appropriate type
+    float attPowerFlatFromAuras = 0.0f;
+    AuraEffectList const& flatAPAuras = GetAuraEffectsByType(
+        ranged ? SPELL_AURA_MOD_RANGED_ATTACK_POWER : SPELL_AURA_MOD_ATTACK_POWER);
+
+    for (AuraEffect const* aurEff : flatAPAuras)
+        attPowerFlatFromAuras += aurEff->GetAmount();
+
+    // If there are NO flat AP auras, but the UnitMod group still says we have a NEGATIVE
+    // modifier, it almost certainly means a debuff (Demoralizing Roar / Shout) didn?t fully unwind.
+    if (attPowerFlatFromAuras == 0.0f && attPowerMod < 0.0f)
+    {
+        TC_LOG_ERROR("spells",
+            "AP flat negative desync for player %s (GUID %s, ranged=%u): "
+            "UnitMod TOTAL_VALUE=%.1f but no SPELL_AURA_MOD_%sATTACK_POWER auras active. "
+            "Resetting flat AP mod to 0.",
+            GetName().c_str(),
+            GetGUID().ToString().c_str(),
+            ranged ? 1u : 0u,
+            attPowerMod,
+            ranged ? "RANGED_" : "");
+
+        attPowerMod = 0.0f;
+    }
+
+    // --- END: desync guard ---
+
+    // add dynamic flat mods from stat-based AP auras
     if (ranged)
     {
         if ((GetClassMask() & CLASSMASK_WAND_USERS) == 0)
