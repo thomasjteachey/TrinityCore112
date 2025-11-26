@@ -6316,9 +6316,6 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                     if (target->GetTypeId() == TYPEID_UNIT && target->IsVehicle())
                         return SPELL_FAILED_BAD_IMPLICIT_TARGETS;
 
-                    if (target->IsMounted())
-                        return SPELL_FAILED_CANT_BE_CHARMED;
-
                     if (target->GetCharmerGUID())
                         return SPELL_FAILED_CANT_BE_CHARMED;
 
