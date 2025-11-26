@@ -822,6 +822,7 @@ class spell_pal_party_damage_redirect : public AuraScript
     void Split(AuraEffect* aurEff, DamageInfo& dmgInfo, uint32& splitAmount)
     {
         PreventDefaultAction();
+
         Unit* caster = GetCaster();
         Unit* target = GetTarget();
         if (!caster || !target || caster == target)
@@ -832,7 +833,12 @@ class spell_pal_party_damage_redirect : public AuraScript
 
         if (IsInBreakableCrowdControl(caster) || IsInBreakableCrowdControl(target))
         {
+            uint32 redirected = std::min(splitAmount, dmgInfo.GetDamage());
             splitAmount = 0;
+
+            if (redirected)
+                dmgInfo.AbsorbDamage(redirected);
+
             return;
         }
 
@@ -930,7 +936,6 @@ class spell_pal_party_damage_redirect : public AuraScript
     void Register() override
     {
         OnEffectSplit += AuraEffectSplitFn(spell_pal_party_damage_redirect::Split, EFFECT_0);
-        OnEffectSplit += AuraEffectSplitFn(spell_pal_party_damage_redirect::Split, EFFECT_1);
     }
 };
 
