@@ -23659,17 +23659,19 @@ void Player::ResetNonQuestAndMountSpells()
         if (!classEntry || spellInfo->SpellFamilyName != classEntry->SpellClassSet)
             continue;
 
-        // skip server-side/triggered spells
-        if (spellInfo->SpellLevel == 0)
+        uint32 const firstRank = spellInfo->GetFirstRankSpell()->Id;
+        bool const isTalentSpell = GetTalentSpellCost(firstRank) > 0;
+
+        // skip server-side/triggered spells except talent-learned ones
+        if (spellInfo->SpellLevel == 0 && !isTalentSpell)
             continue;
 
         // skip wrong class/race skills
         if (!IsSpellFitByClassAndRace(spellInfo->Id))
             continue;
 
-        uint32 const firstRank = spellInfo->GetFirstRankSpell()->Id;
         // remove talent-learned spells too
-        if (GetTalentSpellCost(firstRank) > 0 || SpellMgr::IsSpellValid(spellInfo, this, false))
+        if (isTalentSpell || SpellMgr::IsSpellValid(spellInfo, this, false))
         {
             RemoveAurasDueToSpell(itr->first);
             RemoveSpell(itr->first, false, false);
