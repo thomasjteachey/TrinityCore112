@@ -738,7 +738,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         if (player->GetCommandStatus(CHEAT_GOD))
             return 0;
 
-    if (damagetype != NODAMAGE && cleanDamage > 0)
+    if (damagetype != NODAMAGE && (damage != 0 || cleanDamage->absorbed_damage > 0))
     {
         // interrupting auras with AURA_INTERRUPT_FLAG_DAMAGE before checking !damage (absorbed damage breaks that type of auras)
         if (spellProto)
