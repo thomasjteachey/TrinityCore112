@@ -788,11 +788,6 @@ class spell_pal_party_damage_redirect : public AuraScript
         return ValidateSpellInfo({ SPELL_PALADIN_PARTY_DAMAGE_REDIRECT });
     }
 
-    bool IsInBreakableCrowdControl(Unit* unit) const
-    {
-        return unit->HasBreakableByDamageCrowdControlAura();
-    }
-
     MeleeHitOutcome RollAvoidance(Unit* attacker, Unit* paladin) const
     {
         Unit* swingAttacker = attacker ? attacker : paladin;
@@ -832,7 +827,12 @@ class spell_pal_party_damage_redirect : public AuraScript
 
         if (IsInBreakableCrowdControl(caster) || IsInBreakableCrowdControl(target))
         {
+            uint32 redirected = std::min(splitAmount, dmgInfo.GetDamage());
             splitAmount = 0;
+
+            if (redirected)
+                dmgInfo.AbsorbDamage(redirected);
+
             return;
         }
 
