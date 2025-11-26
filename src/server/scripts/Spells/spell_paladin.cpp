@@ -803,7 +803,9 @@ class spell_pal_party_damage_redirect : public AuraScript
             (1u << MECHANIC_POLYMORPH) |
             (1u << MECHANIC_SAPPED) |
             (1u << MECHANIC_DISORIENTED) |
-            (1u << MECHANIC_SLEEP);
+            (1u << MECHANIC_SLEEP) |
+            (1u << MECHANIC_KNOCKOUT) |
+            (1u << MECHANIC_FREEZE);
 
         return unit->HasAuraWithMechanic(mechanicMask);
     }

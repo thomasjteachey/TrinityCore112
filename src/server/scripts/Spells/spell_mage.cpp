@@ -946,10 +946,16 @@ class spell_mage_ignite_tick : public AuraScript
             if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_DISORIENTED))
                 continue;
 
+            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_KNOCKOUT))
+                continue;
+
             if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_POLYMORPH))
                 continue;
 
             if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_SAPPED))
+                continue;
+
+            if (spreadTarget->HasAuraWithMechanic(1 << MECHANIC_FREEZE))
                 continue;
 
             CastSpellExtraArgs args(aurEff);
