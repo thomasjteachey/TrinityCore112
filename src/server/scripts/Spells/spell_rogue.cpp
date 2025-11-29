@@ -1166,6 +1166,49 @@ class spell_rog_imp_sap : public AuraScript
     }
 };
 
+class spell_rog_deadly_shot : public SpellScript
+{
+    PrepareSpellScript(spell_rog_deadly_shot);
+
+    uint8 _comboPoints = 0;
+
+    bool Load() override
+    {
+        if (Unit* caster = GetCaster())
+            if (Player* player = caster->ToPlayer())
+                _comboPoints = player->GetComboPoints();   // cache before finisher clears them
+
+        return true;
+    }
+
+    void HandleOnHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        if (!_comboPoints)
+            return;
+
+        // If the target is casting something interruptible, stop it
+        target->InterruptNonMeleeSpells(false, GetSpellInfo()->Id);
+
+        // 1 second per combo point, cap at 5s if you want
+        uint32 lockMs = _comboPoints * IN_MILLISECONDS;
+        if (lockMs > 5 * IN_MILLISECONDS)
+            lockMs = 5 * IN_MILLISECONDS;
+
+        // Apply school lockout
+        target->GetSpellHistory()->LockSpellSchool(GetSpellInfo()->GetSchoolMask(), lockMs);
+    }
+
+    void Register() override
+    {
+        OnHit += SpellHitFn(spell_rog_deadly_shot::HandleOnHit);
+    }
+};
+
 void AddSC_rogue_spell_scripts()
 {
     RegisterSpellScript(spell_rog_blade_flurry);
@@ -1195,4 +1238,5 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_imp_sap);
     RegisterSpellScript(spell_rog_poison);
     RegisterSpellScript(spell_rog_evasion);
+    RegisterSpellScript(spell_rog_deadly_shot);
 }
