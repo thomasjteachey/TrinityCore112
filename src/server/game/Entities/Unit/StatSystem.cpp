@@ -459,17 +459,20 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
 
     // --- BEGIN: desync guard for stuck negative AP debuffs (e.g. leftover Demo Roar) ---
 
-    // Sum all flat AP auras of the appropriate type
-    float attPowerFlatFromAuras = 0.0f;
+    // Scan flat AP auras of the appropriate type
+    bool hasNegativeFlatAPAura = false;
     AuraEffectList const& flatAPAuras = GetAuraEffectsByType(
         ranged ? SPELL_AURA_MOD_RANGED_ATTACK_POWER : SPELL_AURA_MOD_ATTACK_POWER);
 
     for (AuraEffect const* aurEff : flatAPAuras)
-        attPowerFlatFromAuras += aurEff->GetAmount();
+    {
+        if (aurEff->GetAmount() < 0)
+            hasNegativeFlatAPAura = true;
+    }
 
-    // If there are NO flat AP auras, but the UnitMod group still says we have a NEGATIVE
+    // If there are NO NEGATIVE flat AP auras, but the UnitMod group still says we have a NEGATIVE
     // modifier, it almost certainly means a debuff (Demoralizing Roar / Shout) didn't fully unwind.
-    if (attPowerFlatFromAuras == 0.0f && attPowerMod < 0.0f)
+    if (!hasNegativeFlatAPAura && attPowerMod < 0.0f)
     {
         // Use the helper to keep dependent stats in sync and notify the client
         SetStatFlatModifier(unitMod, TOTAL_VALUE, 0.0f);
