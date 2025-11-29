@@ -164,8 +164,9 @@ bool CombatManager::HasPvECombat() const
 
 bool CombatManager::HasCombat() const
 {
-    return HasPvECombat() || HasPvPCombat() || _forcedCombatRefs != 0;
+    return HasPvECombat() || HasPvPCombat() || GetOwner()->HasAura(29131) || GetOwner()->HasAura(5229);
 }
+
 
 bool CombatManager::HasPvECombatWithPlayers() const
 {
