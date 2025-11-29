@@ -471,7 +471,8 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     // modifier, it almost certainly means a debuff (Demoralizing Roar / Shout) didn't fully unwind.
     if (attPowerFlatFromAuras == 0.0f && attPowerMod < 0.0f)
     {
-        m_auraFlatModifiersGroup[unitMod][TOTAL_VALUE] = 0.0f;
+        // Use the helper to keep dependent stats in sync and notify the client
+        SetStatFlatModifier(unitMod, TOTAL_VALUE, 0.0f);
         attPowerMod = 0.0f;
     }
 
