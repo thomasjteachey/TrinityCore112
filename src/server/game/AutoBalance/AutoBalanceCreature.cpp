@@ -600,6 +600,17 @@ void ScaleCreature(Creature* creature)
     uint32 const scaledHealth = std::clamp<uint32>(static_cast<uint32>(std::round(newHealth * healthPct)), 1u, newHealth);
     creature->SetHealth(scaledHealth);
 
+    // Keep the player-damage requirement aligned with the scaled health pool.
+    if (creature->m_PlayerDamageReq)
+    {
+        uint32 newDamageReq = newHealth / 2;
+
+        if (oldMaxHealth)
+            newDamageReq = static_cast<uint32>(std::round(static_cast<float>(creature->m_PlayerDamageReq) * newHealth / oldMaxHealth));
+
+        creature->m_PlayerDamageReq = std::min(newDamageReq, newHealth / 2);
+    }
+
     uint32 const oldMaxMana = creature->GetMaxPower(POWER_MANA);
     uint32 const baseMana = info.BaseValues.Mana;
     if (baseMana || oldMaxMana)
