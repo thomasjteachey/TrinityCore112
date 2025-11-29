@@ -468,22 +468,11 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
         attPowerFlatFromAuras += aurEff->GetAmount();
 
     // If there are NO flat AP auras, but the UnitMod group still says we have a NEGATIVE
-    // modifier, it almost certainly means a debuff (Demoralizing Roar / Shout) didn?t fully unwind.
+    // modifier, it almost certainly means a debuff (Demoralizing Roar / Shout) didn't fully unwind.
     if (attPowerFlatFromAuras == 0.0f && attPowerMod < 0.0f)
     {
-        /*
-        TC_LOG_ERROR("spells",
-            "AP flat negative desync for player %s (GUID %s, ranged=%u): "
-            "UnitMod TOTAL_VALUE=%.1f but no SPELL_AURA_MOD_%sATTACK_POWER auras active. "
-            "Resetting flat AP mod to 0.",
-            GetName().c_str(),
-            GetGUID().ToString().c_str(),
-            ranged ? 1u : 0u,
-            attPowerMod,
-            ranged ? "RANGED_" : "");
-
+        m_auraFlatModifiersGroup[unitMod][TOTAL_VALUE] = 0.0f;
         attPowerMod = 0.0f;
-        */
     }
 
     // --- END: desync guard ---
