@@ -1055,6 +1055,8 @@ void Group::GroupLoot(Loot* loot, WorldObject* pLootedObject)
 
             Roll* r = new Roll(newitemGUID, *i);
 
+            i->is_underthreshold = false;
+
             //a vector is filled with only near party members
             for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
             {
@@ -1205,6 +1207,8 @@ void Group::NeedBeforeGreed(Loot* loot, WorldObject* lootedObject)
             ObjectGuid newitemGUID = ObjectGuid::Create<HighGuid::Item>(sObjectMgr->GetGenerator<HighGuid::Item>().Generate());
 
             Roll* r = new Roll(newitemGUID, *i);
+
+            i->is_underthreshold = false;
 
             for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
             {
