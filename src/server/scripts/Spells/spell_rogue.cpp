@@ -32,6 +32,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "Spell.h"
 
 enum RogueSpells
 {
@@ -1191,17 +1192,31 @@ class spell_rog_deadly_shot : public SpellScript
         if (!_comboPoints)
             return;
 
-        // If the target is casting something interruptible, stop it
-        target->InterruptNonMeleeSpells(false, GetSpellInfo()->Id);
+        // Figure out what the target is casting *right now*
+        SpellSchoolMask schoolMask = SPELL_SCHOOL_MASK_NONE;
+        if (Spell* cur = target->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+        {
+            schoolMask = cur->GetSpellInfo()->GetSchoolMask();
+        }
+        else if (Spell* cur = target->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        {
+            schoolMask = cur->GetSpellInfo()->GetSchoolMask();
+        }
+
+        // Not casting anything we care about => no lockout
+        if (!schoolMask)
+            return;
+
+        // Stop the cast
+        target->InterruptNonMeleeSpells(false);
 
         // 1 second per combo point, cap at 5s if you want
-        uint32 lockMs = _comboPoints * IN_MILLISECONDS;
-        if (lockMs > 5 * IN_MILLISECONDS)
-            lockMs = 5 * IN_MILLISECONDS;
+        uint32 lockMs = std::min<uint32>(_comboPoints, 5u) * IN_MILLISECONDS;
 
-        // Apply school lockout
-        target->GetSpellHistory()->LockSpellSchool(GetSpellInfo()->GetSchoolMask(), lockMs);
+        // Lock out the school of the *interrupted* spell, not Deadly Shot's school
+        target->GetSpellHistory()->LockSpellSchool(schoolMask, lockMs);
     }
+
 
     void Register() override
     {
