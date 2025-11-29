@@ -843,10 +843,28 @@ class spell_pal_party_damage_redirect : public AuraScript
 
         Unit* attacker = dmgInfo.GetAttacker();
 
+        DamageEffectType const damageType = dmgInfo.GetDamageType();
+
         uint32 redirected = std::min(splitAmount, dmgInfo.GetDamage());
         splitAmount = 0;
 
         if (!redirected)
+            return;
+
+        // Periodic damage that gets redirected should not keep attackers locked in
+        // combat with the paladin. Treat the redirected portion as self-inflicted
+        // so the damage is still applied without creating new combat ties.
+        if (damageType == DOT)
+        {
+            dmgInfo.AbsorbDamage(redirected);
+            Unit::DealDamage(caster, caster, redirected, nullptr, DOT, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+            return;
+        }
+
+        // If there is no attacker (environmental damage, fall damage, etc.) the
+        // redirect should not fabricate one. Otherwise the paladin will enter
+        // combat against themselves just for absorbing party damage.
+        if (!attacker)
             return;
 
         // Original victim takes (damage - redirected); we absorb the redirected portion there
