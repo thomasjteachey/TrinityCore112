@@ -5338,6 +5338,9 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
 
     Unit::DealDamageMods(target, damage, &absorb);
 
+    cleanDamage.absorbed_damage += absorb;
+    cleanDamage.mitigated_damage += resist;
+
     // Set trigger flag
     uint32 procAttacker = PROC_FLAG_DONE_PERIODIC;
     uint32 procVictim   = PROC_FLAG_TAKEN_PERIODIC;
