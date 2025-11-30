@@ -1529,6 +1529,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType);
         void UpdateStarfireSnare();
         void VerifyStarfireSnare();
+        float GetActiveStarfireSnareSpeedRate(UnitMoveType moveType) const;
 
         bool HasActiveStarfireSnare() const;
 
