@@ -394,13 +394,13 @@ namespace
     // Return how many honor tokens this creature entry should award per kill.
     uint32 GetHonorTokensForCreatureEntry(uint32 entry)
     {
-        // Bosses: 8 tokens each kill
+        // Bosses: 12 tokens each kill
         switch (entry)
         {
         case 1716:
         case 25447:
         case 23970:
-            return 8;
+            return 12;
         default:
             break;
         }
