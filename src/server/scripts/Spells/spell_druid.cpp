@@ -2218,10 +2218,10 @@ class spell_chicken_leap : public SpellScript
     SpellCastResult CheckCast()
     {
         Unit* caster = GetCaster();
-        // The client shows an area as unreachable once the target destination is 5 yards above your position
-        WorldLocation const* destination = GetExplTargetDest();
+        // The client shows an area as unreachable once the target is 5 yards above your position
+        Unit* target = GetExplTargetUnit();
 
-        if (destination && destination->GetPositionZ() - caster->GetPositionZ() > 5.0f)
+        if (target && target->GetPositionZ() - caster->GetPositionZ() > 5.0f)
             return SPELL_FAILED_NOPATH;
 
         return SPELL_CAST_OK;
