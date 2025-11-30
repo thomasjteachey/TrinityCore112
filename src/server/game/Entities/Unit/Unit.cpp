@@ -8862,6 +8862,10 @@ void Unit::SetSpeedRate(UnitMoveType mtype, float rate)
     if (rate < 0)
         rate = 0.0f;
 
+    if (Player* player = ToPlayer())
+        if (float const starfireRateLimit = player->GetActiveStarfireSnareSpeedRate(mtype))
+            rate = std::min(rate, starfireRateLimit);
+
     // Update speed only on change
     MovementChangeType changeType = MovementPacketSender::GetChangeTypeByMoveType(mtype);
     if (m_speed_rate[mtype] == rate && !HasPendingMovementChange(changeType)) //todo: is the "!HasPendingMovementChange" part necessary here?

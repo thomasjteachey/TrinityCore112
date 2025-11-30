@@ -22605,6 +22605,22 @@ void Player::VerifyStarfireSnare()
     _verifyStarfireSnareNextUpdate = false;
 }
 
+float Player::GetActiveStarfireSnareSpeedRate(UnitMoveType moveType) const
+{
+    if (!HasActiveStarfireSnare())
+        return 0.0f;
+
+    float const desiredRate = std::clamp(_activeStarfireSnareSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+    if (desiredRate <= 0.0f)
+        return 0.0f;
+
+    for (UnitMoveType snareMoveType : StarfireSnareMoveTypes)
+        if (snareMoveType == moveType)
+            return desiredRate;
+
+    return 0.0f;
+}
+
 bool Player::HasActiveStarfireSnare() const
 {
     return _activeStarfireSnareRefCount > 0 || _pendingStarfireSnareRemoval;
