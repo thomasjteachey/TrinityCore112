@@ -1343,8 +1343,8 @@ void Spell::EffectJumpDest()
     }
     if (m_spellInfo->Id == 83111)
     {
-        speedZ = 0.1f;
-        speedXY = 250;
+        speedZ = 20;
+        speedXY = 1;
     }
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
