@@ -2210,6 +2210,29 @@ class spell_dru_claw : public SpellScript
     }
 };
 
+// 83111 - Leap
+class spell_chicken_leap : public SpellScript
+{
+    PrepareSpellScript(spell_chicken_leap);
+
+    SpellCastResult CheckCast()
+    {
+        Unit* caster = GetCaster();
+        // The client shows an area as unreachable once the target destination is 5 yards above your position
+        WorldLocation const* destination = GetExplTargetDest();
+
+        if (destination && destination->GetPositionZ() - caster->GetPositionZ() > 5.0f)
+            return SPELL_FAILED_NOPATH;
+
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_chicken_leap::CheckCast);
+    }
+};
+
 
 void AddSC_druid_spell_scripts()
 {
@@ -2268,4 +2291,5 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_natures_grasp_proc);
     RegisterSpellScript(spell_dru_claw);
     RegisterSpellScript(spell_humanoid_speed_pack);
+    RegisterSpellScript(spell_chicken_leap);
 }
