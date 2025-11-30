@@ -775,6 +775,15 @@ PvpveDungeonRun* PvpveDungeonMgr::GetRunForTeam(uint64 teamId)
     return nullptr;
 }
 
+uint64 PvpveDungeonMgr::GetTeamIdForPlayer(ObjectGuid const& guid) const
+{
+    auto itr = _playerToTeam.find(guid);
+    if (itr == _playerToTeam.end())
+        return 0;
+
+    return itr->second;
+}
+
 bool PvpveDungeonMgr::PickSpawnIndex(PvpveDungeonRun const& run, uint8& outIndex)
 {
     if (run.BossDefeated)
@@ -830,6 +839,37 @@ void PvpveDungeonMgr::HandleServerShutdown()
 
         OnPlayerLeftMap(player);
     }
+}
+
+bool PvpveDungeonMgr::UnlockTeamTeleport(uint64 teamId)
+{
+    PvpveTeam* team = GetTeam(teamId);
+    if (!team || team->TeleportUnlockedOnKill)
+        return false;
+
+    PvpveDungeonRun* run = GetRunForTeam(teamId);
+    if (!run || run->Finished)
+        return false;
+
+    DungeonTemplate const* dungeonTemplate = GetDungeonTemplate(run->TemplateId);
+    if (!dungeonTemplate || dungeonTemplate->MapId != kStockadesMapId)
+        return false;
+
+    team->TeleportUnlockedOnKill = true;
+
+    for (ObjectGuid const& memberGuid : team->Members)
+    {
+        if (Player* member = ObjectAccessor::FindPlayer(memberGuid))
+        {
+            if (member->GetMapId() != dungeonTemplate->MapId)
+                continue;
+
+            if (WorldSession* session = member->GetSession())
+                session->SendNotification("Your team has slain an enemy inside the Stockades. Teleport spells can now return you to the city.");
+        }
+    }
+
+    return true;
 }
 
 void PvpveDungeonMgr::OnInstanceCreated(uint32 templateId, uint64 runId, uint32 instanceId)
@@ -1504,6 +1544,11 @@ public:
         if (!run || run->BossDefeated || run->Finished)
             return;
 
+        uint64 const teamId = sPvpveDungeonMgr->GetTeamIdForPlayer(player->GetGUID());
+        PvpveTeam* team = sPvpveDungeonMgr->GetTeam(teamId);
+        if (team && team->TeleportUnlockedOnKill)
+            return;
+
         DungeonTemplate const* dungeonTemplate = sPvpveDungeonMgr->GetDungeonTemplate(run->TemplateId);
         if (!dungeonTemplate || dungeonTemplate->MapId != kStockadesMapId)
             return;
@@ -1518,8 +1563,23 @@ public:
             session->SendNotification("You cannot teleport out until the Stockades boss has been defeated.");
     }
 
-    void OnPVPKill(Player* /*killer*/, Player* killed) override
+    void OnPVPKill(Player* killer, Player* killed) override
     {
+        if (killer && killed && killer->GetMapId() == kStockadesMapId)
+        {
+            PvpveDungeonRun* killerRun = sPvpveDungeonMgr->GetRunForPlayer(killer->GetGUID());
+            PvpveDungeonRun* victimRun = sPvpveDungeonMgr->GetRunForPlayer(killed->GetGUID());
+
+            if (killerRun && killerRun == victimRun)
+            {
+                uint64 const killerTeamId = sPvpveDungeonMgr->GetTeamIdForPlayer(killer->GetGUID());
+                uint64 const victimTeamId = sPvpveDungeonMgr->GetTeamIdForPlayer(killed->GetGUID());
+
+                if (killerTeamId && victimTeamId && killerTeamId != victimTeamId)
+                    sPvpveDungeonMgr->UnlockTeamTeleport(killerTeamId);
+            }
+        }
+
         HandlePlayerDeath(killed);
     }
 

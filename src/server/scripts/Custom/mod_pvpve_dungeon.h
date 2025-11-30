@@ -49,6 +49,7 @@ struct PvpveTeam
     uint8 SpawnIndex = 0;
     bool Ready = false;
     bool Eliminated = false;
+    bool TeleportUnlockedOnKill = false;
 };
 
 class PvpveDungeonInstance
@@ -126,10 +127,13 @@ public:
     PvpveTeam* GetTeam(uint64 teamId);
     PvpveDungeonRun* GetRunForPlayer(ObjectGuid const& guid);
     PvpveDungeonRun* GetRunForTeam(uint64 teamId);
+    uint64 GetTeamIdForPlayer(ObjectGuid const& guid) const;
 
     void Reset();
     void PurgeDungeonInstances();
     void HandleServerShutdown();
+
+    bool UnlockTeamTeleport(uint64 teamId);
 
 private:
     PvpveDungeonMgr();

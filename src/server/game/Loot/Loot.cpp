@@ -238,6 +238,9 @@ bool Loot::FillLoot(uint32 lootId, LootStore const& store, Player* lootOwner, bo
     {
         roundRobinPlayer = lootOwner->GetGUID();
 
+        LootMethod lootMethod = group->GetLootMethod();
+        bool useThreshold = lootMethod == GROUP_LOOT || lootMethod == NEED_BEFORE_GREED || lootMethod == MASTER_LOOT;
+
         for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
             if (Player* player = itr->GetSource())   // should actually be looted object instead of lootOwner but looter has to be really close so doesnt really matter
                 if (player->IsInMap(lootOwner))
@@ -246,7 +249,7 @@ bool Loot::FillLoot(uint32 lootId, LootStore const& store, Player* lootOwner, bo
         for (uint8 i = 0; i < items.size(); ++i)
         {
             if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(items[i].itemid))
-                if (proto->Quality < uint32(group->GetLootThreshold()))
+                if (useThreshold && proto->Quality < uint32(group->GetLootThreshold()))
                     items[i].is_underthreshold = true;
         }
     }
