@@ -1341,6 +1341,11 @@ void Spell::EffectJumpDest()
         speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
         speedXY = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_XY_SPEED);
     }
+    if (m_spellInfo->Id == 83111)
+    {
+        speedZ = 0.1f;
+        speedXY = 250;
+    }
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
 
