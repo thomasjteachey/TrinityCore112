@@ -30,6 +30,7 @@
 #include "World.h"
 #include "Log.h"
 #include "DBCFileLoader.h"
+#include <algorithm>
 #include <array>
 #include <mutex>
 #include <string>
@@ -66,6 +67,12 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include <G3D/g3dmath.h>
+
+namespace
+{
+    constexpr uint32 StockadesMapId = 34;
+    constexpr uint32 StockadesBossKeyItemId = 43650;
+}
 
 CreatureMovementData::CreatureMovementData() : Ground(CreatureGroundMovementType::Run), Flight(CreatureFlightMovementType::None), Swim(true), Rooted(false), Chase(CreatureChaseMovementType::Run),
 Random(CreatureRandomMovementType::Walk), InteractionPauseTimer(sWorld->getIntConfig(CONFIG_CREATURE_STOP_FOR_PLAYER)) { }
@@ -776,6 +783,16 @@ void Creature::Update(uint32 diff)
                     lootingGroupLowGUID = 0;
                 }
                 else m_groupLootTimer -= diff;
+            }
+            else if (GetMapId() == StockadesMapId && loot.unlootedCount > 0)
+            {
+                bool const hasUnlootedBossKey = std::any_of(loot.items.begin(), loot.items.end(), [](LootItem const& lootItem)
+                {
+                    return !lootItem.is_looted && lootItem.itemid == StockadesBossKeyItemId;
+                });
+
+                if (hasUnlootedBossKey)
+                    m_corpseRemoveTime = GameTime::GetGameTime() + m_corpseDelay;
             }
             else if (m_corpseRemoveTime <= GameTime::GetGameTime())
             {

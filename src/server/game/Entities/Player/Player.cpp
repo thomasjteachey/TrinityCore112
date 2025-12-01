@@ -2496,7 +2496,19 @@ void Player::SetGameMaster(bool on)
         SetPhaseMask(newPhase, false);
 
         m_ExtraFlags &= ~PLAYER_EXTRA_GM_ON;
-        SetFactionForRace(GetRace());
+
+        if (GetBattleground())
+        {
+            uint32 const bgTeam = GetBGTeam();
+            if (bgTeam == ALLIANCE)
+                SetFactionForRace(RACE_HUMAN);
+            else if (bgTeam == HORDE)
+                SetFactionForRace(RACE_BLOODELF);
+            else
+                SetFactionForRace(GetRace());
+        }
+        else
+            SetFactionForRace(GetRace());
         RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_GM);
         RemoveUnitFlag2(UNIT_FLAG2_ALLOW_CHEAT_SPELLS);
 
@@ -7615,7 +7627,14 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
     _ApplyItemBonuses(proto, slot, apply);
 
     if (slot == EQUIPMENT_SLOT_RANGED)
+    {
         _ApplyAmmoBonuses();
+
+        // Refresh ammo bag equip effects that may have been removed when the player temporarily lacked
+        // a valid ranged weapon (for example during teleports or weapon swaps).
+        if (apply)
+            ReapplyAmmoBagEquipSpells();
+    }
 
     ApplyItemEquipSpell(item, apply);
     if (updateItemAuras)
@@ -8603,6 +8622,23 @@ void Player::_ApplyAmmoBonuses()
 
     if (CanModifyStats())
         UpdateDamagePhysical(RANGED_ATTACK);
+}
+
+void Player::ReapplyAmmoBagEquipSpells()
+{
+    for (uint8 slot = INVENTORY_SLOT_BAG_START; slot < INVENTORY_SLOT_BAG_END; ++slot)
+    {
+        Item* bag = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!bag)
+            continue;
+
+        ItemTemplate const* bagTemplate = bag->GetTemplate();
+        if (!bagTemplate || bagTemplate->Class != ITEM_CLASS_QUIVER)
+            continue;
+
+        ApplyItemEquipSpell(bag, false);
+        ApplyItemEquipSpell(bag, true);
+    }
 }
 
 bool Player::CheckAmmoCompatibility(ItemTemplate const* ammo_proto) const
@@ -22603,6 +22639,22 @@ void Player::VerifyStarfireSnare()
     }
 
     _verifyStarfireSnareNextUpdate = false;
+}
+
+float Player::GetActiveStarfireSnareSpeedRate(UnitMoveType moveType) const
+{
+    if (!HasActiveStarfireSnare())
+        return 0.0f;
+
+    float const desiredRate = std::clamp(_activeStarfireSnareSpeedRate, MinStarfireSnareSpeedRate, MaxStarfireSnareSpeedRate);
+    if (desiredRate <= 0.0f)
+        return 0.0f;
+
+    for (UnitMoveType snareMoveType : StarfireSnareMoveTypes)
+        if (snareMoveType == moveType)
+            return desiredRate;
+
+    return 0.0f;
 }
 
 bool Player::HasActiveStarfireSnare() const

@@ -1153,6 +1153,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void ApplyEquipCooldown(Item* pItem);
         void SetAmmo(uint32 item);
         void RemoveAmmo();
+        void ReapplyAmmoBagEquipSpells();
         float GetAmmoDPS() const { return m_ammoDPS; }
         bool CheckAmmoCompatibility(ItemTemplate const* ammo_proto) const;
         void QuickEquipItem(uint16 pos, Item* pItem);
@@ -1529,6 +1530,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void HandleStarfireSnareOnSpeedUpdate(UnitMoveType moveType);
         void UpdateStarfireSnare();
         void VerifyStarfireSnare();
+        float GetActiveStarfireSnareSpeedRate(UnitMoveType moveType) const;
 
         bool HasActiveStarfireSnare() const;
 
