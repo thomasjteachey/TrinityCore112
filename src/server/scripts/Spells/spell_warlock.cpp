@@ -1237,14 +1237,6 @@ class spell_warl_shadowburn : public SpellScript
             SPELL_WARLOCK_SHADOWBURN_R4,
             SPELL_WARLOCK_SHADOWBURN_R5,
             SPELL_WARLOCK_SHADOWBURN_R6,
-            SPELL_WARLOCK_FEAR_R1,
-            SPELL_WARLOCK_FEAR_R2,
-            SPELL_WARLOCK_FEAR_R3,
-            SPELL_WARLOCK_HOWL_OF_TERROR_R1,
-            SPELL_WARLOCK_HOWL_OF_TERROR_R2,
-            SPELL_WARLOCK_DEATH_COIL_R1,
-            SPELL_WARLOCK_DEATH_COIL_R2,
-            SPELL_WARLOCK_DEATH_COIL_R3,
             SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA
         });
     }
@@ -1257,24 +1249,29 @@ class spell_warl_shadowburn : public SpellScript
 
         if (Unit* target = GetHitUnit())
         {
-            static uint32 const fearAndHorrorSpells[] =
-            {
-                SPELL_WARLOCK_FEAR_R1,
-                SPELL_WARLOCK_FEAR_R2,
-                SPELL_WARLOCK_FEAR_R3,
-                SPELL_WARLOCK_HOWL_OF_TERROR_R1,
-                SPELL_WARLOCK_HOWL_OF_TERROR_R2,
-                SPELL_WARLOCK_DEATH_COIL_R1,
-                SPELL_WARLOCK_DEATH_COIL_R2,
-                SPELL_WARLOCK_DEATH_COIL_R3
-            };
             if (caster->HasAura(81456) && !caster->HasAura(81458))
             {
                 caster->AddAura(SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, caster);
                 caster->AddAura(81458, caster);
-                for (uint32 spellId : fearAndHorrorSpells)
-                    if (Aura* aura = target->GetAura(spellId, caster->GetGUID()))
-                        aura->Remove();
+
+                std::vector<Aura*> cursesToRemove;
+                Unit::AuraApplicationMap const& appliedAuras = target->GetAppliedAuras();
+                for (auto const& auraApplicationPair : appliedAuras)
+                {
+                    Aura* aura = auraApplicationPair.second->GetBase();
+                    if (!aura)
+                        continue;
+
+                    if (aura->GetCasterGUID() != caster->GetGUID())
+                        continue;
+
+                    SpellInfo const* auraSpellInfo = aura->GetSpellInfo();
+                    if (auraSpellInfo && auraSpellInfo->Dispel == DISPEL_CURSE)
+                        cursesToRemove.push_back(aura);
+                }
+
+                for (Aura* aura : cursesToRemove)
+                    aura->Remove();
             }
         }
     }
