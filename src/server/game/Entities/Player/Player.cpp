@@ -7165,7 +7165,12 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
     if (newValue < 0)
         newValue = 0;
     if (value > 0)
-        AddItem(40752, value);
+    {
+        if (AddItem(40752, value))
+            RefreshQuestItemCounts(40752);
+        else
+            ItemAddedQuestCheck(40752, value);
+    }
     SetHonorPoints(uint32(newValue));
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
@@ -16758,6 +16763,11 @@ void Player::GroupEventHappens(uint32 questId, WorldObject const* pEventObject)
 
 void Player::ItemAddedQuestCheck(uint32 entry, uint32 count)
 {
+    RefreshQuestItemCounts(entry, count);
+}
+
+void Player::RefreshQuestItemCounts(uint32 entry, uint32 addedCount /*= 0*/)
+{
     for (uint8 i = 0; i < MAX_QUEST_LOG_SIZE; ++i)
     {
         uint32 questid = GetQuestSlotQuestId(i);
@@ -16780,9 +16790,25 @@ void Player::ItemAddedQuestCheck(uint32 entry, uint32 count)
             {
                 uint32 reqitemcount = qInfo->RequiredItemCount[j];
                 uint16 curitemcount = q_status.ItemCount[j];
+                uint32 const totalCount = GetItemCount(entry, true);
+                uint16 const expectedCount = std::min<uint16>(totalCount, reqitemcount);
+
+                // When the item was added through an alternate path (or the quest counter drifted),
+                // re-sync the quest's objective counter to the player's actual inventory.
+                if (curitemcount != expectedCount)
+                {
+                    q_status.ItemCount[j] = expectedCount;
+                    m_QuestStatusSave[questid] = QUEST_DEFAULT_SAVE_TYPE;
+                }
+
+                curitemcount = q_status.ItemCount[j];
+
+                // If we were called from ItemAddedQuestCheck directly, maintain the legacy increment
+                // behavior so partial updates still work when the resync already matches.
+                if (addedCount && curitemcount < reqitemcount)
+                    q_status.ItemCount[j] = std::min<uint16>(uint16(curitemcount + addedCount), reqitemcount);
                 if (curitemcount < reqitemcount)
                 {
-                    q_status.ItemCount[j] = std::min<uint16>(q_status.ItemCount[j] + count, reqitemcount);
                     m_QuestStatusSave[questid] = QUEST_DEFAULT_SAVE_TYPE;
                 }
                 if (CanCompleteQuest(questid))
