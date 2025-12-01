@@ -65,7 +65,7 @@ namespace StockadesPvPvE
     namespace
     {
         Position const kStockadesExteriorPosition = { -8779.9f, 834.349f, 94.6801f, 0.653013f };
-        Position const kStockadesBossPosition = { 163.445999f, 0.974434f, -25.606199f, 3.168689f };
+        Position const kStockadesBossPosition = { 170.737518f, 0.004752f, -25.606199f, 3.168689f };
     }
 
     namespace
