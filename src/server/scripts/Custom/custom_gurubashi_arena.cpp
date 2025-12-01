@@ -289,6 +289,8 @@ private:
 
         if (GameObject* chest = summoner->SummonGameObject(GURUBASHI_CHEST_ENTRY, ChestSpawnPosition, QuaternionData::fromEulerAnglesZYX(ChestSpawnPosition.GetOrientation(), 0.f, 0.f), CHEST_DESPAWN_TIME))
         {
+            // Clear temporary ownership so all players in the arena can interact with the chest.
+            summoner->RemoveGameObject(chest, false);
             chest->SetRespawnTime(0);
             _currentChestGuid = chest->GetGUID();
             YellFromChromie();
