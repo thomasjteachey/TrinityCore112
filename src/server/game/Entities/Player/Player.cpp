@@ -2496,7 +2496,19 @@ void Player::SetGameMaster(bool on)
         SetPhaseMask(newPhase, false);
 
         m_ExtraFlags &= ~PLAYER_EXTRA_GM_ON;
-        SetFactionForRace(GetRace());
+
+        if (GetBattleground())
+        {
+            uint32 const bgTeam = GetBGTeam();
+            if (bgTeam == ALLIANCE)
+                SetFactionForRace(RACE_HUMAN);
+            else if (bgTeam == HORDE)
+                SetFactionForRace(RACE_BLOODELF);
+            else
+                SetFactionForRace(GetRace());
+        }
+        else
+            SetFactionForRace(GetRace());
         RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_GM);
         RemoveUnitFlag2(UNIT_FLAG2_ALLOW_CHEAT_SPELLS);
 
