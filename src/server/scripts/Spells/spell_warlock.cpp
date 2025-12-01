@@ -1251,9 +1251,6 @@ class spell_warl_shadowburn : public SpellScript
         {
             if (caster->HasAura(81456) && !caster->HasAura(81458))
             {
-                caster->AddAura(SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, caster);
-                caster->AddAura(81458, caster);
-
                 std::vector<Aura*> cursesToRemove;
                 Unit::AuraApplicationMap const& appliedAuras = target->GetAppliedAuras();
                 for (auto const& auraApplicationPair : appliedAuras)
@@ -1272,6 +1269,12 @@ class spell_warl_shadowburn : public SpellScript
 
                 for (Aura* aura : cursesToRemove)
                     aura->Remove();
+
+                if (cursesToRemove.size() >= 1)
+                {
+                    caster->AddAura(SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA, caster);
+                    caster->AddAura(81458, caster);
+                }
             }
         }
     }
