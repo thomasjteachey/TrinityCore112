@@ -1315,6 +1315,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void AreaExploredOrEventHappens(uint32 questId);
         void GroupEventHappens(uint32 questId, WorldObject const* pEventObject);
         void ItemAddedQuestCheck(uint32 entry, uint32 count);
+        void RefreshQuestItemCounts(uint32 entry, uint32 addedCount = 0);
         void ItemRemovedQuestCheck(uint32 entry, uint32 count);
         void KilledMonster(CreatureTemplate const* cInfo, ObjectGuid guid);
         void KilledMonsterCredit(uint32 entry, ObjectGuid guid = ObjectGuid::Empty);
