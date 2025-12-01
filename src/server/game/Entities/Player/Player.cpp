@@ -26735,22 +26735,27 @@ void Player::SetEquipmentSet(EquipmentSetInfo::EquipmentSetData const& eqSet)
         }
     }
 
-    EquipmentSetInfo& eqSlot = _equipmentSets[eqSet.Guid];
-
-    EquipmentSetUpdateState oldState = eqSlot.State;
-    eqSlot.Data = eqSet;
-
     if (eqSet.Guid == 0)
     {
-        eqSlot.Data.Guid = sObjectMgr->GenerateEquipmentSetGuid();
+        EquipmentSetInfo newSet;
+        newSet.Data = eqSet;
+        newSet.Data.Guid = sObjectMgr->GenerateEquipmentSetGuid();
+
+        _equipmentSets[newSet.Data.Guid] = newSet;
 
         WorldPacket data(SMSG_EQUIPMENT_SET_SAVED, 4 + 1);
-        data << uint32(eqSlot.Data.SetID);
-        data.appendPackGUID(eqSlot.Data.Guid);
+        data << uint32(newSet.Data.SetID);
+        data.appendPackGUID(newSet.Data.Guid);
         SendDirectMessage(&data);
     }
+    else
+    {
+        EquipmentSetInfo& eqSlot = _equipmentSets[eqSet.Guid];
 
-    eqSlot.State = (oldState == EQUIPMENT_SET_NEW ? EQUIPMENT_SET_NEW : EQUIPMENT_SET_CHANGED);
+        EquipmentSetUpdateState oldState = eqSlot.State;
+        eqSlot.Data = eqSet;
+        eqSlot.State = (oldState == EQUIPMENT_SET_NEW ? EQUIPMENT_SET_NEW : EQUIPMENT_SET_CHANGED);
+    }
 }
 
 void Player::_SaveEquipmentSets(CharacterDatabaseTransaction trans)
