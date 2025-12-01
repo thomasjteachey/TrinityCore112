@@ -7153,7 +7153,10 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
     if (newValue < 0)
         newValue = 0;
     if (value > 0)
-        AddItem(40752, value);
+    {
+        if (!AddItem(40752, value))
+            ItemAddedQuestCheck(40752, value);
+    }
     SetHonorPoints(uint32(newValue));
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
