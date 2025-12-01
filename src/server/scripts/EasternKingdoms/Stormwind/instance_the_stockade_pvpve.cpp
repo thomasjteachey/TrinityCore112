@@ -573,6 +573,8 @@ public:
                 PvpveDungeonMgr::instance()->OnInstanceCreated(run->TemplateId, run->Id, player->GetInstanceId());
             }
 
+            player->RemoveArenaSpellCooldowns(true);
+
             SpawnRandomBoss();
 
             NotifyOpposingPlayersOfInvasion(player);
