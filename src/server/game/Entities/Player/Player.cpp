@@ -7615,7 +7615,14 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
     _ApplyItemBonuses(proto, slot, apply);
 
     if (slot == EQUIPMENT_SLOT_RANGED)
+    {
         _ApplyAmmoBonuses();
+
+        // Refresh ammo bag equip effects that may have been removed when the player temporarily lacked
+        // a valid ranged weapon (for example during teleports or weapon swaps).
+        if (apply)
+            ReapplyAmmoBagEquipSpells();
+    }
 
     ApplyItemEquipSpell(item, apply);
     if (updateItemAuras)
@@ -8603,6 +8610,23 @@ void Player::_ApplyAmmoBonuses()
 
     if (CanModifyStats())
         UpdateDamagePhysical(RANGED_ATTACK);
+}
+
+void Player::ReapplyAmmoBagEquipSpells()
+{
+    for (uint8 slot = INVENTORY_SLOT_BAG_START; slot < INVENTORY_SLOT_BAG_END; ++slot)
+    {
+        Item* bag = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!bag)
+            continue;
+
+        ItemTemplate const* bagTemplate = bag->GetTemplate();
+        if (!bagTemplate || bagTemplate->Class != ITEM_CLASS_QUIVER)
+            continue;
+
+        ApplyItemEquipSpell(bag, false);
+        ApplyItemEquipSpell(bag, true);
+    }
 }
 
 bool Player::CheckAmmoCompatibility(ItemTemplate const* ammo_proto) const
