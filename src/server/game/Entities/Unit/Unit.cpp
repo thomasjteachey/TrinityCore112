@@ -633,6 +633,13 @@ bool Unit::IsWithinMeleeRangeAt(Position const& pos, Unit const* obj) const
 float Unit::GetMeleeRange(Unit const* target) const
 {
     float range = GetCombatReach() + target->GetCombatReach() + 4.0f / 3.0f;
+    if (Player const* player = ToPlayer())
+    {
+        // Outgoing check ? only matters for the unit doing the range check
+        if (player->GetRace() == RACE_TAUREN)
+            range += 1.0f;   // +1 yard for Tauren
+    }
+
     return std::max(range, NOMINAL_MELEE_RANGE);
 }
 
