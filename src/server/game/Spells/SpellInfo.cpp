@@ -2301,7 +2301,7 @@ void SpellInfo::_LoadSpellDiminishInfo()
 
         // Explicit Diminishing Groups
         // Freezing Trap effects (including Freezing Arrow) should share the disorient DR in Classic
-        if (Id == 3355 || Id == 14308 || Id == 14309 || Id == 60210)
+        if (Id == 3355 || Id == 14308 || Id == 14309 || Id == 60210 || Id == 19503)
             return DIMINISHING_DISORIENT;
 
         switch (SpellFamilyName)
@@ -2423,8 +2423,7 @@ void SpellInfo::_LoadSpellDiminishInfo()
                     return DIMINISHING_LIMITONLY;
                 // Scatter Shot (disorient)
                 else if (
-                    ((SpellFamilyFlags[0] & 0x40000) && SpellIconID == 132)
-                    || Id == 19503)
+                    ((SpellFamilyFlags[0] & 0x40000) && SpellIconID == 132))
                     return DIMINISHING_DISORIENT;
                 // Wyvern Sting mechanic is MECHANIC_SLEEP but the diminishing is DIMINISHING_DISORIENT
                 else if ((SpellFamilyFlags[1] & 0x1000) && SpellIconID == 1721)
