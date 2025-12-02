@@ -1159,6 +1159,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
     damageInfo->ProcVictim       = PROC_FLAG_NONE;
     damageInfo->CleanDamage      = 0;
     damageInfo->HitOutCome       = MELEE_HIT_EVADE;
+    damageInfo->IgnoreArmor      = false;
 
     if (!victim)
         return;
@@ -1219,7 +1220,7 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
         sScriptMgr->ModifyMeleeDamage(damageInfo->Target, damageInfo->Attacker, damage);
 
         // Calculate armor reduction
-        if (Unit::IsDamageReducedByArmor(SpellSchoolMask(damageInfo->Damages[i].DamageSchoolMask)))
+        if (!damageInfo->IgnoreArmor && Unit::IsDamageReducedByArmor(SpellSchoolMask(damageInfo->Damages[i].DamageSchoolMask)))
         {
             damageInfo->Damages[i].Damage = Unit::CalcArmorReducedDamage(damageInfo->Attacker, damageInfo->Target, damage, nullptr, damageInfo->AttackType);
             damageInfo->CleanDamage += damage - damageInfo->Damages[i].Damage;
