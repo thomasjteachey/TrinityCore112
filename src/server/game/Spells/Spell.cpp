@@ -2740,7 +2740,7 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
 
         // Do not take combo points on dodge and miss
         bool blockedFinisherWithDebuff = MissCondition == SPELL_MISS_BLOCK &&
-            spell->m_spellInfo->HasAttribute(SPELL_ATTR0_FINISHING_MOVE) &&
+            spell->m_spellInfo->NeedsComboPoints() &&
             spell->m_spellInfo->HasEffect(SPELL_EFFECT_APPLY_AURA) &&
             !spell->IsPositive();
 
