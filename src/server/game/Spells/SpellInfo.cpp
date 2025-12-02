@@ -2426,6 +2426,11 @@ void SpellInfo::_LoadSpellDiminishInfo()
                 // Freezing Arrow
                 else if (SpellFamilyFlags[0] & 0x8)
                     return DIMINISHING_DISORIENT;
+
+                // Explicit Diminishing Groups
+                // Freezing Trap effects (including Freezing Arrow) should share the disorient DR in Classic
+                else if (Id == 3355 || Id == 14308 || Id == 14309 || Id == 60210 || Id == 19503)
+                    return DIMINISHING_DISORIENT;
                 break;
             }
             case SPELLFAMILY_PALADIN:
