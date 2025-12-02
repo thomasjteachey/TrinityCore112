@@ -2418,7 +2418,9 @@ void SpellInfo::_LoadSpellDiminishInfo()
                 if ((SpellFamilyFlags[0] & 0x400) && SpellIconID == 538)
                     return DIMINISHING_LIMITONLY;
                 // Scatter Shot (disorient)
-                else if ((SpellFamilyFlags[0] & 0x40000) && SpellIconID == 132)
+                else if (
+                    ((SpellFamilyFlags[0] & 0x40000) && SpellIconID == 132)
+                    || Id == 19503)
                     return DIMINISHING_DISORIENT;
                 // Wyvern Sting mechanic is MECHANIC_SLEEP but the diminishing is DIMINISHING_DISORIENT
                 else if ((SpellFamilyFlags[1] & 0x1000) && SpellIconID == 1721)

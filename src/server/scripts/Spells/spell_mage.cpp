@@ -910,7 +910,7 @@ class spell_mage_ignite_tick : public AuraScript
         if (removeMode != AURA_REMOVE_BY_EXPIRE && removeMode != AURA_REMOVE_BY_DEATH)
             return;
 
-        if (_lastTickDamage < 100)
+        if (_lastTickDamage < 50)
             return;
 
         Unit* caster = GetCaster();
@@ -947,7 +947,7 @@ class spell_mage_ignite_tick : public AuraScript
                 continue;
 
             CastSpellExtraArgs args(aurEff);
-            args.AddSpellBP0(int32(_lastTickDamage * 0.5f));
+            args.AddSpellBP0(int32(_lastTickDamage * 0.75f));
             caster->CastSpell(spreadTarget, SPELL_MAGE_IGNITE, args);
         }
     }
