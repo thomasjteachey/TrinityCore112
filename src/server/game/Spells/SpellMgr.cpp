@@ -610,12 +610,18 @@ bool SpellMgr::CanSpellTriggerProcOnEvent(SpellProcEntry const& procEntry, ProcE
         if (!hitMask)
         {
             // for taken procs allow normal + critical hits by default
+            // blocked hits should still be able to trigger default procs
             if (eventInfo.GetTypeMask() & TAKEN_HIT_PROC_FLAG_MASK)
-                hitMask |= PROC_HIT_NORMAL | PROC_HIT_CRITICAL;
+                hitMask |= PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_BLOCK;
             // for done procs allow normal + critical + absorbs by default
             else
                 hitMask |= PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB;
         }
+
+        // Treat blocked hits as valid for taken procs so aura triggers still fire
+        if (eventInfo.GetTypeMask() & TAKEN_HIT_PROC_FLAG_MASK)
+            if (eventInfo.GetHitMask() & PROC_HIT_BLOCK)
+                hitMask |= PROC_HIT_BLOCK | PROC_HIT_FULL_BLOCK;
         if (!(eventInfo.GetHitMask() & hitMask))
             return false;
     }
