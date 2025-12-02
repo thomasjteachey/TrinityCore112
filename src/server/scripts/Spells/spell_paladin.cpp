@@ -873,7 +873,9 @@ class spell_pal_party_damage_redirect : public AuraScript
         CalcDamageInfo redirectInfo{};
         redirectInfo.Attacker = attacker ? attacker : caster;
         redirectInfo.Target = caster;
+        // Keep the redirected swing physical for immunity interactions but explicitly flag it to ignore armor mitigation.
         redirectInfo.Damages[0].DamageSchoolMask = SPELL_SCHOOL_MASK_NORMAL;
+        redirectInfo.IgnoreArmor = true;
         redirectInfo.Damages[0].Damage = redirected;
         redirectInfo.Damages[1].DamageSchoolMask = SPELL_SCHOOL_MASK_NORMAL;
         redirectInfo.AttackType = BASE_ATTACK;
