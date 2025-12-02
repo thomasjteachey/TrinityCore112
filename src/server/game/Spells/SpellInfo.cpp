@@ -2354,7 +2354,7 @@ void SpellInfo::_LoadSpellDiminishInfo()
                     return DIMINISHING_CONTROLLED_ROOT;
                 // Dragon's Breath
                 else if (SpellFamilyFlags[0] & 0x800000)
-                    return DIMINISHING_DRAGONS_BREATH;
+                    return DIMINISHING_DISORIENT;
                 break;
             }
             case SPELLFAMILY_WARRIOR:
