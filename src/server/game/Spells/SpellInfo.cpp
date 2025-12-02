@@ -2299,11 +2299,6 @@ void SpellInfo::_LoadSpellDiminishInfo()
         if (HasAura(SPELL_AURA_MOD_TAUNT))
             return DIMINISHING_TAUNT;
 
-        // Explicit Diminishing Groups
-        // Freezing Trap effects (including Freezing Arrow) should share the disorient DR in Classic
-        if (Id == 3355 || Id == 14308 || Id == 14309 || Id == 60210 || Id == 19503)
-            return DIMINISHING_DISORIENT;
-
         switch (SpellFamilyName)
         {
             case SPELLFAMILY_GENERIC:
