@@ -2739,7 +2739,12 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         spell->m_hitMask |= hitMask;
 
         // Do not take combo points on dodge and miss
-        if (MissCondition != SPELL_MISS_NONE && spell->m_needComboPoints && spell->m_targets.GetUnitTargetGUID() == TargetGUID)
+        bool blockedFinisherWithDebuff = MissCondition == SPELL_MISS_BLOCK &&
+            spell->m_spellInfo->HasAttribute(SPELL_ATTR0_FINISHING_MOVE) &&
+            spell->m_spellInfo->HasEffect(SPELL_EFFECT_APPLY_AURA) &&
+            !spell->IsPositive();
+
+        if (MissCondition != SPELL_MISS_NONE && !blockedFinisherWithDebuff && spell->m_needComboPoints && spell->m_targets.GetUnitTargetGUID() == TargetGUID)
             spell->m_needComboPoints = false;
 
         // _spellHitTarget can be null if spell is missed in DoSpellHitOnUnit
