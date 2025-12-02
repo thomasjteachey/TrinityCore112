@@ -560,6 +560,7 @@ struct CalcDamageInfo
     uint32 ProcVictim;
     uint32 CleanDamage;          // Used only for rage calculation
     MeleeHitOutcome HitOutCome;  /// @todo remove this field (need use TargetState)
+    bool IgnoreArmor;            // Skip physical armor mitigation when true
 };
 
 // Spell damage info structure based on structure sending in SMSG_SPELLNONMELEEDAMAGELOG opcode
