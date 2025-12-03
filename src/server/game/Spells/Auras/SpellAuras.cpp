@@ -2366,10 +2366,7 @@ void Aura::TriggerProcOnEvent(uint8 procEffectMask, AuraApplication* aurApp, Pro
 
     // Remove aura if we've used last charge to proc
     if (IsUsingCharges() && !GetCharges())
-    {
-        if(!(GetUnitOwner()->HasAura(81439) && aurApp->GetBase()->GetId() == 1784))
-            Remove();
-    }
+        Remove();
 }
 
 void Aura::_DeleteRemovedApplications()
