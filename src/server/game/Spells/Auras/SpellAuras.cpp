@@ -973,6 +973,13 @@ bool Aura::ModCharges(int32 num, AuraRemoveMode removeMode)
 {
     if (IsUsingCharges())
     {
+        if (num < 0 && GetId() == 1784)
+        {
+            if (Unit* owner = m_owner->ToUnit())
+                if (owner->HasAura(81439))
+                    return false;
+        }
+
         int32 charges = m_procCharges + num;
         int32 maxCharges = CalcMaxCharges();
 
@@ -2366,10 +2373,7 @@ void Aura::TriggerProcOnEvent(uint8 procEffectMask, AuraApplication* aurApp, Pro
 
     // Remove aura if we've used last charge to proc
     if (IsUsingCharges() && !GetCharges())
-    {
-        if(!(GetUnitOwner()->HasAura(81439) && aurApp->GetBase()->GetId() == 1784))
-            Remove();
-    }
+        Remove();
 }
 
 void Aura::_DeleteRemovedApplications()
