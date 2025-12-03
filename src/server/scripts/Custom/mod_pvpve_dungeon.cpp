@@ -1517,6 +1517,29 @@ namespace
         32272  // Teleport: Silvermoon
     };
 
+    bool IsRogueVanish(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE)
+            return false;
+
+        if (!(spellInfo->SpellFamilyFlags[0] & SPELLFAMILYFLAG_ROGUE_VANISH))
+            return false;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsEffectValid())
+                continue;
+
+            if (effect.ApplyAuraName == SPELL_AURA_MOD_STEALTH)
+                return true;
+        }
+
+        return false;
+    }
+
     bool IsStockadesMageTeleport(uint32 spellId)
     {
         return kMageTeleportSpellIds.find(spellId) != kMageTeleportSpellIds.end();
@@ -1543,6 +1566,9 @@ public:
         PvpveDungeonRun* run = sPvpveDungeonMgr->GetRunForPlayer(player->GetGUID());
         if (!run || run->BossDefeated || run->Finished)
             return;
+
+        if (player->GetMapId() == kStockadesMapId && IsRogueVanish(spellInfo))
+            player->GetCombatManager().EndAllPvECombat();
 
         uint64 const teamId = sPvpveDungeonMgr->GetTeamIdForPlayer(player->GetGUID());
         PvpveTeam* team = sPvpveDungeonMgr->GetTeam(teamId);
