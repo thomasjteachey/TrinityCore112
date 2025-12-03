@@ -563,7 +563,7 @@ void Unit::UpdateSplinePosition()
 {
     Movement::Location loc = movespline->ComputePosition();
 
-    if (GetTypeId() == TYPEID_PLAYER && movespline->IsOrientationFixed())
+    if (GetTypeId() == TYPEID_PLAYER && (!movespline->HasFinalFacing() || movespline->IsOrientationFixed()))
         loc.orientation = GetOrientation();
 
     if (movespline->onTransport)

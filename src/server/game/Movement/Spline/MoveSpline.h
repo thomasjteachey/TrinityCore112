@@ -128,6 +128,7 @@ namespace Movement
         bool HasAnimation() const { return splineflags.animation; }
         AnimTier GetAnimTier() const { return static_cast<AnimTier>(splineflags.animTier); }
         bool IsOrientationFixed() const { return splineflags.orientationFixed; }
+        bool HasFinalFacing() const { return splineflags.isFacing(); }
 
         bool onTransport;
         std::string ToString() const;
