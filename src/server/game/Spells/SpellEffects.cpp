@@ -1336,17 +1336,21 @@ void Spell::EffectJumpDest()
 
     float speedXY, speedZ;
     CalculateJumpSpeeds(*effectInfo, unitCaster->GetExactDist2d(destTarget), speedXY, speedZ);
+    bool hasOrientation = !m_targets.GetObjectTargetGUID().IsEmpty();
+    bool orientationFixed = false;
     if (m_spellInfo->Id == 81271)
     {
         speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
         speedXY = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_XY_SPEED);
     }
-    if (m_spellInfo->Id == 83111)
+    if (m_spellInfo->Id == 83111 || m_spellInfo->Id == 8311)
     {
         speedZ = 20;
         speedXY = 7;
+        hasOrientation = false;
+        orientationFixed = true;
     }
-    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
+    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, hasOrientation, orientationFixed);
 }
 
 void Spell::EffectTeleportUnits()
