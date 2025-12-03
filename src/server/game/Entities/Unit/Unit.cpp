@@ -18,6 +18,7 @@
 #include "Unit.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include "AbstractFollower.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
@@ -82,6 +83,11 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <cmath>
+
+namespace
+{
+static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
+}
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
 {
@@ -2218,6 +2224,49 @@ void Unit::AddExtraAttacks(uint32 count)
     }
 
     extraAttacksTargets[targetGUID] += count;
+}
+
+void Unit::CompleteGhostWolfCharge(Unit* target)
+{
+    RemoveAurasDueToSpell(SPELL_SHAMAN_GHOST_WOLF);
+
+    if (SpellHistory* spellHistory = GetSpellHistory())
+    {
+        static constexpr std::chrono::seconds GhostWolfCooldown(12);
+        SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
+
+        if (ghostWolfInfo)
+        {
+            SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
+            SpellHistory::Clock::time_point const cooldownEnd = now + GhostWolfCooldown;
+            SpellHistory::Clock::time_point const categoryEnd = ghostWolfInfo->GetCategory() ? cooldownEnd : now;
+
+            spellHistory->AddCooldown(ghostWolfInfo->Id, 0, cooldownEnd, ghostWolfInfo->GetCategory(), categoryEnd);
+        }
+        else
+            spellHistory->AddCooldown(SPELL_SHAMAN_GHOST_WOLF, 0, GhostWolfCooldown);
+
+        if (Player* playerCaster = ToPlayer())
+        {
+            WorldPacket cooldownData;
+            uint32 const ghostWolfCooldownMs = static_cast<uint32>(std::chrono::duration_cast<std::chrono::milliseconds>(GhostWolfCooldown).count());
+            spellHistory->BuildCooldownPacket(cooldownData, SPELL_COOLDOWN_FLAG_NONE, SPELL_SHAMAN_GHOST_WOLF, ghostWolfCooldownMs);
+            playerCaster->SendDirectMessage(&cooldownData);
+        }
+    }
+
+    if (GetShapeshiftForm() == FORM_GHOSTWOLF)
+        RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
+    if (!target || !target->IsAlive())
+        return;
+
+    resetAttackTimer(BASE_ATTACK);
+    resetAttackTimer(OFF_ATTACK);
+
+    bool const startedMelee = Attack(target, true);
+    if (!startedMelee && GetVictim() != target)
+        return;
 }
 
 MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackType attType) const

@@ -154,13 +154,9 @@ void PointMovementGenerator<T>::DoFinalize(T* owner, bool active, bool movementI
 }
 
 template<class T>
-void PointMovementGenerator<T>::MovementInform(T*) { }
-
-template <>
-void PointMovementGenerator<Creature>::MovementInform(Creature* owner)
+void PointMovementGenerator<T>::MovementInform(T* owner)
 {
-    if (owner->AI())
-        owner->AI()->MovementInform(POINT_MOTION_TYPE, _movementId);
+    owner->MovementInform(POINT_MOTION_TYPE, _movementId);
 }
 
 template PointMovementGenerator<Player>::PointMovementGenerator(uint32, float, float, float, bool, float, Optional<float>);
