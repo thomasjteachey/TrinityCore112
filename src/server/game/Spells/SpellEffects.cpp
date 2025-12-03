@@ -1341,7 +1341,7 @@ void Spell::EffectJumpDest()
         speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
         speedXY = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_XY_SPEED);
     }
-    if (m_spellInfo->Id == 83111 || m_spellInfo->Id == 8311)
+    if (m_spellInfo->Id == 83111)
     {
         speedZ = 20;
         speedXY = 7;
