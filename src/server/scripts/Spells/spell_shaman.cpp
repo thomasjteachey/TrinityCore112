@@ -1680,45 +1680,13 @@ class spell_sha_ghost_wolf_charge : public SpellScript
 
         _chargeHandled = true;
 
-        caster->RemoveAurasDueToSpell(SPELL_SHAMAN_GHOST_WOLF);
-
-        if (SpellHistory* spellHistory = caster->GetSpellHistory())
+        if (Player* playerCaster = caster->ToPlayer())
         {
-            static constexpr std::chrono::seconds GhostWolfCooldown(12);
-            SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
-
-            if (ghostWolfInfo)
-            {
-                SpellHistory::Clock::time_point const now = GameTime::GetSystemTime();
-                SpellHistory::Clock::time_point const cooldownEnd = now + GhostWolfCooldown;
-                SpellHistory::Clock::time_point const categoryEnd = ghostWolfInfo->GetCategory() ? cooldownEnd : now;
-
-                spellHistory->AddCooldown(ghostWolfInfo->Id, 0, cooldownEnd, ghostWolfInfo->GetCategory(), categoryEnd);
-            }
-            else
-                spellHistory->AddCooldown(SPELL_SHAMAN_GHOST_WOLF, 0, GhostWolfCooldown);
-
-            if (Player* playerCaster = caster->ToPlayer())
-            {
-                WorldPacket cooldownData;
-                uint32 const ghostWolfCooldownMs = static_cast<uint32>(std::chrono::duration_cast<std::chrono::milliseconds>(GhostWolfCooldown).count());
-                spellHistory->BuildCooldownPacket(cooldownData, SPELL_COOLDOWN_FLAG_NONE, SPELL_SHAMAN_GHOST_WOLF, ghostWolfCooldownMs);
-                playerCaster->SendDirectMessage(&cooldownData);
-            }
+            playerCaster->SetPendingGhostWolfChargeTarget(target->GetGUID());
+            return;
         }
 
-        if (caster->GetShapeshiftForm() == FORM_GHOSTWOLF)
-            caster->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
-
-        if (!target->IsAlive())
-            return;
-
-        caster->resetAttackTimer(BASE_ATTACK);
-        caster->resetAttackTimer(OFF_ATTACK);
-
-        bool const startedMelee = caster->Attack(target, true);
-        if (!startedMelee && caster->GetVictim() != target)
-            return;
+        caster->CompleteGhostWolfCharge(target);
     }
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
