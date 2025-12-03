@@ -4119,9 +4119,12 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         return;
 
     static uint32 const ROGUE_STEALTH_PROTECTION_AURA = 81439;
-    bool ignoreStealthBreak = HasAura(ROGUE_STEALTH_PROTECTION_AURA) &&
-        (flag & (AURA_INTERRUPT_FLAG_TAKE_DAMAGE | AURA_INTERRUPT_FLAG_DIRECT_DAMAGE | AURA_INTERRUPT_FLAG_HITBYSPELL |
-                 AURA_INTERRUPT_FLAG_SPELL_ATTACK | AURA_INTERRUPT_FLAG_MELEE_ATTACK));
+    static uint32 const STEALTH_BREAKER_OWNER_FLAGS = AURA_INTERRUPT_FLAG_CAST | AURA_INTERRUPT_FLAG_MOVE |
+        AURA_INTERRUPT_FLAG_TURNING | AURA_INTERRUPT_FLAG_JUMP | AURA_INTERRUPT_FLAG_NOT_MOUNTED |
+        AURA_INTERRUPT_FLAG_TALK | AURA_INTERRUPT_FLAG_LOOTING | AURA_INTERRUPT_FLAG_MELEE_ATTACK |
+        AURA_INTERRUPT_FLAG_SPELL_ATTACK | AURA_INTERRUPT_FLAG_MOUNT;
+
+    bool ignoreStealthBreak = HasAura(ROGUE_STEALTH_PROTECTION_AURA) && !(flag & STEALTH_BREAKER_OWNER_FLAGS);
 
     // interrupt auras
     for (AuraApplicationList::iterator iter = m_interruptableAuras.begin(); iter != m_interruptableAuras.end();)
@@ -4130,7 +4133,7 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         ++iter;
         if ((aura->GetSpellInfo()->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
         {
-            if (ignoreStealthBreak && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))
+            if (ignoreStealthBreak && (aura->HasEffectType(SPELL_AURA_MOD_STEALTH) || aura->HasEffectType(SPELL_AURA_MOD_INVISIBILITY)))
                 continue;
 
             uint32 removedAuras = m_removedAurasCount;
