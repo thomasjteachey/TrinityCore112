@@ -33,6 +33,7 @@
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "WorldSession.h"
 
 #include <algorithm>

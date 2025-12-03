@@ -24912,13 +24912,26 @@ void Player::UpdateAreaDependentAuras(uint32 newArea)
 
 void Player::MovementInform(uint32 type, uint32 id)
 {
-    if (type == POINT_MOTION_TYPE && (id == EVENT_CHARGE || id == EVENT_CHARGE_PREPATH) && _pendingGhostWolfChargeTarget)
+    if (type == EFFECT_MOTION_TYPE && id == EVENT_JUMP)
     {
-        ObjectGuid const targetGuid = _pendingGhostWolfChargeTarget;
-        _pendingGhostWolfChargeTarget.Clear();
+        if (GetShapeshiftForm() == FORM_GHOSTWOLF)
+        {
+            ObjectGuid targetGuid = _pendingGhostWolfChargeTarget;
+            _pendingGhostWolfChargeTarget.Clear();
 
-        if (Unit* target = ObjectAccessor::GetUnit(*this, targetGuid))
+            if (!targetGuid)
+            {
+                if (Unit* victim = GetVictim())
+                    targetGuid = victim->GetGUID();
+                else if (ObjectGuid selection = GetTarget())
+                    targetGuid = selection;
+            }
+
+            Unit* target = targetGuid ? ObjectAccessor::GetUnit(*this, targetGuid) : nullptr;
             CompleteGhostWolfCharge(target);
+        }
+        else
+            _pendingGhostWolfChargeTarget.Clear();
     }
 }
 
