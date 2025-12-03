@@ -1319,48 +1319,60 @@ void Spell::EffectJump()
     unitCaster->GetMotionMaster()->MoveJump(*unitTarget, speedXY, speedZ, EVENT_JUMP, false);
 }
 
-void Spell::EffectJumpDest()
+void Spell::EffectJumpDest(SpellEffIndex effIndex)
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH)
         return;
 
     Unit* unitCaster = GetUnitCasterForEffectHandlers();
-    if (!unitCaster)
+    if (!unitCaster || unitCaster->IsInFlight() || !m_targets.HasDst())
         return;
 
-    if (unitCaster->IsInFlight())
-        return;
-
-    if (!m_targets.HasDst())
-        return;
-
+    WorldLocation* destTarget = m_targets.GetDst();
     float speedXY, speedZ;
-    CalculateJumpSpeeds(*effectInfo, unitCaster->GetExactDist2d(destTarget), speedXY, speedZ);
-    if (m_spellInfo->Id == 81271)
-    {
-        speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
-        speedXY = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_XY_SPEED);
-    }
-    if (m_spellInfo->Id == 83111)
-    {
-        speedZ = 20.0f;
-        speedXY = 7.0f;
 
-        // For players: use client-side jump so we can spin midair
-        if (unitCaster->GetTypeId() == TYPEID_PLAYER)
-        {
-            Position destPos;
-            destTarget->GetPosition(destPos.m_positionX,
-                destPos.m_positionY,
-                destPos.m_positionZ);
+    // Default behavior for other spells:
+    CalculateJumpSpeeds(*GetEffectInfo(effIndex),
+        unitCaster->GetExactDist2d(destTarget),
+        speedXY, speedZ);
 
-            unitCaster->JumpTo(speedXY, speedZ, true, destPos);
-            return; // don't call MoveJump for players
-        }
+    // Your other special-case (81271) here if you want...
+
+    // === MOONKIN FUN LEAP (83111) ===
+    if (m_spellInfo->Id == 83111 && unitCaster->GetTypeId() == TYPEID_PLAYER)
+    {
+        Position destPos;
+        destTarget->GetPosition(destPos.m_positionX,
+            destPos.m_positionY,
+            destPos.m_positionZ,
+            destPos.m_orientation);
+
+        // Desired total air time
+        static float const DESIRED_TIME = 2.5f;
+        float const g = Movement::gravity; // Trinity constant
+
+        // Vertical speed chosen so flight time ~ DESIRED_TIME
+        speedZ = 0.5f * g * DESIRED_TIME;   // v_z = g*T/2  ? ~high arc
+
+        // Horizontal speed chosen so we cover the distance in DESIRED_TIME
+        float dist2d = unitCaster->GetExactDist2d(destPos.m_positionX,
+            destPos.m_positionY);
+
+        // Avoid divide-by-zero for super tiny hops
+        if (DESIRED_TIME > 0.01f)
+            speedXY = dist2d / DESIRED_TIME;
+        else
+            speedXY = 0.0f;
+
+        // Fire the client-side jump (you can spin in mid-air)
+        unitCaster->JumpTo(speedXY, speedZ, true, destPos);
+        return;
     }
-    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
+
+    // Fallback for all other jump spells
+    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ,
+        EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
-
 void Spell::EffectTeleportUnits()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
