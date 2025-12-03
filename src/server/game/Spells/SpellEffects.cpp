@@ -1336,6 +1336,7 @@ void Spell::EffectJumpDest()
 
     float speedXY, speedZ;
     CalculateJumpSpeeds(*effectInfo, unitCaster->GetExactDist2d(destTarget), speedXY, speedZ);
+    bool hasOrientation = !m_targets.GetObjectTargetGUID().IsEmpty();
     if (m_spellInfo->Id == 81271)
     {
         speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
@@ -1345,8 +1346,9 @@ void Spell::EffectJumpDest()
     {
         speedZ = 20;
         speedXY = 7;
+        hasOrientation = false;
     }
-    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
+    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, hasOrientation);
 }
 
 void Spell::EffectTeleportUnits()

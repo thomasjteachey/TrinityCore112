@@ -33,6 +33,7 @@
 #include "ScriptMgr.h"
 #include "Spell.h"
 #include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -1525,12 +1526,12 @@ namespace
         if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE)
             return false;
 
-        if (!(spellInfo->SpellFamilyFlags[0] & SPELLFAMILYFLAG_ROGUE_VANISH))
+        if (!spellInfo->SpellFamilyFlags.HasFlag(SPELLFAMILYFLAG_ROGUE_VANISH))
             return false;
 
         for (SpellEffectInfo const& effect : spellInfo->GetEffects())
         {
-            if (!effect.IsEffectValid())
+            if (!effect.IsEffect())
                 continue;
 
             if (effect.ApplyAuraName == SPELL_AURA_MOD_STEALTH)
