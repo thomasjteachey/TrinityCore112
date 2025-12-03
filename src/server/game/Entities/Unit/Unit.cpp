@@ -10424,10 +10424,6 @@ void Unit::TriggerAurasProcOnEvent(ProcEventInfo& eventInfo, AuraApplicationProc
         uint8 procEffectMask;
         std::tie(procEffectMask, aurApp) = aurAppProc;
 
-        //neilyo's immunity prevents stealth break
-        if (aurApp->GetBase()->GetId() == 1784 && HasAura(81439))
-            continue;
-
         if (aurApp->GetRemoveMode())
             continue;
 
