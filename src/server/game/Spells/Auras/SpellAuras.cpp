@@ -973,6 +973,13 @@ bool Aura::ModCharges(int32 num, AuraRemoveMode removeMode)
 {
     if (IsUsingCharges())
     {
+        if (num < 0 && GetId() == 1784)
+        {
+            if (Unit* owner = m_owner->ToUnit())
+                if (owner->HasAura(81439))
+                    return false;
+        }
+
         int32 charges = m_procCharges + num;
         int32 maxCharges = CalcMaxCharges();
 
