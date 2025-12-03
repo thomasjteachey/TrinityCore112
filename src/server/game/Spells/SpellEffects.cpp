@@ -1343,8 +1343,20 @@ void Spell::EffectJumpDest()
     }
     if (m_spellInfo->Id == 83111)
     {
-        speedZ = 20;
-        speedXY = 7;
+        speedZ = 20.0f;
+        speedXY = 7.0f;
+
+        // For players: use client-side jump so we can spin midair
+        if (unitCaster->GetTypeId() == TYPEID_PLAYER)
+        {
+            Position destPos;
+            destTarget->GetPosition(destPos.m_positionX,
+                destPos.m_positionY,
+                destPos.m_positionZ);
+
+            unitCaster->JumpTo(speedXY, speedZ, true, destPos);
+            return; // don't call MoveJump for players
+        }
     }
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
