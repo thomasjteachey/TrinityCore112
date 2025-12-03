@@ -24912,7 +24912,7 @@ void Player::UpdateAreaDependentAuras(uint32 newArea)
 
 void Player::MovementInform(uint32 type, uint32 id)
 {
-    if (type == POINT_MOTION_TYPE && (id == EVENT_CHARGE || id == EVENT_CHARGE_PREPATH))
+    if (type == EFFECT_MOTION_TYPE && id == EVENT_JUMP)
     {
         if (GetShapeshiftForm() == FORM_GHOSTWOLF)
         {
