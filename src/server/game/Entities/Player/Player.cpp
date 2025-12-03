@@ -38,6 +38,7 @@
 #include "CinematicMgr.h"
 #include "CombatLogPackets.h"
 #include "CombatPackets.h"
+#include "MovementDefines.h"
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Containers.h"
@@ -24907,6 +24908,36 @@ void Player::UpdateAreaDependentAuras(uint32 newArea)
         if (itr->second->autocast && itr->second->IsFitToRequirements(this, m_zoneUpdateId, newArea))
             if (!HasAura(itr->second->spellId))
                 CastSpell(this, itr->second->spellId, true);
+}
+
+void Player::MovementInform(uint32 type, uint32 id)
+{
+    if (type == POINT_MOTION_TYPE && (id == EVENT_CHARGE || id == EVENT_CHARGE_PREPATH))
+    {
+        if (GetShapeshiftForm() == FORM_GHOSTWOLF)
+        {
+            ObjectGuid targetGuid = _pendingGhostWolfChargeTarget;
+            _pendingGhostWolfChargeTarget.Clear();
+
+            if (!targetGuid)
+            {
+                if (Unit* victim = GetVictim())
+                    targetGuid = victim->GetGUID();
+                else if (ObjectGuid selection = GetTarget())
+                    targetGuid = selection;
+            }
+
+            Unit* target = targetGuid ? ObjectAccessor::GetUnit(*this, targetGuid) : nullptr;
+            CompleteGhostWolfCharge(target);
+        }
+        else
+            _pendingGhostWolfChargeTarget.Clear();
+    }
+}
+
+void Player::SetPendingGhostWolfChargeTarget(ObjectGuid const& targetGuid)
+{
+    _pendingGhostWolfChargeTarget = targetGuid;
 }
 
 uint32 Player::GetCorpseReclaimDelay(bool pvp) const

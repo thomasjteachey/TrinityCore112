@@ -3758,6 +3758,12 @@ void Creature::SetDisplayId(uint32 modelId)
     }
 }
 
+void Creature::MovementInform(uint32 type, uint32 id)
+{
+    if (AI())
+        AI()->MovementInform(type, id);
+}
+
 void Creature::SetTarget(ObjectGuid guid)
 {
     if (HasSpellFocus())
