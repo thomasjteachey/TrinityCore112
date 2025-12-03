@@ -808,12 +808,12 @@ void MotionMaster::MoveJumpTo(float angle, float speedXY, float speedZ)
     MoveJump(x, y, z, 0.0f, speedXY, speedZ);
 }
 
-void MotionMaster::MoveJump(Position const& pos, float speedXY, float speedZ, uint32 id/* = EVENT_JUMP*/, bool hasOrientation/* = false*/)
+void MotionMaster::MoveJump(Position const& pos, float speedXY, float speedZ, uint32 id/* = EVENT_JUMP*/, bool hasOrientation/* = false*/, bool orientationFixed/* = false*/, bool allowTurning/* = false*/)
 {
-    MoveJump(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), speedXY, speedZ, id, hasOrientation);
+    MoveJump(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), speedXY, speedZ, id, hasOrientation, orientationFixed, allowTurning);
 }
 
-void MotionMaster::MoveJump(float x, float y, float z, float o, float speedXY, float speedZ, uint32 id, bool hasOrientation /* = false*/)
+void MotionMaster::MoveJump(float x, float y, float z, float o, float speedXY, float speedZ, uint32 id, bool hasOrientation /* = false*/, bool orientationFixed /* = false*/, bool allowTurning /* = false*/)
 {
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MoveJump: '{}', jumps to point Id: {} (X: {}, Y: {}, Z: {})", _owner->GetGUID().ToString(), id, x, y, z);
     if (speedXY < 0.01f)
@@ -827,13 +827,15 @@ void MotionMaster::MoveJump(float x, float y, float z, float o, float speedXY, f
         init.MoveTo(x, y, z, false);
         init.SetParabolic(max_height, 0);
         init.SetVelocity(speedXY);
+        if (orientationFixed)
+            init.SetOrientationFixed(true);
         if (hasOrientation)
             init.SetFacing(o);
     };
 
     GenericMovementGenerator* movement = new GenericMovementGenerator(std::move(initializer), EFFECT_MOTION_TYPE, id);
     movement->Priority = MOTION_PRIORITY_HIGHEST;
-    movement->BaseUnitState = UNIT_STATE_JUMPING;
+    movement->BaseUnitState = allowTurning ? UNIT_STATE_MOVE : UNIT_STATE_JUMPING;
     movement->AddFlag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH);
     Add(movement);
 }
