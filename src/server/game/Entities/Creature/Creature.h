@@ -70,6 +70,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         float GetNativeObjectScale() const override;
         void SetObjectScale(float scale) override;
         void SetDisplayId(uint32 modelId) override;
+        void MovementInform(uint32 type, uint32 id) override;
 
         void DisappearAndDie() { ForcedDespawn(0); }
 

@@ -1053,6 +1053,10 @@ class TC_GAME_API Unit : public WorldObject
         void SetLastDamagedTargetGuid(ObjectGuid guid) { _lastDamagedTargetGuid = guid; }
         ObjectGuid GetLastDamagedTargetGuid() const { return _lastDamagedTargetGuid; }
 
+        virtual void MovementInform(uint32 /*type*/, uint32 /*id*/) { }
+
+        void CompleteGhostWolfCharge(Unit* target);
+
         void CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 damage, SpellInfo const* spellInfo, WeaponAttackType attackType = BASE_ATTACK, bool crit = false, bool blocked = false, Spell* spell = nullptr);
         void DealSpellDamage(SpellNonMeleeDamage const* damageInfo, bool durabilityLoss);
 

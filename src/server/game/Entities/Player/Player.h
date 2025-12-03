@@ -1870,6 +1870,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         int32 CalculateCorpseReclaimDelay(bool load = false) const;
         void SendCorpseReclaimDelay(uint32 delay) const;
 
+        void MovementInform(uint32 type, uint32 id) override;
+        void SetPendingGhostWolfChargeTarget(ObjectGuid const& targetGuid);
+
         uint32 GetShieldBlockValue() const override;                 // overwrite Unit version (virtual)
         bool CanParry() const { return m_canParry; }
         void SetCanParry(bool value);
@@ -2609,6 +2612,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 _pendingBindTimer;
 
         uint32 _activeCheats;
+
+        ObjectGuid _pendingGhostWolfChargeTarget;
 
         // variables to save health and mana before duel and restore them after duel
         uint32 healthBeforeDuel;
