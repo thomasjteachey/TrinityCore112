@@ -1319,33 +1319,35 @@ void Spell::EffectJump()
     unitCaster->GetMotionMaster()->MoveJump(*unitTarget, speedXY, speedZ, EVENT_JUMP, false);
 }
 
-void Spell::EffectJumpDest(SpellEffIndex effIndex)
+void Spell::EffectJumpDest()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_LAUNCH)
         return;
 
     Unit* unitCaster = GetUnitCasterForEffectHandlers();
-    if (!unitCaster || unitCaster->IsInFlight() || !m_targets.HasDst())
+    if (!unitCaster)
         return;
 
-    WorldLocation* destTarget = m_targets.GetDst();
+    if (unitCaster->IsInFlight())
+        return;
+
+    if (!m_targets.HasDst())
+        return;
+
     float speedXY, speedZ;
-
-    // Default behavior for other spells:
-    CalculateJumpSpeeds(*GetEffectInfo(effIndex),
-        unitCaster->GetExactDist2d(destTarget),
-        speedXY, speedZ);
-
-    // Your other special-case (81271) here if you want...
-
+    CalculateJumpSpeeds(*effectInfo, unitCaster->GetExactDist2d(destTarget), speedXY, speedZ);
+    if (m_spellInfo->Id == 81271)
+    {
+        speedZ = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_Z_SPEED);
+        speedXY = sWorld->getIntConfig(CONFIG_CENTURION_LEAP_XY_SPEED);
+    }
     // === MOONKIN FUN LEAP (83111) ===
     if (m_spellInfo->Id == 83111 && unitCaster->GetTypeId() == TYPEID_PLAYER)
     {
         Position destPos;
         destTarget->GetPosition(destPos.m_positionX,
             destPos.m_positionY,
-            destPos.m_positionZ,
-            destPos.m_orientation);
+            destPos.m_positionZ);
 
         // Desired total air time
         static float const DESIRED_TIME = 2.5f;
@@ -1368,11 +1370,9 @@ void Spell::EffectJumpDest(SpellEffIndex effIndex)
         unitCaster->JumpTo(speedXY, speedZ, true, destPos);
         return;
     }
-
-    // Fallback for all other jump spells
-    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ,
-        EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
+    unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());
 }
+
 void Spell::EffectTeleportUnits()
 {
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
