@@ -84,6 +84,11 @@
 #include "WorldSession.h"
 #include <cmath>
 
+namespace
+{
+static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
+}
+
 float baseMoveSpeed[MAX_MOVE_TYPE] =
 {
     2.5f,                  // MOVE_WALK
