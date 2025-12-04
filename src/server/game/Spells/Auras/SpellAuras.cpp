@@ -2195,8 +2195,14 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
     // take one charge, aura expiration will be handled in Aura::TriggerProcOnEvent (if needed)
     if (IsUsingCharges() && (!eventInfo.GetSpellInfo() || !eventInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR6_DONT_CONSUME_PROC_CHARGES)))
     {
-        --m_procCharges;
-        SetNeedClientUpdateForTargets();
+        Unit* target = aurApp->GetTarget();
+
+        // Do not consume stealth proc charges when the unit is protected by aura 81439 (Stealth Aura Stalker)
+        if (!(GetId() == 1784 && target && target->HasAura(81439)))
+        {
+            --m_procCharges;
+            SetNeedClientUpdateForTargets();
+        }
     }
 
     SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(GetId());
