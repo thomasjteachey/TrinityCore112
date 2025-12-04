@@ -4174,6 +4174,15 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         ++iter;
         if ((aura->GetSpellInfo()->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
         {
+            if (HasAura(81439) && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))
+            {
+                uint32 const protectedFlags = AURA_INTERRUPT_FLAG_HITBYSPELL | AURA_INTERRUPT_FLAG_TAKE_DAMAGE |
+                                             AURA_INTERRUPT_FLAG_DIRECT_DAMAGE | AURA_INTERRUPT_FLAG_MELEE_ATTACK |
+                                             AURA_INTERRUPT_FLAG_SPELL_ATTACK;
+                if (flag & protectedFlags)
+                    continue;
+            }
+
             uint32 removedAuras = m_removedAurasCount;
             RemoveAura(aura);
             if (m_removedAurasCount > removedAuras + 1)
