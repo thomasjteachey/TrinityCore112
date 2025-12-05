@@ -1568,6 +1568,7 @@ class spell_warl_demon_conceal : public SpellScript
 {
     PrepareSpellScript(spell_warl_demon_conceal);
 
+public:
     spell_warl_demon_conceal() : _savedCommandState(COMMAND_FOLLOW), _wasCommandAttack(false), _wasCommandFollow(false), _wasAtStay(false) { }
 
     bool Load() override
@@ -1646,7 +1647,7 @@ class spell_warl_demon_conceal : public SpellScript
         if (_savedTargetGuid)
         {
             if (Unit* target = ObjectAccessor::GetUnit(*pet, _savedTargetGuid))
-                pet->AttackStart(target);
+                pet->AI()->AttackStart(target);
         }
     }
 
