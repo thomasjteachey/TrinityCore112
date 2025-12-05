@@ -88,11 +88,11 @@ enum WarlockSpells
     SPELL_WARLOCK_SHADOWFLAME                       = 37378,
     SPELL_WARLOCK_FLAMESHADOW                       = 37379,
     SPELL_WARLOCK_SHADOWBURN_R1                     = 17877,
-    SPELL_WARLOCK_SHADOWBURN_R2                     = 17919,
-    SPELL_WARLOCK_SHADOWBURN_R3                     = 17920,
-    SPELL_WARLOCK_SHADOWBURN_R4                     = 17921,
-    SPELL_WARLOCK_SHADOWBURN_R5                     = 17922,
-    SPELL_WARLOCK_SHADOWBURN_R6                     = 17923,
+    SPELL_WARLOCK_SHADOWBURN_R2                     = 18867,
+    SPELL_WARLOCK_SHADOWBURN_R3                     = 18868,
+    SPELL_WARLOCK_SHADOWBURN_R4                     = 18869,
+    SPELL_WARLOCK_SHADOWBURN_R5                     = 18870,
+    SPELL_WARLOCK_SHADOWBURN_R6                     = 18871,
     SPELL_WARLOCK_FEAR_R1                           = 5782,
     SPELL_WARLOCK_FEAR_R2                           = 6213,
     SPELL_WARLOCK_FEAR_R3                           = 6215,
@@ -1328,7 +1328,7 @@ class spell_warl_shadowburn : public AuraScript
         }
 
         // Your cooldown logic
-        static constexpr uint32 PsychicScreamSpellIds[] =
+        static constexpr uint32 ShadowburnSpellIds[] =
         {
             SPELL_WARLOCK_SHADOWBURN_R1,
             SPELL_WARLOCK_SHADOWBURN_R2,
@@ -1338,8 +1338,8 @@ class spell_warl_shadowburn : public AuraScript
             SPELL_WARLOCK_SHADOWBURN_R6
         };
 
-        SpellHistory* spellHistory = GetCaster()->GetSpellHistory();
-        for (uint32 spellId : PsychicScreamSpellIds)
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        for (uint32 spellId : ShadowburnSpellIds)
             spellHistory->ModifyCooldown(spellId, -15000);
     }
 
