@@ -1343,27 +1343,6 @@ class spell_warl_shadowburn : public AuraScript
             spellHistory->ModifyCooldown(spellId, -15000);
     }
 
-
-    void ResetKnownRanks(Player* caster, SpellHistory* spellHistory, std::array<uint32, N> const& spellIds, std::set<uint32>& processedCategories)
-    {
-        for (uint32 const spellId : spellIds)
-        {
-            if (!caster->HasSpell(spellId))
-                continue;
-
-            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-            if (!spellInfo)
-                continue;
-
-            if (uint32 const categoryId = spellInfo->GetCategory())
-                if (processedCategories.insert(categoryId).second)
-                    spellHistory->ResetCategoryCooldown(categoryId, true);
-
-            if (spellHistory->HasCooldown(spellId))
-                spellHistory->ResetCooldown(spellId, true);
-        }
-    }
-
     void Register() override
     {
         AfterEffectApply += AuraEffectApplyFn(spell_warl_shadowburn::HandleAfterHit, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
