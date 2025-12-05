@@ -37,6 +37,8 @@
 #include "Pet.h"
 #include "SpellHistory.h"
 #include <vector>
+#include <chrono>
+#include <functional>
 
 enum WarlockSpells
 {
@@ -1570,7 +1572,7 @@ class spell_warl_demon_conceal : public SpellScript
     PrepareSpellScript(spell_warl_demon_conceal);
 
 public:
-    spell_warl_demon_conceal() : _savedCommandState(COMMAND_FOLLOW), _wasCommandAttack(false), _wasCommandFollow(false), _wasAtStay(false) { }
+    spell_warl_demon_conceal() : _savedCommandState(COMMAND_FOLLOW), _savedTargetGuid(ObjectGuid::Empty), _wasCommandAttack(false), _wasCommandFollow(false), _wasAtStay(false) { }
 
     bool Load() override
     {
@@ -1632,24 +1634,49 @@ public:
     void ApplyStoredBehavior()
     {
         Player* player = GetCaster()->ToPlayer();
-        Pet* pet = player->GetPet();
-        if (!pet)
+        if (!player)
             return;
 
-        CharmInfo* charmInfo = pet->GetCharmInfo();
-        if (!charmInfo)
-            return;
+        CommandStates savedCommandState = _savedCommandState;
+        ObjectGuid savedTargetGuid = _savedTargetGuid;
+        bool wasCommandAttack = _wasCommandAttack;
+        bool wasCommandFollow = _wasCommandFollow;
+        bool wasAtStay = _wasAtStay;
 
-        charmInfo->SetCommandState(_savedCommandState);
-        charmInfo->SetIsCommandAttack(_wasCommandAttack);
-        charmInfo->SetIsCommandFollow(_wasCommandFollow);
-        charmInfo->SetIsAtStay(_wasAtStay);
-
-        if (_savedTargetGuid)
+        auto applyBehavior = std::make_shared<std::function<void(uint8)>>();
+        *applyBehavior = [player, savedCommandState, savedTargetGuid, wasCommandAttack, wasCommandFollow, wasAtStay, applyBehavior](uint8 retries)
         {
-            if (Unit* target = ObjectAccessor::GetUnit(*pet, _savedTargetGuid))
-                pet->AI()->AttackStart(target);
-        }
+            Pet* pet = player->GetPet();
+            if (!pet)
+            {
+                if (retries)
+                    player->m_Events.AddEventAtOffset([=]() mutable { (*applyBehavior)(retries - 1); }, std::chrono::milliseconds(50));
+                return;
+            }
+
+            CharmInfo* charmInfo = pet->GetCharmInfo();
+            if (!charmInfo)
+            {
+                if (retries)
+                    player->m_Events.AddEventAtOffset([=]() mutable { (*applyBehavior)(retries - 1); }, std::chrono::milliseconds(50));
+                return;
+            }
+
+            charmInfo->SetCommandState(savedCommandState);
+            charmInfo->SetIsCommandAttack(wasCommandAttack);
+            charmInfo->SetIsCommandFollow(wasCommandFollow);
+            charmInfo->SetIsAtStay(wasAtStay);
+            charmInfo->SetIsReturning(false);
+            charmInfo->SetIsFollowing(false);
+
+            if (savedTargetGuid)
+            {
+                if (Unit* target = ObjectAccessor::GetUnit(*pet, savedTargetGuid))
+                    pet->AI()->AttackStart(target);
+            }
+        };
+
+        (*applyBehavior)(10);
     }
 
     void Register() override
