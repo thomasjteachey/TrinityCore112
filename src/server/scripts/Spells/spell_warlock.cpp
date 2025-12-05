@@ -1223,9 +1223,9 @@ class spell_warl_seed_of_corruption_generic : public AuraScript
 };
 
 // -17877 - Shadowburn (all ranks)
-class spell_warl_shadowburn : public SpellScript
+class spell_warl_shadowburn : public AuraScript
 {
-    PrepareSpellScript(spell_warl_shadowburn);
+    PrepareAuraScript(spell_warl_shadowburn);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
@@ -1241,13 +1241,38 @@ class spell_warl_shadowburn : public SpellScript
         });
     }
 
-    void HandleAfterHit()
+    void HandleAfterHit(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
     {
         Unit* caster = GetCaster();
         if (!caster)
             return;
 
-        if (Unit* target = GetHitUnit())
+        // Store mana cost in the dummy aura amount for later refund
+        if (aurEff)
+        {
+            SpellInfo const* sbInfo = GetSpellInfo();
+            int32 cost = 0;
+
+            // Best-effort cost derivation (safe across most 3.3.5 forks)
+            if (sbInfo)
+            {
+                // Flat cost
+                cost += int32(sbInfo->ManaCost);
+
+                // % cost (if used)
+                if (sbInfo->ManaCostPercentage)
+                    cost += caster->CountPctFromMaxPower(POWER_MANA, sbInfo->ManaCostPercentage);
+
+                // Per-level (rarely used for Shadowburn, but safe)
+                if (sbInfo->ManaCostPerlevel)
+                    cost += int32(sbInfo->ManaCostPerlevel * caster->GetLevel());
+            }
+
+            // Save it on the aura effect
+            const_cast<AuraEffect*>(aurEff)->SetAmount(cost);
+        }
+
+        if (Unit* target = GetTarget())
         {
             if (caster->HasAura(81456) && !caster->HasAura(81458))
             {
@@ -1279,9 +1304,70 @@ class spell_warl_shadowburn : public SpellScript
         }
     }
 
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_DEATH)
+            return;
+
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        Player* player = caster->ToPlayer();
+        if (!player)
+            return;
+
+        // Refund mana
+        int32 refund = 0;
+        if (AuraEffect const* eff = GetEffect(EFFECT_0))
+            refund = eff->GetAmount();
+
+        if (refund > 0)
+        {
+            caster->EnergizeBySpell(caster, GetSpellInfo()->Id, refund, POWER_MANA);
+        }
+
+        // Your cooldown logic
+        static constexpr uint32 PsychicScreamSpellIds[] =
+        {
+            SPELL_WARLOCK_SHADOWBURN_R1,
+            SPELL_WARLOCK_SHADOWBURN_R2,
+            SPELL_WARLOCK_SHADOWBURN_R3,
+            SPELL_WARLOCK_SHADOWBURN_R4,
+            SPELL_WARLOCK_SHADOWBURN_R5,
+            SPELL_WARLOCK_SHADOWBURN_R6
+        };
+
+        SpellHistory* spellHistory = GetCaster()->GetSpellHistory();
+        for (uint32 spellId : PsychicScreamSpellIds)
+            spellHistory->ModifyCooldown(spellId, -15000);
+    }
+
+
+    void ResetKnownRanks(Player* caster, SpellHistory* spellHistory, std::array<uint32, N> const& spellIds, std::set<uint32>& processedCategories)
+    {
+        for (uint32 const spellId : spellIds)
+        {
+            if (!caster->HasSpell(spellId))
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            if (!spellInfo)
+                continue;
+
+            if (uint32 const categoryId = spellInfo->GetCategory())
+                if (processedCategories.insert(categoryId).second)
+                    spellHistory->ResetCategoryCooldown(categoryId, true);
+
+            if (spellHistory->HasCooldown(spellId))
+                spellHistory->ResetCooldown(spellId, true);
+        }
+    }
+
     void Register() override
     {
-        AfterHit += SpellHitFn(spell_warl_shadowburn::HandleAfterHit);
+        AfterEffectApply += AuraEffectApplyFn(spell_warl_shadowburn::HandleAfterHit, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectApplyFn(spell_warl_shadowburn::OnRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
     }
 };
 

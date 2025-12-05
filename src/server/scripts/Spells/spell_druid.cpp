@@ -2221,7 +2221,7 @@ class spell_chicken_leap : public SpellScript
         // The client shows an area as unreachable once the target is 5 yards above your position
         Unit* target = GetExplTargetUnit();
 
-        if (target && target->GetPositionZ() - caster->GetPositionZ() > 5.0f)
+        if (target && target->GetPositionZ() - caster->GetPositionZ() > 20.0f)
             return SPELL_FAILED_NOPATH;
 
         return SPELL_CAST_OK;
