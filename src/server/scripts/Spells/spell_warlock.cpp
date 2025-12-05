@@ -23,6 +23,7 @@
 
 #include "ScriptMgr.h"
 #include "Creature.h"
+#include "CreatureAI.h"
 #include "GameObject.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
