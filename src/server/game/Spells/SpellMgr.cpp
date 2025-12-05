@@ -4833,7 +4833,6 @@ void SpellMgr::LoadSpellInfoCorrections()
         // Remove procflags from test/debug/deprecated spells to avoid DB Errors
         2479,  // Honorless Target
         3232,  // Gouge Stun Test
-        3409,  // Crippling Poison
         4312,  // Strider Presence
         5707,  // Lifestone Regeneration
         5760,  // Mind-numbing Poison
@@ -4844,7 +4843,6 @@ void SpellMgr::LoadSpellInfoCorrections()
         7288,  // Immolate Cumulative (TEST) (Rank 1)
         7291,  // Food (TEST)
         7331,  // Healing Aura (TEST) (Rank 1)
-        7366,  // Berserker Stance
         7824,  // Blacksmithing Skill +10
         12551, // Frost Shot
         14795, // Venomhide Poison
