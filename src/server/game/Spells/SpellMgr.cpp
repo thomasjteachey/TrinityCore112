@@ -54,15 +54,15 @@ bool IsNaturesGraspAura(uint32 spellId)
 bool IsZulGurubClassEnchant(uint32 spellId)
 {
     static constexpr std::array<uint32, 18> zulGurubEnchantSpells = {
-        24148, 24149, // Warrior – Presence of Might
-        24151, 24160, // Paladin – Syncretist's Sigil
-        24153, 24161, // Rogue – Death's Embrace
-        24154, 24162, // Hunter – Falcon's Call
-        24155, 24163, // Warlock/Shaman – Vodouisant's Vigilant Embrace
-        24156, 24164, // Mage – Presence of Sight
-        24157, 24165, // Warlock – Hoodoo Hex
-        24158, 24167, // Priest – Prophetic Aura
-        24159, 24168  // Druid – Animist's Caress
+        24148, 24149, // Warrior ? Presence of Might
+        24151, 24160, // Paladin ? Syncretist's Sigil
+        24153, 24161, // Rogue ? Death's Embrace
+        24154, 24162, // Hunter ? Falcon's Call
+        24155, 24163, // Warlock/Shaman ? Vodouisant's Vigilant Embrace
+        24156, 24164, // Mage ? Presence of Sight
+        24157, 24165, // Warlock ? Hoodoo Hex
+        24158, 24167, // Priest ? Prophetic Aura
+        24159, 24168  // Druid ? Animist's Caress
     };
 
     for (uint32 zulGurubEnchantSpell : zulGurubEnchantSpells)
@@ -4847,10 +4847,6 @@ void SpellMgr::LoadSpellInfoCorrections()
         7366,  // Berserker Stance
         7824,  // Blacksmithing Skill +10
         12551, // Frost Shot
-        13218, // Wound Poison (Rank 1)
-        13222, // Wound Poison II (Rank 2)
-        13223, // Wound Poison III (Rank 3)
-        13224, // Wound Poison IV (Rank 4)
         14795, // Venomhide Poison
         16610, // Razorhide
         18099, // Chill Nova
@@ -4860,8 +4856,6 @@ void SpellMgr::LoadSpellInfoCorrections()
         21163, // Polished Armor (Rank 1)
         22818, // Mol'dar's Moxie
         22820, // Slip'kik's Savvy
-        23333, // Warsong Flag
-        23335, // Silverwing Flag
         25160, // Sand Storm
         27189, // Wound Poison V (Rank 5)
         28313, // Aura of Fear
@@ -4869,8 +4863,6 @@ void SpellMgr::LoadSpellInfoCorrections()
         28754, // Fury of the Ashbringer
         30802, // Unleashed Rage (Rank 1)
         31481, // Lung Burst
-        32430, // Battle Standard
-        32431, // Battle Standard
         32447, // Travel Form
         33370, // Spell Haste
         33807, // Abacus of Violent Odds
