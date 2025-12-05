@@ -37,6 +37,7 @@
 #include "Pet.h"
 #include "SpellHistory.h"
 #include <vector>
+#include <chrono>
 
 enum WarlockSpells
 {
@@ -1570,7 +1571,7 @@ class spell_warl_demon_conceal : public SpellScript
     PrepareSpellScript(spell_warl_demon_conceal);
 
 public:
-    spell_warl_demon_conceal() : _savedCommandState(COMMAND_FOLLOW), _wasCommandAttack(false), _wasCommandFollow(false), _wasAtStay(false) { }
+    spell_warl_demon_conceal() : _savedCommandState(COMMAND_FOLLOW), _savedTargetGuid(ObjectGuid::Empty), _wasCommandAttack(false), _wasCommandFollow(false), _wasAtStay(false) { }
 
     bool Load() override
     {
@@ -1632,24 +1633,36 @@ public:
     void ApplyStoredBehavior()
     {
         Player* player = GetCaster()->ToPlayer();
-        Pet* pet = player->GetPet();
-        if (!pet)
+        if (!player)
             return;
 
-        CharmInfo* charmInfo = pet->GetCharmInfo();
-        if (!charmInfo)
-            return;
-
-        charmInfo->SetCommandState(_savedCommandState);
-        charmInfo->SetIsCommandAttack(_wasCommandAttack);
-        charmInfo->SetIsCommandFollow(_wasCommandFollow);
-        charmInfo->SetIsAtStay(_wasAtStay);
-
-        if (_savedTargetGuid)
+        auto const applyBehavior = [player, savedCommandState = _savedCommandState, savedTargetGuid = _savedTargetGuid,
+                                    wasCommandAttack = _wasCommandAttack, wasCommandFollow = _wasCommandFollow, wasAtStay = _wasAtStay]()
         {
-            if (Unit* target = ObjectAccessor::GetUnit(*pet, _savedTargetGuid))
-                pet->AI()->AttackStart(target);
-        }
+            Pet* pet = player->GetPet();
+            if (!pet)
+                return;
+
+            CharmInfo* charmInfo = pet->GetCharmInfo();
+            if (!charmInfo)
+                return;
+
+            charmInfo->SetCommandState(savedCommandState);
+            charmInfo->SetIsCommandAttack(wasCommandAttack);
+            charmInfo->SetIsCommandFollow(wasCommandFollow);
+            charmInfo->SetIsAtStay(wasAtStay);
+
+            if (savedTargetGuid)
+            {
+                if (Unit* target = ObjectAccessor::GetUnit(*pet, savedTargetGuid))
+                    pet->AI()->AttackStart(target);
+            }
+        };
+
+        applyBehavior();
+
+        if (!player->GetPet())
+            player->m_Events.AddEventAtOffset(applyBehavior, std::chrono::milliseconds(1));
     }
 
     void Register() override
