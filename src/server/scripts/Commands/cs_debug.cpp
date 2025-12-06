@@ -98,6 +98,7 @@ public:
             { "Mod32Value",         HandleDebugMod32ValueCommand,          rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "play",               debugPlayCommandTable },
             { "send",               debugSendCommandTable },
+            { "refreshstats",       HandleDebugRefreshStatsCommand,        rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "setaurastate",       HandleDebugSetAuraStateCommand,        rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "setitemvalue",       HandleDebugSetItemValueCommand,        rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
             { "setvalue",           HandleDebugSetValueCommand,            rbac::RBAC_PERM_COMMAND_DEBUG,   Console::No },
@@ -520,6 +521,25 @@ public:
     static bool HandleDebugSendQuestInvalidMsgCommand(ChatHandler* handler, QuestFailedReason msg)
     {
         handler->GetPlayer()->SendCanTakeQuestResponse(msg);
+        return true;
+    }
+
+    static bool HandleDebugRefreshStatsCommand(ChatHandler* handler)
+    {
+        Player* target = handler->getSelectedPlayer();
+        if (!target)
+            target = handler->GetPlayer();
+
+        if (!target)
+        {
+            handler->SendSysMessage(LANG_NO_CHAR_SELECTED);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        target->UpdateAllStats();
+        handler->PSendSysMessage("Recalculated all stats for %s.", handler->GetNameLink(target).c_str());
+
         return true;
     }
 
