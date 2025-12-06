@@ -5031,10 +5031,10 @@ void Spell::TakePower()
         return;
     }
 
-    unitCaster->ModifyPower(powerType, -m_powerCost);
+    int32 const powerChange = unitCaster->ModifyPower(powerType, -m_powerCost);
 
-    // Set the five second timer
-    if (powerType == POWER_MANA && m_powerCost > 0)
+    // Set the five second timer only if mana was actually spent
+    if (powerType == POWER_MANA && powerChange < 0)
         unitCaster->SetLastManaUse(GameTime::GetGameTimeMS());
 }
 
