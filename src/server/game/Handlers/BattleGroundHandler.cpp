@@ -35,6 +35,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "Item.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "CharacterCache.h"
