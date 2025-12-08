@@ -39,6 +39,50 @@
 #include "WorldPacket.h"
 #include "CharacterCache.h"
 
+#include <string>
+
+namespace
+{
+    uint32 constexpr ChromieEntry = 27915;
+    char const* const ChromieName = "Chromie";
+
+    uint32 constexpr GurubashiArenaMapId = 0;
+    float constexpr GurubashiArenaX = -13204.609f;
+    float constexpr GurubashiArenaY = 272.2056f;
+    float constexpr GurubashiArenaZ = 21.858f;
+    float constexpr GurubashiArenaO = 1.022f;
+
+    bool HasArtifactEquipment(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item const* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                if (ItemTemplate const* proto = item->GetTemplate())
+                    if (proto->Quality == ITEM_QUALITY_ARTIFACT)
+                        return true;
+
+        return false;
+    }
+
+    void TeleportToGurubashiWithChromieWhisper(Player* player)
+    {
+        if (!player)
+            return;
+
+        player->TeleportTo(GurubashiArenaMapId, GurubashiArenaX, GurubashiArenaY, GurubashiArenaZ, GurubashiArenaO);
+
+        std::string message = "You can't enter battlegrounds or arenas while wearing artifact gear.";
+
+        WorldPacket data;
+        ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Unit>(ChromieEntry, 1);
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message,
+            0, ChromieName, player->GetName());
+        player->SendDirectMessage(&data);
+    }
+}
+
 void WorldSession::HandleBattlemasterHelloOpcode(WorldPacket& recvData)
 {
     ObjectGuid guid;
@@ -425,6 +469,8 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
     if (!bracketEntry)
         return;
 
+    bool const artifactEquipped = HasArtifactEquipment(_player);
+
     //some checks if player isn't cheating - it is not exactly cheating, but we cannot allow it
     if (action == 1 && ginfo.ArenaType == 0)
     {
@@ -450,6 +496,20 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
     WorldPacket data;
     if (action)
     {
+        if (artifactEquipped)
+        {
+            TeleportToGurubashiWithChromieWhisper(_player);
+
+            _player->RemoveBattlegroundQueueId(bgQueueTypeId);
+            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_NONE, 0, 0, 0, 0);
+            bgQueue.RemovePlayer(_player->GetGUID(), true);
+            if (!ginfo.ArenaType)
+                sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
+            SendPacket(&data);
+
+            return;
+        }
+
         // check Freeze debuff
         if (_player->HasAura(9454))
             return;
