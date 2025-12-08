@@ -501,12 +501,9 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
         {
             TeleportToGurubashiWithChromieWhisper(_player);
 
-            _player->RemoveBattlegroundQueueId(bgQueueTypeId);
-            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_NONE, 0, 0, 0, 0);
-            bgQueue.RemovePlayer(_player->GetGUID(), true);
-            if (!ginfo.ArenaType)
-                sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
-            SendPacket(&data);
+            uint32 remainingTime = ginfo.RemoveInviteTime ? getMSTimeDiff(GameTime::GetGameTimeMS(), ginfo.RemoveInviteTime) : 0;
+            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_WAIT_JOIN, remainingTime, 0, ginfo.ArenaType, ginfo.Team);
+            _player->SendDirectMessage(&data);
 
             return;
         }
