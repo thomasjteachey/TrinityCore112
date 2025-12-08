@@ -48,10 +48,10 @@ namespace
     char const* const ChromieName = "Chromie";
 
     uint32 constexpr GurubashiArenaMapId = 0;
-    float constexpr GurubashiArenaX = -13204.609f;
-    float constexpr GurubashiArenaY = 272.2056f;
-    float constexpr GurubashiArenaZ = 21.858f;
-    float constexpr GurubashiArenaO = 1.022f;
+    float constexpr GurubashiArenaX = -13235.707031f;
+    float constexpr GurubashiArenaY = 214.336441;
+    float constexpr GurubashiArenaZ = 31.276190;
+    float constexpr GurubashiArenaO = 1.010225f;
 
     bool HasArtifactEquipment(Player const* player)
     {
