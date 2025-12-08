@@ -1565,13 +1565,11 @@ class spell_warl_unstable_affliction : public AuraScript
     }
 };
 
+
 // 81337 - demonic concealment
 class spell_warl_demon_conceal : public SpellScript
 {
     PrepareSpellScript(spell_warl_demon_conceal);
-
-public:
-    spell_warl_demon_conceal() : _savedCommandState(COMMAND_FOLLOW), _savedTargetGuid(ObjectGuid::Empty), _wasCommandAttack(false), _wasCommandFollow(false), _wasAtStay(false) { }
 
     bool Load() override
     {
@@ -1611,18 +1609,6 @@ public:
     {
         Player* player = GetCaster()->ToPlayer();
         Pet* pet = player->GetPet();
-
-        if (CharmInfo* charmInfo = pet->GetCharmInfo())
-        {
-            _savedCommandState = charmInfo->GetCommandState();
-            _wasCommandAttack = charmInfo->IsCommandAttack();
-            _wasCommandFollow = charmInfo->IsCommandFollow();
-            _wasAtStay = charmInfo->IsAtStay();
-        }
-
-        if (Unit* victim = pet->GetVictim())
-            _savedTargetGuid = victim->GetGUID();
-
         pet->UnSummon();
 
         CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
@@ -1630,54 +1616,25 @@ public:
         player->AddAura(SPELL_WARLOCK_INVIS, player);
     }
 
-    void ApplyStoredBehavior()
+    void SetStay()
     {
         Player* player = GetCaster()->ToPlayer();
-        if (!player)
-            return;
-
-        auto const applyBehavior = [player, savedCommandState = _savedCommandState, savedTargetGuid = _savedTargetGuid,
-                                    wasCommandAttack = _wasCommandAttack, wasCommandFollow = _wasCommandFollow, wasAtStay = _wasAtStay]()
+        Pet* pet = player->GetPet();
+        if (pet)
         {
-            Pet* pet = player->GetPet();
-            if (!pet)
-                return;
-
-            CharmInfo* charmInfo = pet->GetCharmInfo();
-            if (!charmInfo)
-                return;
-
-            charmInfo->SetCommandState(savedCommandState);
-            charmInfo->SetIsCommandAttack(wasCommandAttack);
-            charmInfo->SetIsCommandFollow(wasCommandFollow);
-            charmInfo->SetIsAtStay(wasAtStay);
-
-            if (savedTargetGuid)
-            {
-                if (Unit* target = ObjectAccessor::GetUnit(*pet, savedTargetGuid))
-                    pet->AI()->AttackStart(target);
-            }
-        };
-
-        applyBehavior();
-
-        if (!player->GetPet())
-            player->m_Events.AddEventAtOffset(applyBehavior, std::chrono::milliseconds(1));
+            pet->GetCharmInfo()->SetCommandState(COMMAND_STAY);
+            pet->GetCharmInfo()->SetIsAtStay(true);
+            pet->GetCharmInfo()->SetIsCommandAttack(false);
+            pet->GetCharmInfo()->SetIsCommandFollow(false);
+        }
     }
 
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_warl_demon_conceal::DoCheckCast);
         OnEffectHitTarget += SpellEffectFn(spell_warl_demon_conceal::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
-        AfterCast += SpellCastFn(spell_warl_demon_conceal::ApplyStoredBehavior);
+        AfterCast += SpellCastFn(spell_warl_demon_conceal::SetStay);
     }
-
-private:
-    CommandStates _savedCommandState;
-    ObjectGuid _savedTargetGuid;
-    bool _wasCommandAttack;
-    bool _wasCommandFollow;
-    bool _wasAtStay;
 };
 
 class spell_pet_firebolt : public SpellScript
