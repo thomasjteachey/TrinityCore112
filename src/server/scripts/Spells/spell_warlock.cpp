@@ -1226,9 +1226,92 @@ class spell_warl_seed_of_corruption_generic : public AuraScript
 };
 
 // -17877 - Shadowburn (all ranks)
-class spell_warl_shadowburn : public AuraScript
+namespace
 {
-    PrepareAuraScript(spell_warl_shadowburn);
+    int32 CalculateShadowburnManaCost(SpellInfo const* sbInfo, Unit* caster)
+    {
+        if (!sbInfo || !caster)
+            return 0;
+
+        int32 cost = int32(sbInfo->ManaCost);
+
+        if (sbInfo->ManaCostPercentage)
+            cost += caster->CountPctFromMaxPower(POWER_MANA, sbInfo->ManaCostPercentage);
+
+        if (sbInfo->ManaCostPerlevel)
+            cost += int32(sbInfo->ManaCostPerlevel * caster->GetLevel());
+
+        return cost;
+    }
+
+    void ApplyShadowburnKillEffects(Unit* caster, SpellInfo const* spellInfo, int32 refund)
+    {
+        if (!caster)
+            return;
+
+        Player* player = caster->ToPlayer();
+        if (!player)
+            return;
+
+        if (refund > 0 && spellInfo)
+            caster->EnergizeBySpell(caster, spellInfo->Id, refund, POWER_MANA);
+
+        static constexpr uint32 ShadowburnSpellIds[] =
+        {
+            SPELL_WARLOCK_SHADOWBURN_R1,
+            SPELL_WARLOCK_SHADOWBURN_R2,
+            SPELL_WARLOCK_SHADOWBURN_R3,
+            SPELL_WARLOCK_SHADOWBURN_R4,
+            SPELL_WARLOCK_SHADOWBURN_R5,
+            SPELL_WARLOCK_SHADOWBURN_R6
+        };
+
+        if (SpellHistory* spellHistory = caster->GetSpellHistory())
+            for (uint32 spellId : ShadowburnSpellIds)
+                spellHistory->ModifyCooldown(spellId, -15000);
+    }
+}
+
+class spell_warl_shadowburn : public SpellScript
+{
+    PrepareSpellScript(spell_warl_shadowburn);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo(
+        {
+            SPELL_WARLOCK_SHADOWBURN_R1,
+            SPELL_WARLOCK_SHADOWBURN_R2,
+            SPELL_WARLOCK_SHADOWBURN_R3,
+            SPELL_WARLOCK_SHADOWBURN_R4,
+            SPELL_WARLOCK_SHADOWBURN_R5,
+            SPELL_WARLOCK_SHADOWBURN_R6,
+            SPELL_WARLOCK_SHADOWBURN_CONSUMPTION_AURA
+        });
+    }
+
+    void HandleAfterHit()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        if (target->IsAlive())
+            return;
+
+        ApplyShadowburnKillEffects(caster, GetSpellInfo(), CalculateShadowburnManaCost(GetSpellInfo(), caster));
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_warl_shadowburn::HandleAfterHit);
+    }
+};
+
+class spell_warl_shadowburn_aura : public AuraScript
+{
+    PrepareAuraScript(spell_warl_shadowburn_aura);
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
@@ -1250,30 +1333,8 @@ class spell_warl_shadowburn : public AuraScript
         if (!caster)
             return;
 
-        // Store mana cost in the dummy aura amount for later refund
         if (aurEff)
-        {
-            SpellInfo const* sbInfo = GetSpellInfo();
-            int32 cost = 0;
-
-            // Best-effort cost derivation (safe across most 3.3.5 forks)
-            if (sbInfo)
-            {
-                // Flat cost
-                cost += int32(sbInfo->ManaCost);
-
-                // % cost (if used)
-                if (sbInfo->ManaCostPercentage)
-                    cost += caster->CountPctFromMaxPower(POWER_MANA, sbInfo->ManaCostPercentage);
-
-                // Per-level (rarely used for Shadowburn, but safe)
-                if (sbInfo->ManaCostPerlevel)
-                    cost += int32(sbInfo->ManaCostPerlevel * caster->GetLevel());
-            }
-
-            // Save it on the aura effect
-            const_cast<AuraEffect*>(aurEff)->SetAmount(cost);
-        }
+            const_cast<AuraEffect*>(aurEff)->SetAmount(CalculateShadowburnManaCost(GetSpellInfo(), caster));
 
         if (Unit* target = GetTarget())
         {
@@ -1316,40 +1377,20 @@ class spell_warl_shadowburn : public AuraScript
         if (!caster)
             return;
 
-        Player* player = caster->ToPlayer();
-        if (!player)
-            return;
-
-        // Refund mana
         int32 refund = 0;
         if (AuraEffect const* eff = GetEffect(EFFECT_0))
             refund = eff->GetAmount();
 
-        if (refund > 0)
-        {
-            caster->EnergizeBySpell(caster, GetSpellInfo()->Id, refund, POWER_MANA);
-        }
+        if (refund <= 0)
+            refund = CalculateShadowburnManaCost(GetSpellInfo(), caster);
 
-        // Your cooldown logic
-        static constexpr uint32 ShadowburnSpellIds[] =
-        {
-            SPELL_WARLOCK_SHADOWBURN_R1,
-            SPELL_WARLOCK_SHADOWBURN_R2,
-            SPELL_WARLOCK_SHADOWBURN_R3,
-            SPELL_WARLOCK_SHADOWBURN_R4,
-            SPELL_WARLOCK_SHADOWBURN_R5,
-            SPELL_WARLOCK_SHADOWBURN_R6
-        };
-
-        SpellHistory* spellHistory = caster->GetSpellHistory();
-        for (uint32 spellId : ShadowburnSpellIds)
-            spellHistory->ModifyCooldown(spellId, -15000);
+        ApplyShadowburnKillEffects(caster, GetSpellInfo(), refund);
     }
 
     void Register() override
     {
-        AfterEffectApply += AuraEffectApplyFn(spell_warl_shadowburn::HandleAfterHit, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
-        AfterEffectRemove += AuraEffectApplyFn(spell_warl_shadowburn::OnRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectApply += AuraEffectApplyFn(spell_warl_shadowburn_aura::HandleAfterHit, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectApplyFn(spell_warl_shadowburn_aura::OnRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
     }
 };
 
@@ -1726,7 +1767,7 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_warl_seed_of_corruption);
     RegisterSpellScript(spell_warl_seed_of_corruption_dummy);
     RegisterSpellScript(spell_warl_seed_of_corruption_generic);
-    RegisterSpellScript(spell_warl_shadowburn);
+    RegisterSpellAndAuraScriptPair(spell_warl_shadowburn, spell_warl_shadowburn_aura);
     RegisterSpellScript(spell_warl_shadow_ward);
     RegisterSpellScript(spell_warl_siphon_life);
     RegisterSpellScript(spell_warl_soul_leech);
