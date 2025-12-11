@@ -1501,18 +1501,19 @@ private:
         }
         //remove all seal spells.
         GetCaster()->RemoveAurasDueToSpell(20164);
-        GetCaster()->RemoveAurasDueToSpell(20375);
-        AuraApplication* sealOfRighteousness = GetCaster()->GetAuraApplicationOfRankedSpell(20154);
-        if(sealOfRighteousness)
-            GetCaster()->RemoveAurasDueToSpell(sealOfRighteousness->GetBase()->GetId());
 
-        AuraApplication* sealOfWisdom = GetCaster()->GetAuraApplicationOfRankedSpell(20166);
-        if (sealOfWisdom)
-            GetCaster()->RemoveAurasDueToSpell(sealOfWisdom->GetBase()->GetId());
+        auto removeRankedSeal = [this](uint32 spellId)
+        {
+            if (AuraApplication* seal = GetCaster()->GetAuraApplicationOfRankedSpell(spellId))
+                GetCaster()->RemoveAurasDueToSpell(seal->GetBase()->GetId());
+        };
 
-        AuraApplication* sealOfCrusader = GetCaster()->GetAuraApplicationOfRankedSpell(21082);
-        if (sealOfCrusader)
-            GetCaster()->RemoveAurasDueToSpell(sealOfCrusader->GetBase()->GetId());
+        removeRankedSeal(20154); // Seal of Righteousness
+        removeRankedSeal(20165); // Seal of Light
+        removeRankedSeal(20166); // Seal of Wisdom
+        removeRankedSeal(21082); // Seal of the Crusader
+        removeRankedSeal(20375); // Seal of Command
+        removeRankedSeal(33127); // Seal of Command
     }
 
     void Register() override
