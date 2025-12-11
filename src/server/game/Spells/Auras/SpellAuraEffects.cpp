@@ -2695,6 +2695,14 @@ void AuraEffect::HandleAuraMounted(AuraApplication const* aurApp, uint8 mode, bo
         if (mode & AURA_EFFECT_HANDLE_REAL)
             target->RemoveAurasByType(SPELL_AURA_MOUNTED);
     }
+
+    // Mounted speed modifiers are only meant to apply while mounted, so always recalculate
+    // movement speeds whenever the mounted state toggles.
+    target->UpdateSpeed(MOVE_RUN);
+
+    // Update flight speed as well for flying mounts.
+    if (target->HasUnitMovementFlag(MOVEMENTFLAG_CAN_FLY | MOVEMENTFLAG_FLYING))
+        target->UpdateSpeed(MOVE_FLIGHT);
 }
 
 void AuraEffect::HandleAuraAllowFlight(AuraApplication const* aurApp, uint8 mode, bool apply) const
