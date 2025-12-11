@@ -2192,8 +2192,18 @@ class spell_dru_claw : public SpellScript
 {
     PrepareSpellScript(spell_dru_claw);
 
+    bool _shouldMangle = false;
+
+    void HandleBeforeHit(SpellMissInfo missInfo)
+    {
+        _shouldMangle = missInfo == SPELL_MISS_NONE;
+    }
+
     void HandleAfterHit()
     {
+        if (!_shouldMangle)
+            return;
+
         if (GetCaster()->IsPlayer())
         {
             Player* p = GetCaster()->ToPlayer();
@@ -2206,6 +2216,7 @@ class spell_dru_claw : public SpellScript
 
     void Register() override
     {
+        BeforeHit += BeforeSpellHitFn(spell_dru_claw::HandleBeforeHit);
         AfterHit += SpellHitFn(spell_dru_claw::HandleAfterHit);
     }
 };
