@@ -1261,38 +1261,16 @@ public:
     }
 
 private:
-    static Aura const* GetLightningShieldAura(Unit* owner)
-    {
-        if (!owner)
-            return nullptr;
-
-        owner->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1);
-        if (AuraApplication const* auraApp = owner->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1))
-            return auraApp->GetBase();
-
-        return nullptr;
-    }
-
-    static uint8 GetLightningShieldCharges(Unit* owner)
-    {
-        if (Aura const* lightningShieldAura = GetLightningShieldAura(owner))
-            return lightningShieldAura->GetCharges();
-
-        return 0;
-    }
-
     void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        uint8 lightningCharges = GetLightningShieldCharges(GetUnitOwner());
-        amount = -static_cast<int32>(lightningCharges) * 15;
+        amount = -45;
     }
 
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        uint8 lightningCharges = GetLightningShieldCharges(GetUnitOwner());
-        amount = -static_cast<int32>(lightningCharges) * 2;
+        amount = -7;
     }
 
     void Register() override
