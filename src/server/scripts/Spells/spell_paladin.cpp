@@ -1692,7 +1692,6 @@ class spell_pal_lay_on_hands : public SpellScript
         Unit* caster = GetCaster();
         if (caster == GetHitUnit())
         {
-            caster->CastSpell(caster, SPELL_PALADIN_FORBEARANCE, true);
             caster->CastSpell(caster, SPELL_PALADIN_AVENGING_WRATH_MARKER, true);
             caster->CastSpell(caster, SPELL_PALADIN_IMMUNE_SHIELD_MARKER, true);
         }
