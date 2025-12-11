@@ -1639,6 +1639,7 @@ class spell_hun_outmaneuver : public SpellScript
 
         WorldLocation hunterPosition = player->GetWorldLocation();
         WorldLocation petPosition = pet->GetWorldLocation();
+        petPosition.SetOrientation(hunterPosition.GetOrientation());
         player->NearTeleportTo(petPosition);
         pet->NearTeleportTo(hunterPosition);
         pet->GetCharmInfo()->SetCommandState(COMMAND_STAY);
