@@ -1055,7 +1055,7 @@ class spell_pal_holy_shock : public SpellScript
                 caster->CastSpell(unitTarget, sSpellMgr->GetSpellWithRank(SPELL_PALADIN_HOLY_SHOCK_R1_DAMAGE, rank), true);
                 if (caster->HasAura(81489))
                 {
-                    caster->CastSpell(unitTarget, 81490, true);
+                    caster->CastSpell(caster, 81490, true);
                 }
             }
         }
