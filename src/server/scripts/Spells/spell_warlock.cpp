@@ -1738,6 +1738,34 @@ class spell_warl_pyroclasm : public SpellScript
 };
 
 //6789 death coil
+class spell_warl_death_coil : public SpellScript
+{
+    PrepareSpellScript(spell_warl_death_coil);
+
+
+    void HandleOnCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        bool const noGCD = caster->HasAura(81375);
+        if (!noGCD)
+        {
+            caster->GetSpellHistory()->AddGlobalCooldown(GetSpellInfo(), 1500);
+            WorldPacket data;
+            caster->GetSpellHistory()->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, 6119, 0);
+            caster->ToPlayer()->SendDirectMessage(&data);
+        }
+
+
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warl_death_coil::HandleOnCast);
+    }
+};
 
 void AddSC_warlock_spell_scripts()
 {
@@ -1779,4 +1807,5 @@ void AddSC_warlock_spell_scripts()
     RegisterSpellScript(spell_pet_firebolt);
     RegisterSpellScript(spell_warl_pyroclasm);
     RegisterSpellScript(aura_warl_immolate_tick_leech);
+    RegisterSpellScript(spell_warl_death_coil);
 }
