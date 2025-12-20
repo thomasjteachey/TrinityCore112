@@ -1636,7 +1636,7 @@ class spell_sha_spirit_hunt : public AuraScript
     }
 };
 
-// 81910 - Spirit Walk
+// 81910 - Rehgar's Fury
 class spell_sha_ghost_wolf_charge : public SpellScript
 {
     PrepareSpellScript(spell_sha_ghost_wolf_charge);

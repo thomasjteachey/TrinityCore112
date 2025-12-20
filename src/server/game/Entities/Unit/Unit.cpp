@@ -2232,7 +2232,7 @@ void Unit::CompleteGhostWolfCharge(Unit* target)
 
     if (SpellHistory* spellHistory = GetSpellHistory())
     {
-        static constexpr std::chrono::seconds GhostWolfCooldown(12);
+        static constexpr std::chrono::seconds GhostWolfCooldown(15);
         SpellInfo const* ghostWolfInfo = sSpellMgr->GetSpellInfo(SPELL_SHAMAN_GHOST_WOLF);
 
         if (ghostWolfInfo)
