@@ -190,9 +190,8 @@ void SpellHistory::HandleCooldowns(SpellInfo const* spellInfo, uint32 itemID, Sp
 
 bool SpellHistory::IsReady(SpellInfo const* spellInfo, uint32 itemId /*= 0*/, bool ignoreCategoryCooldown /*= false*/) const
 {
-    if (spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE)
-        if (IsSchoolLocked(spellInfo->GetSchoolMask()))
-            return false;
+    if (IsSchoolLocked(spellInfo->GetSchoolMask()))
+        return false;
 
     if (HasCooldown(spellInfo->Id, itemId, ignoreCategoryCooldown))
         return false;
