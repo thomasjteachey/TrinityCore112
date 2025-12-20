@@ -600,9 +600,6 @@ void SpellHistory::LockSpellSchool(SpellSchoolMask schoolMask, uint32 lockoutTim
         if (spellInfo->IsCooldownStartedOnEvent())
             continue;
 
-        if (spellInfo->PreventionType != SPELL_PREVENTION_TYPE_SILENCE)
-            continue;
-
         if ((schoolMask & spellInfo->GetSchoolMask()) && GetRemainingCooldown(spellInfo) < lockoutTime)
         {
             cooldowns[spellId] = lockoutTime;
