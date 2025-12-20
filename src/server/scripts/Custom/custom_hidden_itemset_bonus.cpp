@@ -460,14 +460,22 @@ void LoadHiddenItemsetBonuses()
             continue;
         }
 
+        std::unordered_set<uint32> learnedSpellSet;
+
+        SpellLearnSpellMapBounds learnBounds = sSpellMgr->GetSpellLearnSpellMapBounds(b.spellId);
+        for (auto itr = learnBounds.first; itr != learnBounds.second; ++itr)
+            learnedSpellSet.insert(itr->second.spell);
+
         for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
         {
-            if (effectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) && effectInfo.TriggerSpell)
-                b.learnedSpells.push_back(effectInfo.TriggerSpell);
+            if ((effectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effectInfo.IsEffect(SPELL_EFFECT_SCRIPT_EFFECT)) && effectInfo.TriggerSpell)
+                learnedSpellSet.insert(effectInfo.TriggerSpell);
 
             if ((effectInfo.IsEffect(SPELL_EFFECT_SUMMON) || effectInfo.IsEffect(SPELL_EFFECT_SUMMON_PET)) && effectInfo.MiscValue > 0)
                 b.summonedEntries.push_back(effectInfo.MiscValue);
         }
+
+        b.learnedSpells.assign(learnedSpellSet.begin(), learnedSpellSet.end());
 
         s_HiddenItemsetBonuses[b.itemsetId] = b;
         currentSpells.insert(b.spellId);
