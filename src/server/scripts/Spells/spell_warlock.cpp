@@ -1009,6 +1009,7 @@ uint32 GetDemonicSacrificeSpell(uint32 summonSpellId)
     switch (summonSpellId)
     {
         case SPELL_WARLOCK_SUMMON_IMP_BASE:
+        case 81338:
             return SPELL_WARLOCK_DEMONIC_SACRIFICE_IMP;
         case SPELL_WARLOCK_SUMMON_VOIDWALKER_BASE:
             return SPELL_WARLOCK_DEMONIC_SACRIFICE_VOIDWALKER;
