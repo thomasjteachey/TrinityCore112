@@ -808,6 +808,22 @@ class spell_warl_spellstone : public SpellScript
 {
     PrepareSpellScript(spell_warl_spellstone);
 
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 81475 });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetExplTargetUnit();
+
+        if (caster && target && caster != target && !target->HasAura(81475))
+            return SPELL_FAILED_BAD_TARGETS;
+
+        return SPELL_CAST_OK;
+    }
+
     void HandleAfterCast()
     {
         Player* caster = GetCaster()->ToPlayer();
@@ -844,6 +860,7 @@ class spell_warl_spellstone : public SpellScript
 
     void Register() override
     {
+        OnCheckCast += SpellCheckCastFn(spell_warl_spellstone::CheckCast);
         AfterCast += SpellCastFn(spell_warl_spellstone::HandleAfterCast);
     }
 };
