@@ -808,19 +808,35 @@ class spell_warl_spellstone : public SpellScript
 {
     PrepareSpellScript(spell_warl_spellstone);
 
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ 81475 });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetExplTargetUnit();
+
+        if (caster && target && caster != target && !target->HasAura(81475))
+            return SPELL_FAILED_BAD_TARGETS;
+
+        return SPELL_CAST_OK;
+    }
+
     void HandleAfterCast()
     {
-        Player* caster = GetCaster()->ToPlayer();
-        if (!caster)
+        Unit* target = GetExplTargetUnit();
+        if (!target || !target->IsPlayer())
             return;
 
-        if (!caster->HasAura(81475))
+        if (!target->HasAura(81475))
             return;
 
         std::vector<AuraApplication*> physicalDebuffs;
-        physicalDebuffs.reserve(caster->GetAppliedAuras().size());
+        physicalDebuffs.reserve(target->GetAppliedAuras().size());
 
-        for (auto const& auraPair : caster->GetAppliedAuras())
+        for (auto const& auraPair : target->GetAppliedAuras())
         {
             AuraApplication* aurApp = auraPair.second;
             if (!aurApp || aurApp->IsPositive())
@@ -839,11 +855,12 @@ class spell_warl_spellstone : public SpellScript
         }
 
         for (AuraApplication* aurApp : physicalDebuffs)
-            caster->RemoveAura(aurApp);
+            target->RemoveAura(aurApp);
     }
 
     void Register() override
     {
+        OnCheckCast += SpellCheckCastFn(spell_warl_spellstone::CheckCast);
         AfterCast += SpellCastFn(spell_warl_spellstone::HandleAfterCast);
     }
 };
