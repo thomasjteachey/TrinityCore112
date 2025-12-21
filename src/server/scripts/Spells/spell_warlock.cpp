@@ -818,7 +818,7 @@ class spell_warl_spellstone : public SpellScript
         Unit* caster = GetCaster();
         Unit* target = GetExplTargetUnit();
 
-        if (caster && target && caster != target && !target->HasAura(81475))
+        if (caster && target && caster != target && !caster->HasAura(81475))
             return SPELL_FAILED_BAD_TARGETS;
 
         return SPELL_CAST_OK;
