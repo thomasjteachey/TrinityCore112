@@ -7641,6 +7641,11 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
         if (apply)
             ReapplyAmmoBagEquipSpells();
     }
+    else if (apply && GetWeaponForAttack(RANGED_ATTACK))
+    {
+        // Ensure ranged speed modifiers from ammo bags are refreshed when equipping other items.
+        ReapplyAmmoBagEquipSpells();
+    }
 
     ApplyItemEquipSpell(item, apply);
     if (updateItemAuras)
