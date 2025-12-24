@@ -7641,11 +7641,10 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
         if (apply)
             ReapplyAmmoBagEquipSpells();
     }
-    else if (apply && (slot == EQUIPMENT_SLOT_MAINHAND || slot == EQUIPMENT_SLOT_OFFHAND))
+    else if (apply && GetWeaponForAttack(RANGED_ATTACK))
     {
-        // Ensure ranged speed modifiers from ammo bags are refreshed when swapping melee weapons.
-        if (GetWeaponForAttack(RANGED_ATTACK))
-            ReapplyAmmoBagEquipSpells();
+        // Ensure ranged speed modifiers from ammo bags are refreshed when equipping other items.
+        ReapplyAmmoBagEquipSpells();
     }
 
     ApplyItemEquipSpell(item, apply);
