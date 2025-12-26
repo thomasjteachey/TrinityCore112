@@ -8637,6 +8637,24 @@ void Player::_ApplyAmmoBonuses()
 
 void Player::ReapplyAmmoBagEquipSpells()
 {
+    for (AuraApplicationMap::iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end();)
+    {
+        Aura* aura = iter->second->GetBase();
+        ObjectGuid castItemGuid = aura->GetCastItemGUID();
+        if (!castItemGuid.IsEmpty())
+        {
+            Item* castItem = GetItemByGuid(castItemGuid);
+            if (!castItem || !IsEquipmentPos(castItem->GetBagSlot(), castItem->GetSlot()))
+            {
+                RemoveAura(iter);
+                iter = m_appliedAuras.begin();
+                continue;
+            }
+        }
+
+        ++iter;
+    }
+
     for (uint8 slot = INVENTORY_SLOT_BAG_START; slot < INVENTORY_SLOT_BAG_END; ++slot)
     {
         Item* bag = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
@@ -13414,6 +13432,15 @@ void Player::SwapItem(uint16 src, uint16 dst)
     if (!pSrcItem)
         return;
 
+    auto refreshWeaponAttackTime = [this, src, dst]()
+    {
+        if (IsEquipmentPos(src) || IsEquipmentPos(dst))
+        {
+            SetRegularAttackTime();
+            UpdateDamagePhysical(RANGED_ATTACK);
+        }
+    };
+
     TC_LOG_DEBUG("entities.player.items", "Player::SwapItem: Player '{}' ({}), Bag: {}, Slot: {}, Item: {}",
         GetName(), GetGUID().ToString(), dstbag, dstslot, pSrcItem->GetEntry());
 
@@ -13518,6 +13545,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
             AutoUnequipOffhandIfNeed();
         }
 
+        refreshWeaponAttackTime();
         return;
     }
 
@@ -13566,6 +13594,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
                 }
             }
             SendRefundInfo(pDstItem);
+            refreshWeaponAttackTime();
             return;
         }
     }
@@ -13745,6 +13774,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
     }
 
     AutoUnequipOffhandIfNeed();
+    refreshWeaponAttackTime();
 }
 
 void Player::AddItemToBuyBackSlot(Item* pItem)
