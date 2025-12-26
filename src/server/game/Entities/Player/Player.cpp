@@ -13414,6 +13414,15 @@ void Player::SwapItem(uint16 src, uint16 dst)
     if (!pSrcItem)
         return;
 
+    auto refreshWeaponAttackTime = [this, src, dst]()
+    {
+        if (IsEquipmentPos(src) || IsEquipmentPos(dst))
+        {
+            SetRegularAttackTime();
+            UpdateDamagePhysical(RANGED_ATTACK);
+        }
+    };
+
     TC_LOG_DEBUG("entities.player.items", "Player::SwapItem: Player '{}' ({}), Bag: {}, Slot: {}, Item: {}",
         GetName(), GetGUID().ToString(), dstbag, dstslot, pSrcItem->GetEntry());
 
@@ -13518,6 +13527,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
             AutoUnequipOffhandIfNeed();
         }
 
+        refreshWeaponAttackTime();
         return;
     }
 
@@ -13566,6 +13576,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
                 }
             }
             SendRefundInfo(pDstItem);
+            refreshWeaponAttackTime();
             return;
         }
     }
@@ -13745,6 +13756,7 @@ void Player::SwapItem(uint16 src, uint16 dst)
     }
 
     AutoUnequipOffhandIfNeed();
+    refreshWeaponAttackTime();
 }
 
 void Player::AddItemToBuyBackSlot(Item* pItem)
