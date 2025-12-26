@@ -7641,6 +7641,11 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
         if (apply)
             ReapplyAmmoBagEquipSpells();
     }
+    else if (apply && GetWeaponForAttack(RANGED_ATTACK))
+    {
+        // Ensure ranged speed modifiers from ammo bags are refreshed when equipping other items.
+        ReapplyAmmoBagEquipSpells();
+    }
 
     ApplyItemEquipSpell(item, apply);
     if (updateItemAuras)
@@ -8640,6 +8645,40 @@ void Player::ReapplyAmmoBagEquipSpells()
 
         ItemTemplate const* bagTemplate = bag->GetTemplate();
         if (!bagTemplate || bagTemplate->Class != ITEM_CLASS_QUIVER)
+            continue;
+
+        bool needsReapply = false;
+
+        for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+        {
+            _Spell const& spellData = bagTemplate->Spells[i];
+
+            if (spellData.SpellId <= 0 || spellData.SpellTrigger != ITEM_SPELLTRIGGER_ON_EQUIP)
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellData.SpellId);
+            if (!spellInfo)
+                continue;
+
+            AuraApplicationMapBounds range = GetAppliedAuras().equal_range(spellInfo->Id);
+            bool hasAuraForItem = false;
+            for (AuraApplicationMap::const_iterator itr = range.first; itr != range.second; ++itr)
+            {
+                if (itr->second->GetBase()->GetCastItemGUID() == bag->GetGUID())
+                {
+                    hasAuraForItem = true;
+                    break;
+                }
+            }
+
+            if (!hasAuraForItem)
+            {
+                needsReapply = true;
+                break;
+            }
+        }
+
+        if (!needsReapply)
             continue;
 
         ApplyItemEquipSpell(bag, false);
