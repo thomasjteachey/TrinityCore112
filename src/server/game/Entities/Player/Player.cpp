@@ -7635,11 +7635,6 @@ void Player::_ApplyItemMods(Item* item, uint8 slot, bool apply, bool updateItemA
     if (slot == EQUIPMENT_SLOT_RANGED)
     {
         _ApplyAmmoBonuses();
-
-        // Refresh ammo bag equip effects that may have been removed when the player temporarily lacked
-        // a valid ranged weapon (for example during teleports or weapon swaps).
-        if (apply)
-            ReapplyAmmoBagEquipSpells();
     }
 
     ApplyItemEquipSpell(item, apply);
