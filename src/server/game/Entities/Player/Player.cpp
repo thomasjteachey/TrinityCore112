@@ -8646,8 +8646,9 @@ void Player::ReapplyAmmoBagEquipSpells()
             Item* castItem = GetItemByGuid(castItemGuid);
             if (!castItem || !IsEquipmentPos(castItem->GetBagSlot(), castItem->GetSlot()))
             {
+                AuraApplicationMap::iterator next = std::next(iter);
                 RemoveAura(iter);
-                iter = m_appliedAuras.begin();
+                iter = next;
                 continue;
             }
         }
@@ -8680,13 +8681,24 @@ void Player::ReapplyAmmoBagEquipSpells()
 
             AuraApplicationMapBounds range = GetAppliedAuras().equal_range(spellInfo->Id);
             bool hasAuraForItem = false;
-            for (AuraApplicationMap::const_iterator itr = range.first; itr != range.second; ++itr)
+            for (AuraApplicationMap::iterator itr = range.first; itr != range.second;)
             {
                 if (itr->second->GetBase()->GetCastItemGUID() == bag->GetGUID())
                 {
-                    hasAuraForItem = true;
-                    break;
+                    if (!hasAuraForItem)
+                    {
+                        hasAuraForItem = true;
+                        ++itr;
+                    }
+                    else
+                    {
+                        AuraApplicationMap::iterator next = std::next(itr);
+                        RemoveAura(itr);
+                        itr = next;
+                    }
                 }
+                else
+                    ++itr;
             }
 
             if (!hasAuraForItem)
