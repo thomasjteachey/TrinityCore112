@@ -8679,7 +8679,7 @@ void Player::ReapplyAmmoBagEquipSpells()
             if (!spellInfo)
                 continue;
 
-            AuraApplicationMapBounds range = GetAppliedAuras().equal_range(spellInfo->Id);
+            AuraApplicationMapBoundsNonConst range = GetAppliedAuras().equal_range(spellInfo->Id);
             bool hasAuraForItem = false;
             for (AuraApplicationMap::iterator itr = range.first; itr != range.second;)
             {
