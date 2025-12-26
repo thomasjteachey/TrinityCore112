@@ -8637,6 +8637,24 @@ void Player::_ApplyAmmoBonuses()
 
 void Player::ReapplyAmmoBagEquipSpells()
 {
+    for (AuraApplicationMap::iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end();)
+    {
+        Aura* aura = iter->second->GetBase();
+        ObjectGuid castItemGuid = aura->GetCastItemGUID();
+        if (!castItemGuid.IsEmpty())
+        {
+            Item* castItem = GetItemByGuid(castItemGuid);
+            if (!castItem || !IsEquipmentPos(castItem->GetBagSlot(), castItem->GetSlot()))
+            {
+                RemoveAura(iter);
+                iter = m_appliedAuras.begin();
+                continue;
+            }
+        }
+
+        ++iter;
+    }
+
     for (uint8 slot = INVENTORY_SLOT_BAG_START; slot < INVENTORY_SLOT_BAG_END; ++slot)
     {
         Item* bag = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
