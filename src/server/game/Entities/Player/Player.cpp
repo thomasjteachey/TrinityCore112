@@ -8178,11 +8178,17 @@ void Player::ApplyEquipSpell(SpellInfo const* spellInfo, Item* item, bool apply,
         if (spellInfo->CheckShapeshift(GetShapeshiftForm()) != SPELL_CAST_OK)
             return;
 
-        if (form_change)                                    // check aura active state from other form
+        AuraApplicationMapBounds range = m_appliedAuras.equal_range(spellInfo->Id);
+        if (item)
         {
-            AuraApplicationMapBounds range = m_appliedAuras.equal_range(spellInfo->Id);
             for (AuraApplicationMap::const_iterator itr = range.first; itr != range.second; ++itr)
-                if (!item || itr->second->GetBase()->GetCastItemGUID() == item->GetGUID())
+                if (itr->second->GetBase()->GetCastItemGUID() == item->GetGUID())
+                    return;
+        }
+        else if (form_change)                               // check aura active state from other form
+        {
+            for (AuraApplicationMap::const_iterator itr = range.first; itr != range.second; ++itr)
+                if (!item)
                     return;
         }
 
