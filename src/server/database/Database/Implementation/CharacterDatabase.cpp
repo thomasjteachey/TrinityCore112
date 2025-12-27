@@ -521,6 +521,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_UPD_CHAR_HONOR_POINTS, "UPDATE characters SET totalHonorPoints = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_WEEKLY_HONOR_POINTS, "INSERT INTO character_honor_weekly (guid, weekly_honor) VALUES (?, ?) ON DUPLICATE KEY UPDATE weekly_honor = weekly_honor + VALUES(weekly_honor)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_WEEKLY_HONOR_TOP, "SELECT guid, weekly_honor FROM character_honor_weekly ORDER BY weekly_honor DESC, guid ASC LIMIT 1", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_SEL_WEEKLY_HONOR_TOP_TWO, "SELECT guid, weekly_honor FROM character_honor_weekly ORDER BY weekly_honor DESC, guid ASC LIMIT 2", CONNECTION_SYNCH);
     PrepareStatement(CHAR_UPD_WEEKLY_HONOR_RESET, "UPDATE character_honor_weekly SET weekly_honor = 0", CONNECTION_ASYNC);
     PrepareStatement(CHAR_SEL_WARCHIEF_HONOR, "SELECT current_warchief_guid, current_warchief_name FROM warchief_honor WHERE id = 1", CONNECTION_SYNCH);
     PrepareStatement(CHAR_UPD_WARCHIEF_HONOR, "INSERT INTO warchief_honor (id, current_warchief_guid, current_warchief_name, last_warchief_guid, last_warchief_name) VALUES (1, ?, ?, ?, ?) "

@@ -3335,16 +3335,17 @@ static time_t GetNextWeeklyResetTime(time_t t)
 namespace
 {
     constexpr uint32 WarchiefNpcEntry = 31412;
+    constexpr uint32 WarchiefRunnerUpEntry = 110117;
     constexpr uint32 WarchiefSpellId = 58553;
 
-    bool UpdateWarchiefNpc(ObjectGuid const& winnerGuid, std::string const& winnerName, std::string* previousName)
+    bool UpdateHonorNpc(uint32 entry, ObjectGuid const& winnerGuid, std::string const& winnerName, std::string* previousName)
     {
         ObjectGuid::LowType spawnId = 0;
         uint32 mapId = MAPID_INVALID;
 
         for (auto const& [spawnGuid, creatureData] : sObjectMgr->GetAllCreatureData())
         {
-            if (creatureData.id != WarchiefNpcEntry)
+            if (creatureData.id != entry)
                 continue;
 
             spawnId = spawnGuid;
@@ -3356,11 +3357,11 @@ namespace
 
         if (!spawnId)
         {
-            TC_LOG_ERROR("misc", "Weekly honor warchief: NPC entry {} not found in creature data.", WarchiefNpcEntry);
+            TC_LOG_ERROR("misc", "Weekly honor warchief: NPC entry {} not found in creature data.", entry);
             return false;
         }
 
-        if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(WarchiefNpcEntry))
+        if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(entry))
             if (previousName && previousName->empty())
                 *previousName = creatureTemplate->Name;
 
@@ -3374,11 +3375,11 @@ namespace
             tempCreature = std::make_unique<Creature>();
             if (!tempCreature->LoadFromDB(spawnId, map, false, true))
             {
-                TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
-                return false;
-            }
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
+            return false;
+        }
 
-            creature = tempCreature.get();
+        creature = tempCreature.get();
         }
 
         float const originalScale = creature->GetObjectScale();
@@ -3485,7 +3486,7 @@ namespace
 
 bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName, uint32* honorGain)
 {
-    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WEEKLY_HONOR_TOP);
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WEEKLY_HONOR_TOP_TWO);
     PreparedQueryResult result = CharacterDatabase.Query(stmt);
 
     if (!result)
@@ -3504,6 +3505,15 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     Field* fields = result->Fetch();
     ObjectGuid::LowType winnerLowGuid = fields[0].GetUInt32();
     uint32 weeklyHonor = fields[1].GetUInt32();
+    ObjectGuid::LowType runnerUpLowGuid = 0;
+    uint32 runnerUpHonor = 0;
+
+    if (result->NextRow())
+    {
+        fields = result->Fetch();
+        runnerUpLowGuid = fields[0].GetUInt32();
+        runnerUpHonor = fields[1].GetUInt32();
+    }
 
     if (!winnerLowGuid || weeklyHonor == 0)
     {
@@ -3539,7 +3549,7 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         previousWarchiefName = warchiefFields[1].GetString();
     }
 
-    UpdateWarchiefNpc(winnerGuid, resolvedWinnerName, &previousWarchiefName);
+    UpdateHonorNpc(WarchiefNpcEntry, winnerGuid, resolvedWinnerName, &previousWarchiefName);
     ApplyWarchiefAura(winnerGuid);
 
     MailSender sender = previousWarchiefGuid
@@ -3562,6 +3572,21 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     stmt->setUInt32(2, previousWarchiefGuid);
     stmt->setString(3, previousWarchiefName);
     CharacterDatabase.Execute(stmt);
+
+    if (runnerUpLowGuid && runnerUpLowGuid != winnerLowGuid && runnerUpHonor > 0)
+    {
+        ObjectGuid runnerUpGuid = ObjectGuid::Create<HighGuid::Player>(runnerUpLowGuid);
+        std::string runnerUpName;
+        if (!sCharacterCache->GetCharacterNameByGuid(runnerUpGuid, runnerUpName))
+            runnerUpName = "<unknown>";
+
+        UpdateHonorNpc(WarchiefRunnerUpEntry, runnerUpGuid, runnerUpName, nullptr);
+
+        CharacterDatabaseTransaction runnerUpTrans = CharacterDatabase.BeginTransaction();
+        MailDraft("Second Place", "If you're not first you're last.")
+            .SendMailTo(runnerUpTrans, MailReceiver(runnerUpLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
+        CharacterDatabase.CommitTransaction(runnerUpTrans);
+    }
 
     if (resetHonor)
     {
