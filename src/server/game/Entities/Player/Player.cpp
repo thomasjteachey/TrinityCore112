@@ -7174,9 +7174,27 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
     }
     SetHonorPoints(uint32(newValue));
 
+    if (value > 0)
+        AddWeeklyHonorPoints(uint32(value), trans);
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
     stmt->setUInt32(0, newValue);
     stmt->setUInt32(1, GetGUID().GetCounter());
+
+    if (trans)
+        trans->Append(stmt);
+    else
+        CharacterDatabase.Execute(stmt);
+}
+
+void Player::AddWeeklyHonorPoints(uint32 value, CharacterDatabaseTransaction trans)
+{
+    if (!value)
+        return;
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_WEEKLY_HONOR_POINTS);
+    stmt->setUInt32(0, GetGUID().GetCounter());
+    stmt->setUInt32(1, value);
 
     if (trans)
         trans->Append(stmt);
