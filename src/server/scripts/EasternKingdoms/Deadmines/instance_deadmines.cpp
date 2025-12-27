@@ -15,12 +15,12 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* ScriptData
-SDName: Instance_Deadmines
-SD%Complete: 100
-SDComment:
-SDCategory: Deadmines
-EndScriptData */
+ /* ScriptData
+ SDName: Instance_Deadmines
+ SD%Complete: 100
+ SDComment:
+ SDCategory: Deadmines
+ EndScriptData */
 
 #include "ScriptMgr.h"
 #include "CreatureAI.h"
@@ -33,15 +33,15 @@ EndScriptData */
 
 enum Sounds
 {
-    SOUND_CANNONFIRE                                     = 1400,
-    SOUND_DESTROYDOOR                                    = 3079
+    SOUND_CANNONFIRE = 1400,
+    SOUND_DESTROYDOOR = 3079
 };
 
 enum Misc
 {
-    DATA_CANNON_BLAST_TIMER                                = 3000,
-    DATA_PIRATES_DELAY_TIMER                               = 1000,
-    DATA_SMITE_ALARM_DELAY_TIMER                           = 5000
+    DATA_CANNON_BLAST_TIMER = 3000,
+    DATA_PIRATES_DELAY_TIMER = 1000,
+    DATA_SMITE_ALARM_DELAY_TIMER = 5000
 };
 
 DoorData const doorData[] =
