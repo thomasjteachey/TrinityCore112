@@ -502,6 +502,7 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_DEL_CHARACTER, "DELETE FROM characters WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHAR_ACTION, "DELETE FROM character_action WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHAR_AURA, "DELETE FROM character_aura WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_DEL_CHAR_AURA_BY_SPELL, "DELETE FROM character_aura WHERE guid = ? AND spell = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHAR_GIFT, "DELETE FROM character_gifts WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHAR_INSTANCE, "DELETE FROM character_instance WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHAR_INVENTORY, "DELETE FROM character_inventory WHERE guid = ?", CONNECTION_ASYNC);
@@ -518,6 +519,13 @@ void CharacterDatabaseConnection::DoPrepareStatements()
     PrepareStatement(CHAR_DEL_CHAR_TALENT, "DELETE FROM character_talent WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_DEL_CHAR_SKILLS, "DELETE FROM character_skills WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHAR_HONOR_POINTS, "UPDATE characters SET totalHonorPoints = ? WHERE guid = ?", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_INS_WEEKLY_HONOR_POINTS, "INSERT INTO character_honor_weekly (guid, weekly_honor) VALUES (?, ?) ON DUPLICATE KEY UPDATE weekly_honor = weekly_honor + VALUES(weekly_honor)", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_WEEKLY_HONOR_TOP, "SELECT guid, weekly_honor FROM character_honor_weekly ORDER BY weekly_honor DESC, guid ASC LIMIT 1", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_UPD_WEEKLY_HONOR_RESET, "UPDATE character_honor_weekly SET weekly_honor = 0", CONNECTION_ASYNC);
+    PrepareStatement(CHAR_SEL_WARCHIEF_HONOR, "SELECT current_warchief_guid, current_warchief_name FROM warchief_honor WHERE id = 1", CONNECTION_SYNCH);
+    PrepareStatement(CHAR_UPD_WARCHIEF_HONOR, "INSERT INTO warchief_honor (id, current_warchief_guid, current_warchief_name, last_warchief_guid, last_warchief_name) VALUES (1, ?, ?, ?, ?) "
+        "ON DUPLICATE KEY UPDATE current_warchief_guid = VALUES(current_warchief_guid), current_warchief_name = VALUES(current_warchief_name), "
+        "last_warchief_guid = VALUES(last_warchief_guid), last_warchief_name = VALUES(last_warchief_name)", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHAR_ARENA_POINTS, "UPDATE characters SET arenaPoints = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_UPD_CHAR_MONEY, "UPDATE characters SET money = ? WHERE guid = ?", CONNECTION_ASYNC);
     PrepareStatement(CHAR_INS_CHAR_ACTION, "INSERT INTO character_action (guid, spec, button, action, type) VALUES (?, ?, ?, ?, ?)", CONNECTION_ASYNC);

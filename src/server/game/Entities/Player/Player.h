@@ -1847,6 +1847,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 GetMaxHonorPoints() const;
         uint32 GetArenaPoints() const { return GetUInt32Value(PLAYER_FIELD_ARENA_CURRENCY); }
         void ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans = CharacterDatabaseTransaction(nullptr), bool applyHonorGainAuras = true);      //! If trans is specified, honor save query will be added to trans, otherwise saved immediately
+        void AddWeeklyHonorPoints(uint32 value, CharacterDatabaseTransaction trans = CharacterDatabaseTransaction(nullptr));
         void ModifyArenaPoints(int32 value, CharacterDatabaseTransaction trans = CharacterDatabaseTransaction(nullptr));      //! If trans is specified, arena point save query will be added to trans
         uint32 GetMaxPersonalArenaRatingRequirement(uint32 minarenaslot) const;
         void SetHonorPoints(uint32 value);
