@@ -4236,6 +4236,28 @@ void AuraEffect::HandleAuraModAttackPower(AuraApplication const* aurApp, uint8 m
     // Apply/remove the actual flat AP modifier
     target->HandleStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, float(GetAmount()), apply);
 
+    if (!apply)
+    {
+        float attPowerMod = target->GetFlatModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE);
+        if (attPowerMod < 0.0f)
+        {
+            bool hasNegativeFlatAPAura = false;
+            auto const& flatAPAuras = target->GetAuraEffectsByType(SPELL_AURA_MOD_ATTACK_POWER);
+
+            for (AuraEffect const* aurEff : flatAPAuras)
+            {
+                if (aurEff->GetAmount() < 0)
+                {
+                    hasNegativeFlatAPAura = true;
+                    break;
+                }
+            }
+
+            if (!hasNegativeFlatAPAura)
+                target->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, 0.0f);
+        }
+    }
+
     if (Player* player = target->ToPlayer())
     {
         float afterFlat = target->GetFlatModifierValue(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE);
