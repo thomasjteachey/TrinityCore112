@@ -51,6 +51,7 @@
 #include "GuildMgr.h"
 #include "InstanceSaveMgr.h"
 #include "IPLocation.h"
+#include "Item.h"
 #include "Language.h"
 #include "LFGMgr.h"
 #include "Log.h"
@@ -3338,6 +3339,8 @@ namespace
     constexpr uint32 WarchiefRunnerUpEntry = 110017;
     constexpr uint32 WarchiefSpellId = 58553;
     constexpr uint32 WarchiefMailSenderEntry = 2784;
+    constexpr uint32 WarchiefMailItemEntry = 8586;
+    constexpr uint32 WarchiefMailSpellCheck = 16084;
 
     void BroadcastCreatureTemplateUpdate(CreatureTemplate const* creatureTemplate, Map* map)
     {
@@ -3511,6 +3514,17 @@ namespace
         stmt->setBool(index++, false);
         CharacterDatabase.Execute(stmt);
     }
+
+    bool ShouldAttachWarchiefItem(ObjectGuid const& winnerGuid)
+    {
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(winnerGuid))
+            return !player->HasSpell(WarchiefMailSpellCheck);
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_HAS_SPELL);
+        stmt->setUInt32(0, winnerGuid.GetCounter());
+        stmt->setUInt32(1, WarchiefMailSpellCheck);
+        return !CharacterDatabase.Query(stmt);
+    }
 }
 
 bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName, uint32* honorGain)
@@ -3588,8 +3602,19 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
          << "weekly honor gained: " << weeklyHonor;
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    MailDraft("warchief honor", body.str())
-        .SendMailTo(trans, MailReceiver(winnerLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
+    MailDraft draft("warchief honor", body.str());
+
+    if (ShouldAttachWarchiefItem(winnerGuid))
+    {
+        if (Item* item = Item::CreateItem(WarchiefMailItemEntry, 1))
+        {
+            item->SetOwnerGUID(winnerGuid);
+            item->SaveToDB(trans);
+            draft.AddItem(item);
+        }
+    }
+
+    draft.SendMailTo(trans, MailReceiver(winnerLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
     CharacterDatabase.CommitTransaction(trans);
 
     stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_WARCHIEF_HONOR);
