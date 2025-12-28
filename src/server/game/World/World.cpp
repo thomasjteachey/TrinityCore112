@@ -3365,18 +3365,17 @@ namespace
             if (previousName && previousName->empty())
                 *previousName = creatureTemplate->Name;
 
-        Map* map = sMapMgr->FindBaseMap(mapId);
+        Map* map = sMapMgr->CreateBaseMap(mapId);
         Creature* creature = map ? map->GetCreatureBySpawnId(spawnId) : nullptr;
         std::unique_ptr<Creature> tempCreature;
 
         if (!creature)
         {
-            map = sMapMgr->CreateBaseMap(mapId);
             tempCreature = std::make_unique<Creature>();
             if (!tempCreature->LoadFromDB(spawnId, map, false, true))
             {
-            TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
-            return false;
+                TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
+                return false;
         }
 
         creature = tempCreature.get();
@@ -3436,7 +3435,7 @@ namespace
 
         for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
         {
-            SpellEffectInfo const& effect = spellInfo->Effects[i];
+            SpellEffectInfo const& effect = spellInfo->GetEffect(SpellEffIndex(i));
             if (!effect.IsEffect())
                 continue;
 
