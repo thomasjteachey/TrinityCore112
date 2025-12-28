@@ -2282,7 +2282,8 @@ bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool c
     if (useOnline)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid))
-            return CopyAppearanceFromPlayer(player, copyName, copyEquipment, persist);
+            if (CopyAppearanceFromPlayer(player, copyName, copyEquipment, persist))
+                return true;
     }
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_APPEARANCE_BY_GUID);
