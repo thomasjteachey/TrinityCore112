@@ -4254,7 +4254,11 @@ void AuraEffect::HandleAuraModAttackPower(AuraApplication const* aurApp, uint8 m
             }
 
             if (!hasNegativeFlatAPAura)
+            {
                 target->SetStatFlatModifier(UNIT_MOD_ATTACK_POWER, TOTAL_VALUE, 0.0f);
+                target->SetAttackPowerModNeg(0);
+                target->ForceValuesUpdateAtIndex(UNIT_FIELD_ATTACK_POWER_MODS);
+            }
         }
     }
 
