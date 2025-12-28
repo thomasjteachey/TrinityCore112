@@ -4242,7 +4242,7 @@ void AuraEffect::HandleAuraModAttackPower(AuraApplication const* aurApp, uint8 m
         if (attPowerMod < 0.0f)
         {
             bool hasNegativeFlatAPAura = false;
-            AuraEffectList const& flatAPAuras = target->GetAuraEffectsByType(SPELL_AURA_MOD_ATTACK_POWER);
+            auto const& flatAPAuras = target->GetAuraEffectsByType(SPELL_AURA_MOD_ATTACK_POWER);
 
             for (AuraEffect const* aurEff : flatAPAuras)
             {
