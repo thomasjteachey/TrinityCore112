@@ -3406,7 +3406,12 @@ namespace
         float const originalScale = creature->GetObjectScale();
         UnitStandStateType const originalStandState = creature->GetStandState();
 
-        if (!creature->CopyAppearanceFromPlayerGuid(winnerGuid, true, true, true))
+        bool useOnlineAppearance = true;
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(winnerGuid))
+            if (player->GetShapeshiftForm() == FORM_MOONKIN)
+                useOnlineAppearance = false;
+
+        if (!creature->CopyAppearanceFromPlayerGuid(winnerGuid, true, true, true, useOnlineAppearance))
         {
             TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to copy appearance from {}.", winnerGuid.ToString());
             return false;
