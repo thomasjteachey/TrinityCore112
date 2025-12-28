@@ -36,6 +36,7 @@
 #include "ChatCommand.h"
 #include "ChatPackets.h"
 #include "Config.h"
+#include "Creature.h"
 #include "CreatureAIRegistry.h"
 #include "CreatureGroups.h"
 #include "CreatureTextMgr.h"
@@ -56,12 +57,14 @@
 #include "LootItemStorage.h"
 #include "LootMgr.h"
 #include "M2Stores.h"
-#include "MapManager.h"
+#include "Map.h"
 #include "Memory.h"
 #include "Metric.h"
 #include "MMapFactory.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "Mail.h"
+#include "MapManager.h"
 #include "OutdoorPvPMgr.h"
 #include "PetitionMgr.h"
 #include "Player.h"
@@ -89,6 +92,8 @@
 #include "WhoListStorage.h"
 #include "WorldSession.h"
 
+#include <memory>
+#include <sstream>
 #include <boost/asio/ip/address.hpp>
 
 TC_GAME_API std::atomic<bool> World::m_stopEvent(false);
@@ -3327,8 +3332,275 @@ static time_t GetNextWeeklyResetTime(time_t t)
     return t;
 }
 
+namespace
+{
+    constexpr uint32 WarchiefNpcEntry = 31412;
+    constexpr uint32 WarchiefRunnerUpEntry = 110117;
+    constexpr uint32 WarchiefSpellId = 58553;
+
+    bool UpdateHonorNpc(uint32 entry, ObjectGuid const& winnerGuid, std::string const& winnerName, std::string* previousName)
+    {
+        ObjectGuid::LowType spawnId = 0;
+        uint32 mapId = MAPID_INVALID;
+
+        for (auto const& [spawnGuid, creatureData] : sObjectMgr->GetAllCreatureData())
+        {
+            if (creatureData.id != entry)
+                continue;
+
+            spawnId = spawnGuid;
+            mapId = creatureData.mapId;
+
+            if (mapId == 0)
+                break;
+        }
+
+        if (!spawnId)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: NPC entry {} not found in creature data.", entry);
+            return false;
+        }
+
+        if (CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(entry))
+            if (previousName && previousName->empty())
+                *previousName = creatureTemplate->Name;
+
+        Map* map = sMapMgr->CreateBaseMap(mapId);
+        Creature* creature = map ? map->GetCreatureBySpawnId(spawnId) : nullptr;
+        std::unique_ptr<Creature> tempCreature;
+
+        if (!creature)
+        {
+            tempCreature = std::make_unique<Creature>();
+            if (!tempCreature->LoadFromDB(spawnId, map, false, true))
+            {
+                TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to load NPC spawn {} from DB.", spawnId);
+                return false;
+        }
+
+        creature = tempCreature.get();
+        }
+
+        float const originalScale = creature->GetObjectScale();
+        UnitStandStateType const originalStandState = creature->GetStandState();
+
+        if (!creature->CopyAppearanceFromPlayerGuid(winnerGuid, true, true, true))
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Failed to copy appearance from {}.", winnerGuid.ToString());
+            return false;
+        }
+
+        creature->SetObjectScale(originalScale);
+        creature->SetStandState(originalStandState);
+
+        if (CreatureTemplate const* creatureTemplate = creature->GetCreatureTemplate())
+        {
+            CreatureTemplate* mutableTemplate = const_cast<CreatureTemplate*>(creatureTemplate);
+
+            if (mutableTemplate->Name != winnerName)
+            {
+                mutableTemplate->Name = winnerName;
+                mutableTemplate->InitializeQueryData();
+
+                if (WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_UPD_CREATURE_TEMPLATE_NAME))
+                {
+                    stmt->setString(0, winnerName);
+                    stmt->setUInt32(1, mutableTemplate->Entry);
+                    WorldDatabase.Execute(stmt);
+                }
+            }
+        }
+
+        return true;
+    }
+
+    void ApplyWarchiefAura(ObjectGuid const& winnerGuid)
+    {
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(winnerGuid))
+        {
+            player->CastSpell(player, WarchiefSpellId, true);
+            return;
+        }
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(WarchiefSpellId);
+        if (!spellInfo)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Spell {} not found.", WarchiefSpellId);
+            return;
+        }
+
+        uint8 effMask = 0;
+        int32 amount[MAX_SPELL_EFFECTS] = {};
+        int32 baseAmount[MAX_SPELL_EFFECTS] = {};
+
+        for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+        {
+            SpellEffectInfo const& effect = spellInfo->GetEffect(SpellEffIndex(i));
+            if (!effect.IsEffect())
+                continue;
+
+            effMask |= 1 << i;
+            baseAmount[i] = effect.CalcBaseValue(effect.BasePoints);
+            amount[i] = baseAmount[i];
+        }
+
+        if (!effMask)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Spell {} has no effects.", WarchiefSpellId);
+            return;
+        }
+
+        int32 duration = spellInfo->GetMaxDuration();
+        if (duration <= 0)
+            duration = 7 * DAY * IN_MILLISECONDS;
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_CHAR_AURA_BY_SPELL);
+        stmt->setUInt32(0, winnerGuid.GetCounter());
+        stmt->setUInt32(1, WarchiefSpellId);
+        CharacterDatabase.Execute(stmt);
+
+        uint8 index = 0;
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_AURA);
+        stmt->setUInt32(index++, winnerGuid.GetCounter());
+        stmt->setUInt64(index++, winnerGuid.GetRawValue());
+        stmt->setUInt64(index++, 0);
+        stmt->setUInt32(index++, WarchiefSpellId);
+        stmt->setUInt8(index++, effMask);
+        stmt->setUInt8(index++, 0);
+        stmt->setUInt8(index++, 1);
+        stmt->setInt32(index++, amount[0]);
+        stmt->setInt32(index++, amount[1]);
+        stmt->setInt32(index++, amount[2]);
+        stmt->setInt32(index++, baseAmount[0]);
+        stmt->setInt32(index++, baseAmount[1]);
+        stmt->setInt32(index++, baseAmount[2]);
+        stmt->setInt32(index++, duration);
+        stmt->setInt32(index++, duration);
+        stmt->setUInt8(index++, 0);
+        stmt->setFloat(index++, 0.0f);
+        stmt->setBool(index++, false);
+        CharacterDatabase.Execute(stmt);
+    }
+}
+
+bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName, uint32* honorGain)
+{
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WEEKLY_HONOR_TOP_TWO);
+    PreparedQueryResult result = CharacterDatabase.Query(stmt);
+
+    if (!result)
+    {
+        TC_LOG_INFO("misc", "Weekly honor warchief: No honor data found.");
+
+        if (resetHonor)
+        {
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_WEEKLY_HONOR_RESET);
+            CharacterDatabase.Execute(stmt);
+        }
+
+        return false;
+    }
+
+    Field* fields = result->Fetch();
+    ObjectGuid::LowType winnerLowGuid = fields[0].GetUInt32();
+    uint32 weeklyHonor = fields[1].GetUInt32();
+    ObjectGuid::LowType runnerUpLowGuid = 0;
+    uint32 runnerUpHonor = 0;
+
+    if (result->NextRow())
+    {
+        fields = result->Fetch();
+        runnerUpLowGuid = fields[0].GetUInt32();
+        runnerUpHonor = fields[1].GetUInt32();
+    }
+
+    if (!winnerLowGuid || weeklyHonor == 0)
+    {
+        TC_LOG_INFO("misc", "Weekly honor warchief: No honor gained this week.");
+
+        if (resetHonor)
+        {
+            stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_WEEKLY_HONOR_RESET);
+            CharacterDatabase.Execute(stmt);
+        }
+
+        return false;
+    }
+
+    ObjectGuid winnerGuid = ObjectGuid::Create<HighGuid::Player>(winnerLowGuid);
+    std::string resolvedWinnerName;
+    if (!sCharacterCache->GetCharacterNameByGuid(winnerGuid, resolvedWinnerName))
+        resolvedWinnerName = "<unknown>";
+
+    if (winnerName)
+        *winnerName = resolvedWinnerName;
+    if (honorGain)
+        *honorGain = weeklyHonor;
+
+    ObjectGuid::LowType previousWarchiefGuid = 0;
+    std::string previousWarchiefName;
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_WARCHIEF_HONOR);
+    if (PreparedQueryResult warchiefResult = CharacterDatabase.Query(stmt))
+    {
+        Field* warchiefFields = warchiefResult->Fetch();
+        previousWarchiefGuid = warchiefFields[0].GetUInt32();
+        previousWarchiefName = warchiefFields[1].GetString();
+    }
+
+    UpdateHonorNpc(WarchiefNpcEntry, winnerGuid, resolvedWinnerName, &previousWarchiefName);
+    ApplyWarchiefAura(winnerGuid);
+
+    MailSender sender = previousWarchiefGuid
+        ? MailSender(MAIL_NORMAL, previousWarchiefGuid)
+        : MailSender(MAIL_CREATURE, WarchiefNpcEntry);
+
+    std::ostringstream body;
+    body << "By the will of the Horde, your deeds in battle have earned the title of Warchief for this week.\n\n"
+         << "Weekly honor gained: " << weeklyHonor << "\n\n"
+         << "Lok'tar Ogar!";
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    MailDraft("Warchief's Honor", body.str())
+        .SendMailTo(trans, MailReceiver(winnerLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
+    CharacterDatabase.CommitTransaction(trans);
+
+    stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_WARCHIEF_HONOR);
+    stmt->setUInt32(0, winnerLowGuid);
+    stmt->setString(1, resolvedWinnerName);
+    stmt->setUInt32(2, previousWarchiefGuid);
+    stmt->setString(3, previousWarchiefName);
+    CharacterDatabase.Execute(stmt);
+
+    if (runnerUpLowGuid && runnerUpLowGuid != winnerLowGuid && runnerUpHonor > 0)
+    {
+        ObjectGuid runnerUpGuid = ObjectGuid::Create<HighGuid::Player>(runnerUpLowGuid);
+        std::string runnerUpName;
+        if (!sCharacterCache->GetCharacterNameByGuid(runnerUpGuid, runnerUpName))
+            runnerUpName = "<unknown>";
+
+        UpdateHonorNpc(WarchiefRunnerUpEntry, runnerUpGuid, runnerUpName, nullptr);
+
+        CharacterDatabaseTransaction runnerUpTrans = CharacterDatabase.BeginTransaction();
+        MailDraft("Second Place", "If you're not first you're last.")
+            .SendMailTo(runnerUpTrans, MailReceiver(runnerUpLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
+        CharacterDatabase.CommitTransaction(runnerUpTrans);
+    }
+
+    if (resetHonor)
+    {
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_WEEKLY_HONOR_RESET);
+        CharacterDatabase.Execute(stmt);
+    }
+
+    TC_LOG_INFO("misc", "Weekly honor warchief: {} selected with {} honor.", resolvedWinnerName, weeklyHonor);
+    return true;
+}
+
 void World::ResetWeeklyQuests()
 {
+    ProcessWeeklyHonorWarchief(true);
+
     // reset all saved quest status
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_RESET_CHARACTER_QUESTSTATUS_WEEKLY);
     CharacterDatabase.Execute(stmt);
