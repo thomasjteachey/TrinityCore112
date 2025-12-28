@@ -2375,8 +2375,10 @@ Creature* Player::GetNPCIfCanInteractWith(ObjectGuid const& guid, NPCFlags npcFl
     if (!creature)
         return nullptr;
 
+    bool allowDeadInteraction = npcFlags & UNIT_NPC_FLAG_BATTLEMASTER;
+
     // Deathstate checks
-    if (!IsAlive() && !(creature->GetCreatureTemplate()->type_flags & CREATURE_TYPE_FLAG_VISIBLE_TO_GHOSTS))
+    if (!IsAlive() && !allowDeadInteraction && !(creature->GetCreatureTemplate()->type_flags & CREATURE_TYPE_FLAG_VISIBLE_TO_GHOSTS))
         return nullptr;
 
     // alive or spirit healer
