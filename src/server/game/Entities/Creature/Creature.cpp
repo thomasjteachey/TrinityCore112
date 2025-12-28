@@ -2243,7 +2243,11 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     SetFloatValue(UNIT_FIELD_COMBATREACH, player->GetFloatValue(UNIT_FIELD_COMBATREACH));
 
     if (player->GetDisplayId() != player->GetNativeDisplayId())
+    {
         SetDisplayId(player->GetDisplayId());
+        if (player->GetShapeshiftForm() != FORM_NONE)
+            SetNativeDisplayId(player->GetDisplayId());
+    }
 
     SetPowerType(player->GetPowerType(), false);
 
