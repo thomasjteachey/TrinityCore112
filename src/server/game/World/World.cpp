@@ -3335,8 +3335,30 @@ static time_t GetNextWeeklyResetTime(time_t t)
 namespace
 {
     constexpr uint32 WarchiefNpcEntry = 31412;
-    constexpr uint32 WarchiefRunnerUpEntry = 110117;
+    constexpr uint32 WarchiefRunnerUpEntry = 110017;
     constexpr uint32 WarchiefSpellId = 58553;
+
+    void BroadcastCreatureTemplateUpdate(CreatureTemplate const* creatureTemplate, Map* map)
+    {
+        if (!creatureTemplate || !map)
+            return;
+
+        Map::PlayerList const& players = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+        {
+            if (Player* player = itr->GetSource())
+            {
+                LocaleConstant locale = player->GetSession()->GetSessionDbLocaleIndex();
+                if (sWorld->getBoolConfig(CONFIG_CACHE_DATA_QUERIES))
+                    player->GetSession()->SendPacket(&creatureTemplate->QueryData[static_cast<uint32>(locale)]);
+                else
+                {
+                    WorldPacket response = creatureTemplate->BuildQueryData(locale);
+                    player->GetSession()->SendPacket(&response);
+                }
+            }
+        }
+    }
 
     bool UpdateHonorNpc(uint32 entry, ObjectGuid const& winnerGuid, std::string const& winnerName, std::string* previousName)
     {
@@ -3409,6 +3431,8 @@ namespace
                     WorldDatabase.Execute(stmt);
                 }
             }
+
+            BroadcastCreatureTemplateUpdate(mutableTemplate, map);
         }
 
         return true;
