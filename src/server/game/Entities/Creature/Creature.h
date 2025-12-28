@@ -83,7 +83,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         void LoadTemplateRoot();
 
         bool CopyAppearanceFromPlayer(Player const* player, bool copyName = true, bool copyEquipment = true, bool persist = false);
-        bool CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName = true, bool copyEquipment = true, bool persist = false);
+        bool CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName = true, bool copyEquipment = true, bool persist = false, bool useOnline = true);
         bool CopyAppearanceFromPlayerName(std::string const& playerName, bool copyName = true, bool copyEquipment = true, bool persist = false);
 
         std::array<uint32, CreaturePlayerBytes::VisibleItemSlotCount> const& GetVisibleItemDisplayIds() const { return _playerVisibleItemDisplayIds; }

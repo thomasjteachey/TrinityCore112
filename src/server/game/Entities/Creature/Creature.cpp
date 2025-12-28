@@ -2274,13 +2274,16 @@ bool Creature::CopyAppearanceFromPlayer(Player const* player, bool copyName, boo
     return true;
 }
 
-bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName, bool copyEquipment, bool persist)
+bool Creature::CopyAppearanceFromPlayerGuid(ObjectGuid const& playerGuid, bool copyName, bool copyEquipment, bool persist, bool useOnline)
 {
     if (!playerGuid || !playerGuid.IsPlayer())
         return false;
 
-    if (Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid))
-        return CopyAppearanceFromPlayer(player, copyName, copyEquipment, persist);
+    if (useOnline)
+    {
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid))
+            return CopyAppearanceFromPlayer(player, copyName, copyEquipment, persist);
+    }
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_APPEARANCE_BY_GUID);
     stmt->setUInt32(0, playerGuid.GetCounter());
