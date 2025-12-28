@@ -3337,6 +3337,7 @@ namespace
     constexpr uint32 WarchiefNpcEntry = 31412;
     constexpr uint32 WarchiefRunnerUpEntry = 110017;
     constexpr uint32 WarchiefSpellId = 58553;
+    constexpr uint32 WarchiefMailSenderEntry = 2784;
 
     void BroadcastCreatureTemplateUpdate(CreatureTemplate const* creatureTemplate, Map* map)
     {
@@ -3575,17 +3576,14 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     UpdateHonorNpc(WarchiefNpcEntry, winnerGuid, resolvedWinnerName, &previousWarchiefName);
     ApplyWarchiefAura(winnerGuid);
 
-    MailSender sender = previousWarchiefGuid
-        ? MailSender(MAIL_NORMAL, previousWarchiefGuid)
-        : MailSender(MAIL_CREATURE, WarchiefNpcEntry);
+    MailSender sender(MAIL_CREATURE, WarchiefMailSenderEntry);
 
     std::ostringstream body;
-    body << "By the will of the Horde, your deeds in battle have earned the title of Warchief for this week.\n\n"
-         << "Weekly honor gained: " << weeklyHonor << "\n\n"
-         << "Lok'tar Ogar!";
+    body << "by the will of the tryhards, your deeds in battle have earned the title of warchief for this week.\n\n"
+         << "weekly honor gained: " << weeklyHonor;
 
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    MailDraft("Warchief's Honor", body.str())
+    MailDraft("warchief honor", body.str())
         .SendMailTo(trans, MailReceiver(winnerLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
     CharacterDatabase.CommitTransaction(trans);
 
@@ -3606,7 +3604,7 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
         UpdateHonorNpc(WarchiefRunnerUpEntry, runnerUpGuid, runnerUpName, nullptr);
 
         CharacterDatabaseTransaction runnerUpTrans = CharacterDatabase.BeginTransaction();
-        MailDraft("Second Place", "If you're not first you're last.")
+        MailDraft("second place", "if you're not first you're last.")
             .SendMailTo(runnerUpTrans, MailReceiver(runnerUpLowGuid), sender, MAIL_CHECK_MASK_HAS_BODY, 0);
         CharacterDatabase.CommitTransaction(runnerUpTrans);
     }
