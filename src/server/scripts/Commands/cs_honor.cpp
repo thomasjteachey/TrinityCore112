@@ -27,6 +27,7 @@ EndScriptData */
 #include "Language.h"
 #include "Player.h"
 #include "RBAC.h"
+#include "World.h"
 #include "WorldSession.h"
 
 using namespace Trinity::ChatCommands;
@@ -48,6 +49,7 @@ public:
         {
             { "add",    honorAddCommandTable },
             { "update", HandleHonorUpdateCommand, rbac::RBAC_PERM_COMMAND_HONOR_UPDATE, Console::No },
+            { "warchief", HandleHonorWarchiefCommand, rbac::RBAC_PERM_COMMAND_HONOR_UPDATE, Console::No },
         };
 
         static ChatCommandTable commandTable =
@@ -109,6 +111,21 @@ public:
             return false;
 
         target->UpdateHonorFields();
+        return true;
+    }
+
+    static bool HandleHonorWarchiefCommand(ChatHandler* handler)
+    {
+        std::string winnerName;
+        uint32 weeklyHonor = 0;
+
+        if (!sWorld->ProcessWeeklyHonorWarchief(true, &winnerName, &weeklyHonor))
+        {
+            handler->SendSysMessage("No weekly honor winner was found.");
+            return true;
+        }
+
+        handler->PSendSysMessage("Weekly honor winner set to %s with %u honor.", winnerName.c_str(), weeklyHonor);
         return true;
     }
 };

@@ -661,6 +661,7 @@ class TC_GAME_API World
         time_t GetNextDailyQuestsResetTime() const { return m_NextDailyQuestReset; }
         time_t GetNextWeeklyQuestsResetTime() const { return m_NextWeeklyQuestReset; }
         time_t GetNextRandomBGResetTime() const { return m_NextRandomBGReset; }
+        bool ProcessWeeklyHonorWarchief(bool resetHonor = true, std::string* winnerName = nullptr, uint32* honorGain = nullptr);
 
         /// Get the maximum skill level a player can reach
         uint16 GetConfigMaxSkillValue() const
