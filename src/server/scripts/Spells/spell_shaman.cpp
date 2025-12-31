@@ -1267,25 +1267,25 @@ private:
     void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        if (!GetTarget() || !GetTarget()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, GetTarget()->GetGUID()))
+        if (GetUnitOwner()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1))
         {
-            amount = 0;
+            amount = -35;
             return;
         }
 
-        amount = -35;
+        amount = 0;
     }
 
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        if (!GetTarget() || !GetTarget()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, GetTarget()->GetGUID()))
+        if (GetUnitOwner()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1))
         {
-            amount = 0;
+            amount = -5;
             return;
         }
 
-        amount = -5;
+        amount = 0;
     }
 
     void Register() override
