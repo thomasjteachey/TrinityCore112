@@ -1264,12 +1264,24 @@ private:
     void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
+        if (!GetTarget() || !GetTarget()->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x400, 0, 0))
+        {
+            amount = 0;
+            return;
+        }
+
         amount = -45;
     }
 
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
+        if (!GetTarget() || !GetTarget()->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x400, 0, 0))
+        {
+            amount = 0;
+            return;
+        }
+
         amount = -7;
     }
 
