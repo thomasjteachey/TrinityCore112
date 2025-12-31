@@ -5650,7 +5650,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             if (m_caster->ToPlayer()->IsInFlight())
                 return SPELL_FAILED_NOT_ON_TAXI;
-            else if (m_caster->GetMountDisplayId() == 0 && m_caster->ToPlayer()->HasAura(89153))
+            else if (m_caster->ToPlayer()->GetMountDisplayId() == 0 && m_caster->ToPlayer()->HasAura(89153))
                 deferAutoDismountForRunMount = true;
             else
                 return SPELL_FAILED_NOT_MOUNTED;
