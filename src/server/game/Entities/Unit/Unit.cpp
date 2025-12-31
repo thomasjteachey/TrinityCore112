@@ -87,6 +87,14 @@
 namespace
 {
 static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
+
+static inline bool IsPlainsrunningRunMount(Unit* unit)
+{
+    return unit
+        && unit->GetTypeId() == TYPEID_PLAYER
+        && unit->IsMounted()
+        && unit->HasAura(89153); // Plainsrunning
+}
 }
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
@@ -5746,9 +5754,27 @@ bool Unit::Attack(Unit* victim, bool meleeAttack)
     if (!IsAlive() || !victim->IsInWorld() || !victim->IsAlive())
         return false;
 
-    // player cannot attack in mount state
+    // player cannot attack in mount state (except Plainsrunning run-mount)
     if (GetTypeId() == TYPEID_PLAYER && IsMounted())
-        return false;
+    {
+        if (!IsPlainsrunningRunMount(this))
+            return false;
+
+        if (meleeAttack)
+        {
+            if (IsWithinMeleeRange(victim))
+            {
+                Dismount();
+                RemoveAurasByType(SPELL_AURA_MOUNTED);
+            }
+            else
+            {
+                if (Player* player = ToPlayer())
+                    player->SendAttackSwingNotInRange();
+                return false;
+            }
+        }
+    }
 
     Creature* creature = ToCreature();
     // creatures cannot attack while evading
