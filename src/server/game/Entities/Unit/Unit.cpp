@@ -4228,6 +4228,8 @@ void Unit::RemoveMovementImpairingAuras(bool withRoot)
 
 void Unit::RemoveAurasWithMechanic(uint32 mechanicMaskToRemove, AuraRemoveMode removeMode, uint32 exceptSpellId, bool withEffectMechanics)
 {
+    bool const removingFear = (mechanicMaskToRemove & (1 << MECHANIC_FEAR)) != 0;
+    bool const removingCharm = (mechanicMaskToRemove & (1 << MECHANIC_CHARM)) != 0;
     std::vector<Aura*> aurasToUpdateTargets;
     RemoveAppliedAuras([=, &aurasToUpdateTargets](AuraApplication const* aurApp)
     {
@@ -4237,6 +4239,9 @@ void Unit::RemoveAurasWithMechanic(uint32 mechanicMaskToRemove, AuraRemoveMode r
 
         uint32 appliedMechanicMask = aura->GetSpellInfo()->GetSpellMechanicMaskByEffectMask(aurApp->GetEffectMask());
         if (!(appliedMechanicMask & mechanicMaskToRemove))
+            return false;
+
+        if (removingFear && !removingCharm && aura->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
             return false;
 
         // spell mechanic matches required mask for removal
