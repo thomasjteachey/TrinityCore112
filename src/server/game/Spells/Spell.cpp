@@ -6627,7 +6627,9 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
         result = SPELL_FAILED_PACIFIED;
     else if (unitflag & UNIT_FLAG_FLEEING)
     {
-        if (usableWhileFeared)
+        if (unitCaster->HasAttackMeFearAura() && !CheckSpellCancelsCharm(param1))
+            result = SPELL_FAILED_CHARMED;
+        else if (usableWhileFeared)
         {
             SpellCastResult mechanicResult = mechanicCheck(SPELL_AURA_MOD_FEAR);
             if (mechanicResult != SPELL_CAST_OK)
