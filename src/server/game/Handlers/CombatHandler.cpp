@@ -59,6 +59,25 @@ void WorldSession::HandleAttackSwingOpcode(WorldPackets::Combat::AttackSwing& pa
     }
 
     _player->ClearAttackStopRequestAfterTaunt();
+
+    // Plainsrunning (89153): mimic real mount behavior for right-click auto attack.
+    // If in melee range -> dismount and start attack.
+    // If NOT in melee range -> do NOT dismount, do NOT queue attack, send "not in range".
+    if (_player->IsMounted() && _player->HasAura(89153))
+    {
+        if (!_player->IsWithinMeleeRange(enemy))
+        {
+            _player->SendAttackSwingNotInRange();
+
+            // Ensure client does not think it is in an attack state
+            SendAttackStop(enemy);
+            return;
+        }
+
+        _player->Dismount();
+        _player->RemoveAurasByType(SPELL_AURA_MOUNTED);
+    }
+
     _player->Attack(enemy, true);
 }
 
