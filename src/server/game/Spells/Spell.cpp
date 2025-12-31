@@ -6687,9 +6687,43 @@ bool Spell::CheckSpellCancelsAuraEffect(AuraType auraType, uint32* param1) const
 
 bool Spell::CheckSpellCancelsCharm(uint32* param1) const
 {
-    return CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_CHARM, param1) &&
-        CheckSpellCancelsAuraEffect(SPELL_AURA_AOE_CHARM, param1) &&
-        CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_POSSESS, param1);
+    if (!CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_CHARM, param1) ||
+        !CheckSpellCancelsAuraEffect(SPELL_AURA_AOE_CHARM, param1) ||
+        !CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_POSSESS, param1))
+        return false;
+
+    Unit* unitCaster = (m_originalCaster ? m_originalCaster : m_caster->ToUnit());
+    if (!unitCaster)
+        return false;
+
+    if (!unitCaster->HasAttackMeFearAura())
+        return true;
+
+    for (SpellEffectInfo const& effect : m_spellInfo->GetEffects())
+    {
+        if (!effect.IsEffect(SPELL_EFFECT_APPLY_AURA))
+            continue;
+
+        uint32 const miscValue = static_cast<uint32>(effect.MiscValue);
+        switch (effect.ApplyAuraName)
+        {
+            case SPELL_AURA_MECHANIC_IMMUNITY:
+                if (miscValue == MECHANIC_CHARM)
+                    return true;
+                break;
+            case SPELL_AURA_STATE_IMMUNITY:
+                if (miscValue == SPELL_AURA_MOD_CHARM || miscValue == SPELL_AURA_AOE_CHARM || miscValue == SPELL_AURA_MOD_POSSESS)
+                    return true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (param1)
+        *param1 = MECHANIC_CHARM;
+
+    return false;
 }
 
 bool Spell::CheckSpellCancelsTaunt(uint32* param1) const
