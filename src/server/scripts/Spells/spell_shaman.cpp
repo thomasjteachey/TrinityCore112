@@ -1287,6 +1287,7 @@ private:
 
     void Register() override
     {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateSnareReduction, EFFECT_0, SPELL_AURA_MECHANIC_DURATION_MOD);
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateSnareReduction, EFFECT_1, SPELL_AURA_MECHANIC_DURATION_MOD);
         DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_sha_lightning_shield_defense::CalculateDamageReduction, EFFECT_2, SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN);
     }
