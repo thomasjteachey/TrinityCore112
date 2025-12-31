@@ -2192,16 +2192,19 @@ class spell_dru_claw : public SpellScript
 {
     PrepareSpellScript(spell_dru_claw);
 
-    bool _shouldMangle = false;
+    SpellMissInfo _missInfo = SPELL_MISS_NONE;
 
     void HandleBeforeHit(SpellMissInfo missInfo)
     {
-        _shouldMangle = missInfo == SPELL_MISS_NONE;
+        _missInfo = missInfo;
     }
 
     void HandleAfterHit()
     {
-        if (!_shouldMangle)
+        bool shouldMangle = _missInfo == SPELL_MISS_NONE ||
+            (_missInfo == SPELL_MISS_BLOCK && GetHitDamage() > 0);
+
+        if (!shouldMangle)
             return;
 
         if (GetCaster()->IsPlayer())
