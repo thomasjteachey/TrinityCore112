@@ -1267,7 +1267,7 @@ private:
     void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        if (GetUnitOwner()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1))
+        if (GetUnitOwner()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1))
         {
             amount = -35;
             return;
@@ -1279,7 +1279,7 @@ private:
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        if (GetUnitOwner()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1))
+        if (GetUnitOwner()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_BASE_R1))
         {
             amount = -5;
             return;
