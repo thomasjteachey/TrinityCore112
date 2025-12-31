@@ -60,6 +60,7 @@ enum RogueSpells
     SPELL_ROGUE_STEALTH                         =  1784,
     SPELL_ROGUE_IMPROVED_SAP                    = 14095,
     SPELL_ROGUE_DEADLY_BREW                     = 81301,
+    SPELL_ROGUE_GARROTE_POISON                  = 81302,
     SPELL_ROGUE_SEAL_FATE                       = 14186,
     SPELL_ROGUE_RUTHLESSNESS_R1                 = 14156,
     SPELL_ROGUE_RUTHLESSNESS_R2                 = 14160,
@@ -128,6 +129,62 @@ class spell_rog_evasion : public SpellScript
     void Register() override
     {
         AfterCast += SpellCastFn(spell_rog_evasion::HandleAfterCast);
+    }
+};
+
+// 703 - Garrote
+class spell_rog_garrote : public SpellScript
+{
+    PrepareSpellScript(spell_rog_garrote);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleAfterHit()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Unit* target = GetHitUnit();
+        if (!player || !target)
+            return;
+
+        if (!player->HasAura(SPELL_ROGUE_GARROTE_POISON))
+            return;
+
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+        if (!item)
+            return;
+
+        for (uint8 slot = 0; slot < MAX_ENCHANTMENT_SLOT; ++slot)
+        {
+            SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(item->GetEnchantmentId(EnchantmentSlot(slot)));
+            if (!enchant)
+                continue;
+
+            for (uint8 s = 0; s < 3; ++s)
+            {
+                if (enchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
+                    continue;
+
+                SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(enchant->EffectArg[s]);
+                if (!spellInfo)
+                {
+                    TC_LOG_ERROR("spells", "Player::CastItemCombatSpell Enchant {}, player (Name: {}, {}) cast unknown spell {}", enchant->ID, player->GetName(), player->GetGUID().ToString(), enchant->EffectArg[s]);
+                    continue;
+                }
+
+                if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE || spellInfo->Dispel != DISPEL_POISON)
+                    continue;
+
+                player->CastSpell(target, enchant->EffectArg[s], item);
+            }
+        }
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_rog_garrote::HandleAfterHit);
     }
 };
 
@@ -1232,6 +1289,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_cheat_death);
     RegisterSpellScript(spell_rog_cut_to_the_chase);
     RegisterSpellScript(spell_rog_deadly_poison);
+    RegisterSpellScript(spell_rog_garrote);
     RegisterSpellScript(spell_rog_ruthlessness_bonus);
     new spell_rog_killing_spree();
     RegisterSpellScript(spell_rog_nerves_of_steel);
