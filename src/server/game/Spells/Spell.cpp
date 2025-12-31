@@ -5339,6 +5339,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
 {
     GameObject const* trapCaster = GetTrapGameObject();
     bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS) && IsTrapGameObject(trapCaster);
+    bool deferAutoDismountForRunMount = false;
 
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
@@ -5649,6 +5650,8 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         {
             if (m_caster->ToPlayer()->IsInFlight())
                 return SPELL_FAILED_NOT_ON_TAXI;
+            else if (m_caster->ToUnit()->GetMountDisplayId() == 0 && m_caster->ToPlayer()->HasAura(89153))
+                deferAutoDismountForRunMount = true;
             else
                 return SPELL_FAILED_NOT_MOUNTED;
         }
@@ -6466,6 +6469,15 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     }
 
     // all ok
+    if (deferAutoDismountForRunMount)
+    {
+        Player* playerCaster = m_caster->ToPlayer();
+        if (playerCaster && playerCaster->IsMounted())
+        {
+            playerCaster->Dismount();
+            playerCaster->RemoveAurasByType(SPELL_AURA_MOUNTED);
+        }
+    }
     return SPELL_CAST_OK;
 }
 
