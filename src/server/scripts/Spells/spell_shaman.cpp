@@ -1252,6 +1252,9 @@ public:
 
         if (Aura* aura = owner->GetAura(SPELL_SHAMAN_LIGHTNING_SHIELD_DEFENSIVE_AURA))
         {
+            if (AuraEffect* rootMod = aura->GetEffect(EFFECT_0))
+                rootMod->RecalculateAmount();
+
             if (AuraEffect* snareMod = aura->GetEffect(EFFECT_1))
                 snareMod->RecalculateAmount();
 
@@ -1264,7 +1267,7 @@ private:
     void CalculateSnareReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        if (!GetTarget() || !GetTarget()->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x400, 0, 0))
+        if (!GetTarget() || !GetTarget()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, GetTarget()->GetGUID()))
         {
             amount = 0;
             return;
@@ -1276,7 +1279,7 @@ private:
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
     {
         canBeRecalculated = true;
-        if (!GetTarget() || !GetTarget()->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_SHAMAN, 0x400, 0, 0))
+        if (!GetTarget() || !GetTarget()->GetAuraApplicationOfRankedSpell(SPELL_SHAMAN_LIGHTNING_SHIELD_R1, GetTarget()->GetGUID()))
         {
             amount = 0;
             return;
