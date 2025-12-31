@@ -117,6 +117,14 @@ namespace
     constexpr float MaxStarfireSnareSpeedRate = 1.0f;
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
+    static inline bool IsPlainsrunningRunMount(Unit* unit)
+    {
+        return unit
+            && unit->GetTypeId() == TYPEID_PLAYER
+            && unit->IsMounted()
+            && unit->HasAura(89153); // Plainsrunning
+    }
 }
 #include "ArenaSpectator.h"
 
@@ -1198,6 +1206,12 @@ void Player::Update(uint32 p_time)
                             setAttackTimer(OFF_ATTACK, ATTACK_DISPLAY_DELAY);
 
                     // do attack
+                    // Plainsrunning: defer dismount until we actually swing (in range + facing + valid)
+                    if (IsPlainsrunningRunMount(this))
+                    {
+                        Dismount();
+                        RemoveAurasByType(SPELL_AURA_MOUNTED);
+                    }
                     AttackerStateUpdate(victim, BASE_ATTACK);
                     resetAttackTimer(BASE_ATTACK);
                 }
@@ -1216,6 +1230,12 @@ void Player::Update(uint32 p_time)
                         setAttackTimer(BASE_ATTACK, ATTACK_DISPLAY_DELAY);
 
                     // do attack
+                    // Plainsrunning: defer dismount until we actually swing (in range + facing + valid)
+                    if (IsPlainsrunningRunMount(this))
+                    {
+                        Dismount();
+                        RemoveAurasByType(SPELL_AURA_MOUNTED);
+                    }
                     AttackerStateUpdate(victim, OFF_ATTACK);
                     resetAttackTimer(OFF_ATTACK);
                 }
