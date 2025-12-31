@@ -1270,7 +1270,7 @@ private:
             return;
         }
 
-        amount = -30;
+        amount = -35;
     }
 
     void CalculateDamageReduction(AuraEffect const* /*aurEff*/, int32& amount, bool& canBeRecalculated)
