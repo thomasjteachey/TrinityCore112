@@ -284,9 +284,7 @@ class spell_rog_slice_and_dice_5cp : public SpellScript
         if (!caster)
             return;
 
-        uint32 sliceAndDiceId = SPELL_ROGUE_SLICE_AND_DICE_R1;
-        if (uint8 rank = sSpellMgr->GetSpellRank(GetSpellInfo()->Id))
-            sliceAndDiceId = sSpellMgr->GetSpellWithRank(SPELL_ROGUE_SLICE_AND_DICE_R1, rank);
+        uint32 sliceAndDiceId = 6774;
 
         caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
     }
