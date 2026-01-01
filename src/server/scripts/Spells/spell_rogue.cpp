@@ -45,6 +45,7 @@ enum RogueSpells
     SPELL_ROGUE_KILLING_SPREE_DMG_BUFF          = 61851,
     SPELL_ROGUE_PREY_ON_THE_WEAK                = 58670,
     SPELL_ROGUE_SHIV_TRIGGERED                  =  5940,
+    SPELL_ROGUE_SLICE_AND_DICE_R1               =  5171,
     SPELL_ROGUE_TRICKS_OF_THE_TRADE             = 57934,
     SPELL_ROGUE_TRICKS_OF_THE_TRADE_DMG_BOOST   = 57933,
     SPELL_ROGUE_TRICKS_OF_THE_TRADE_PROC        = 59628,
@@ -264,6 +265,44 @@ class spell_rog_cut_to_the_chase : public AuraScript
     void Register() override
     {
         OnEffectProc += AuraEffectProcFn(spell_rog_cut_to_the_chase::HandleProc, EFFECT_0, SPELL_AURA_DUMMY);
+    }
+};
+
+// Slice and Dice (5 combo points, no combo point cost)
+class spell_rog_slice_and_dice_5cp : public SpellScript
+{
+    PrepareSpellScript(spell_rog_slice_and_dice_5cp);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_ROGUE_SLICE_AND_DICE_R1 });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        uint32 sliceAndDiceId = SPELL_ROGUE_SLICE_AND_DICE_R1;
+        if (uint8 rank = sSpellMgr->GetSpellRank(GetSpellInfo()->Id))
+            sliceAndDiceId = sSpellMgr->GetSpellWithRank(SPELL_ROGUE_SLICE_AND_DICE_R1, rank);
+
+        if (GetSpellInfo()->Id != sliceAndDiceId)
+            caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
+
+        if (AuraEffect const* snd = caster->GetAuraEffect(SPELL_AURA_MOD_MELEE_HASTE, SPELLFAMILY_ROGUE, 0x00040000, 0x00000000, 0x00000000, caster->GetGUID()))
+        {
+            uint32 countMax = snd->GetSpellInfo()->GetMaxDuration();
+
+            snd->GetBase()->SetDuration(countMax, true);
+            snd->GetBase()->SetMaxDuration(snd->GetBase()->GetDuration());
+        }
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_rog_slice_and_dice_5cp::HandleAfterCast);
     }
 };
 
@@ -1289,6 +1328,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_cheat_death);
     RegisterSpellScript(spell_rog_cut_to_the_chase);
     RegisterSpellScript(spell_rog_deadly_poison);
+    RegisterSpellScript(spell_rog_slice_and_dice_5cp);
     RegisterSpellScript(spell_rog_garrote);
     RegisterSpellScript(spell_rog_ruthlessness_bonus);
     new spell_rog_killing_spree();
