@@ -288,16 +288,7 @@ class spell_rog_slice_and_dice_5cp : public SpellScript
         if (uint8 rank = sSpellMgr->GetSpellRank(GetSpellInfo()->Id))
             sliceAndDiceId = sSpellMgr->GetSpellWithRank(SPELL_ROGUE_SLICE_AND_DICE_R1, rank);
 
-        if (GetSpellInfo()->Id != sliceAndDiceId)
-            caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
-
-        if (AuraEffect const* snd = caster->GetAuraEffect(SPELL_AURA_MOD_MELEE_HASTE, SPELLFAMILY_ROGUE, 0x00040000, 0x00000000, 0x00000000, caster->GetGUID()))
-        {
-            uint32 countMax = snd->GetSpellInfo()->GetMaxDuration();
-
-            snd->GetBase()->SetDuration(countMax, true);
-            snd->GetBase()->SetMaxDuration(snd->GetBase()->GetDuration());
-        }
+        caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
     }
 
     void Register() override
