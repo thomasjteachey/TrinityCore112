@@ -2738,14 +2738,19 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         // set hitmask for finish procs
         spell->m_hitMask |= hitMask;
 
-        // Do not take combo points on dodge and miss
+        // Do not take combo points on dodge, miss, or full block
+        bool fullBlock = MissCondition == SPELL_MISS_BLOCK && spell->m_spellInfo->HasAttribute(SPELL_ATTR3_COMPLETELY_BLOCKED);
+        bool partialBlock = MissCondition == SPELL_MISS_BLOCK && !fullBlock;
         bool blockedFinisherWithDebuff = MissCondition == SPELL_MISS_BLOCK &&
             spell->m_spellInfo->NeedsComboPoints() &&
             spell->m_spellInfo->HasEffect(SPELL_EFFECT_APPLY_AURA) &&
             !spell->IsPositive();
 
-        if (MissCondition != SPELL_MISS_NONE && !blockedFinisherWithDebuff && spell->m_needComboPoints && spell->m_targets.GetUnitTargetGUID() == TargetGUID)
-            spell->m_needComboPoints = false;
+        if (MissCondition != SPELL_MISS_NONE && !partialBlock && spell->m_needComboPoints && spell->m_targets.GetUnitTargetGUID() == TargetGUID)
+        {
+            if (fullBlock || !blockedFinisherWithDebuff)
+                spell->m_needComboPoints = false;
+        }
 
         // _spellHitTarget can be null if spell is missed in DoSpellHitOnUnit
         if (MissCondition != SPELL_MISS_EVADE && _spellHitTarget && !spell->m_caster->IsFriendlyTo(unit) && (!spell->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)))
