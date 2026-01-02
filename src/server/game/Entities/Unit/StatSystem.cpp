@@ -393,7 +393,7 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
                 val2 = level * 2.0f + GetStat(STAT_STRENGTH) + GetStat(STAT_AGILITY) - 20.0f;
                 break;
             case CLASS_SHAMAN:
-                val2 = level * 2.0f + GetStat(STAT_STRENGTH) * 2.0f + GetStat(STAT_AGILITY) - 20.0f;
+                val2 = level * 2.0f + GetStat(STAT_STRENGTH) * 2.0f - 20.0f;
                 break;
             case CLASS_DRUID:
             {
