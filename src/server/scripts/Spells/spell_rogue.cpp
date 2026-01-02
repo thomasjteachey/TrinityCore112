@@ -287,7 +287,14 @@ class spell_rog_slice_and_dice_5cp : public SpellScript
         uint32 sliceAndDiceId = 6774;
         caster->AddAura(6774, caster);
 
-        //caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
+        if (AuraEffect const* snd = caster->GetAuraEffect(SPELL_AURA_MOD_MELEE_HASTE, SPELLFAMILY_ROGUE, 0x00040000, 0x00000000, 0x00000000, caster->GetGUID()))
+        {
+            // Max 5 cp duration
+            uint32 countMax = snd->GetSpellInfo()->GetMaxDuration();
+
+            snd->GetBase()->SetDuration(countMax, true);
+            snd->GetBase()->SetMaxDuration(snd->GetBase()->GetDuration());
+        }
     }
 
     void Register() override
