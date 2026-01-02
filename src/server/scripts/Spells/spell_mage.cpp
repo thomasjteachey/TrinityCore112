@@ -1065,7 +1065,7 @@ class spell_mage_mana_shield : public spell_mage_incanters_absorbtion_base_AuraS
 
     bool Validate(SpellInfo const* spellInfo) override
     {
-        return ValidateSpellInfo({ SPELL_MAGE_ARCANE_SURGE }) &&
+        return ValidateSpellInfo({ SPELL_MAGE_ARCANE_SURGE, SPELL_MAGE_IMPLOSION, SPELL_MAGE_RECALIBRATING }) &&
             spell_mage_incanters_absorbtion_base_AuraScript::Validate(spellInfo);
     }
 
@@ -1091,7 +1091,7 @@ class spell_mage_mana_shield : public spell_mage_incanters_absorbtion_base_AuraS
             && !GetCaster()->HasAura(SPELL_MAGE_RECALIBRATING)
             )
         {
-            GetCaster()->AddAura(SPELL_MAGE_BROKEN_MANA_SHIELD, GetCaster());
+            GetCaster()->CastSpell(GetCaster(), SPELL_MAGE_IMPLOSION, true);
             GetCaster()->AddAura(SPELL_MAGE_RECALIBRATING, GetCaster());
         }
     }
