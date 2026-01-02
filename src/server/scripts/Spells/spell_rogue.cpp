@@ -285,8 +285,9 @@ class spell_rog_slice_and_dice_5cp : public SpellScript
             return;
 
         uint32 sliceAndDiceId = 6774;
+        caster->AddAura(6774, caster);
 
-        caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
+        //caster->CastSpell(caster, sliceAndDiceId, CastSpellExtraArgs(TRIGGERED_IGNORE_COMBO_POINTS));
     }
 
     void Register() override
