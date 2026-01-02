@@ -69,7 +69,8 @@ enum RogueSpells
     SPELL_ROGUE_RUTHLESSNESS_BONUS              = 81407,
     SPELL_ROGUE_IMPROVED_EVASION_TRIGGER        = 81403,
     SPELL_ROGUE_IMPROVED_EVASION_AURA           = 81404,
-    SPELL_ROGUE_GOUGE_DOT_REMOVAL_AURA          = 81410
+    SPELL_ROGUE_GOUGE_DOT_REMOVAL_AURA          = 81410,
+    SPELL_ROGUE_DEADLY_SHOT_INTERRUPT_TRIGGER   = 89159
 };
 
 // 13877, 33735, (check 51211, 65956) - Blade Flurry
@@ -1310,6 +1311,9 @@ class spell_rog_deadly_shot : public SpellScript
 
         // Lock out the school of the *interrupted* spell, not Deadly Shot's school
         target->GetSpellHistory()->LockSpellSchool(schoolMask, lockMs);
+
+        if (caster->HasAura(SPELL_ROGUE_IMPROVED_EVASION_AURA))
+            caster->CastSpell(caster, SPELL_ROGUE_DEADLY_SHOT_INTERRUPT_TRIGGER, true);
     }
 
 
