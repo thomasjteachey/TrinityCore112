@@ -506,19 +506,15 @@ void Player::UpdateAttackPowerAndDamage(bool ranged)
     if (ranged)
     {
         SetRangedAttackPower(int32(base_attPower));
-        if (attPowerMod >= 0)
-            SetRangedAttackPowerModPos(int32(attPowerMod));
-        if (attPowerMod <= 0)
-            SetRangedAttackPowerModNeg(int32(attPowerMod));
+        SetRangedAttackPowerModPos(attPowerMod > 0.0f ? int32(attPowerMod) : 0);
+        SetRangedAttackPowerModNeg(attPowerMod < 0.0f ? int32(attPowerMod) : 0);
         SetRangedAttackPowerMultiplier(attPowerMultiplier);
     }
     else
     {
         SetAttackPower(int32(base_attPower));
-        if (attPowerMod >= 0)
-            SetAttackPowerModPos(int32(attPowerMod));
-        if (attPowerMod <= 0)
-            SetAttackPowerModNeg(int32(attPowerMod));
+        SetAttackPowerModPos(attPowerMod > 0.0f ? int32(attPowerMod) : 0);
+        SetAttackPowerModNeg(attPowerMod < 0.0f ? int32(attPowerMod) : 0);
         SetAttackPowerMultiplier(attPowerMultiplier);
     }
 
@@ -1102,19 +1098,15 @@ void Creature::UpdateAttackPowerAndDamage(bool ranged)
     if (ranged)
     {
         SetRangedAttackPower(int32(baseAttackPower));
-        if (attackPowerMod >= 0)
-            SetRangedAttackPowerModPos(int32(attackPowerMod));
-        if (attackPowerMod <= 0)
-            SetRangedAttackPowerModNeg(int32(attackPowerMod));
+        SetRangedAttackPowerModPos(attackPowerMod > 0.0f ? int32(attackPowerMod) : 0);
+        SetRangedAttackPowerModNeg(attackPowerMod < 0.0f ? int32(attackPowerMod) : 0);
         SetRangedAttackPowerMultiplier(attackPowerMultiplier);
     }
     else
     {
         SetAttackPower(int32(baseAttackPower));
-        if (attackPowerMod >= 0)
-            SetAttackPowerModPos(int32(attackPowerMod));
-        if (attackPowerMod <= 0)
-            SetAttackPowerModNeg(int32(attackPowerMod));
+        SetAttackPowerModPos(attackPowerMod > 0.0f ? int32(attackPowerMod) : 0);
+        SetAttackPowerModNeg(attackPowerMod < 0.0f ? int32(attackPowerMod) : 0);
         SetAttackPowerMultiplier(attackPowerMultiplier);
     }
 
@@ -1490,7 +1482,8 @@ void Guardian::UpdateAttackPowerAndDamage(bool ranged)
     float attPowerMultiplier = GetPctModifierValue(unitMod, TOTAL_PCT) - 1.0f;
 
     SetAttackPower(int32(base_attPower));
-    SetAttackPowerModPos(int32(attPowerMod));
+    SetAttackPowerModPos(attPowerMod > 0.0f ? int32(attPowerMod) : 0);
+    SetAttackPowerModNeg(attPowerMod < 0.0f ? int32(attPowerMod) : 0);
     SetAttackPowerMultiplier(attPowerMultiplier);
 
     //automatically update weapon damage after attack power modification
