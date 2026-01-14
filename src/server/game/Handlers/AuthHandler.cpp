@@ -16,8 +16,11 @@
  */
 
 #include "Opcodes.h"
+#include "Random.h"
 #include "WorldSession.h"
 #include "WorldPacket.h"
+
+#include <limits>
 
 void WorldSession::SendAuthResponse(uint8 code, bool shortForm, uint32 queuePos)
 {
@@ -39,7 +42,9 @@ void WorldSession::SendAuthResponse(uint8 code, bool shortForm, uint32 queuePos)
 
 void WorldSession::SendClientCacheVersion(uint32 version)
 {
+    uint32 maxVersion = version > 0 ? version : std::numeric_limits<uint32>::max();
+    uint32 randomVersion = urand(1u, maxVersion);
     WorldPacket data(SMSG_CLIENTCACHE_VERSION, 4);
-    data << uint32(version);
+    data << uint32(randomVersion);
     SendPacket(&data);
 }
