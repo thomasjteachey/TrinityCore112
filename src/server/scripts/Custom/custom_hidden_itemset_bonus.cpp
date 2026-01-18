@@ -65,6 +65,33 @@ struct LearnedSpellRefState
 
 using PlayerLearnedSpellRefMap = std::unordered_map<uint32, LearnedSpellRefState>;
 std::unordered_map<uint64, PlayerLearnedSpellRefMap> s_PlayerLearnedSpellRefs;
+
+void CollectLearnedSpellsFromSpell(uint32 spellId, std::unordered_set<uint32>& learnedSpellSet, std::unordered_set<uint32>& visitedSpells)
+{
+    if (!spellId)
+        return;
+
+    if (!visitedSpells.insert(spellId).second)
+        return;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return;
+
+    SpellLearnSpellMapBounds learnBounds = sSpellMgr->GetSpellLearnSpellMapBounds(spellId);
+    for (auto itr = learnBounds.first; itr != learnBounds.second; ++itr)
+        learnedSpellSet.insert(itr->second.spell);
+
+    for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
+    {
+        if ((effectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effectInfo.IsEffect(SPELL_EFFECT_SCRIPT_EFFECT)) && effectInfo.TriggerSpell)
+            learnedSpellSet.insert(effectInfo.TriggerSpell);
+
+        if (effectInfo.TriggerSpell)
+            CollectLearnedSpellsFromSpell(effectInfo.TriggerSpell, learnedSpellSet, visitedSpells);
+    }
+}
+
 bool IsHiddenBonusActive(Player* player, uint32 itemsetId)
 {
     if (!player)
@@ -461,16 +488,11 @@ void LoadHiddenItemsetBonuses()
         }
 
         std::unordered_set<uint32> learnedSpellSet;
-
-        SpellLearnSpellMapBounds learnBounds = sSpellMgr->GetSpellLearnSpellMapBounds(b.spellId);
-        for (auto itr = learnBounds.first; itr != learnBounds.second; ++itr)
-            learnedSpellSet.insert(itr->second.spell);
+        std::unordered_set<uint32> visitedSpells;
+        CollectLearnedSpellsFromSpell(b.spellId, learnedSpellSet, visitedSpells);
 
         for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
         {
-            if ((effectInfo.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effectInfo.IsEffect(SPELL_EFFECT_SCRIPT_EFFECT)) && effectInfo.TriggerSpell)
-                learnedSpellSet.insert(effectInfo.TriggerSpell);
-
             if ((effectInfo.IsEffect(SPELL_EFFECT_SUMMON) || effectInfo.IsEffect(SPELL_EFFECT_SUMMON_PET)) && effectInfo.MiscValue > 0)
                 b.summonedEntries.push_back(effectInfo.MiscValue);
         }
