@@ -1281,8 +1281,10 @@ class spell_rog_deadly_shot : public SpellScript
     void HandleOnHit()
     {
         Unit* caster = GetCaster();
-        Unit* target = GetHitUnit();
-        if (!caster || !target)
+        Unit* target = GetExplTargetUnit();
+        if (!target || target == caster)
+            target = GetHitUnit();
+        if (!caster || !target || target == caster)
             return;
 
         if (!_comboPoints)
