@@ -6566,6 +6566,10 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
     if (m_fromClient && unitCaster->IsCharmed() && unitCaster->IsPlayer() && !CheckSpellCancelsCharm(param1))
         result = SPELL_FAILED_CHARMED;
 
+    bool hasAttackMeFear = unitCaster->HasAttackMeFearAura();
+    if (result == SPELL_CAST_OK && hasAttackMeFear && !CheckSpellCancelsCharm(param1))
+        result = SPELL_FAILED_CHARMED;
+
     // spell has attribute usable while having a cc state, check if caster has allowed mechanic auras, another mechanic types must prevent cast spell
     auto mechanicCheck = [&](AuraType type) -> SpellCastResult
     {
@@ -6611,7 +6615,19 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
         return SPELL_CAST_OK;
     };
 
-    if (unitflag & UNIT_FLAG_STUNNED)
+    if (result == SPELL_CAST_OK && !hasAttackMeFear && unitflag & UNIT_FLAG_FLEEING)
+    {
+        if (usableWhileFeared)
+        {
+            SpellCastResult mechanicResult = mechanicCheck(SPELL_AURA_MOD_FEAR);
+            if (mechanicResult != SPELL_CAST_OK)
+                result = mechanicResult;
+        }
+        else if (!CheckSpellCancelsFear(param1))
+            result = SPELL_FAILED_FLEEING;
+    }
+
+    if (result == SPELL_CAST_OK && unitflag & UNIT_FLAG_STUNNED)
     {
         if (usableWhileStunned)
         {
@@ -6624,24 +6640,14 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
         else if ((m_spellInfo->Mechanic & MECHANIC_IMMUNE_SHIELD) && m_caster->ToUnit() && m_caster->ToUnit()->HasAuraWithMechanic(1 << MECHANIC_BANISH))
             result = SPELL_FAILED_STUNNED;
     }
-    else if (unitCaster->IsTaunted() && !CheckSpellCancelsCharm(param1))
+
+    if (result == SPELL_CAST_OK && unitCaster->IsTaunted() && !CheckSpellCancelsCharm(param1))
         result = SPELL_FAILED_CHARMED;
-    else if (unitflag & UNIT_FLAG_SILENCED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && !CheckSpellCancelsSilence(param1))
+    if (result == SPELL_CAST_OK && unitflag & UNIT_FLAG_SILENCED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && !CheckSpellCancelsSilence(param1))
         result = SPELL_FAILED_SILENCED;
-    else if (unitflag & UNIT_FLAG_PACIFIED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_PACIFY && !CheckSpellCancelsPacify(param1))
+    if (result == SPELL_CAST_OK && unitflag & UNIT_FLAG_PACIFIED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_PACIFY && !CheckSpellCancelsPacify(param1))
         result = SPELL_FAILED_PACIFIED;
-    else if (unitflag & UNIT_FLAG_FLEEING)
-    {
-        if (usableWhileFeared)
-        {
-            SpellCastResult mechanicResult = mechanicCheck(SPELL_AURA_MOD_FEAR);
-            if (mechanicResult != SPELL_CAST_OK)
-                result = mechanicResult;
-        }
-        else if (!CheckSpellCancelsFear(param1))
-            result = SPELL_FAILED_FLEEING;
-    }
-    else if ((unitflag & UNIT_FLAG_CONFUSED))
+    if (result == SPELL_CAST_OK && (unitflag & UNIT_FLAG_CONFUSED))
     {
         if (usableWhileConfused)
         {
