@@ -937,7 +937,7 @@ class spell_mage_ignite_tick : public AuraScript
             if (!caster->IsValidAttackTarget(spreadTarget))
                 continue;
 
-            if (spreadTarget->GetTypeId() != TYPEID_PLAYER && spreadTarget->GetCreatureType() != CREATURE_TYPE_HUMANOID)
+            if (spreadTarget->GetCreatureType() != CREATURE_TYPE_HUMANOID)
                 continue;
 
             if (spreadTarget->HasAura(SPELL_MAGE_IGNITE))
