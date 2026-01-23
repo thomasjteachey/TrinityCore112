@@ -418,6 +418,7 @@ class TC_GAME_API SpellInfo
         bool IsChanneled() const;
         bool IsMoveAllowedChannel() const;
         bool IsStarfire() const;
+        bool IsMindVision() const;
         float GetStarfireSnareSpeedRate() const;
         bool NeedsComboPoints() const;
         bool IsNextMeleeSwingSpell() const;
