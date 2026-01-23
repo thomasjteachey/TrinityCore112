@@ -1251,6 +1251,11 @@ bool SpellInfo::IsStarfire() const
     return SpellFamilyName == SPELLFAMILY_DRUID && (SpellFamilyFlags[0] & 0x00000004);
 }
 
+bool SpellInfo::IsMindVision() const
+{
+    return Id == 2096 || Id == 10909;
+}
+
 float SpellInfo::GetStarfireSnareSpeedRate() const
 {
     switch (Id)

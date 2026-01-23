@@ -2471,7 +2471,7 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     else if (MissCondition == SPELL_MISS_REFLECT && ReflectResult == SPELL_MISS_NONE)
         _spellHitTarget = spell->m_caster->ToUnit();
 
-    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()))
+    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision())
     {
         if(spell->m_spellInfo->Id != 14309 && spell->m_spellInfo->Id != 14308 && spell->m_spellInfo->Id != 3355 && spell->m_spellInfo->Id != 13810 && spell->m_spellInfo->Id != 63487 && spell->m_spellInfo->Id != 67035
             && spell->m_spellInfo->Id != 72216 && spell->m_spellInfo->Id != 19185 && spell->m_spellInfo->Id != 3600 && spell->m_spellInfo->Id != 6474) //freezing/frost traps and Earthbind Totem don't put you in combat
@@ -2893,7 +2893,7 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
         if (m_spellInfo->Speed > 0.0f && unit->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) && unit->GetCharmerOrOwnerGUID() != m_caster->GetGUID())
             return SPELL_MISS_EVADE;
 
-        if (m_caster->IsValidAttackTarget(unit, m_spellInfo))
+        if (m_caster->IsValidAttackTarget(unit, m_spellInfo) && !m_spellInfo->IsMindVision())
             unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
         else if (m_caster->IsFriendlyTo(unit))
         {
@@ -8079,7 +8079,7 @@ void Spell::PreprocessSpellLaunch(TargetInfo& targetInfo)
         return;
 
     // This will only cause combat - the target will engage once the projectile hits (in Spell::TargetInfo::PreprocessTarget)
-    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged())
+    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision()
         && (m_spellInfo->Id != 14309 && m_spellInfo->Id != 14308 && m_spellInfo->Id != 3355 && m_spellInfo->Id != 13810 && m_spellInfo->Id != 63487 && m_spellInfo->Id != 67035 && m_spellInfo->Id != 72216 && m_spellInfo->Id != 19185
             && m_spellInfo->Id != 3600 && m_spellInfo->Id != 6474)) //freezing/frost traps and Earthbind Totem don't put you in combat
         m_originalCaster->SetInCombatWith(targetUnit, true);
