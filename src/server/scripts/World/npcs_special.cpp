@@ -1585,6 +1585,19 @@ struct npc_training_dummy : NullCreatureAI
             else
                 ++itr;
         }
+
+        // Attackers are the only units that refresh the timer on training dummies.
+        // If no attacker has hit the dummy recently, drop all remaining PvE combat refs
+        // (such as healers that were pulled in by assist threat).
+        if (_combatTimer.empty())
+        {
+            std::vector<CombatReference*> combatRefs;
+            for (auto const& [_, combatRef] : me->GetCombatManager().GetPvECombatRefs())
+                combatRefs.push_back(combatRef);
+
+            for (CombatReference* combatRef : combatRefs)
+                combatRef->EndCombat();
+        }
     }
 private:
     std::unordered_map<ObjectGuid /*attackerGUID*/, Milliseconds /*combatTime*/> _combatTimer;
