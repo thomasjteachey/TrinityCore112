@@ -2405,6 +2405,10 @@ void WorldObject::ModSpellCastTime(SpellInfo const* spellInfo, int32& castTime, 
     else if (spellInfo->SpellVisual[0] == 3881 && unitCaster->HasAura(67556)) // cooking with Chef Hat.
         castTime = 500;
 
+    if (Player const* playerCaster = unitCaster->ToPlayer(); playerCaster && playerCaster->GetRace() == RACE_TAUREN
+        && (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT))
+        castTime = std::max(castTime - 1000, 0);
+
 }
 
 void WorldObject::ModSpellDurationTime(SpellInfo const* spellInfo, int32& duration, Spell* spell /*= nullptr*/) const
