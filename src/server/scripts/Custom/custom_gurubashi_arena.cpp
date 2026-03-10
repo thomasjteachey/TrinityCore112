@@ -60,6 +60,19 @@ char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is dea
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 
+bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
+{
+    if (!player)
+        return false;
+
+    if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
+        return false;
+
+    // The server already maintains authoritative FFA arena membership.
+    // In Gurubashi, entering/leaving the battle ring toggles this state.
+    return player->pvpInfo.IsInFFAPvPArea && player->HasPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
+}
+
 bool IsPlayerEligible(Player* player)
 {
     if (!player || !player->IsInWorld())
@@ -84,7 +97,7 @@ enum class GurubashiAreaState
     NonRing
 };
 
-GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 /*areaId*/)
 {
     if (!player)
         return GurubashiAreaState::Outside;
@@ -92,17 +105,8 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    // Match Player::UpdateArea() behavior: the arena flag can be defined on a parent area.
-    for (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId); areaEntry;)
-    {
-        if (areaEntry->Flags & AREA_FLAG_ARENA)
-            return GurubashiAreaState::BattleRing;
-
-        if (!areaEntry->ParentAreaID)
-            break;
-
-        areaEntry = sAreaTableStore.LookupEntry(areaEntry->ParentAreaID);
-    }
+    if (IsInGurubashiBattleRingByPvpState(player, zoneId))
+        return GurubashiAreaState::BattleRing;
 
     return GurubashiAreaState::NonRing;
 }
