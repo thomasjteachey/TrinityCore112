@@ -79,24 +79,20 @@ bool IsPlayerEligible(Player* player)
 
 enum class GurubashiAreaState
 {
-    Other,
+    Outside,
     BattleRing,
-    Sanctuary
+    NonRing
 };
 
-GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 /*areaId*/)
 {
     if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
-        return GurubashiAreaState::Other;
+        return GurubashiAreaState::Outside;
 
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
-        return GurubashiAreaState::Other;
+        return GurubashiAreaState::Outside;
 
-    if (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId))
-        if (areaEntry->IsSanctuary())
-            return GurubashiAreaState::Sanctuary;
-
-    return player->IsFFAPvP() ? GurubashiAreaState::BattleRing : GurubashiAreaState::Other;
+    return player->IsFFAPvP() ? GurubashiAreaState::BattleRing : GurubashiAreaState::NonRing;
 }
 
 
@@ -424,9 +420,10 @@ public:
         Position const currentPosition = player->GetPosition();
         GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
 
-        bool const isTeleportTransition = player->IsBeingTeleported() || !player->HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() ||
+            (tracked.HasPosition && tracked.Position.GetExactDist2d(currentPosition) > 80.0f);
 
-        if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::Sanctuary &&
+        if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing &&
             !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
         {
             Creature* chromi = GetChromiCasterForPlayer(player);
@@ -441,6 +438,7 @@ public:
 
         tracked.AreaState = currentState;
         tracked.Position = currentPosition;
+        tracked.MapId = player->GetMapId();
         tracked.HasPosition = true;
     }
 
@@ -453,13 +451,15 @@ private:
         TrackedState& tracked = _trackedPlayers[player->GetGUID()];
         tracked.AreaState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
         tracked.Position = player->GetPosition();
+        tracked.MapId = player->GetMapId();
         tracked.HasPosition = true;
     }
 
     struct TrackedState
     {
-        GurubashiAreaState AreaState = GurubashiAreaState::Other;
+        GurubashiAreaState AreaState = GurubashiAreaState::Outside;
         Position Position;
+        uint32 MapId = 0;
         bool HasPosition = false;
     };
 
