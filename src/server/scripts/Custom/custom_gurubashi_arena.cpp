@@ -375,7 +375,7 @@ public:
         if (wasInBattleRing && !isInBattleRing)
         {
             player->CastSpell(player, MOONFIRE_SPELL_ID, TRIGGERED_FULL_MASK);
-            player->DealDamage(player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+            Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
             WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
         }
 
