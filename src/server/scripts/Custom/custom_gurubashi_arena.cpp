@@ -33,6 +33,7 @@
 #include "Util.h"
 
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <shared_mutex>
 #include <unordered_map>
@@ -98,7 +99,7 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
 }
 
 
-Creature* FindChromiForPlayer(Player* player)
+Creature* GetChromiCasterForPlayer(Player* player)
 {
     if (!player)
         return nullptr;
@@ -124,7 +125,14 @@ Creature* FindChromiForPlayer(Player* player)
         }
     }
 
-    return nearestChromi;
+    if (nearestChromi && nearestDistance <= 40.0f)
+        return nearestChromi;
+
+    Position summonPosition = player->GetPosition();
+    summonPosition.m_positionX += std::cos(summonPosition.GetOrientation()) * 2.0f;
+    summonPosition.m_positionY += std::sin(summonPosition.GetOrientation()) * 2.0f;
+
+    return player->SummonCreature(CHROMIE_ENTRY, summonPosition, TEMPSUMMON_TIMED_DESPAWN, 5s);
 }
 
 void WhisperFromChromi(Player* player, Creature* chromi, std::string_view message)
@@ -415,13 +423,12 @@ public:
         Position const currentPosition = player->GetPosition();
         GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
 
-        bool const isTeleportTransition = player->IsBeingTeleported() ||
-            (tracked.HasPosition && tracked.Position.GetExactDist2d(currentPosition) > 80.0f);
+        bool const isTeleportTransition = player->IsBeingTeleported() || !player->HasUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
 
         if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::Sanctuary &&
             !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
         {
-            Creature* chromi = FindChromiForPlayer(player);
+            Creature* chromi = GetChromiCasterForPlayer(player);
             if (chromi)
                 chromi->CastSpell(player, MOONFIRE_SPELL_ID, false);
             else
