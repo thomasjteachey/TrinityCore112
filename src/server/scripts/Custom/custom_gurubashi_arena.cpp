@@ -17,6 +17,7 @@
 
 #include "Chat.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
@@ -33,7 +34,9 @@
 
 #include <chrono>
 #include <shared_mutex>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -44,9 +47,13 @@ constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
+constexpr uint32 MOONFIRE_SPELL_ID = 8921;
+constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
+char const* const CHROMI_NAME = "Chromi";
+char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is death.";
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 
@@ -65,6 +72,37 @@ bool IsPlayerEligible(Player* player)
         return false;
 
     return player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
+}
+
+enum class GurubashiAreaState
+{
+    Other,
+    BattleRing,
+    Sanctuary
+};
+
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
+{
+    if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
+        return GurubashiAreaState::Other;
+
+    if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
+        return GurubashiAreaState::Other;
+
+    if (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId))
+        if (areaEntry->IsSanctuary())
+            return GurubashiAreaState::Sanctuary;
+
+    return player->IsFFAPvP() ? GurubashiAreaState::BattleRing : GurubashiAreaState::Other;
+}
+
+void WhisperFromChromi(Player* player, std::string_view message)
+{
+    WorldPacket data;
+    ObjectGuid chromiGuid = ObjectGuid::Create<HighGuid::Unit>(CHROMIE_ENTRY, 1);
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromiGuid, player->GetGUID(), message,
+        0, CHROMI_NAME, player->GetName());
+    player->SendDirectMessage(&data);
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
@@ -310,6 +348,82 @@ private:
 
 gurubashi_arena_hourly_event* gurubashi_arena_hourly_event::s_Instance = nullptr;
 
+
+class gurubashi_arena_exit_enforcer : public WorldScript
+{
+public:
+    gurubashi_arena_exit_enforcer() : WorldScript("gurubashi_arena_exit_enforcer") { }
+
+    void OnUpdate(uint32 diff) override
+    {
+        _updateTimer += diff;
+        if (_updateTimer < 250)
+            return;
+
+        _updateTimer = 0;
+
+        std::unordered_set<ObjectGuid> activePlayers;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        std::vector<Player*> players;
+
+        {
+            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+            players.reserve(ObjectAccessor::GetPlayers().size());
+            for (auto const& playerPair : ObjectAccessor::GetPlayers())
+                if (Player* player = playerPair.second)
+                    if (player->IsInWorld())
+                        players.push_back(player);
+        }
+
+        for (Player* player : players)
+        {
+            ObjectGuid const guid = player->GetGUID();
+            activePlayers.insert(guid);
+
+            TrackedState& tracked = _trackedPlayers[guid];
+            Position const currentPosition = player->GetPosition();
+            GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
+
+            bool const hasLargePositionJump = tracked.HasPosition && tracked.Position.GetExactDist2d(currentPosition) > 70.0f;
+            bool const isTeleportRelatedUpdate = player->IsBeingTeleported() || nowMs < tracked.IgnoreUntilMs || hasLargePositionJump;
+
+            if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::Sanctuary &&
+                !isTeleportRelatedUpdate && !player->IsGameMaster() && player->IsAlive())
+            {
+                player->CastSpell(player, MOONFIRE_SPELL_ID, TRIGGERED_FULL_MASK);
+                Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
+            }
+
+            tracked.AreaState = currentState;
+            tracked.Position = currentPosition;
+            tracked.HasPosition = true;
+            tracked.IgnoreUntilMs = isTeleportRelatedUpdate ? (nowMs + 1000) : 0;
+        }
+
+        for (auto itr = _trackedPlayers.begin(); itr != _trackedPlayers.end();)
+        {
+            if (activePlayers.find(itr->first) == activePlayers.end())
+                itr = _trackedPlayers.erase(itr);
+            else
+                ++itr;
+        }
+    }
+
+private:
+    struct TrackedState
+    {
+        GurubashiAreaState AreaState = GurubashiAreaState::Other;
+        Position Position;
+        bool HasPosition = false;
+        uint32 IgnoreUntilMs = 0;
+    };
+
+    uint32 _updateTimer = 0;
+    std::unordered_map<ObjectGuid, TrackedState> _trackedPlayers;
+};
+
+
 namespace
 {
 using namespace Trinity::ChatCommands;
@@ -409,5 +523,6 @@ void AddSC_custom_gurubashi_arena()
 {
     new go_custom_gurubashi_hourly_chest();
     new gurubashi_arena_hourly_event();
+    new gurubashi_arena_exit_enforcer();
     new gurubashi_arena_commands();
 }
