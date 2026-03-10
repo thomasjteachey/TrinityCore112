@@ -57,6 +57,8 @@ constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const CHROMI_NAME = "Chromi";
+ObjectGuid const CHROMI_VIRTUAL_PLAYER_GUID = ObjectGuid::Create<HighGuid::Player>(ObjectGuid::LowType(900000));
+char const* const CHROMI_VIRTUAL_PLAYER_NAME = "Chromie";
 char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is death.";
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
@@ -149,13 +151,28 @@ Creature* GetChromiCasterForPlayer(Player* player)
     return player->SummonCreature(CHROMIE_ENTRY, summonPosition, TEMPSUMMON_TIMED_DESPAWN, 5s);
 }
 
-void WhisperFromChromi(Player* player, Creature* chromi, std::string_view message)
+Player* FindConnectedChromiPlayer()
 {
+    if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(CHROMI_NAME))
+        return chromi;
+
+    return ObjectAccessor::FindConnectedPlayerByName("Chromie");
+}
+
+void WhisperFromChromi(Player* player, Creature* /*chromi*/, std::string_view message)
+{
+    if (!player)
+        return;
+
+    if (Player* chromiPlayer = FindConnectedChromiPlayer())
+    {
+        chromiPlayer->Whisper(message, LANG_UNIVERSAL, player);
+        return;
+    }
+
     WorldPacket data;
-    ObjectGuid chromiGuid = chromi ? chromi->GetGUID() : ObjectGuid::Create<HighGuid::Unit>(CHROMIE_ENTRY, 1);
-    std::string speakerName = chromi ? chromi->GetName() : CHROMI_NAME;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromiGuid, player->GetGUID(), message,
-        0, speakerName.c_str(), player->GetName());
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, CHROMI_VIRTUAL_PLAYER_GUID, player->GetGUID(), message,
+        0, CHROMI_VIRTUAL_PLAYER_NAME);
     player->SendDirectMessage(&data);
 }
 
