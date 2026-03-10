@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -59,6 +60,19 @@ char const* const CHROMI_NAME = "Chromi";
 char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is death.";
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
+
+bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
+{
+    if (!player)
+        return false;
+
+    if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
+        return false;
+
+    // The server already maintains authoritative FFA arena membership.
+    // In Gurubashi, entering/leaving the battle ring toggles this state.
+    return player->pvpInfo.IsInFFAPvPArea && player->HasPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
+}
 
 bool IsPlayerEligible(Player* player)
 {
@@ -84,7 +98,7 @@ enum class GurubashiAreaState
     NonRing
 };
 
-GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 /*areaId*/)
 {
     if (!player)
         return GurubashiAreaState::Outside;
@@ -92,17 +106,8 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    // Match Player::UpdateArea() behavior: the arena flag can be defined on a parent area.
-    for (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId); areaEntry;)
-    {
-        if (areaEntry->Flags & AREA_FLAG_ARENA)
-            return GurubashiAreaState::BattleRing;
-
-        if (!areaEntry->ParentAreaID)
-            break;
-
-        areaEntry = sAreaTableStore.LookupEntry(areaEntry->ParentAreaID);
-    }
+    if (IsInGurubashiBattleRingByPvpState(player, zoneId))
+        return GurubashiAreaState::BattleRing;
 
     return GurubashiAreaState::NonRing;
 }
@@ -398,76 +403,143 @@ private:
 gurubashi_arena_hourly_event* gurubashi_arena_hourly_event::s_Instance = nullptr;
 
 
-class gurubashi_arena_exit_enforcer : public PlayerScript
+namespace
+{
+std::mutex g_GurubashiTrackedPlayersMutex;
+std::unordered_set<ObjectGuid> g_GurubashiTrackedPlayers;
+
+bool ShouldTrackGurubashiPlayer(Player const* player)
+{
+    return player && player->IsInWorld() && player->GetMapId() == GURUBASHI_ARENA_MAP_ID && player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
+}
+
+void UpdateGurubashiPlayerTracking(Player* player)
+{
+    if (!player)
+        return;
+
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    if (ShouldTrackGurubashiPlayer(player))
+        g_GurubashiTrackedPlayers.insert(player->GetGUID());
+    else
+        g_GurubashiTrackedPlayers.erase(player->GetGUID());
+}
+
+void RemoveGurubashiPlayerTracking(ObjectGuid guid)
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    g_GurubashiTrackedPlayers.erase(guid);
+}
+}
+
+class gurubashi_arena_exit_tracker : public PlayerScript
 {
 public:
-    gurubashi_arena_exit_enforcer() : PlayerScript("gurubashi_arena_exit_enforcer") { }
+    gurubashi_arena_exit_tracker() : PlayerScript("gurubashi_arena_exit_tracker") { }
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        UpdateTrackedState(player);
+        UpdateGurubashiPlayerTracking(player);
     }
 
     void OnMapChanged(Player* player) override
     {
-        UpdateTrackedState(player);
+        UpdateGurubashiPlayerTracking(player);
+    }
+
+    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    {
+        UpdateGurubashiPlayerTracking(player);
     }
 
     void OnLogout(Player* player) override
     {
-        if (!player)
-            return;
-
-        _trackedPlayers.erase(player->GetGUID());
+        if (player)
+            RemoveGurubashiPlayerTracking(player->GetGUID());
     }
+};
 
-    void OnUpdateZone(Player* player, uint32 newZone, uint32 newArea) override
+class gurubashi_arena_exit_enforcer : public WorldScript
+{
+public:
+    gurubashi_arena_exit_enforcer() : WorldScript("gurubashi_arena_exit_enforcer") { }
+
+    void OnUpdate(uint32 diff) override
     {
-        if (!player)
+        _scanAccumulator += diff;
+        if (_scanAccumulator < _scanIntervalMs)
             return;
 
-        ObjectGuid const guid = player->GetGUID();
-        TrackedState& tracked = _trackedPlayers[guid];
+        _scanAccumulator = 0;
 
-        Position const currentPosition = player->GetPosition();
-        GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
-
-        float const distance2d = tracked.HasPosition ? tracked.Position.GetExactDist2d(currentPosition) : std::numeric_limits<float>::max();
-        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 15.0f;
-        bool const crossedBattleRingBoundary =
-            tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
-
-        if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
+        std::vector<ObjectGuid> trackedPlayers;
         {
-            Creature* chromi = GetChromiCasterForPlayer(player);
-            if (chromi)
-                chromi->CastSpell(player, MOONFIRE_SPELL_ID, false);
-            else
-                player->CastSpell(player, MOONFIRE_SPELL_ID, false);
-
-            Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
-            WhisperFromChromi(player, chromi, GURUBASHI_EXIT_WHISPER);
+            std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+            trackedPlayers.reserve(g_GurubashiTrackedPlayers.size());
+            for (ObjectGuid const& guid : g_GurubashiTrackedPlayers)
+                trackedPlayers.push_back(guid);
         }
 
-        tracked.AreaState = currentState;
-        tracked.Position = currentPosition;
-        tracked.MapId = player->GetMapId();
-        tracked.HasPosition = true;
+        std::unordered_set<ObjectGuid> processedPlayers;
+        processedPlayers.reserve(trackedPlayers.size());
+
+        for (ObjectGuid const& guid : trackedPlayers)
+        {
+            Player* player = ObjectAccessor::FindPlayer(guid);
+            if (!player || !player->IsInWorld())
+            {
+                RemoveGurubashiPlayerTracking(guid);
+                _trackedPlayers.erase(guid);
+                continue;
+            }
+
+            if (!ShouldTrackGurubashiPlayer(player))
+            {
+                UpdateGurubashiPlayerTracking(player);
+                _trackedPlayers.erase(guid);
+                continue;
+            }
+
+            processedPlayers.insert(guid);
+
+            TrackedState& tracked = _trackedPlayers[guid];
+            Position const currentPosition = player->GetPosition();
+            GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
+
+            if (tracked.HasPosition)
+            {
+                float const distance2d = tracked.Position.GetExactDist2d(currentPosition);
+                bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 45.0f;
+                bool const crossedBattleRingBoundary =
+                    tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
+
+                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
+                {
+                    Creature* chromi = GetChromiCasterForPlayer(player);
+                    if (chromi)
+                        chromi->CastSpell(player, MOONFIRE_SPELL_ID, false);
+                    else
+                        player->CastSpell(player, MOONFIRE_SPELL_ID, false);
+
+                    Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                    WhisperFromChromi(player, chromi, GURUBASHI_EXIT_WHISPER);
+                }
+            }
+
+            tracked.AreaState = currentState;
+            tracked.Position = currentPosition;
+            tracked.MapId = player->GetMapId();
+            tracked.HasPosition = true;
+        }
+
+        for (auto itr = _trackedPlayers.begin(); itr != _trackedPlayers.end();)
+            if (processedPlayers.find(itr->first) == processedPlayers.end())
+                itr = _trackedPlayers.erase(itr);
+            else
+                ++itr;
     }
 
 private:
-    void UpdateTrackedState(Player* player)
-    {
-        if (!player)
-            return;
-
-        TrackedState& tracked = _trackedPlayers[player->GetGUID()];
-        tracked.AreaState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
-        tracked.Position = player->GetPosition();
-        tracked.MapId = player->GetMapId();
-        tracked.HasPosition = true;
-    }
-
     struct TrackedState
     {
         GurubashiAreaState AreaState = GurubashiAreaState::Outside;
@@ -477,6 +549,8 @@ private:
     };
 
     std::unordered_map<ObjectGuid, TrackedState> _trackedPlayers;
+    uint32 _scanAccumulator = 0;
+    static constexpr uint32 _scanIntervalMs = 250;
 };
 
 
@@ -579,6 +653,7 @@ void AddSC_custom_gurubashi_arena()
 {
     new go_custom_gurubashi_hourly_chest();
     new gurubashi_arena_hourly_event();
+    new gurubashi_arena_exit_tracker();
     new gurubashi_arena_exit_enforcer();
     new gurubashi_arena_commands();
 }
