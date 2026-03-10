@@ -73,16 +73,26 @@ bool IsPlayerEligible(Player* player)
     return player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
 }
 
-bool IsInGurubashiBattleRing(Player const* player, uint32 zoneId)
+enum class GurubashiAreaState
+{
+    Other,
+    BattleRing,
+    Sanctuary
+};
+
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
 {
     if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
-        return false;
+        return GurubashiAreaState::Other;
 
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
-        return false;
+        return GurubashiAreaState::Other;
 
-    // Gurubashi battle ring uses FFA PvP; the surrounding spectator/safe area does not.
-    return player->IsFFAPvP();
+    if (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId))
+        if (areaEntry->IsSanctuary())
+            return GurubashiAreaState::Sanctuary;
+
+    return player->IsFFAPvP() ? GurubashiAreaState::BattleRing : GurubashiAreaState::Other;
 }
 
 void WhisperFromChromi(Player* player, std::string_view message)
@@ -345,10 +355,7 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        if (!player)
-            return;
-
-        _ignoreNextZoneUpdate.insert(player->GetGUID());
+        MarkTeleportTransition(player);
         UpdateArenaState(player);
     }
 
@@ -358,54 +365,84 @@ public:
             return;
 
         ObjectGuid const guid = player->GetGUID();
-        _playerInBattleRing.erase(guid);
-        _ignoreNextZoneUpdate.erase(guid);
+        _playerAreaState.erase(guid);
+        _ignoreUntilMs.erase(guid);
     }
 
     void OnMapChanged(Player* player) override
     {
-        if (!player)
-            return;
-
-        _ignoreNextZoneUpdate.insert(player->GetGUID());
+        MarkTeleportTransition(player);
         UpdateArenaState(player);
     }
 
-    void OnUpdateZone(Player* player, uint32 newZone, uint32 /*newArea*/) override
+    void OnUpdateZone(Player* player, uint32 newZone, uint32 newArea) override
     {
-        if (!player || !player->IsAlive() || player->IsBeingTeleported() || player->IsGameMaster())
+        if (!player)
+            return;
+
+        ObjectGuid const guid = player->GetGUID();
+
+        if (player->IsBeingTeleported())
         {
-            UpdateArenaState(player);
+            MarkTeleportTransition(player);
+            _playerAreaState[guid] = GetGurubashiAreaState(player, newZone, newArea);
             return;
         }
 
-        ObjectGuid const guid = player->GetGUID();
-        bool const wasInBattleRing = _playerInBattleRing[guid];
-        bool const isInBattleRing = IsInGurubashiBattleRing(player, newZone);
-        bool const isTeleportRelatedUpdate = player->IsBeingTeleported() || (_ignoreNextZoneUpdate.erase(guid) > 0);
+        GurubashiAreaState const previousState = _playerAreaState[guid];
+        GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
 
-        if (wasInBattleRing && !isInBattleRing && !isTeleportRelatedUpdate)
+        if (previousState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::Sanctuary &&
+            !player->IsGameMaster() && player->IsAlive() && !IsTeleportRelatedUpdate(guid))
         {
             player->CastSpell(player, MOONFIRE_SPELL_ID, TRIGGERED_FULL_MASK);
             Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
             WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
         }
 
-        _playerInBattleRing[guid] = isInBattleRing;
+        _playerAreaState[guid] = currentState;
     }
 
 private:
+    static uint32 GetTeleportGraceUntilMs()
+    {
+        return GameTime::GetGameTimeMS() + 3000;
+    }
+
+    void MarkTeleportTransition(Player* player)
+    {
+        if (!player)
+            return;
+
+        _ignoreUntilMs[player->GetGUID()] = GetTeleportGraceUntilMs();
+    }
+
+    bool IsTeleportRelatedUpdate(ObjectGuid guid)
+    {
+        auto const itr = _ignoreUntilMs.find(guid);
+        if (itr == _ignoreUntilMs.end())
+            return false;
+
+        uint32 const now = GameTime::GetGameTimeMS();
+        if (now <= itr->second)
+            return true;
+
+        _ignoreUntilMs.erase(itr);
+        return false;
+    }
+
     void UpdateArenaState(Player* player)
     {
         if (!player)
             return;
 
-        _playerInBattleRing[player->GetGUID()] = IsInGurubashiBattleRing(player, player->GetZoneId());
+        _playerAreaState[player->GetGUID()] = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
     }
 
-    std::unordered_map<ObjectGuid, bool> _playerInBattleRing;
-    std::unordered_set<ObjectGuid> _ignoreNextZoneUpdate;
+    std::unordered_map<ObjectGuid, GurubashiAreaState> _playerAreaState;
+    std::unordered_map<ObjectGuid, uint32> _ignoreUntilMs;
 };
+
 
 namespace
 {
