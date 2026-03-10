@@ -149,8 +149,27 @@ Creature* GetChromiCasterForPlayer(Player* player)
     return player->SummonCreature(CHROMIE_ENTRY, summonPosition, TEMPSUMMON_TIMED_DESPAWN, 5s);
 }
 
+Player* FindConnectedChromiPlayer()
+{
+    if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(CHROMI_NAME))
+        return chromi;
+
+    return ObjectAccessor::FindConnectedPlayerByName("Chromie");
+}
+
 void WhisperFromChromi(Player* player, Creature* chromi, std::string_view message)
 {
+    if (!player)
+        return;
+
+    if (Player* chromiPlayer = FindConnectedChromiPlayer())
+    {
+        WorldPacket playerWhisperData;
+        ChatHandler::BuildChatPacket(playerWhisperData, CHAT_MSG_WHISPER, LANG_UNIVERSAL, chromiPlayer, player, message);
+        player->SendDirectMessage(&playerWhisperData);
+        return;
+    }
+
     WorldPacket data;
     ObjectGuid chromiGuid = chromi ? chromi->GetGUID() : ObjectGuid::Create<HighGuid::Unit>(CHROMIE_ENTRY, 1);
     std::string speakerName = chromi ? chromi->GetName() : CHROMI_NAME;

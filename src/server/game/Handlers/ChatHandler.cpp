@@ -47,11 +47,24 @@
 
 namespace
 {
-char const* const CHROMI_WHISPER_NAME = "Chromi";
+std::array<std::string_view, 2> const CHROMI_WHISPER_NAMES = { "Chromi", "Chromie" };
+
 bool IsChromiWhisperTarget(std::string const& targetName)
 {
     std::string normalizedTarget = targetName;
-    return normalizePlayerName(normalizedTarget) && normalizedTarget == CHROMI_WHISPER_NAME;
+    if (!normalizePlayerName(normalizedTarget))
+        return false;
+
+    return std::find(CHROMI_WHISPER_NAMES.begin(), CHROMI_WHISPER_NAMES.end(), normalizedTarget) != CHROMI_WHISPER_NAMES.end();
+}
+
+Player* FindConnectedChromiPlayer()
+{
+    for (std::string_view chromiName : CHROMI_WHISPER_NAMES)
+        if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(chromiName))
+            return chromi;
+
+    return nullptr;
 }
 
 std::string_view GetRandomChromiCatFact()
@@ -352,13 +365,14 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         {
             if (IsChromiWhisperTarget(to))
             {
-                if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(CHROMI_WHISPER_NAME))
+                if (Player* chromi = FindConnectedChromiPlayer())
                 {
                     WorldPacket data;
                     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL, chromi, sender, GetRandomChromiCatFact());
                     sender->SendDirectMessage(&data);
-                    break;
                 }
+
+                return;
             }
 
             if (!normalizePlayerName(to))
