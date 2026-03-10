@@ -36,6 +36,7 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -348,99 +349,78 @@ private:
 gurubashi_arena_hourly_event* gurubashi_arena_hourly_event::s_Instance = nullptr;
 
 
-class gurubashi_arena_exit_enforcer : public PlayerScript
+class gurubashi_arena_exit_enforcer : public WorldScript
 {
 public:
-    gurubashi_arena_exit_enforcer() : PlayerScript("gurubashi_arena_exit_enforcer") { }
+    gurubashi_arena_exit_enforcer() : WorldScript("gurubashi_arena_exit_enforcer") { }
 
-    void OnLogin(Player* player, bool /*firstLogin*/) override
+    void OnUpdate(uint32 diff) override
     {
-        MarkTeleportTransition(player);
-        UpdateArenaState(player);
-    }
-
-    void OnLogout(Player* player) override
-    {
-        if (!player)
+        _updateTimer += diff;
+        if (_updateTimer < 250)
             return;
 
-        ObjectGuid const guid = player->GetGUID();
-        _playerAreaState.erase(guid);
-        _ignoreUntilMs.erase(guid);
-    }
+        _updateTimer = 0;
 
-    void OnMapChanged(Player* player) override
-    {
-        MarkTeleportTransition(player);
-        UpdateArenaState(player);
-    }
+        std::unordered_set<ObjectGuid> activePlayers;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        std::vector<Player*> players;
 
-    void OnUpdateZone(Player* player, uint32 newZone, uint32 newArea) override
-    {
-        if (!player)
-            return;
-
-        ObjectGuid const guid = player->GetGUID();
-
-        if (player->IsBeingTeleported())
         {
-            MarkTeleportTransition(player);
-            _playerAreaState[guid] = GetGurubashiAreaState(player, newZone, newArea);
-            return;
+            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+            players.reserve(ObjectAccessor::GetPlayers().size());
+            for (auto const& playerPair : ObjectAccessor::GetPlayers())
+                if (Player* player = playerPair.second)
+                    if (player->IsInWorld())
+                        players.push_back(player);
         }
 
-        GurubashiAreaState const previousState = _playerAreaState[guid];
-        GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
-
-        if (previousState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::Sanctuary &&
-            !player->IsGameMaster() && player->IsAlive() && !IsTeleportRelatedUpdate(guid))
+        for (Player* player : players)
         {
-            player->CastSpell(player, MOONFIRE_SPELL_ID, TRIGGERED_FULL_MASK);
-            Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
-            WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
+            ObjectGuid const guid = player->GetGUID();
+            activePlayers.insert(guid);
+
+            TrackedState& tracked = _trackedPlayers[guid];
+            Position const currentPosition = player->GetPosition();
+            GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
+
+            bool const hasLargePositionJump = tracked.HasPosition && tracked.Position.GetExactDist2d(currentPosition) > 70.0f;
+            bool const isTeleportRelatedUpdate = player->IsBeingTeleported() || nowMs < tracked.IgnoreUntilMs || hasLargePositionJump;
+
+            if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::Sanctuary &&
+                !isTeleportRelatedUpdate && !player->IsGameMaster() && player->IsAlive())
+            {
+                player->CastSpell(player, MOONFIRE_SPELL_ID, TRIGGERED_FULL_MASK);
+                Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
+            }
+
+            tracked.AreaState = currentState;
+            tracked.Position = currentPosition;
+            tracked.HasPosition = true;
+            tracked.IgnoreUntilMs = isTeleportRelatedUpdate ? (nowMs + 1000) : 0;
         }
 
-        _playerAreaState[guid] = currentState;
+        for (auto itr = _trackedPlayers.begin(); itr != _trackedPlayers.end();)
+        {
+            if (activePlayers.find(itr->first) == activePlayers.end())
+                itr = _trackedPlayers.erase(itr);
+            else
+                ++itr;
+        }
     }
 
 private:
-    static uint32 GetTeleportGraceUntilMs()
+    struct TrackedState
     {
-        return GameTime::GetGameTimeMS() + 3000;
-    }
+        GurubashiAreaState AreaState = GurubashiAreaState::Other;
+        Position Position;
+        bool HasPosition = false;
+        uint32 IgnoreUntilMs = 0;
+    };
 
-    void MarkTeleportTransition(Player* player)
-    {
-        if (!player)
-            return;
-
-        _ignoreUntilMs[player->GetGUID()] = GetTeleportGraceUntilMs();
-    }
-
-    bool IsTeleportRelatedUpdate(ObjectGuid guid)
-    {
-        auto const itr = _ignoreUntilMs.find(guid);
-        if (itr == _ignoreUntilMs.end())
-            return false;
-
-        uint32 const now = GameTime::GetGameTimeMS();
-        if (now <= itr->second)
-            return true;
-
-        _ignoreUntilMs.erase(itr);
-        return false;
-    }
-
-    void UpdateArenaState(Player* player)
-    {
-        if (!player)
-            return;
-
-        _playerAreaState[player->GetGUID()] = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
-    }
-
-    std::unordered_map<ObjectGuid, GurubashiAreaState> _playerAreaState;
-    std::unordered_map<ObjectGuid, uint32> _ignoreUntilMs;
+    uint32 _updateTimer = 0;
+    std::unordered_map<ObjectGuid, TrackedState> _trackedPlayers;
 };
 
 
