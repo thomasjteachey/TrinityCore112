@@ -86,7 +86,7 @@ enum class GurubashiAreaState
 
 GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
 {
-    if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
+    if (!player)
         return GurubashiAreaState::Outside;
 
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
