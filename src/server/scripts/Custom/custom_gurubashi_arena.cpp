@@ -84,7 +84,7 @@ enum class GurubashiAreaState
     NonRing
 };
 
-GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 /*areaId*/)
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
 {
     if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
         return GurubashiAreaState::Outside;
@@ -92,7 +92,11 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    return player->IsFFAPvP() ? GurubashiAreaState::BattleRing : GurubashiAreaState::NonRing;
+    AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId);
+    if (areaEntry && (areaEntry->Flags & AREA_FLAG_ARENA))
+        return GurubashiAreaState::BattleRing;
+
+    return GurubashiAreaState::NonRing;
 }
 
 
@@ -420,8 +424,7 @@ public:
         Position const currentPosition = player->GetPosition();
         GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
 
-        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() ||
-            (tracked.HasPosition && tracked.Position.GetExactDist2d(currentPosition) > 80.0f);
+        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId();
 
         if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing &&
             !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
