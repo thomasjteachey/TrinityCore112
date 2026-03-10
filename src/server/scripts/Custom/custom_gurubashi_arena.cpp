@@ -92,9 +92,17 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId);
-    if (areaEntry && (areaEntry->Flags & AREA_FLAG_ARENA))
-        return GurubashiAreaState::BattleRing;
+    // Match Player::UpdateArea() behavior: the arena flag can be defined on a parent area.
+    for (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId); areaEntry;)
+    {
+        if (areaEntry->Flags & AREA_FLAG_ARENA)
+            return GurubashiAreaState::BattleRing;
+
+        if (!areaEntry->ParentAreaID)
+            break;
+
+        areaEntry = sAreaTableStore.LookupEntry(areaEntry->ParentAreaID);
+    }
 
     return GurubashiAreaState::NonRing;
 }
@@ -424,10 +432,13 @@ public:
         Position const currentPosition = player->GetPosition();
         GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
 
-        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId();
+        float const distance2d = tracked.HasPosition ? tracked.Position.GetExactDist2d(currentPosition) : std::numeric_limits<float>::max();
+        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 15.0f;
+        bool const crossedBattleRingBoundary =
+            (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing) ||
+            (tracked.AreaState == GurubashiAreaState::NonRing && currentState == GurubashiAreaState::BattleRing);
 
-        if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing &&
-            !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
+        if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
         {
             Creature* chromi = GetChromiCasterForPlayer(player);
             if (chromi)
