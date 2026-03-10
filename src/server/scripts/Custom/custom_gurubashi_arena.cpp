@@ -84,7 +84,7 @@ enum class GurubashiAreaState
     NonRing
 };
 
-GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 /*areaId*/)
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
 {
     if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
         return GurubashiAreaState::Outside;
@@ -92,7 +92,19 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    return player->IsFFAPvP() ? GurubashiAreaState::BattleRing : GurubashiAreaState::NonRing;
+    // Match Player::UpdateArea() behavior: the arena flag can be defined on a parent area.
+    for (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId); areaEntry;)
+    {
+        if (areaEntry->Flags & AREA_FLAG_ARENA)
+            return GurubashiAreaState::BattleRing;
+
+        if (!areaEntry->ParentAreaID)
+            break;
+
+        areaEntry = sAreaTableStore.LookupEntry(areaEntry->ParentAreaID);
+    }
+
+    return GurubashiAreaState::NonRing;
 }
 
 
@@ -420,11 +432,13 @@ public:
         Position const currentPosition = player->GetPosition();
         GurubashiAreaState const currentState = GetGurubashiAreaState(player, newZone, newArea);
 
-        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() ||
-            (tracked.HasPosition && tracked.Position.GetExactDist2d(currentPosition) > 80.0f);
+        float const distance2d = tracked.HasPosition ? tracked.Position.GetExactDist2d(currentPosition) : std::numeric_limits<float>::max();
+        bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 15.0f;
+        bool const crossedBattleRingBoundary =
+            (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing) ||
+            (tracked.AreaState == GurubashiAreaState::NonRing && currentState == GurubashiAreaState::BattleRing);
 
-        if (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing &&
-            !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
+        if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
         {
             Creature* chromi = GetChromiCasterForPlayer(player);
             if (chromi)
