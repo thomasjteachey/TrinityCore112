@@ -17,6 +17,7 @@
 
 #include "Chat.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
 #include "GameTime.h"
@@ -33,6 +34,7 @@
 
 #include <chrono>
 #include <shared_mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 using namespace std::chrono_literals;
@@ -44,9 +46,13 @@ constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
+constexpr uint32 MOONFIRE_SPELL_ID = 8921;
+constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
+char const* const CHROMI_NAME = "Chromi";
+char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is death.";
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 
@@ -65,6 +71,29 @@ bool IsPlayerEligible(Player* player)
         return false;
 
     return player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
+}
+
+bool IsInGurubashiBattleRing(Player const* player, uint32 zoneId, uint32 areaId)
+{
+    if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
+        return false;
+
+    if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
+        return false;
+
+    if (AreaTableEntry const* areaEntry = sAreaTableStore.LookupEntry(areaId))
+        return (areaEntry->Flags & AREA_FLAG_ARENA) != 0;
+
+    return false;
+}
+
+void WhisperFromChromi(Player* player, std::string_view message)
+{
+    WorldPacket data;
+    ObjectGuid chromiGuid = ObjectGuid::Create<HighGuid::Unit>(CHROMIE_ENTRY, 1);
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromiGuid, player->GetGUID(), message,
+        0, CHROMI_NAME, player->GetName());
+    player->SendDirectMessage(&data);
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
@@ -310,6 +339,61 @@ private:
 
 gurubashi_arena_hourly_event* gurubashi_arena_hourly_event::s_Instance = nullptr;
 
+
+class gurubashi_arena_exit_enforcer : public PlayerScript
+{
+public:
+    gurubashi_arena_exit_enforcer() : PlayerScript("gurubashi_arena_exit_enforcer") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        UpdateArenaState(player);
+    }
+
+    void OnLogout(Player* player) override
+    {
+        _playerInBattleRing.erase(player->GetGUID());
+    }
+
+    void OnMapChanged(Player* player) override
+    {
+        UpdateArenaState(player);
+    }
+
+    void OnUpdateZone(Player* player, uint32 newZone, uint32 newArea) override
+    {
+        if (!player || !player->IsAlive() || player->IsBeingTeleported() || player->IsGameMaster())
+        {
+            UpdateArenaState(player);
+            return;
+        }
+
+        ObjectGuid const guid = player->GetGUID();
+        bool const wasInBattleRing = _playerInBattleRing[guid];
+        bool const isInBattleRing = IsInGurubashiBattleRing(player, newZone, newArea);
+
+        if (wasInBattleRing && !isInBattleRing)
+        {
+            player->CastSpell(player, MOONFIRE_SPELL_ID, TRIGGERED_FULL_MASK);
+            Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+            WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
+        }
+
+        _playerInBattleRing[guid] = isInBattleRing;
+    }
+
+private:
+    void UpdateArenaState(Player* player)
+    {
+        if (!player)
+            return;
+
+        _playerInBattleRing[player->GetGUID()] = IsInGurubashiBattleRing(player, player->GetZoneId(), player->GetAreaId());
+    }
+
+    std::unordered_map<ObjectGuid, bool> _playerInBattleRing;
+};
+
 namespace
 {
 using namespace Trinity::ChatCommands;
@@ -409,5 +493,6 @@ void AddSC_custom_gurubashi_arena()
 {
     new go_custom_gurubashi_hourly_chest();
     new gurubashi_arena_hourly_event();
+    new gurubashi_arena_exit_enforcer();
     new gurubashi_arena_commands();
 }
