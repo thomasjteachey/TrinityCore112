@@ -435,8 +435,7 @@ public:
         float const distance2d = tracked.HasPosition ? tracked.Position.GetExactDist2d(currentPosition) : std::numeric_limits<float>::max();
         bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 15.0f;
         bool const crossedBattleRingBoundary =
-            (tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing) ||
-            (tracked.AreaState == GurubashiAreaState::NonRing && currentState == GurubashiAreaState::BattleRing);
+            tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
 
         if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
         {
