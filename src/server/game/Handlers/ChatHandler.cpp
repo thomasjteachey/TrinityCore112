@@ -43,6 +43,31 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include <algorithm>
+#include <array>
+
+namespace
+{
+char const* const CHROMI_WHISPER_NAME = "Chromi";
+bool IsChromiWhisperTarget(std::string const& targetName)
+{
+    std::string normalizedTarget = targetName;
+    return normalizePlayerName(normalizedTarget) && normalizedTarget == CHROMI_WHISPER_NAME;
+}
+
+std::string_view GetRandomChromiCatFact()
+{
+    static constexpr std::array catFacts =
+    {
+        "Cats can rotate their ears 180 degrees to pinpoint sounds.",
+        "A cat's purr can vibrate between 25 and 150 Hz, a range associated with tissue healing.",
+        "Cats have a special righting reflex that helps them twist midair and land on their feet.",
+        "A cat's nose print is unique, much like a human fingerprint.",
+        "Cats can make over 100 different vocal sounds, far more than dogs."
+    };
+
+    return catFacts[urand(0, catFacts.size() - 1)];
+}
+}
 
 inline bool isNasty(uint8 c)
 {
@@ -325,6 +350,17 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         }
         case CHAT_MSG_WHISPER:
         {
+            if (IsChromiWhisperTarget(to))
+            {
+                if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(CHROMI_WHISPER_NAME))
+                {
+                    WorldPacket data;
+                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL, chromi, sender, GetRandomChromiCatFact());
+                    sender->SendDirectMessage(&data);
+                    break;
+                }
+            }
+
             if (!normalizePlayerName(to))
             {
                 SendPlayerNotFoundNotice(to);
