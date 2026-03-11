@@ -479,20 +479,14 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    Unit* damageDealer = player;
-
                     if (Creature* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
-                        moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, false);
-                        damageDealer = moonfireCaster;
-                    }
 
-                    SpellNonMeleeDamage damageInfo(damageDealer, player, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
-                    damageInfo.damage = GURUBASHI_EXIT_PUNISH_DAMAGE;
-                    Unit::DealDamageMods(player, damageInfo.damage, &damageInfo.absorb);
-                    player->DealSpellDamage(&damageInfo, true);
-                    player->SendSpellNonMeleeDamageLog(&damageInfo);
+                        CastSpellExtraArgs args;
+                        args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                        moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, args);
+                    }
 
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
