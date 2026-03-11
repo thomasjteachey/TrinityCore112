@@ -137,7 +137,7 @@ std::string_view GetRandomChromiCatFact()
         "CAT FACT 16: A group of cats is called a clowder.",
         "CAT FACT 17: A female cat is called a queen.",
         "CAT FACT 18: A male cat is called a tom.",
-        "CAT FACT 19: Newly born cats are called kittens.",
+        "CAT FACT 19: Newborn kittens cannot fully retract their claws until they are a few weeks old.",
         "CAT FACT 20: Cats have a special righting reflex that helps them land on their feet.",
         "CAT FACT 21: A cat's collarbone is tiny and not attached like in humans.",
         "CAT FACT 22: Cats have an extra scent organ on the roof of the mouth.",
@@ -173,7 +173,7 @@ std::string_view GetRandomChromiCatFact()
         "CAT FACT 52: Cats can recognize their names, even if they ignore them.",
         "CAT FACT 53: Purring does not always mean a cat is happy; it can also self-soothe.",
         "CAT FACT 54: Cats mark territory by rubbing scent glands on objects.",
-        "CAT FACT 55: A cat's brain structure is more similar to a human's than a dog's in some areas.",
+        "CAT FACT 55: Cats have about 300 million neurons in their cerebral cortex, supporting strong sensory processing.",
         "CAT FACT 56: Cats can dream during REM sleep.",
         "CAT FACT 57: Whisker fatigue can make some cats dislike deep food bowls.",
         "CAT FACT 58: Cats can drink seawater better than many mammals thanks to efficient kidneys.",
@@ -187,7 +187,7 @@ std::string_view GetRandomChromiCatFact()
         "CAT FACT 66: Cats use paw pads to sense vibrations in the ground.",
         "CAT FACT 67: Socialized cats can form strong bonds with people and other pets.",
         "CAT FACT 68: Some cats enjoy puzzle feeders that stimulate hunting instincts.",
-        "CAT FACT 69: Regular play helps cats stay mentally sharp and physically healthy."
+        "CAT FACT 69: Indoor cats with daily interactive play are less likely to develop obesity-related health issues."
     };
 
     return catFacts[urand(0, catFacts.size() - 1)];
