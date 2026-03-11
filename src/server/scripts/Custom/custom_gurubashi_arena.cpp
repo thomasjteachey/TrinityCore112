@@ -31,6 +31,7 @@
 #include "SharedDefines.h"
 #include "SpellMgr.h"
 #include "TaskScheduler.h"
+#include "TemporarySummon.h"
 #include "Util.h"
 
 #include <chrono>
@@ -481,7 +482,7 @@ public:
                     SpellInfo const* moonfireSpell = sSpellMgr->GetSpellInfo(MOONFIRE_SPELL_ID);
                     Unit* damageDealer = player;
 
-                    if (TempSummon* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
+                    if (Creature* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
                         moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, true);
