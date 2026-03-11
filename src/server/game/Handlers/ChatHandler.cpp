@@ -44,6 +44,7 @@
 #include "WorldPacket.h"
 #include <algorithm>
 #include <array>
+#include <memory>
 
 namespace
 {
@@ -65,6 +66,61 @@ Player* FindConnectedChromiPlayer()
             return chromi;
 
     return nullptr;
+}
+
+Player* EnsureHiddenChromiPlayer()
+{
+    static std::unique_ptr<WorldSession> hiddenSession;
+    static std::unique_ptr<Player> hiddenChromi;
+
+    if (hiddenChromi)
+        return hiddenChromi.get();
+
+    hiddenSession = std::make_unique<WorldSession>(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
+        0, Minutes(0), DEFAULT_LOCALE, 0, false);
+
+    hiddenChromi = std::make_unique<Player>(hiddenSession.get());
+    hiddenChromi->GetMotionMaster()->Initialize();
+
+    CharacterCreateInfo createInfo;
+    createInfo.Name = "Chromie";
+    createInfo.Race = RACE_GNOME;
+    createInfo.Class = CLASS_MAGE;
+    createInfo.Gender = GENDER_FEMALE;
+    createInfo.Skin = 0;
+    createInfo.Face = 0;
+    createInfo.HairStyle = 0;
+    createInfo.HairColor = 0;
+    createInfo.FacialHair = 0;
+    createInfo.OutfitId = 0;
+
+    if (!hiddenChromi->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
+    {
+        hiddenChromi.reset();
+        hiddenSession.reset();
+        return nullptr;
+    }
+
+    hiddenChromi->SetGameMaster(true);
+    hiddenChromi->SetAcceptWhispers(true);
+    hiddenChromi->SetGMVisible(false);
+    hiddenSession->SetPlayer(hiddenChromi.get());
+    return hiddenChromi.get();
+}
+
+void WhisperFromChromi(Player* receiver, std::string_view message)
+{
+    if (!receiver)
+        return;
+
+    if (Player* chromi = FindConnectedChromiPlayer())
+    {
+        chromi->Whisper(message, LANG_UNIVERSAL, receiver);
+        return;
+    }
+
+    if (Player* hiddenChromi = EnsureHiddenChromiPlayer())
+        hiddenChromi->Whisper(message, LANG_UNIVERSAL, receiver);
 }
 
 std::string_view GetRandomChromiCatFact()
@@ -365,13 +421,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         {
             if (IsChromiWhisperTarget(to))
             {
-                if (Player* chromi = FindConnectedChromiPlayer())
-                {
-                    WorldPacket data;
-                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_UNIVERSAL, chromi, sender, GetRandomChromiCatFact());
-                    sender->SendDirectMessage(&data);
-                }
-
+                WhisperFromChromi(sender, GetRandomChromiCatFact());
                 return;
             }
 
