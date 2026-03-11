@@ -501,7 +501,9 @@ public:
                             | TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE);
 
                         CastSpellExtraArgs castArgs(moonfireCastFlags);
-                        castArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                        castArgs.AddSpellBP0(int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                        castArgs.AddSpellBP1(int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                        castArgs.AddSpellBP2(int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
                         moonfireCastResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, castArgs);
                         if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
                             WhisperFromChromi(player, "[Gurubashi Debug] Moonfire cast result: " + std::to_string(static_cast<uint32>(moonfireCastResult))
