@@ -18,26 +18,90 @@
 #include "ScriptMgr.h"
 #include "Player.h"
 #include "Group.h"
+#include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "ObjectGuid.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
-#include "Chat.h"
 #include "StringFormat.h"
-#include "WorldPacket.h"
+#include "WorldSession.h"
+
+#include <memory>
+#include <string_view>
 
 #include <unordered_map>
 
 namespace
 {
-    uint32 constexpr ChromieEntry = 27915;
-    char const* const ChromieName = "Chromie";
     uint32 constexpr StormwindCityZoneId = 1519;
     uint32 constexpr GurubashiArenaFallbackMap = 0;
     float constexpr GurubashiArenaFallbackX = -13204.609f;
     float constexpr GurubashiArenaFallbackY = 272.2056f;
     float constexpr GurubashiArenaFallbackZ = 21.858f;
     float constexpr GurubashiArenaFallbackO = 1.022f;
+
+    Player* FindConnectedChromiePlayer()
+    {
+        if (Player* chromie = ObjectAccessor::FindConnectedPlayerByName("Chromi"))
+            return chromie;
+
+        return ObjectAccessor::FindConnectedPlayerByName("Chromie");
+    }
+
+    Player* EnsureHiddenChromiePlayer()
+    {
+        static std::unique_ptr<WorldSession> hiddenSession;
+        static std::unique_ptr<Player> hiddenChromie;
+
+        if (hiddenChromie)
+            return hiddenChromie.get();
+
+        hiddenSession = std::make_unique<WorldSession>(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
+            0, Minutes(0), DEFAULT_LOCALE, 0, false);
+
+        hiddenChromie = std::make_unique<Player>(hiddenSession.get());
+        hiddenChromie->GetMotionMaster()->Initialize();
+
+        CharacterCreateInfo createInfo;
+        createInfo.SetName("Chromie")
+            .SetRace(RACE_GNOME)
+            .SetClass(CLASS_MAGE)
+            .SetGender(GENDER_FEMALE)
+            .SetSkin(0)
+            .SetFace(0)
+            .SetHairStyle(0)
+            .SetHairColor(0)
+            .SetFacialHair(0)
+            .SetOutfitId(0);
+
+        if (!hiddenChromie->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
+        {
+            hiddenChromie.reset();
+            hiddenSession.reset();
+            return nullptr;
+        }
+
+        hiddenChromie->SetGameMaster(true);
+        hiddenChromie->SetAcceptWhispers(true);
+        hiddenChromie->SetGMVisible(false);
+        hiddenSession->SetPlayer(hiddenChromie.get());
+        return hiddenChromie.get();
+    }
+
+    void WhisperFromChromie(Player* player, std::string_view message)
+    {
+        if (!player)
+            return;
+
+        if (Player* chromiePlayer = FindConnectedChromiePlayer())
+        {
+            chromiePlayer->Whisper(message, LANG_UNIVERSAL, player);
+            return;
+        }
+
+        if (Player* hiddenChromie = EnsureHiddenChromiePlayer())
+            hiddenChromie->Whisper(message, LANG_UNIVERSAL, player);
+    }
 
     struct ZoneAreaKey
     {
@@ -214,11 +278,7 @@ static void EnforceZoneRuleForPlayer(Player* player)
 
             std::string message = Trinity::StringFormat("Spacetime is fragile! {} I've sent you back to safety.", requirementText);
 
-            WorldPacket data;
-            ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Unit>(ChromieEntry, 1);
-            ChatHandler::BuildChatPacket(data, CHAT_MSG_MONSTER_WHISPER, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message,
-                0, ChromieName, player->GetName());
-            player->SendDirectMessage(&data);
+            WhisperFromChromie(player, message);
         }
     }
 }
