@@ -479,7 +479,6 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    SpellInfo const* moonfireSpell = sSpellMgr->GetSpellInfo(MOONFIRE_SPELL_ID);
                     Unit* damageDealer = player;
 
                     if (Creature* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
@@ -489,7 +488,7 @@ public:
                         damageDealer = moonfireCaster;
                     }
 
-                    SpellNonMeleeDamage damageInfo(damageDealer, player, MOONFIRE_SPELL_ID, moonfireSpell ? moonfireSpell->GetSchoolMask() : SPELL_SCHOOL_MASK_NATURE);
+                    SpellNonMeleeDamage damageInfo(damageDealer, player, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
                     damageInfo.damage = GURUBASHI_EXIT_PUNISH_DAMAGE;
                     Unit::DealDamageMods(player, damageInfo.damage, &damageInfo.absorb);
                     player->DealSpellDamage(&damageInfo, true);
