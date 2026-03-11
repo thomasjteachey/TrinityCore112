@@ -20,6 +20,7 @@
 #include "Group.h"
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "ObjectGuid.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
