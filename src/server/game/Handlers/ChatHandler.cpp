@@ -423,7 +423,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                     ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Player>(CHROMIE_FAKE_GUID);
 
                     WorldPacket data;
-                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_INFORM, LANG_UNIVERSAL, chromieGuid, chromieGuid, msg);
+                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_INFORM, LANG_UNIVERSAL, chromieGuid, chromieGuid, msg, 0);
                     sender->SendDirectMessage(&data);
 
                     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, sender->GetGUID(), GetRandomChromiCatFact(), 0, CHROMIE_WHISPER_NAME);
