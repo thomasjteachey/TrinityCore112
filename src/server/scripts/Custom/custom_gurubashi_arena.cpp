@@ -29,6 +29,7 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "SpellMgr.h"
 #include "TaskScheduler.h"
 #include "Util.h"
 
@@ -50,6 +51,7 @@ constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 MOONFIRE_SPELL_ID = 8921;
 constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
+constexpr uint32 HOSTILE_FACTION_ID = 14;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
@@ -476,9 +478,17 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    player->CastSpell(player, MOONFIRE_SPELL_ID, true);
+                    SpellInfo const* moonfireSpell = sSpellMgr->GetSpellInfo(MOONFIRE_SPELL_ID);
+                    Unit* damageDealer = player;
 
-                    Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                    if (TempSummon* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
+                    {
+                        moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
+                        moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, true);
+                        damageDealer = moonfireCaster;
+                    }
+
+                    Unit::DealDamage(damageDealer, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, moonfireSpell, false);
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
             }
