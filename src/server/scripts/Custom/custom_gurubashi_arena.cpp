@@ -52,6 +52,7 @@ constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 MOONFIRE_SPELL_ID = 8921;
+constexpr uint32 GURUBASHI_MOONFIRE_CASTER_ENTRY = 1;
 constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
 constexpr uint32 HOSTILE_FACTION_ID = 14;
 constexpr bool ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS = true;
@@ -481,7 +482,7 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    if (Creature* moonfireCaster = player->GetMap()->SummonCreature(WORLD_TRIGGER, player->GetPosition(), nullptr, 6 * IN_MILLISECONDS, nullptr))
+                    if (Creature* moonfireCaster = player->GetMap()->SummonCreature(GURUBASHI_MOONFIRE_CASTER_ENTRY, player->GetPosition(), nullptr, 6 * IN_MILLISECONDS, nullptr))
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
 
@@ -528,7 +529,7 @@ public:
                     }
                     else if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
                     {
-                        WhisperFromChromi(player, "[Gurubashi Debug] Failed to summon trigger caster.");
+                        WhisperFromChromi(player, "[Gurubashi Debug] Failed to summon Moonfire caster entry 1.");
                     }
 
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
