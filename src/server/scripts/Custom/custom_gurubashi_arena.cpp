@@ -511,28 +511,17 @@ public:
                         WhisperFromChromi(player, "[Gurubashi Debug] Failed to summon Moonfire caster entry 1; using player as damage caster.");
                     }
 
-                    ObjectGuid const punishedPlayerGuid = player->GetGUID();
-                    ObjectGuid const damageCasterGuid = damageCaster->GetGUID();
-                    player->m_Events.AddEventAtOffset([punishedPlayerGuid, damageCasterGuid]()
+                    if (player->IsAlive())
                     {
-                        Player* punishedPlayer = ObjectAccessor::FindPlayer(punishedPlayerGuid);
-                        if (!punishedPlayer || !punishedPlayer->IsInWorld() || !punishedPlayer->IsAlive())
-                            return;
-
-                        Unit* resolvedDamageCaster = punishedPlayer;
-                        if (damageCasterGuid)
-                            if (Unit* caster = ObjectAccessor::GetUnit(*punishedPlayer, damageCasterGuid))
-                                resolvedDamageCaster = caster;
-
-                        SpellNonMeleeDamage damageInfo(resolvedDamageCaster, punishedPlayer, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
+                        SpellNonMeleeDamage damageInfo(damageCaster, player, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
                         damageInfo.damage = GURUBASHI_EXIT_PUNISH_DAMAGE;
-                        Unit::DealDamageMods(punishedPlayer, damageInfo.damage, &damageInfo.absorb);
-                        punishedPlayer->DealSpellDamage(&damageInfo, true);
-                        punishedPlayer->SendSpellNonMeleeDamageLog(&damageInfo);
+                        Unit::DealDamageMods(player, damageInfo.damage, &damageInfo.absorb);
+                        player->DealSpellDamage(&damageInfo, true);
+                        player->SendSpellNonMeleeDamageLog(&damageInfo);
 
                         if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
-                            WhisperFromChromi(punishedPlayer, "[Gurubashi Debug] Applied fallback Moonfire punish damage: " + std::to_string(GURUBASHI_EXIT_PUNISH_DAMAGE));
-                    }, 200ms);
+                            WhisperFromChromi(player, "[Gurubashi Debug] Applied immediate guaranteed Moonfire punish damage: " + std::to_string(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                    }
 
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
