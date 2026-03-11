@@ -54,7 +54,12 @@ constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
-char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is death.";
+char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
+{
+    "The only way out of the arena is death.",
+    "One does not simply walk out of the battle ring.",
+    "Coward."
+};
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 
@@ -119,6 +124,14 @@ void WhisperFromChromi(Player* player, std::string_view message)
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message, 0, "Chromie");
     player->SendDirectMessage(&data);
+}
+
+void WhisperRandomExitKillLineFromChromie(Player* player)
+{
+    if (!player)
+        return;
+
+    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 2)]);
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
@@ -479,7 +492,7 @@ public:
                 {
                     Unit::Kill(player, player);
 
-                    WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
+                    WhisperRandomExitKillLineFromChromie(player);
                 }
             }
 
