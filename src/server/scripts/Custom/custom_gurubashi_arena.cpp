@@ -32,13 +32,10 @@
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "TaskScheduler.h"
-#include "TemporarySummon.h"
 #include "Util.h"
 #include "WorldSession.h"
 
 #include <chrono>
-#include <cmath>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -117,42 +114,6 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
 }
 
 
-Creature* GetChromiCasterForPlayer(Player* player)
-{
-    if (!player)
-        return nullptr;
-
-    Map* map = player->GetMap();
-    if (!map)
-        return nullptr;
-
-    Creature* nearestChromi = nullptr;
-    float nearestDistance = std::numeric_limits<float>::max();
-
-    for (auto const& spawnPair : map->GetCreatureBySpawnIdStore())
-    {
-        Creature* creature = spawnPair.second;
-        if (!creature || !creature->IsAlive() || creature->GetEntry() != CHROMIE_ENTRY)
-            continue;
-
-        float const distance = player->GetExactDist2d(creature);
-        if (distance < nearestDistance)
-        {
-            nearestDistance = distance;
-            nearestChromi = creature;
-        }
-    }
-
-    if (nearestChromi && nearestDistance <= 40.0f)
-        return nearestChromi;
-
-    Position summonPosition = player->GetPosition();
-    summonPosition.m_positionX += std::cos(summonPosition.GetOrientation()) * 2.0f;
-    summonPosition.m_positionY += std::sin(summonPosition.GetOrientation()) * 2.0f;
-
-    return player->SummonCreature(CHROMIE_ENTRY, summonPosition, TEMPSUMMON_TIMED_DESPAWN, 5s);
-}
-
 Player* FindConnectedChromiPlayer()
 {
     if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(CHROMI_NAME))
@@ -202,7 +163,7 @@ Player* EnsureHiddenChromiPlayer()
     return hiddenChromi.get();
 }
 
-void WhisperFromChromi(Player* player, Creature* /*chromi*/, std::string_view message)
+void WhisperFromChromi(Player* player, std::string_view message)
 {
     if (!player)
         return;
@@ -573,14 +534,10 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    Creature* chromi = GetChromiCasterForPlayer(player);
-                    if (chromi)
-                        chromi->CastSpell(player, MOONFIRE_SPELL_ID, false);
-                    else
-                        player->CastSpell(player, MOONFIRE_SPELL_ID, false);
+                    player->CastSpell(player, MOONFIRE_SPELL_ID, true);
 
                     Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
-                    WhisperFromChromi(player, chromi, GURUBASHI_EXIT_WHISPER);
+                    WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
             }
 
