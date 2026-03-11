@@ -32,10 +32,12 @@
 #include "TaskScheduler.h"
 #include "TemporarySummon.h"
 #include "Util.h"
+#include "WorldSession.h"
 
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -57,8 +59,6 @@ constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const CHROMI_NAME = "Chromi";
-ObjectGuid const CHROMI_VIRTUAL_PLAYER_GUID = ObjectGuid::Create<HighGuid::Player>(ObjectGuid::LowType(900000));
-char const* const CHROMI_VIRTUAL_PLAYER_NAME = "Chromie";
 char const* const GURUBASHI_EXIT_WHISPER = "The only way out of the arena is death.";
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
@@ -159,6 +159,46 @@ Player* FindConnectedChromiPlayer()
     return ObjectAccessor::FindConnectedPlayerByName("Chromie");
 }
 
+Player* EnsureHiddenChromiPlayer()
+{
+    static std::unique_ptr<WorldSession> hiddenSession;
+    static std::unique_ptr<Player> hiddenChromi;
+
+    if (hiddenChromi)
+        return hiddenChromi.get();
+
+    hiddenSession = std::make_unique<WorldSession>(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
+        0, Minutes(0), DEFAULT_LOCALE, 0, false);
+
+    hiddenChromi = std::make_unique<Player>(hiddenSession.get());
+    hiddenChromi->GetMotionMaster()->Initialize();
+
+    CharacterCreateInfo createInfo;
+    createInfo.Name = "Chromie";
+    createInfo.Race = RACE_GNOME;
+    createInfo.Class = CLASS_MAGE;
+    createInfo.Gender = GENDER_FEMALE;
+    createInfo.Skin = 0;
+    createInfo.Face = 0;
+    createInfo.HairStyle = 0;
+    createInfo.HairColor = 0;
+    createInfo.FacialHair = 0;
+    createInfo.OutfitId = 0;
+
+    if (!hiddenChromi->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
+    {
+        hiddenChromi.reset();
+        hiddenSession.reset();
+        return nullptr;
+    }
+
+    hiddenChromi->SetGameMaster(true);
+    hiddenChromi->SetAcceptWhispers(true);
+    hiddenChromi->SetGMVisible(false);
+    hiddenSession->SetPlayer(hiddenChromi.get());
+    return hiddenChromi.get();
+}
+
 void WhisperFromChromi(Player* player, Creature* /*chromi*/, std::string_view message)
 {
     if (!player)
@@ -170,10 +210,8 @@ void WhisperFromChromi(Player* player, Creature* /*chromi*/, std::string_view me
         return;
     }
 
-    WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, CHROMI_VIRTUAL_PLAYER_GUID, player->GetGUID(), message,
-        0, CHROMI_VIRTUAL_PLAYER_NAME);
-    player->SendDirectMessage(&data);
+    if (Player* hiddenChromi = EnsureHiddenChromiPlayer())
+        hiddenChromi->Whisper(message, LANG_UNIVERSAL, player);
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
