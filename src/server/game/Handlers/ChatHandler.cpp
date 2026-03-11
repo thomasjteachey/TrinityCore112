@@ -18,6 +18,7 @@
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "CellImpl.h"
+#include "CharacterCache.h"
 #include "Common.h"
 #include "Channel.h"
 #include "ChannelMgr.h"
@@ -49,8 +50,8 @@
 namespace
 {
 std::array<std::string_view, 2> const CHROMI_WHISPER_NAMES = { "Chromi", "Chromie" };
-uint32 constexpr CHROMIE_PLAYER_GUID = 1;
-char const* const CHROMIE_NAME = "Chromie";
+ObjectGuid::LowType constexpr CHROMIE_FAKE_GUID = 1;
+char const* const CHROMIE_WHISPER_NAME = "Chromie";
 
 bool IsChromiWhisperTarget(std::string const& targetName)
 {
@@ -99,6 +100,10 @@ Player* GetOrCreateChromiWhisperPlayer()
             hiddenSession.reset();
             return nullptr;
         }
+
+        if (!sCharacterCache->HasCharacterCacheEntry(hiddenChromi->GetGUID()))
+            sCharacterCache->AddCharacterCacheEntry(hiddenChromi->GetGUID(), hiddenSession->GetAccountId(), hiddenChromi->GetName(),
+                hiddenChromi->GetNativeGender(), hiddenChromi->GetRace(), hiddenChromi->GetClass(), hiddenChromi->GetLevel());
 
         hiddenChromi->SetGameMaster(true);
         hiddenChromi->SetAcceptWhispers(true);
@@ -414,7 +419,16 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                     chromi->Whisper(GetRandomChromiCatFact(), LANG_UNIVERSAL, sender);
                 }
                 else
-                    SendPlayerNotFoundNotice(to);
+                {
+                    ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Player>(CHROMIE_FAKE_GUID);
+
+                    WorldPacket data;
+                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_INFORM, LANG_UNIVERSAL, chromieGuid, chromieGuid, msg);
+                    sender->SendDirectMessage(&data);
+
+                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, sender->GetGUID(), GetRandomChromiCatFact(), 0, CHROMIE_WHISPER_NAME);
+                    sender->SendDirectMessage(&data);
+                }
 
                 return;
             }
