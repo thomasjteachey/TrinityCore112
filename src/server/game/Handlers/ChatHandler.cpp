@@ -54,60 +54,13 @@ std::array<std::string_view, 2> const CHROMI_WHISPER_NAMES = { "Chromi", "Chromi
 bool IsChromiWhisperTarget(std::string const& targetName)
 {
     std::string normalizedTarget = targetName;
+    if (std::string::size_type realmSeparator = normalizedTarget.find('-'); realmSeparator != std::string::npos)
+        normalizedTarget.erase(realmSeparator);
+
     if (!normalizePlayerName(normalizedTarget))
         return false;
 
     return std::find(CHROMI_WHISPER_NAMES.begin(), CHROMI_WHISPER_NAMES.end(), normalizedTarget) != CHROMI_WHISPER_NAMES.end();
-}
-
-Player* FindConnectedChromiPlayer()
-{
-    for (std::string_view chromiName : CHROMI_WHISPER_NAMES)
-        if (Player* chromi = ObjectAccessor::FindConnectedPlayerByName(chromiName))
-            return chromi;
-
-    return nullptr;
-}
-
-
-Player* EnsureHiddenChromiPlayer()
-{
-    static std::unique_ptr<WorldSession> hiddenSession;
-    static std::unique_ptr<Player> hiddenChromi;
-
-    if (hiddenChromi)
-        return hiddenChromi.get();
-
-    hiddenSession = std::make_unique<WorldSession>(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
-        0, Minutes(0), DEFAULT_LOCALE, 0, false);
-
-    hiddenChromi = std::make_unique<Player>(hiddenSession.get());
-    hiddenChromi->GetMotionMaster()->Initialize();
-
-    CharacterCreateInfo createInfo;
-    createInfo.SetName("Chromie")
-        .SetRace(RACE_GNOME)
-        .SetClass(CLASS_MAGE)
-        .SetGender(GENDER_FEMALE)
-        .SetSkin(0)
-        .SetFace(0)
-        .SetHairStyle(0)
-        .SetHairColor(0)
-        .SetFacialHair(0)
-        .SetOutfitId(0);
-
-    if (!hiddenChromi->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
-    {
-        hiddenChromi.reset();
-        hiddenSession.reset();
-        return nullptr;
-    }
-
-    hiddenChromi->SetGameMaster(true);
-    hiddenChromi->SetAcceptWhispers(true);
-    hiddenChromi->SetGMVisible(false);
-    hiddenSession->SetPlayer(hiddenChromi.get());
-    return hiddenChromi.get();
 }
 
 void WhisperFromChromi(Player* receiver, std::string_view message)
@@ -115,14 +68,54 @@ void WhisperFromChromi(Player* receiver, std::string_view message)
     if (!receiver)
         return;
 
-    if (Player* chromi = FindConnectedChromiPlayer())
+    static std::unique_ptr<WorldSession> hiddenSession;
+    static std::unique_ptr<Player> hiddenChromi;
+
+    Player* chromi = nullptr;
+    for (std::string_view chromiName : CHROMI_WHISPER_NAMES)
+        if ((chromi = ObjectAccessor::FindConnectedPlayerByName(chromiName)))
+            break;
+
+    if (!chromi)
     {
-        chromi->Whisper(message, LANG_UNIVERSAL, receiver);
-        return;
+        if (!hiddenChromi)
+        {
+            hiddenSession = std::make_unique<WorldSession>(0, "chromie_hidden", std::shared_ptr<WorldSocket>(), SEC_GAMEMASTER, EXPANSION_WRATH_OF_THE_LICH_KING,
+                0, Minutes(0), DEFAULT_LOCALE, 0, false);
+
+            hiddenChromi = std::make_unique<Player>(hiddenSession.get());
+            hiddenChromi->GetMotionMaster()->Initialize();
+
+            CharacterCreateInfo createInfo;
+            createInfo.SetName("Chromie")
+                .SetRace(RACE_GNOME)
+                .SetClass(CLASS_MAGE)
+                .SetGender(GENDER_FEMALE)
+                .SetSkin(0)
+                .SetFace(0)
+                .SetHairStyle(0)
+                .SetHairColor(0)
+                .SetFacialHair(0)
+                .SetOutfitId(0);
+
+            if (!hiddenChromi->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
+            {
+                hiddenChromi.reset();
+                hiddenSession.reset();
+                return;
+            }
+
+            hiddenChromi->SetGameMaster(true);
+            hiddenChromi->SetAcceptWhispers(true);
+            hiddenChromi->SetGMVisible(false);
+            hiddenSession->SetPlayer(hiddenChromi.get());
+            ObjectAccessor::AddObject(hiddenChromi.get());
+        }
+
+        chromi = hiddenChromi.get();
     }
 
-    if (Player* hiddenChromi = EnsureHiddenChromiPlayer())
-        hiddenChromi->Whisper(message, LANG_UNIVERSAL, receiver);
+    chromi->Whisper(message, LANG_UNIVERSAL, receiver);
 }
 
 std::string_view GetRandomChromiCatFact()
