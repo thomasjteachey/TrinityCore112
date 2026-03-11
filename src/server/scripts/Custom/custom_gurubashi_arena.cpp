@@ -485,7 +485,14 @@ public:
 
                         CastSpellExtraArgs args;
                         args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
-                        moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, args);
+
+                        SpellCastResult const castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, args);
+                        if (castResult != SPELL_CAST_OK)
+                        {
+                            CastSpellExtraArgs fallbackArgs(TRIGGERED_FULL_MASK);
+                            fallbackArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                            moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, fallbackArgs);
+                        }
                     }
 
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
