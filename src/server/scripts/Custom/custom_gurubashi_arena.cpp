@@ -29,6 +29,7 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "SpellMgr.h"
 #include "TaskScheduler.h"
 #include "TemporarySummon.h"
 #include "Util.h"
