@@ -481,7 +481,7 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    if (Creature* moonfireCaster = player->SummonTrigger(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(), 6s))
+                    if (Creature* moonfireCaster = player->GetMap()->SummonCreature(WORLD_TRIGGER, player->GetPosition(), nullptr, 6 * IN_MILLISECONDS, nullptr))
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
 
@@ -490,7 +490,7 @@ public:
 
                         SpellCastResult castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, args);
                         if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
-                            WhisperFromChromi(player, "[Gurubashi Debug] Primary Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)));
+                            WhisperFromChromi(player, "[Gurubashi Debug] Primary Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)) + (castResult == SPELL_FAILED_BAD_TARGETS ? " (SPELL_FAILED_BAD_TARGETS)" : ""));
 
                         if (castResult != SPELL_CAST_OK)
                         {
@@ -507,7 +507,7 @@ public:
                             fallbackArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
                             castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, fallbackArgs);
                             if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
-                                WhisperFromChromi(player, "[Gurubashi Debug] Fallback Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)));
+                                WhisperFromChromi(player, "[Gurubashi Debug] Fallback Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)) + (castResult == SPELL_FAILED_BAD_TARGETS ? " (SPELL_FAILED_BAD_TARGETS)" : ""));
                         }
 
                         if (castResult != SPELL_CAST_OK)
