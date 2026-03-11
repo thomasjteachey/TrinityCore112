@@ -37,6 +37,7 @@
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -53,6 +54,7 @@ constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 MOONFIRE_SPELL_ID = 8921;
 constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
 constexpr uint32 HOSTILE_FACTION_ID = 14;
+constexpr bool ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS = true;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
@@ -483,10 +485,31 @@ public:
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
 
-                        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                        CastSpellExtraArgs args;
                         args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
 
-                        SpellCastResult const castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, args);
+                        SpellCastResult castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, args);
+                        if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                            WhisperFromChromi(player, "[Gurubashi Debug] Primary Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)));
+
+                        if (castResult != SPELL_CAST_OK)
+                        {
+                            TriggerCastFlags const fallbackTriggerFlags = TriggerCastFlags(TRIGGERED_IGNORE_GCD
+                                | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD
+                                | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
+                                | TRIGGERED_IGNORE_CAST_IN_PROGRESS
+                                | TRIGGERED_IGNORE_SHAPESHIFT
+                                | TRIGGERED_IGNORE_CASTER_AURASTATE
+                                | TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE
+                                | TRIGGERED_IGNORE_CASTER_AURAS);
+
+                            CastSpellExtraArgs fallbackArgs(fallbackTriggerFlags);
+                            fallbackArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                            castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, fallbackArgs);
+                            if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                                WhisperFromChromi(player, "[Gurubashi Debug] Fallback Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)));
+                        }
+
                         if (castResult != SPELL_CAST_OK)
                         {
                             SpellNonMeleeDamage damageInfo(moonfireCaster, player, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
@@ -494,7 +517,18 @@ public:
                             Unit::DealDamageMods(player, damageInfo.damage, &damageInfo.absorb);
                             player->DealSpellDamage(&damageInfo, true);
                             player->SendSpellNonMeleeDamageLog(&damageInfo);
+
+                            if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                                WhisperFromChromi(player, "[Gurubashi Debug] Applied manual spell-damage fallback.");
                         }
+                        else if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                        {
+                            WhisperFromChromi(player, "[Gurubashi Debug] Moonfire cast succeeded; no manual fallback used.");
+                        }
+                    }
+                    else if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                    {
+                        WhisperFromChromi(player, "[Gurubashi Debug] Failed to summon trigger caster.");
                     }
 
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
