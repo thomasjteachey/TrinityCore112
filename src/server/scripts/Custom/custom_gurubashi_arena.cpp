@@ -485,11 +485,16 @@ public:
                     if (Creature* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
-                        moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, true);
+                        moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, false);
                         damageDealer = moonfireCaster;
                     }
 
-                    Unit::DealDamage(damageDealer, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, moonfireSpell, false);
+                    SpellNonMeleeDamage damageInfo(damageDealer, player, MOONFIRE_SPELL_ID, moonfireSpell ? moonfireSpell->GetSchoolMask() : SPELL_SCHOOL_MASK_NATURE);
+                    damageInfo.damage = GURUBASHI_EXIT_PUNISH_DAMAGE;
+                    Unit::DealDamageMods(player, damageInfo.damage, &damageInfo.absorb);
+                    player->DealSpellDamage(&damageInfo, true);
+                    player->SendSpellNonMeleeDamageLog(&damageInfo);
+
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
             }
