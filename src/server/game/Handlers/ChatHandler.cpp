@@ -54,6 +54,9 @@ std::array<std::string_view, 2> const CHROMI_WHISPER_NAMES = { "Chromi", "Chromi
 bool IsChromiWhisperTarget(std::string const& targetName)
 {
     std::string normalizedTarget = targetName;
+    if (std::string::size_type realmSeparator = normalizedTarget.find('-'); realmSeparator != std::string::npos)
+        normalizedTarget.erase(realmSeparator);
+
     if (!normalizePlayerName(normalizedTarget))
         return false;
 
