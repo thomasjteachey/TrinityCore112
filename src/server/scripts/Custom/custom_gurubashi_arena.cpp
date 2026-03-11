@@ -29,7 +29,9 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "SpellMgr.h"
 #include "TaskScheduler.h"
+#include "TemporarySummon.h"
 #include "Util.h"
 
 #include <chrono>
@@ -50,6 +52,7 @@ constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 MOONFIRE_SPELL_ID = 8921;
 constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
+constexpr uint32 HOSTILE_FACTION_ID = 14;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
