@@ -46,7 +46,6 @@
 #include "WorldPacket.h"
 #include <algorithm>
 #include <array>
-#include <memory>
 
 namespace
 {
