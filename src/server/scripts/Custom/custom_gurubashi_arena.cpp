@@ -479,19 +479,21 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    if (Creature* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 6s))
+                    if (Creature* moonfireCaster = player->SummonTrigger(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation(), 6s))
                     {
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
 
-                        CastSpellExtraArgs args;
+                        CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
                         args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
 
                         SpellCastResult const castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, args);
                         if (castResult != SPELL_CAST_OK)
                         {
-                            CastSpellExtraArgs fallbackArgs(TRIGGERED_FULL_MASK);
-                            fallbackArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
-                            moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, fallbackArgs);
+                            SpellNonMeleeDamage damageInfo(moonfireCaster, player, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
+                            damageInfo.damage = GURUBASHI_EXIT_PUNISH_DAMAGE;
+                            Unit::DealDamageMods(player, damageInfo.damage, &damageInfo.absorb);
+                            player->DealSpellDamage(&damageInfo, true);
+                            player->SendSpellNonMeleeDamageLog(&damageInfo);
                         }
                     }
 
