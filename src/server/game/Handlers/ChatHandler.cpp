@@ -45,11 +45,12 @@
 #include "WorldPacket.h"
 #include <algorithm>
 #include <array>
-#include <memory>
 
 namespace
 {
 std::array<std::string_view, 2> const CHROMI_WHISPER_NAMES = { "Chromi", "Chromie" };
+uint32 constexpr CHROMIE_PLAYER_GUID = 1;
+char const* const CHROMIE_NAME = "Chromie";
 
 bool IsChromiWhisperTarget(std::string const& targetName)
 {
