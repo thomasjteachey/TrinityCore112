@@ -29,6 +29,7 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "SpellMgr.h"
 #include "TaskScheduler.h"
 #include "Util.h"
 
@@ -476,9 +477,10 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    player->CastSpell(player, MOONFIRE_SPELL_ID, true);
+                    SpellInfo const* moonfireSpell = sSpellMgr->GetSpellInfo(MOONFIRE_SPELL_ID);
+                    player->CastSpell(player, MOONFIRE_SPELL_ID, false);
 
-                    Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                    Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, moonfireSpell, false);
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
             }
