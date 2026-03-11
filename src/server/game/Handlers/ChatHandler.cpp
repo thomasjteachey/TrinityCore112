@@ -34,6 +34,7 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "MotionMaster.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -68,6 +69,7 @@ Player* FindConnectedChromiPlayer()
     return nullptr;
 }
 
+
 Player* EnsureHiddenChromiPlayer()
 {
     static std::unique_ptr<WorldSession> hiddenSession;
@@ -83,16 +85,16 @@ Player* EnsureHiddenChromiPlayer()
     hiddenChromi->GetMotionMaster()->Initialize();
 
     CharacterCreateInfo createInfo;
-    createInfo.Name = "Chromie";
-    createInfo.Race = RACE_GNOME;
-    createInfo.Class = CLASS_MAGE;
-    createInfo.Gender = GENDER_FEMALE;
-    createInfo.Skin = 0;
-    createInfo.Face = 0;
-    createInfo.HairStyle = 0;
-    createInfo.HairColor = 0;
-    createInfo.FacialHair = 0;
-    createInfo.OutfitId = 0;
+    createInfo.SetName("Chromie")
+        .SetRace(RACE_GNOME)
+        .SetClass(CLASS_MAGE)
+        .SetGender(GENDER_FEMALE)
+        .SetSkin(0)
+        .SetFace(0)
+        .SetHairStyle(0)
+        .SetHairColor(0)
+        .SetFacialHair(0)
+        .SetOutfitId(0);
 
     if (!hiddenChromi->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
     {
