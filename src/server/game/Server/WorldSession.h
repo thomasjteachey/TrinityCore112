@@ -361,6 +361,18 @@ class CharacterCreateInfo
     friend class WorldSession;
     friend class Player;
 
+    public:
+        CharacterCreateInfo& SetName(std::string name) { Name = std::move(name); return *this; }
+        CharacterCreateInfo& SetRace(uint8 race) { Race = race; return *this; }
+        CharacterCreateInfo& SetClass(uint8 playerClass) { Class = playerClass; return *this; }
+        CharacterCreateInfo& SetGender(uint8 gender) { Gender = gender; return *this; }
+        CharacterCreateInfo& SetSkin(uint8 skin) { Skin = skin; return *this; }
+        CharacterCreateInfo& SetFace(uint8 face) { Face = face; return *this; }
+        CharacterCreateInfo& SetHairStyle(uint8 hairStyle) { HairStyle = hairStyle; return *this; }
+        CharacterCreateInfo& SetHairColor(uint8 hairColor) { HairColor = hairColor; return *this; }
+        CharacterCreateInfo& SetFacialHair(uint8 facialHair) { FacialHair = facialHair; return *this; }
+        CharacterCreateInfo& SetOutfitId(uint8 outfitId) { OutfitId = outfitId; return *this; }
+
     protected:
         /// User specified variables
         std::string Name;
