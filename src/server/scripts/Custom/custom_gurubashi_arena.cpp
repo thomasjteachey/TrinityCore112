@@ -476,9 +476,10 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    player->CastSpell(player, MOONFIRE_SPELL_ID, true);
+                    CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                    args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                    player->CastSpell(player, MOONFIRE_SPELL_ID, args);
 
-                    Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
             }
