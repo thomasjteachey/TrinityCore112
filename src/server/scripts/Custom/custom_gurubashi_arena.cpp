@@ -479,21 +479,9 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    if (Creature* moonfireCaster = player->SummonCreature(WORLD_TRIGGER, player->GetPosition(), TEMPSUMMON_TIMED_DESPAWN, 5s))
-                    {
-                        moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
-
-                        CastSpellExtraArgs args;
-                        args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
-
-                        SpellCastResult const castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, args);
-                        if (castResult != SPELL_CAST_OK)
-                        {
-                            CastSpellExtraArgs fallbackArgs(TRIGGERED_FULL_MASK);
-                            fallbackArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
-                            moonfireCaster->CastSpell(player, MOONFIRE_SPELL_ID, fallbackArgs);
-                        }
-                    }
+                    CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                    args.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                    player->CastSpell(player, MOONFIRE_SPELL_ID, args);
 
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
