@@ -57,7 +57,7 @@ constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 {
     "The only way out of the arena is death.",
-    "One does not simply walk out of the battle ring.",
+    "One does not simply walk out of the Battle Ring.",
     "Coward."
 };
 
