@@ -489,11 +489,22 @@ public:
                         moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
                         damageCaster = moonfireCaster;
 
-                        CastSpellExtraArgs castArgs;
+                        TriggerCastFlags const moonfireCastFlags = TriggerCastFlags(TRIGGERED_IGNORE_POWER_AND_REAGENT_COST
+                            | TRIGGERED_IGNORE_GCD
+                            | TRIGGERED_IGNORE_SPELL_AND_CATEGORY_CD
+                            | TRIGGERED_IGNORE_CAST_IN_PROGRESS
+                            | TRIGGERED_IGNORE_CASTER_AURAS
+                            | TRIGGERED_IGNORE_CASTER_AURASTATE
+                            | TRIGGERED_IGNORE_SHAPESHIFT
+                            | TRIGGERED_IGNORE_CASTER_MOUNTED_OR_ON_VEHICLE);
+
+                        CastSpellExtraArgs castArgs(moonfireCastFlags);
                         castArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
                         SpellCastResult castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, castArgs);
                         if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
-                            WhisperFromChromi(player, "[Gurubashi Debug] Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)) + (castResult == SPELL_FAILED_BAD_TARGETS ? " (SPELL_FAILED_BAD_TARGETS)" : ""));
+                            WhisperFromChromi(player, "[Gurubashi Debug] Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult))
+                                + (castResult == SPELL_FAILED_BAD_TARGETS ? " (SPELL_FAILED_BAD_TARGETS)" : "")
+                                + (castResult == SPELL_FAILED_NO_POWER ? " (SPELL_FAILED_NO_POWER)" : ""));
                     }
                     else if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
                     {
