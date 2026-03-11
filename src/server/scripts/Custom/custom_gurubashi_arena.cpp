@@ -35,6 +35,7 @@
 #include <chrono>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -49,7 +50,10 @@ constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 MOONFIRE_SPELL_ID = 8921;
+constexpr uint32 GURUBASHI_MOONFIRE_CASTER_ENTRY = 1;
 constexpr uint32 GURUBASHI_EXIT_PUNISH_DAMAGE = 1000000;
+constexpr uint32 HOSTILE_FACTION_ID = 14;
+constexpr bool ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS = true;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
@@ -476,9 +480,47 @@ public:
 
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
                 {
-                    player->CastSpell(player, MOONFIRE_SPELL_ID, true);
+                    Unit* damageCaster = player;
 
-                    Unit::DealDamage(player, player, GURUBASHI_EXIT_PUNISH_DAMAGE, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NATURE, nullptr, false);
+                    if (Creature* moonfireCaster = player->GetMap()->SummonCreature(GURUBASHI_MOONFIRE_CASTER_ENTRY, player->GetPosition(), nullptr, 6 * IN_MILLISECONDS, nullptr))
+                    {
+                        moonfireCaster->SetFaction(HOSTILE_FACTION_ID);
+                        damageCaster = moonfireCaster;
+
+                        CastSpellExtraArgs castArgs;
+                        castArgs.AddSpellMod(SPELLVALUE_BASE_POINT0, int32(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                        SpellCastResult castResult = moonfireCaster->CastSpell(CastSpellTargetArg(player), MOONFIRE_SPELL_ID, castArgs);
+                        if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                            WhisperFromChromi(player, "[Gurubashi Debug] Moonfire cast result: " + std::to_string(static_cast<uint32>(castResult)) + (castResult == SPELL_FAILED_BAD_TARGETS ? " (SPELL_FAILED_BAD_TARGETS)" : ""));
+                    }
+                    else if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                    {
+                        WhisperFromChromi(player, "[Gurubashi Debug] Failed to summon Moonfire caster entry 1; using player as damage caster.");
+                    }
+
+                    ObjectGuid const punishedPlayerGuid = player->GetGUID();
+                    ObjectGuid const damageCasterGuid = damageCaster->GetGUID();
+                    player->m_Events.AddEventAtOffset([punishedPlayerGuid, damageCasterGuid]()
+                    {
+                        Player* punishedPlayer = ObjectAccessor::FindPlayer(punishedPlayerGuid);
+                        if (!punishedPlayer || !punishedPlayer->IsInWorld() || !punishedPlayer->IsAlive())
+                            return;
+
+                        Unit* resolvedDamageCaster = punishedPlayer;
+                        if (damageCasterGuid)
+                            if (Unit* caster = ObjectAccessor::GetUnit(*punishedPlayer, damageCasterGuid))
+                                resolvedDamageCaster = caster;
+
+                        SpellNonMeleeDamage damageInfo(resolvedDamageCaster, punishedPlayer, MOONFIRE_SPELL_ID, SPELL_SCHOOL_MASK_NATURE);
+                        damageInfo.damage = GURUBASHI_EXIT_PUNISH_DAMAGE;
+                        Unit::DealDamageMods(punishedPlayer, damageInfo.damage, &damageInfo.absorb);
+                        punishedPlayer->DealSpellDamage(&damageInfo, true);
+                        punishedPlayer->SendSpellNonMeleeDamageLog(&damageInfo);
+
+                        if (ENABLE_GURUBASHI_EXIT_DEBUG_WHISPERS)
+                            WhisperFromChromi(punishedPlayer, "[Gurubashi Debug] Applied fallback Moonfire punish damage: " + std::to_string(GURUBASHI_EXIT_PUNISH_DAMAGE));
+                    }, 200ms);
+
                     WhisperFromChromi(player, GURUBASHI_EXIT_WHISPER);
                 }
             }
