@@ -1622,21 +1622,21 @@ struct SpellShapeshiftFormEntry
 struct SpellVisualEntry
 {
     //uint32 ID;                                            // 0
-    //uint32 PrecastKit;                                    // 1
-    //uint32 CastKit;                                       // 2
-    //uint32 ImpactKit;                                     // 3
-    //uint32 StateKit;                                      // 4
-    //uint32 StateDoneKit;                                  // 5
-    //uint32 ChannelKit;                                    // 6
+    uint32 PrecastKit;                                      // 1
+    uint32 CastKit;                                         // 2
+    uint32 ImpactKit;                                       // 3
+    uint32 StateKit;                                        // 4
+    uint32 StateDoneKit;                                    // 5
+    uint32 ChannelKit;                                      // 6
     uint32 HasMissile;                                      // 7
     int32 MissileModel;                                     // 8
-    //uint32 MissilePathType;                               // 9
-    //uint32 MissileDestinationAttachment;                  // 10
-    //uint32 MissileSound;                                  // 11
-    //uint32 AnimEventSoundID;                              // 12
-    //uint32 Flags;                                         // 13
-    //uint32 CasterImpactKit;                               // 14
-    //uint32 TargetImpactKit;                               // 15
+    uint32 MissilePathType;                                 // 9
+    uint32 MissileDestinationAttachment;                    // 10
+    uint32 MissileSound;                                    // 11
+    uint32 AnimEventSoundID;                                // 12
+    uint32 Flags;                                           // 13
+    uint32 CasterImpactKit;                                 // 14
+    uint32 TargetImpactKit;                                 // 15
     //int32 MissileAttachment;                              // 16
     //uint32 MissileFollowGroundHeight;                     // 17
     //uint32 MissileFollowGroundDropSpeed;                  // 18

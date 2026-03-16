@@ -152,7 +152,16 @@ void PlayForcedDeathStarfireVisual(Player* player)
     if (!starfireInfo || !starfireInfo->SpellVisual[0])
         return;
 
-    player->SendPlaySpellVisual(starfireInfo->SpellVisual[0]);
+    SpellVisualEntry const* spellVisual = sSpellVisualStore.LookupEntry(starfireInfo->SpellVisual[0]);
+    if (!spellVisual)
+        return;
+
+    uint32 const visualKit = spellVisual->TargetImpactKit ? spellVisual->TargetImpactKit :
+        (spellVisual->ImpactKit ? spellVisual->ImpactKit : spellVisual->CastKit);
+    if (!visualKit)
+        return;
+
+    player->SendPlaySpellVisual(visualKit);
 }
 
 bool HasLivingHostileInGurubashiBattleRing(Player const* player)
