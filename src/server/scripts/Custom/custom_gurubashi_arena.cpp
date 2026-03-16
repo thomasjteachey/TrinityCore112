@@ -56,9 +56,10 @@ constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 {
-    "You left the Battle Ring with enemies still inside.",
-    "No escape while foes yet stand in the Battle Ring.",
-    "Coward."
+    "The only way out of the arena is death.",
+    "One does not simply walk out of the Battle Ring.",
+    "Coward.",
+    "Enemy players impede the exit from the Battle Ring."
 };
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
@@ -131,7 +132,7 @@ void WhisperRandomExitKillLineFromChromie(Player* player)
     if (!player)
         return;
 
-    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 2)]);
+    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 3)]);
 }
 
 bool HasLivingHostileInGurubashiBattleRing(Player const* player)
