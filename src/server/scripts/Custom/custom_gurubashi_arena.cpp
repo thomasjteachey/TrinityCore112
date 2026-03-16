@@ -214,7 +214,7 @@ Position BuildRandomBattleRingPosition(Player* player)
 
         float const x = ChestSpawnPosition.GetPositionX() + std::cos(angle) * radius;
         float const y = ChestSpawnPosition.GetPositionY() + std::sin(angle) * radius;
-        float const z = player->GetMap()->GetHeight(player->GetPhaseShift(), x, y, ChestSpawnPosition.GetPositionZ() + 6.0f);
+        float const z = player->GetMap()->GetHeight(player->GetPhaseMask(), x, y, ChestSpawnPosition.GetPositionZ() + 6.0f);
 
         if (!std::isfinite(z))
             continue;
