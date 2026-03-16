@@ -688,7 +688,7 @@ public:
                 {
                     Unit::Kill(player, player);
 
-                    WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
+                    WhisperRandomExitKillLineFromChromie(player);
                 }
             }
 
