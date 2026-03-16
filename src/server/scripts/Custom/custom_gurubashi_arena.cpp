@@ -56,8 +56,8 @@ constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 {
-    "The only way out of the arena is death.",
-    "One does not simply walk out of the Battle Ring.",
+    "You left the Battle Ring with enemies still inside.",
+    "No escape while foes yet stand in the Battle Ring.",
     "Coward."
 };
 
