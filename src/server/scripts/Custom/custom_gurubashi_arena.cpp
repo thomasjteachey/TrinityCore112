@@ -134,6 +134,31 @@ void WhisperRandomExitKillLineFromChromie(Player* player)
     WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 2)]);
 }
 
+bool HasLivingHostileInGurubashiBattleRing(Player const* player)
+{
+    if (!player)
+        return false;
+
+    std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+    for (auto const& playerPair : ObjectAccessor::GetPlayers())
+    {
+        Player* other = playerPair.second;
+        if (!other || other == player || !other->IsAlive())
+            continue;
+
+        if (other->GetMapId() != player->GetMapId() || other->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
+            continue;
+
+        if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
+            continue;
+
+        if (player->IsValidAttackTarget(other))
+            return true;
+    }
+
+    return false;
+}
+
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
 {
     uint32 playerCount = 0;
@@ -488,7 +513,8 @@ public:
                 bool const crossedBattleRingBoundary =
                     tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
 
-                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
+                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive() &&
+                    HasLivingHostileInGurubashiBattleRing(player))
                 {
                     Unit::Kill(player, player);
 
