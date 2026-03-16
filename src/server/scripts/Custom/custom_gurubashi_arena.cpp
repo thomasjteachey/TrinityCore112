@@ -159,7 +159,10 @@ bool HasLivingHostileInGurubashiBattleRing(Player const* player)
         if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
             continue;
 
-        if (player->IsValidAttackTarget(other))
+        // Evaluate hostility without relying on transient FFA flags.
+        // When a player steps out of the ring, FFA can drop before this check runs,
+        // but the exit rule should still treat non-group/raid players in the ring as hostile.
+        if (!player->IsInSameRaidWith(other))
             return true;
     }
 
@@ -685,7 +688,7 @@ public:
                 {
                     Unit::Kill(player, player);
 
-                    WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
+                    WhisperRandomExitKillLineFromChromie(player);
                 }
             }
 
