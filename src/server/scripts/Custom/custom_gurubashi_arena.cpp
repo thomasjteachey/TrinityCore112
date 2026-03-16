@@ -30,6 +30,7 @@
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "SpellMgr.h"
+#include "SpellInfo.h"
 #include "TaskScheduler.h"
 #include "TemporarySummon.h"
 #include "Util.h"
@@ -53,6 +54,7 @@ constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
+constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
@@ -139,6 +141,27 @@ void WhisperRandomExitKillLineFromChromie(Player* player)
         return;
 
     WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 3)]);
+}
+
+void PlayForcedDeathStarfireVisual(Player* player)
+{
+    if (!player || !player->IsInWorld())
+        return;
+
+    SpellInfo const* starfireInfo = sSpellMgr->GetSpellInfo(FORCED_DEATH_STARFIRE_SPELL_ID);
+    if (!starfireInfo || !starfireInfo->SpellVisual[0])
+        return;
+
+    SpellVisualEntry const* spellVisual = sSpellVisualStore.LookupEntry(starfireInfo->SpellVisual[0]);
+    if (!spellVisual)
+        return;
+
+    uint32 const visualKit = spellVisual->TargetImpactKit ? spellVisual->TargetImpactKit :
+        (spellVisual->ImpactKit ? spellVisual->ImpactKit : spellVisual->CastKit);
+    if (!visualKit)
+        return;
+
+    player->SendPlaySpellVisual(visualKit);
 }
 
 bool HasLivingHostileInGurubashiBattleRing(Player const* player)
@@ -672,6 +695,7 @@ public:
             bool const chestActive = event && event->IsChestActive();
             if (chestActive && IsChestDeathLockoutActive(guid) && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster())
             {
+                PlayForcedDeathStarfireVisual(player);
                 Unit::Kill(player, player);
                 WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
             }
@@ -686,6 +710,7 @@ public:
                 if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive() &&
                     HasLivingHostileInGurubashiBattleRing(player))
                 {
+                    PlayForcedDeathStarfireVisual(player);
                     Unit::Kill(player, player);
 
                     WhisperRandomExitKillLineFromChromie(player);
