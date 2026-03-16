@@ -35,6 +35,7 @@
 #include "Util.h"
 
 #include <chrono>
+#include <cmath>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
@@ -51,6 +52,7 @@ constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
+constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
@@ -62,6 +64,10 @@ char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 };
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
+char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
+
+void ClearChestDeathLockouts();
+
 
 bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
 {
@@ -190,6 +196,85 @@ void YellFromChromie()
         }
     });
 }
+
+Position BuildRandomBattleRingPosition(Player* player)
+{
+    Position destination = ChestSpawnPosition;
+
+    if (!player)
+        return destination;
+
+    constexpr float maxRadius = 30.0f;
+    constexpr float twoPi = 6.28318530718f;
+
+    for (uint8 attempt = 0; attempt < 8; ++attempt)
+    {
+        float const angle = frand(0.0f, twoPi);
+        float const radius = frand(3.0f, maxRadius);
+
+        float const x = ChestSpawnPosition.GetPositionX() + std::cos(angle) * radius;
+        float const y = ChestSpawnPosition.GetPositionY() + std::sin(angle) * radius;
+        float const z = player->GetMap()->GetHeight(player->GetPhaseMask(), x, y, ChestSpawnPosition.GetPositionZ() + 6.0f);
+
+        if (!std::isfinite(z))
+            continue;
+
+        destination.Relocate(x, y, z + 0.25f, frand(0.0f, twoPi));
+        return destination;
+    }
+
+    return destination;
+}
+
+void TeleportStranglethornPlayersToBattleRing()
+{
+    std::vector<ObjectGuid> playersToTeleport;
+
+    {
+        std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+        for (auto const& playerPair : ObjectAccessor::GetPlayers())
+        {
+            Player* player = playerPair.second;
+            if (!player || !player->IsInWorld() || player->IsBeingTeleported() || !player->IsAlive())
+                continue;
+
+            if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID || player->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
+                continue;
+
+            playersToTeleport.push_back(player->GetGUID());
+        }
+    }
+
+    for (ObjectGuid const& guid : playersToTeleport)
+    {
+        Player* player = ObjectAccessor::FindPlayer(guid);
+        if (!player || !player->IsInWorld() || player->IsBeingTeleported() || !player->IsAlive())
+            continue;
+
+        player->CastSpell(player, TELEPORT_VISUAL_SPELL, TRIGGERED_FULL_MASK);
+        Position const destination = BuildRandomBattleRingPosition(player);
+        player->NearTeleportTo(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), destination.GetOrientation(), true);
+        player->CastSpell(player, TELEPORT_VISUAL_SPELL, TRIGGERED_FULL_MASK);
+    }
+}
+bool IsChestGuidActiveInWorld(ObjectGuid chestGuid)
+{
+    if (!chestGuid)
+        return false;
+
+    bool found = false;
+    sMapMgr->DoForAllMaps([&](Map* map)
+    {
+        if (found)
+            return;
+
+        if (GameObject* chest = map->GetGameObject(chestGuid))
+            found = chest->IsInWorld();
+    });
+
+    return found;
+}
+
 }
 
 class go_custom_gurubashi_hourly_chest : public GameObjectScript
@@ -225,6 +310,7 @@ public:
                 player->SendNewItem(item, 1, true, false);
 
             _rewardGranted = true;
+            ClearChestDeathLockouts();
             me->DespawnOrUnsummon();
         }
 
@@ -272,11 +358,20 @@ public:
         _currentChestGuid.Clear();
         _nextCheckTimeMs = 0;
         _lastEligibleCount = 0;
+        _chestActive = false;
+        ClearChestDeathLockouts();
     }
 
     void OnUpdate(uint32 diff) override
     {
         _scheduler.Update(diff);
+
+        if (_chestActive && !IsChestGuidActiveInWorld(_currentChestGuid))
+        {
+            _currentChestGuid.Clear();
+            _chestActive = false;
+            ClearChestDeathLockouts();
+        }
     }
 
     static gurubashi_arena_hourly_event* GetInstance()
@@ -304,6 +399,11 @@ public:
     SpawnResult ForceSpawn()
     {
         return AttemptSpawn(true);
+    }
+
+    bool IsChestActive() const
+    {
+        return _currentChestGuid && _chestActive;
     }
 
 private:
@@ -352,6 +452,8 @@ private:
                 return SpawnResult::ChestAlreadyActive;
 
             _currentChestGuid.Clear();
+            _chestActive = false;
+            ClearChestDeathLockouts();
         }
 
         if (GameObject* chest = summoner->SummonGameObject(GURUBASHI_CHEST_ENTRY, ChestSpawnPosition, QuaternionData::fromEulerAnglesZYX(ChestSpawnPosition.GetOrientation(), 0.f, 0.f), CHEST_DESPAWN_TIME))
@@ -360,6 +462,9 @@ private:
             summoner->RemoveGameObject(chest, false);
             chest->SetRespawnTime(0);
             _currentChestGuid = chest->GetGUID();
+            _chestActive = true;
+            ClearChestDeathLockouts();
+            TeleportStranglethornPlayersToBattleRing();
             YellFromChromie();
             return SpawnResult::Success;
         }
@@ -370,6 +475,7 @@ private:
     TaskScheduler _scheduler;
     ObjectGuid _currentChestGuid;
     uint32 _nextCheckTimeMs = 0;
+    bool _chestActive = false;
     uint32 _lastEligibleCount = 0;
 
     static gurubashi_arena_hourly_event* s_Instance;
@@ -382,6 +488,25 @@ namespace
 {
 std::mutex g_GurubashiTrackedPlayersMutex;
 std::unordered_set<ObjectGuid> g_GurubashiTrackedPlayers;
+std::unordered_set<ObjectGuid> g_GurubashiChestDeathLockouts;
+
+bool IsChestDeathLockoutActive(ObjectGuid guid)
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    return g_GurubashiChestDeathLockouts.find(guid) != g_GurubashiChestDeathLockouts.end();
+}
+
+void MarkChestDeathLockout(ObjectGuid guid)
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    g_GurubashiChestDeathLockouts.insert(guid);
+}
+
+void ClearChestDeathLockouts()
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    g_GurubashiChestDeathLockouts.clear();
+}
 
 bool ShouldTrackGurubashiPlayer(Player const* player)
 {
@@ -432,6 +557,46 @@ public:
         if (player)
             RemoveGurubashiPlayerTracking(player->GetGUID());
     }
+
+    void OnPVPKill(Player* /*killer*/, Player* killed) override
+    {
+        gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+        if (!killed || !event || !event->IsChestActive())
+            return;
+
+        GurubashiAreaState const areaState = GetGurubashiAreaState(killed, killed->GetZoneId(), killed->GetAreaId());
+        if (areaState == GurubashiAreaState::BattleRing)
+            MarkChestDeathLockout(killed->GetGUID());
+    }
+
+    void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
+    {
+        gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+        if (!killed || !event || !event->IsChestActive())
+            return;
+
+        GurubashiAreaState const areaState = GetGurubashiAreaState(killed, killed->GetZoneId(), killed->GetAreaId());
+        if (areaState == GurubashiAreaState::BattleRing)
+            MarkChestDeathLockout(killed->GetGUID());
+    }
+
+    void OnPlayerRepop(Player* player) override
+    {
+        gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+        if (!player || !event || !event->IsChestActive() || !IsChestDeathLockoutActive(player->GetGUID()))
+            return;
+
+        WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
+    }
+
+    void OnPlayerResurrect(Player* player) override
+    {
+        gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+        if (!player || !event || !event->IsChestActive() || !IsChestDeathLockoutActive(player->GetGUID()))
+            return;
+
+        WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
+    }
 };
 
 class gurubashi_arena_exit_enforcer : public WorldScript
@@ -480,6 +645,14 @@ public:
             TrackedState& tracked = _trackedPlayers[guid];
             Position const currentPosition = player->GetPosition();
             GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
+
+            gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+            bool const chestActive = event && event->IsChestActive();
+            if (chestActive && IsChestDeathLockoutActive(guid) && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster())
+            {
+                Unit::Kill(player, player);
+                WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
+            }
 
             if (tracked.HasPosition)
             {
