@@ -56,13 +56,6 @@ constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
-char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
-{
-    "The only way out of the arena is death.",
-    "One does not simply walk out of the Battle Ring.",
-    "Coward."
-};
-
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
 
@@ -130,14 +123,6 @@ void WhisperFromChromi(Player* player, std::string_view message)
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message, 0, "Chromie");
     player->SendDirectMessage(&data);
-}
-
-void WhisperRandomExitKillLineFromChromie(Player* player)
-{
-    if (!player)
-        return;
-
-    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 2)]);
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
@@ -508,6 +493,7 @@ void ClearChestDeathLockouts()
     g_GurubashiChestDeathLockouts.clear();
 }
 
+
 bool ShouldTrackGurubashiPlayer(Player const* player)
 {
     return player && player->IsInWorld() && player->GetMapId() == GURUBASHI_ARENA_MAP_ID && player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
@@ -589,14 +575,6 @@ public:
         WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
     }
 
-    void OnPlayerResurrect(Player* player) override
-    {
-        gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
-        if (!player || !event || !event->IsChestActive() || !IsChestDeathLockoutActive(player->GetGUID()))
-            return;
-
-        WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
-    }
 };
 
 class gurubashi_arena_exit_enforcer : public WorldScript
@@ -665,7 +643,7 @@ public:
                 {
                     Unit::Kill(player, player);
 
-                    WhisperRandomExitKillLineFromChromie(player);
+                    WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
                 }
             }
 
