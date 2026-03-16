@@ -56,6 +56,14 @@ constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
+char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
+{
+    "The only way out of the arena is death.",
+    "One does not simply walk out of the Battle Ring.",
+    "Coward.",
+    "Enemy players impede the exit from the Battle Ring."
+};
+
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
 
@@ -123,6 +131,39 @@ void WhisperFromChromi(Player* player, std::string_view message)
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message, 0, "Chromie");
     player->SendDirectMessage(&data);
+}
+
+void WhisperRandomExitKillLineFromChromie(Player* player)
+{
+    if (!player)
+        return;
+
+    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 3)]);
+}
+
+bool HasLivingHostileInGurubashiBattleRing(Player const* player)
+{
+    if (!player)
+        return false;
+
+    std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+    for (auto const& playerPair : ObjectAccessor::GetPlayers())
+    {
+        Player* other = playerPair.second;
+        if (!other || other == player || !other->IsAlive())
+            continue;
+
+        if (other->GetMapId() != player->GetMapId() || other->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
+            continue;
+
+        if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
+            continue;
+
+        if (player->IsValidAttackTarget(other))
+            return true;
+    }
+
+    return false;
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
@@ -639,7 +680,8 @@ public:
                 bool const crossedBattleRingBoundary =
                     tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
 
-                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive())
+                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive() &&
+                    HasLivingHostileInGurubashiBattleRing(player))
                 {
                     Unit::Kill(player, player);
 
