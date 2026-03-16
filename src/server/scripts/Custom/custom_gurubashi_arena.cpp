@@ -30,6 +30,7 @@
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "SpellMgr.h"
+#include "SpellInfo.h"
 #include "TaskScheduler.h"
 #include "TemporarySummon.h"
 #include "Util.h"
