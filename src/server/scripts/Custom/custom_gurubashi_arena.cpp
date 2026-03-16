@@ -53,7 +53,7 @@ constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
-constexpr uint32 FORCED_DEATH_STARFIRE_VISUAL_SPELL = 48465;
+constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
@@ -147,7 +147,11 @@ void PlayForcedDeathStarfireVisual(Player* player)
     if (!player || !player->IsInWorld())
         return;
 
-    player->CastSpell(player, FORCED_DEATH_STARFIRE_VISUAL_SPELL, true);
+    SpellInfo const* starfireInfo = sSpellMgr->GetSpellInfo(FORCED_DEATH_STARFIRE_SPELL_ID);
+    if (!starfireInfo || !starfireInfo->SpellVisual[0])
+        return;
+
+    player->SendPlaySpellVisual(starfireInfo->SpellVisual[0]);
 }
 
 bool HasLivingHostileInGurubashiBattleRing(Player const* player)
