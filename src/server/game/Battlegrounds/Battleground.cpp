@@ -1406,7 +1406,7 @@ void Battleground::RelocateDeadPlayers(ObjectGuid guideGuid)
     }
 }
 
-bool Battleground::AddObject(uint32 type, uint32 entry, float x, float y, float z, float o, float rotation0, float rotation1, float rotation2, float rotation3, uint32 /*respawnTime*/, GOState goState)
+bool Battleground::AddObject(uint32 type, uint32 entry, float x, float y, float z, float o, float rotation0, float rotation1, float rotation2, float rotation3, uint32 respawnTime, GOState goState)
 {
     // If the assert is called, means that BgObjects must be resized!
     ASSERT(type < BgObjects.size());
@@ -1435,6 +1435,12 @@ bool Battleground::AddObject(uint32 type, uint32 entry, float x, float y, float 
                 entry, m_MapId, m_InstanceID);
         delete go;
         return false;
+    }
+
+    if (respawnTime)
+    {
+        go->SetLootState(GO_JUST_DEACTIVATED);
+        go->SetRespawnTime(respawnTime);
     }
 /*
     uint32 guid = go->GetGUID().GetCounter();
@@ -1558,7 +1564,7 @@ void Battleground::SpawnBGObject(uint32 type, uint32 respawntime)
             obj->SetRespawnTime(respawntime);
             if (!obj->IsInWorld())
                 map->AddToMap(obj);
-            else if (!respawntime)
+            else
                 obj->UpdateObjectVisibility(true);
         }
 }
