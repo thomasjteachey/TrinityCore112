@@ -101,7 +101,7 @@ void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
     // Crossfaction WSG UI patch uses this addon channel payload as authoritative flag-color state.
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message);
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     SendPacketToAll(&data);
     BroadcastWSGFlagFullState();
 }
@@ -120,7 +120,7 @@ void BattlegroundWS::BroadcastWSGFlagFullState()
     std::string payload = std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetWSGFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" + GetWSGFlagStateToken(_flagState[TEAM_HORDE]);
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message);
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     SendPacketToAll(&data);
 }
 
@@ -141,7 +141,7 @@ void BattlegroundWS::SendWSGFlagFullStateTo(Player* player)
     std::string payload = std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetWSGFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" + GetWSGFlagStateToken(_flagState[TEAM_HORDE]);
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
-    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message);
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     player->SendDirectMessage(&data);
 }
 
