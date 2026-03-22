@@ -16,6 +16,7 @@
  */
 
 #include "WorldSession.h"
+#include "Battleground.h"
 #include "CharacterCache.h"
 #include "Common.h"
 #include "DatabaseEnv.h"
@@ -804,6 +805,13 @@ void WorldSession::BuildPartyMemberStatsChangedPacket(Player* player, WorldPacke
         if (player->IsFFAPvP())
             playerStatus |= MEMBER_STATUS_PVP_FFA;
 
+        if (Battleground* bg = player->GetBattleground())
+        {
+            ObjectGuid guid = player->GetGUID();
+            if (bg->GetFlagPickerGUID(TEAM_ALLIANCE) == guid || bg->GetFlagPickerGUID(TEAM_HORDE) == guid)
+                playerStatus |= MEMBER_STATUS_UNK3;
+        }
+
         if (player->isAFK())
             playerStatus |= MEMBER_STATUS_AFK;
 
@@ -1005,6 +1013,13 @@ void WorldSession::HandleRequestPartyMemberStatsOpcode(WorldPacket &recvData)
 
     if (player->IsFFAPvP())
         playerStatus |= MEMBER_STATUS_PVP_FFA;
+
+    if (Battleground* bg = player->GetBattleground())
+    {
+        ObjectGuid guid = player->GetGUID();
+        if (bg->GetFlagPickerGUID(TEAM_ALLIANCE) == guid || bg->GetFlagPickerGUID(TEAM_HORDE) == guid)
+            playerStatus |= MEMBER_STATUS_UNK3;
+    }
 
     if (player->isAFK())
         playerStatus |= MEMBER_STATUS_AFK;
