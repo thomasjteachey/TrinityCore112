@@ -19,6 +19,7 @@
 #include "BattlegroundMgr.h"
 #include "DBCStores.h"
 #include "GameObject.h"
+#include "Group.h"
 #include "Log.h"
 #include "Map.h"
 #include "Object.h"
