@@ -3860,7 +3860,16 @@ void Spell::EffectSummonObjectWild()
     if (pGameObj->GetGoType() == GAMEOBJECT_TYPE_FLAGDROP)
         if (Player* player = m_caster->ToPlayer())
             if (Battleground* bg = player->GetBattleground())
-                bg->SetDroppedFlagGUID(pGameObj->GetGUID(), player->GetTeam() == ALLIANCE ? TEAM_HORDE: TEAM_ALLIANCE);
+            {
+                // Crossfaction BGs can spoof native faction; resolve team by battleground assignment first.
+                uint32 team = bg->GetPlayerTeam(player->GetGUID());
+                if (!team)
+                    team = player->GetBGTeam();
+                if (!team)
+                    team = player->GetTeam();
+
+                bg->SetDroppedFlagGUID(pGameObj->GetGUID(), team == ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE);
+            }
 
     if (GameObject* linkedTrap = pGameObj->GetLinkedTrap())
     {

@@ -897,7 +897,16 @@ bool BattlegroundWS::CheckAchievementCriteriaMeet(uint32 criteriaId, Player cons
         case BG_CRITERIA_CHECK_SAVE_THE_DAY:
             if (target)
                 if (Player const* playerTarget = target->ToPlayer())
-                    return GetFlagState(playerTarget->GetTeam()) == BG_WS_FLAG_STATE_ON_BASE;
+                {
+                    // Use battleground team, not native faction, so crossfaction assignments stay consistent.
+                    uint32 team = GetPlayerTeam(playerTarget->GetGUID());
+                    if (!team)
+                        team = playerTarget->GetBGTeam();
+                    if (!team)
+                        team = playerTarget->GetTeam();
+
+                    return GetFlagState(team) == BG_WS_FLAG_STATE_ON_BASE;
+                }
             return false;
     }
 
