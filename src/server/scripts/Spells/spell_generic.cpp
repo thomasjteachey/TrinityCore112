@@ -125,9 +125,8 @@ class spell_pet_moveto : public SpellScript
 
         PathType const pathType = path.GetPathType();
         if ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
-            (path.HasNavigationData() && !pet->GetMap()->IsBattlegroundOrArena() && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))
+            (path.HasNavigationData() && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))
             return SPELL_FAILED_NOPATH;
-
         // Do a mini Spell::CheckCasterAuras on the pet, no other way of doing this
         SpellCastResult result = SPELL_CAST_OK;
         uint32 const unitflag = pet->GetUnitFlags();
