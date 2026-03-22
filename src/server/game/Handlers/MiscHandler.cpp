@@ -483,6 +483,9 @@ void WorldSession::HandleSetSelectionOpcode(WorldPacket& recvData)
     }
 
     _player->SetSelection(guid);
+
+    if (guid.IsEmpty())
+        _player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
 }
 
 void WorldSession::HandleStandStateChangeOpcode(WorldPacket& recvData)
