@@ -414,7 +414,7 @@ void BattlegroundWS::RespawnFlagAfterDrop(uint32 team)
     else
         SpawnBGObject(BG_WS_OBJECT_H_FLAG, RESPAWN_IMMEDIATELY);
 
-    SendBroadcastText(team == ALLIANCE ? BG_WS_TEXT_ALLIANCE_FLAG_RETURNED : BG_WS_TEXT_HORDE_FLAG_RETURNED, CHAT_MSG_BG_SYSTEM_NEUTRAL);
+    SendBroadcastText(team == ALLIANCE ? BG_WS_TEXT_ALLIANCE_FLAG_RETURNED_TIMEOUT : BG_WS_TEXT_HORDE_FLAG_RETURNED_TIMEOUT, CHAT_MSG_BG_SYSTEM_NEUTRAL);
     SendWSGFlagAddonMessage(team == ALLIANCE ? "A:RETURN" : "H:RETURN");
 
     if (GameObject* obj = GetBgMap()->GetGameObject(GetDroppedFlagGUID(team)))
