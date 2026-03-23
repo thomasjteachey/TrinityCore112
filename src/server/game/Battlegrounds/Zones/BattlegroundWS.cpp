@@ -28,6 +28,9 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 #include "World.h"
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 // these variables aren't used outside of this file, so declare them only here
@@ -96,6 +99,99 @@ char const* BattlegroundWS::GetWSGFlagStateToken(uint8 flagState)
     }
 }
 
+float BattlegroundWS::NormalizeWSGCoord(float value, float min, float max)
+{
+    if (max <= min)
+        return 0.0f;
+
+    float normalized = (value - min) / (max - min);
+    return std::clamp(normalized, 0.0f, 1.0f);
+}
+
+std::string BattlegroundWS::FormatWSGCoord(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(4) << value;
+    return stream.str();
+}
+
+bool BattlegroundWS::GetWSGFlagWorldPositionByIdentity(uint32 flagTeam, float& x, float& y) const
+{
+    int32 const flagTeamIndex = GetTeamIndexByTeamId(flagTeam);
+    if (flagTeamIndex != TEAM_ALLIANCE && flagTeamIndex != TEAM_HORDE)
+        return false;
+
+    if (_flagState[flagTeamIndex] == BG_WS_FLAG_STATE_ON_PLAYER)
+    {
+        if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[flagTeamIndex]))
+        {
+            x = carrier->GetPositionX();
+            y = carrier->GetPositionY();
+            return true;
+        }
+    }
+    else if (_flagState[flagTeamIndex] == BG_WS_FLAG_STATE_ON_GROUND)
+    {
+        if (Map* map = GetBgMap())
+        {
+            if (GameObject* droppedFlag = map->GetGameObject(GetDroppedFlagGUID(flagTeam)))
+            {
+                x = droppedFlag->GetPositionX();
+                y = droppedFlag->GetPositionY();
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+std::string BattlegroundWS::BuildWSGFlagFullPayload() const
+{
+    // WSG worldspace extents used to map world coordinates to 0..1 minimap-like coordinates.
+    // We keep these constants local to the WSG sync layer so gameplay behavior remains unchanged.
+    constexpr float WSG_MIN_X = 850.0f;
+    constexpr float WSG_MAX_X = 1600.0f;
+    constexpr float WSG_MIN_Y = 1300.0f;
+    constexpr float WSG_MAX_Y = 1750.0f;
+
+    std::string allianceCarrier;
+    std::string hordeCarrier;
+    std::string allianceX;
+    std::string allianceY;
+    std::string hordeX;
+    std::string hordeY;
+
+    if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    {
+        if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_ALLIANCE]))
+            allianceCarrier = carrier->GetName();
+    }
+
+    if (_flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    {
+        if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_HORDE]))
+            hordeCarrier = carrier->GetName();
+    }
+
+    float x = 0.0f;
+    float y = 0.0f;
+    if (GetWSGFlagWorldPositionByIdentity(ALLIANCE, x, y))
+    {
+        allianceX = FormatWSGCoord(NormalizeWSGCoord(x, WSG_MIN_X, WSG_MAX_X));
+        allianceY = FormatWSGCoord(NormalizeWSGCoord(y, WSG_MIN_Y, WSG_MAX_Y));
+    }
+
+    if (GetWSGFlagWorldPositionByIdentity(HORDE, x, y))
+    {
+        hordeX = FormatWSGCoord(NormalizeWSGCoord(x, WSG_MIN_X, WSG_MAX_X));
+        hordeY = FormatWSGCoord(NormalizeWSGCoord(y, WSG_MIN_Y, WSG_MAX_Y));
+    }
+
+    return std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetWSGFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" +
+        GetWSGFlagStateToken(_flagState[TEAM_HORDE]) + ":" + allianceX + ":" + allianceY + ":" + hordeX + ":" + hordeY;
+}
+
 void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
 {
     // Crossfaction WSG UI patch uses this addon channel payload as authoritative flag-color state.
@@ -108,16 +204,7 @@ void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
 {
-    std::string allianceCarrier;
-    std::string hordeCarrier;
-
-    if (Player* player = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_ALLIANCE]))
-        allianceCarrier = player->GetName();
-
-    if (Player* player = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_HORDE]))
-        hordeCarrier = player->GetName();
-
-    std::string payload = std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetWSGFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" + GetWSGFlagStateToken(_flagState[TEAM_HORDE]);
+    std::string payload = BuildWSGFlagFullPayload();
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
@@ -129,16 +216,7 @@ void BattlegroundWS::SendWSGFlagFullStateTo(Player* player)
     if (!player || !player->GetSession())
         return;
 
-    std::string allianceCarrier;
-    std::string hordeCarrier;
-
-    if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_ALLIANCE]))
-        allianceCarrier = carrier->GetName();
-
-    if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_HORDE]))
-        hordeCarrier = carrier->GetName();
-
-    std::string payload = std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetWSGFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" + GetWSGFlagStateToken(_flagState[TEAM_HORDE]);
+    std::string payload = BuildWSGFlagFullPayload();
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
