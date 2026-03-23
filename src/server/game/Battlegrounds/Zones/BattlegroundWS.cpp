@@ -436,10 +436,13 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
     uint32 winner = 0;
 
     player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT);
+    uint32 capturedFlagIdentity = TEAM_ALLIANCE;
+
     if (player->GetTeam() == ALLIANCE)
     {
         if (!IsHordeFlagPickedup())
             return;
+        capturedFlagIdentity = TEAM_HORDE;
         SetHordeFlagPicker(ObjectGuid::Empty);              // must be before aura remove to prevent 2 events (drop+capture) at the same time
                                                             // horde flag in base (but not respawned yet)
         _flagState[TEAM_HORDE] = BG_WS_FLAG_STATE_WAIT_RESPAWN;
@@ -459,6 +462,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
     {
         if (!IsAllianceFlagPickedup())
             return;
+        capturedFlagIdentity = TEAM_ALLIANCE;
         SetAllianceFlagPicker(ObjectGuid::Empty);           // must be before aura remove to prevent 2 events (drop+capture) at the same time
                                                             // alliance flag in base (but not respawned yet)
         _flagState[TEAM_ALLIANCE] = BG_WS_FLAG_STATE_WAIT_RESPAWN;
@@ -485,7 +489,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
         SendBroadcastText(BG_WS_TEXT_CAPTURED_HORDE_FLAG, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
     else
         SendBroadcastText(BG_WS_TEXT_CAPTURED_ALLIANCE_FLAG, CHAT_MSG_BG_SYSTEM_HORDE, player);
-    SendWSGFlagAddonMessage(player->GetTeam() == ALLIANCE ? "H:CAPTURE" : "A:CAPTURE");
+    SendWSGFlagAddonMessage(capturedFlagIdentity == TEAM_HORDE ? "H:CAPTURE" : "A:CAPTURE");
 
     UpdateFlagState(player->GetTeam(), 1);                  // flag state none
     UpdateTeamScore(player->GetTeamId());
@@ -557,6 +561,7 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
     }
 
     bool set = false;
+    int32 droppedFlagIdentity = -1;
 
     if (player->GetTeam() == ALLIANCE)
     {
@@ -573,6 +578,7 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
             _flagState[TEAM_HORDE] = BG_WS_FLAG_STATE_ON_GROUND;
             player->CastSpell(player, BG_WS_SPELL_WARSONG_FLAG_DROPPED, true);
             set = true;
+            droppedFlagIdentity = TEAM_HORDE;
         }
     }
     else
@@ -590,15 +596,16 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
             _flagState[TEAM_ALLIANCE] = BG_WS_FLAG_STATE_ON_GROUND;
             player->CastSpell(player, BG_WS_SPELL_SILVERWING_FLAG_DROPPED, true);
             set = true;
+            droppedFlagIdentity = TEAM_ALLIANCE;
         }
     }
 
-    if (set)
+    if (set && (droppedFlagIdentity == TEAM_ALLIANCE || droppedFlagIdentity == TEAM_HORDE))
     {
         //player->CastSpell(player, SPELL_RECENTLY_DROPPED_FLAG, true);
-        UpdateFlagState(player->GetTeam(), 1);
+        UpdateFlagState(droppedFlagIdentity == TEAM_HORDE ? ALLIANCE : HORDE, 1);
 
-        if (player->GetTeam() == ALLIANCE)
+        if (droppedFlagIdentity == TEAM_HORDE)
         {
             SendBroadcastText(BG_WS_TEXT_HORDE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_HORDE, player);
             SendWSGFlagAddonMessage("H:DROP");
@@ -611,7 +618,7 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
             UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1));
         }
 
-        _flagsDropTimer[GetTeamIndexByTeamId(player->GetTeam()) ? 0 : 1] = BG_WS_FLAG_DROP_TIME;
+        _flagsDropTimer[droppedFlagIdentity] = BG_WS_FLAG_DROP_TIME;
     }
 }
 
