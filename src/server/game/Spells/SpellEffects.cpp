@@ -18,6 +18,7 @@
 #include "Spell.h"
 #include "AccountMgr.h"
 #include "Battleground.h"
+#include "BattlegroundWS.h"
 #include "CellImpl.h"
 #include "Common.h"
 #include "Creature.h"
@@ -3860,7 +3861,21 @@ void Spell::EffectSummonObjectWild()
     if (pGameObj->GetGoType() == GAMEOBJECT_TYPE_FLAGDROP)
         if (Player* player = m_caster->ToPlayer())
             if (Battleground* bg = player->GetBattleground())
-                bg->SetDroppedFlagGUID(pGameObj->GetGUID(), player->GetTeam() == ALLIANCE ? TEAM_HORDE: TEAM_ALLIANCE);
+            {
+                int32 droppedFlagTeam = -1;
+                if (bg->GetTypeID() == BATTLEGROUND_WS)
+                {
+                    if (pGameObj->GetEntry() == BG_OBJECT_A_FLAG_GROUND_WS_ENTRY)
+                        droppedFlagTeam = TEAM_ALLIANCE;
+                    else if (pGameObj->GetEntry() == BG_OBJECT_H_FLAG_GROUND_WS_ENTRY)
+                        droppedFlagTeam = TEAM_HORDE;
+                }
+
+                if (droppedFlagTeam == -1)
+                    droppedFlagTeam = player->GetTeam() == ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+
+                bg->SetDroppedFlagGUID(pGameObj->GetGUID(), droppedFlagTeam);
+            }
 
     if (GameObject* linkedTrap = pGameObj->GetLinkedTrap())
     {

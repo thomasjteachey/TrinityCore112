@@ -22,6 +22,7 @@
 #include "Common.h"
 #include "Channel.h"
 #include "ChannelMgr.h"
+#include "BattlegroundWS.h"
 #include "Chat.h"
 #include "ChatPackets.h"
 #include "DatabaseEnv.h"
@@ -191,6 +192,25 @@ std::string_view GetRandomChromiCatFact()
     };
 
     return catFacts[urand(0, catFacts.size() - 1)];
+}
+
+bool HandleWSGFlagSyncRequest(Player* sender, uint32 type, uint32 lang, std::string const& msg)
+{
+    if (!sender || lang != LANG_ADDON || type != CHAT_MSG_BATTLEGROUND)
+        return false;
+
+    std::size_t const separator = msg.find('\t');
+    if (separator == std::string::npos)
+        return false;
+
+    if (msg.compare(0, separator, "CWSGREQ") != 0 || msg.compare(separator + 1, std::string::npos, "FULL") != 0)
+        return false;
+
+    if (Battleground* battleground = sender->GetBattleground())
+        if (battleground->GetStatus() == STATUS_IN_PROGRESS && battleground->GetTypeID() == BATTLEGROUND_WS)
+            static_cast<BattlegroundWS*>(battleground)->SendWSGFlagFullStateTo(sender);
+
+    return true;
 }
 
 }
@@ -384,6 +404,9 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
     {
         if (msg.empty())
             return;
+        if (HandleWSGFlagSyncRequest(sender, type, lang, msg))
+            return;
+
         if (lang == LANG_ADDON)
         {
             if (AddonChannelCommandHandler(this).ParseCommands(msg.c_str()))
