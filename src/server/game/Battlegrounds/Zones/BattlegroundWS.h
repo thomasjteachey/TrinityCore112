@@ -238,6 +238,7 @@ class BattlegroundWS : public Battleground
         void SendWSGFlagAddonMessage(std::string const& payload);
         void BroadcastWSGFlagFullState();
         void SendWSGFlagFullStateTo(Player* player);
+        std::string BuildWSGFlagFullPayload() const;
 
         void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
         void HandleAreaTrigger(Player* player, uint32 trigger) override;
@@ -257,7 +258,7 @@ class BattlegroundWS : public Battleground
                 m_DroppedFlagGUID[team] = guid;
         }
 
-        ObjectGuid GetDroppedFlagGUID(uint32 TeamID)             { return m_DroppedFlagGUID[GetTeamIndexByTeamId(TeamID)]; }
+        ObjectGuid GetDroppedFlagGUID(uint32 TeamID) const       { return m_DroppedFlagGUID[GetTeamIndexByTeamId(TeamID)]; }
         void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
 
         /* Scorekeeping */
@@ -292,5 +293,8 @@ class BattlegroundWS : public Battleground
 
         void PostUpdateImpl(uint32 diff) override;
         static char const* GetWSGFlagStateToken(uint8 flagState);
+        bool GetWSGFlagWorldPositionByIdentity(uint32 flagTeam, float& x, float& y) const;
+        static float NormalizeWSGCoord(float value, float min, float max);
+        static std::string FormatWSGCoord(float value);
 };
 #endif
