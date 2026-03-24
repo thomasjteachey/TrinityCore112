@@ -24,6 +24,7 @@ EndScriptData */
 
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
+#include "Battleground.h"
 #include "Chat.h"
 #include "DatabaseEnv.h"
 #include "Language.h"
@@ -50,6 +51,7 @@ public:
             { "ingame",     HandleGMListIngameCommand,  rbac::RBAC_PERM_COMMAND_GM_INGAME,      Console::Yes },
             { "list",       HandleGMListFullCommand,    rbac::RBAC_PERM_COMMAND_GM_LIST,        Console::Yes },
             { "visible",    HandleGMVisibleCommand,     rbac::RBAC_PERM_COMMAND_GM_VISIBLE,     Console::No },
+            { "bgstart",    HandleGMBgStartCommand,     rbac::RBAC_PERM_COMMAND_GM,             Console::No },
             { "on",         HandleGMOnCommand,          rbac::RBAC_PERM_COMMAND_GM,             Console::No },
             { "off",        HandleGMOffCommand,         rbac::RBAC_PERM_COMMAND_GM,             Console::No },
         };
@@ -226,6 +228,37 @@ public:
         handler->GetPlayer()->SetGameMaster(true);
         handler->GetPlayer()->UpdateTriggerVisibility();
         handler->GetSession()->SendNotification(LANG_GM_ON);
+        return true;
+    }
+
+    static bool HandleGMBgStartCommand(ChatHandler* handler)
+    {
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        Battleground* battleground = player->GetBattleground();
+        if (!battleground)
+        {
+            handler->SendSysMessage("You must be inside a battleground or arena to use this command.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+        {
+            handler->SendSysMessage("This battleground or arena has already started.");
+            return true;
+        }
+
+        if (!battleground->SkipStartDelay())
+        {
+            handler->SendSysMessage("Could not skip the battleground or arena start countdown.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        handler->SendSysMessage("Skipped the battleground or arena start countdown.");
         return true;
     }
 
