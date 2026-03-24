@@ -3876,7 +3876,11 @@ void Spell::EffectSummonObjectWild()
                     droppedFlagTeam = player->GetTeam() == ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
 
                 if (droppedFlagTeam == TEAM_ALLIANCE || droppedFlagTeam == TEAM_HORDE)
+                {
                     bg->SetDroppedFlagGUID(pGameObj->GetGUID(), droppedFlagTeam);
+                    if (bg->GetTypeID() == BATTLEGROUND_WS)
+                        static_cast<BattlegroundWS*>(bg)->BroadcastWSGFlagFullState();
+                }
             }
 
     if (GameObject* linkedTrap = pGameObj->GetLinkedTrap())

@@ -237,7 +237,7 @@ class BattlegroundWS : public Battleground
         void EventPlayerClickedOnFlag(Player* player, GameObject* target_obj) override;
         void EventPlayerCapturedFlag(Player* player);
         void HandleFlagRoomCapturePoint(int32 team);
-        void SendWSGFlagAddonMessage(std::string const& payload);
+        void SendWSGFlagAddonMessage(std::string const& payload, bool broadcastFullState = true);
         void BroadcastWSGFlagFullState();
         void SendWSGFlagFullStateTo(Player* player);
         std::string BuildWSGFlagFullPayload() const;
