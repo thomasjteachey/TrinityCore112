@@ -453,66 +453,7 @@ inline void Battleground::_ProcessJoin(uint32 diff)
     }
     // Delay expired (after 2 or 1 minute)
     else if (GetStartDelayTime() <= 0 && !(m_Events & BG_STARTING_EVENT_4))
-    {
-        m_Events |= BG_STARTING_EVENT_4;
-
-        StartingEventOpenDoors();
-
-        if (StartMessageIds[BG_STARTING_EVENT_FOURTH])
-            SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);
-        SetStatus(STATUS_IN_PROGRESS);
-        SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FOURTH]);
-
-        // Remove preparation
-        if (isArena())
-        {
-            /// @todo add arena sound PlaySoundToAll(SOUND_ARENA_START);
-            for (BattlegroundPlayerMap::const_iterator itr = GetPlayers().begin(); itr != GetPlayers().end(); ++itr)
-                if (Player* player = ObjectAccessor::FindPlayer(itr->first))
-                {
-                    // BG Status packet
-                    WorldPacket status;
-                    BattlegroundQueueTypeId bgQueueTypeId = sBattlegroundMgr->BGQueueTypeId(m_TypeID, GetArenaType());
-                    uint32 queueSlot = player->GetBattlegroundQueueIndex(bgQueueTypeId);
-                    sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, this, queueSlot, STATUS_IN_PROGRESS, 0, GetStartTime(), GetArenaType(), player->GetBGTeam());
-                    player->SendDirectMessage(&status);
-
-                    player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
-                    player->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
-                    player->ResetAllPowers();
-                    if (!player->IsGameMaster())
-                    {
-                        // remove auras with duration lower than 30s
-                        player->RemoveAppliedAuras([](AuraApplication const* aurApp)
-                        {
-                            Aura* aura = aurApp->GetBase();
-                            return !aura->IsPermanent()
-                                && aura->GetDuration() <= 30 * IN_MILLISECONDS
-                                && aurApp->IsPositive()
-                                && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY)
-                                && !aura->HasEffectType(SPELL_AURA_MOD_INVISIBILITY);
-                        });
-                    }
-                }
-
-            CheckWinConditions();
-        }
-        else
-        {
-            PlaySoundToAll(SOUND_BG_START);
-
-            for (BattlegroundPlayerMap::const_iterator itr = GetPlayers().begin(); itr != GetPlayers().end(); ++itr)
-                if (Player* player = ObjectAccessor::FindPlayer(itr->first))
-                {
-                    player->RemoveAurasDueToSpell(SPELL_PREPARATION);
-                    player->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
-                    player->ResetAllPowers();
-                }
-            // Announce BG starting
-            if (sWorld->getBoolConfig(CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE))
-                sWorld->SendWorldText(LANG_BG_STARTED_ANNOUNCE_WORLD, GetName().c_str(), GetMinLevel(), GetMaxLevel());
-        }
-    }
+        SkipStartDelay();
 }
 
 inline void Battleground::_ProcessLeave(uint32 diff)
@@ -1051,6 +992,97 @@ void Battleground::StartBattleground()
 
     if (m_IsRated)
         TC_LOG_DEBUG("bg.arena", "Arena match type: {} for Team1Id: {} - Team2Id: {} started.", m_ArenaType, m_ArenaTeamIds[TEAM_ALLIANCE], m_ArenaTeamIds[TEAM_HORDE]);
+}
+
+bool Battleground::SkipStartDelay()
+{
+    if (GetStatus() != STATUS_WAIT_JOIN || (m_Events & BG_STARTING_EVENT_4))
+        return false;
+
+    // Ensure setup is complete if this is forced very early, before the first regular countdown update.
+    if (!(m_Events & BG_STARTING_EVENT_1))
+    {
+        m_Events |= BG_STARTING_EVENT_1;
+
+        if (!FindBgMap())
+        {
+            TC_LOG_ERROR("bg.battleground", "Battleground::SkipStartDelay: map (map id: {}, instance id: {}) is not created!", m_MapId, m_InstanceID);
+            EndNow();
+            return false;
+        }
+
+        if (!SetupBattleground())
+        {
+            EndNow();
+            return false;
+        }
+
+        StartingEventCloseDoors();
+    }
+
+    // Skip remaining countdown warnings.
+    m_Events |= BG_STARTING_EVENT_2;
+    m_Events |= BG_STARTING_EVENT_3;
+    m_Events |= BG_STARTING_EVENT_4;
+
+    StartingEventOpenDoors();
+
+    if (StartMessageIds[BG_STARTING_EVENT_FOURTH])
+        SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+    SetStatus(STATUS_IN_PROGRESS);
+    SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FOURTH]);
+
+    // Remove preparation
+    if (isArena())
+    {
+        /// @todo add arena sound PlaySoundToAll(SOUND_ARENA_START);
+        for (BattlegroundPlayerMap::const_iterator itr = GetPlayers().begin(); itr != GetPlayers().end(); ++itr)
+            if (Player* player = ObjectAccessor::FindPlayer(itr->first))
+            {
+                // BG Status packet
+                WorldPacket status;
+                BattlegroundQueueTypeId bgQueueTypeId = sBattlegroundMgr->BGQueueTypeId(m_TypeID, GetArenaType());
+                uint32 queueSlot = player->GetBattlegroundQueueIndex(bgQueueTypeId);
+                sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, this, queueSlot, STATUS_IN_PROGRESS, 0, GetStartTime(), GetArenaType(), player->GetBGTeam());
+                player->SendDirectMessage(&status);
+
+                player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
+                player->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
+                player->ResetAllPowers();
+                if (!player->IsGameMaster())
+                {
+                    // remove auras with duration lower than 30s
+                    player->RemoveAppliedAuras([](AuraApplication const* aurApp)
+                    {
+                        Aura* aura = aurApp->GetBase();
+                        return !aura->IsPermanent()
+                            && aura->GetDuration() <= 30 * IN_MILLISECONDS
+                            && aurApp->IsPositive()
+                            && !aura->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY)
+                            && !aura->HasEffectType(SPELL_AURA_MOD_INVISIBILITY);
+                    });
+                }
+            }
+
+        CheckWinConditions();
+    }
+    else
+    {
+        PlaySoundToAll(SOUND_BG_START);
+
+        for (BattlegroundPlayerMap::const_iterator itr = GetPlayers().begin(); itr != GetPlayers().end(); ++itr)
+            if (Player* player = ObjectAccessor::FindPlayer(itr->first))
+            {
+                player->RemoveAurasDueToSpell(SPELL_PREPARATION);
+                player->RemoveAurasDueToSpell(SPELL_INSTANT_CAST);
+                player->ResetAllPowers();
+            }
+        // Announce BG starting
+        if (sWorld->getBoolConfig(CONFIG_BATTLEGROUND_QUEUE_ANNOUNCER_ENABLE))
+            sWorld->SendWorldText(LANG_BG_STARTED_ANNOUNCE_WORLD, GetName().c_str(), GetMinLevel(), GetMaxLevel());
+    }
+
+    return true;
 }
 
 void Battleground::AddPlayer(Player* player)
