@@ -192,15 +192,13 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
         GetWSGFlagStateToken(_flagState[TEAM_HORDE]) + ":" + allianceX + ":" + allianceY + ":" + hordeX + ":" + hordeY;
 }
 
-void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload, bool broadcastFullState /*= true*/)
+void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
 {
     // Crossfaction WSG UI patch uses this addon channel payload as authoritative flag-color state.
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     SendPacketToAll(&data);
-    if (broadcastFullState)
-        BroadcastWSGFlagFullState();
 }
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
@@ -417,6 +415,7 @@ void BattlegroundWS::RespawnFlagAfterDrop(uint32 team)
 
     SendBroadcastText(team == ALLIANCE ? BG_WS_TEXT_ALLIANCE_FLAG_RETURNED_TIMEOUT : BG_WS_TEXT_HORDE_FLAG_RETURNED_TIMEOUT, CHAT_MSG_BG_SYSTEM_NEUTRAL);
     SendWSGFlagAddonMessage(team == ALLIANCE ? "A:RETURN" : "H:RETURN");
+    BroadcastWSGFlagFullState();
 
     if (GameObject* obj = GetBgMap()->GetGameObject(GetDroppedFlagGUID(team)))
         obj->Delete();
@@ -491,6 +490,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
     else
         SendBroadcastText(BG_WS_TEXT_CAPTURED_ALLIANCE_FLAG, CHAT_MSG_BG_SYSTEM_HORDE, player);
     SendWSGFlagAddonMessage(capturedFlagIdentity == TEAM_HORDE ? "H:CAPTURE" : "A:CAPTURE");
+    BroadcastWSGFlagFullState();
 
     UpdateFlagState(player->GetTeam(), 1);                  // flag state none
     UpdateTeamScore(player->GetTeamId());
@@ -609,13 +609,13 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
         if (droppedFlagIdentity == TEAM_HORDE)
         {
             SendBroadcastText(BG_WS_TEXT_HORDE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_HORDE, player);
-            SendWSGFlagAddonMessage("H:DROP", false);
+            SendWSGFlagAddonMessage("H:DROP");
             UpdateWorldState(BG_WS_FLAG_UNK_HORDE, uint32(-1));
         }
         else
         {
             SendBroadcastText(BG_WS_TEXT_ALLIANCE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
-            SendWSGFlagAddonMessage("A:DROP", false);
+            SendWSGFlagAddonMessage("A:DROP");
             UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1));
         }
 
@@ -650,6 +650,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
         else if (_flagDebuffState == 2)
           player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
         SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+        BroadcastWSGFlagFullState();
     }
 
     //horde flag picked up from base
@@ -674,6 +675,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
         else if (_flagDebuffState == 2)
           player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
         SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+        BroadcastWSGFlagFullState();
     }
 
     //Alliance flag on ground(not in base) (returned or picked up again from ground!)
@@ -691,6 +693,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
             _bothFlagsKept = false;
             HandleFlagRoomCapturePoint(TEAM_HORDE); // Check Horde flag if it is in capture zone; if so, capture it
             SendWSGFlagAddonMessage("A:RETURN");
+            BroadcastWSGFlagFullState();
         }
         else
         {
@@ -707,6 +710,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
               player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
             UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1);
             SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+            BroadcastWSGFlagFullState();
         }
         //called in HandleGameObjectUseOpcode:
         //target_obj->Delete();
@@ -727,6 +731,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
             _bothFlagsKept = false;
             HandleFlagRoomCapturePoint(TEAM_ALLIANCE); // Check Alliance flag if it is in capture zone; if so, capture it
             SendWSGFlagAddonMessage("H:RETURN");
+            BroadcastWSGFlagFullState();
         }
         else
         {
@@ -743,6 +748,7 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
               player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
             UpdateWorldState(BG_WS_FLAG_UNK_HORDE, 1);
             SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+            BroadcastWSGFlagFullState();
         }
         //called in HandleGameObjectUseOpcode:
         //target_obj->Delete();
