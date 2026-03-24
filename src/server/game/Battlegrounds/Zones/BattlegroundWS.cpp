@@ -28,7 +28,6 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 #include "World.h"
-#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -99,15 +98,6 @@ char const* BattlegroundWS::GetWSGFlagStateToken(uint8 flagState)
     }
 }
 
-float BattlegroundWS::NormalizeWSGCoord(float value, float min, float max)
-{
-    if (max <= min)
-        return 0.0f;
-
-    float normalized = (value - min) / (max - min);
-    return std::clamp(normalized, 0.0f, 1.0f);
-}
-
 std::string BattlegroundWS::FormatWSGCoord(float value)
 {
     std::ostringstream stream;
@@ -148,13 +138,6 @@ bool BattlegroundWS::GetWSGFlagWorldPositionByIdentity(uint32 flagTeam, float& x
 
 std::string BattlegroundWS::BuildWSGFlagFullPayload() const
 {
-    // WSG worldspace extents used to map world coordinates to 0..1 minimap-like coordinates.
-    // We keep these constants local to the WSG sync layer so gameplay behavior remains unchanged.
-    constexpr float WSG_MIN_X = 850.0f;
-    constexpr float WSG_MAX_X = 1600.0f;
-    constexpr float WSG_MIN_Y = 1300.0f;
-    constexpr float WSG_MAX_Y = 1750.0f;
-
     std::string allianceCarrier;
     std::string hordeCarrier;
     std::string allianceX;
@@ -178,14 +161,16 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
     float y = 0.0f;
     if (GetWSGFlagWorldPositionByIdentity(ALLIANCE, x, y))
     {
-        allianceX = FormatWSGCoord(NormalizeWSGCoord(x, WSG_MIN_X, WSG_MAX_X));
-        allianceY = FormatWSGCoord(NormalizeWSGCoord(y, WSG_MIN_Y, WSG_MAX_Y));
+        Map2ZoneCoordinates(x, y, 3277);
+        allianceX = FormatWSGCoord(x / 100.0f);
+        allianceY = FormatWSGCoord(y / 100.0f);
     }
 
     if (GetWSGFlagWorldPositionByIdentity(HORDE, x, y))
     {
-        hordeX = FormatWSGCoord(NormalizeWSGCoord(x, WSG_MIN_X, WSG_MAX_X));
-        hordeY = FormatWSGCoord(NormalizeWSGCoord(y, WSG_MIN_Y, WSG_MAX_Y));
+        Map2ZoneCoordinates(x, y, 3277);
+        hordeX = FormatWSGCoord(x / 100.0f);
+        hordeY = FormatWSGCoord(y / 100.0f);
     }
 
     return std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetWSGFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" +

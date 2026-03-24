@@ -296,7 +296,6 @@ class BattlegroundWS : public Battleground
         void PostUpdateImpl(uint32 diff) override;
         static char const* GetWSGFlagStateToken(uint8 flagState);
         bool GetWSGFlagWorldPositionByIdentity(uint32 flagTeam, float& x, float& y) const;
-        static float NormalizeWSGCoord(float value, float min, float max);
         static std::string FormatWSGCoord(float value);
 };
 #endif
