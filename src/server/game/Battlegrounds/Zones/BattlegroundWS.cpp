@@ -192,14 +192,15 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
         GetWSGFlagStateToken(_flagState[TEAM_HORDE]) + ":" + allianceX + ":" + allianceY + ":" + hordeX + ":" + hordeY;
 }
 
-void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
+void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload, bool broadcastFullState /*= true*/)
 {
     // Crossfaction WSG UI patch uses this addon channel payload as authoritative flag-color state.
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     SendPacketToAll(&data);
-    BroadcastWSGFlagFullState();
+    if (broadcastFullState)
+        BroadcastWSGFlagFullState();
 }
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
@@ -608,13 +609,13 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
         if (droppedFlagIdentity == TEAM_HORDE)
         {
             SendBroadcastText(BG_WS_TEXT_HORDE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_HORDE, player);
-            SendWSGFlagAddonMessage("H:DROP");
+            SendWSGFlagAddonMessage("H:DROP", false);
             UpdateWorldState(BG_WS_FLAG_UNK_HORDE, uint32(-1));
         }
         else
         {
             SendBroadcastText(BG_WS_TEXT_ALLIANCE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
-            SendWSGFlagAddonMessage("A:DROP");
+            SendWSGFlagAddonMessage("A:DROP", false);
             UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1));
         }
 
