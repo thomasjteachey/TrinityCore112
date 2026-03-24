@@ -3869,12 +3869,14 @@ void Spell::EffectSummonObjectWild()
                         droppedFlagTeam = TEAM_ALLIANCE;
                     else if (pGameObj->GetEntry() == BG_OBJECT_H_FLAG_GROUND_WS_ENTRY)
                         droppedFlagTeam = TEAM_HORDE;
+                    else
+                        TC_LOG_ERROR("bg.battleground", "Spell::EffectSummonObjectWild: Unknown WSG dropped flag entry ({}) for GO {}", pGameObj->GetEntry(), pGameObj->GetGUID().ToString());
                 }
-
-                if (droppedFlagTeam == -1)
+                else
                     droppedFlagTeam = player->GetTeam() == ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
 
-                bg->SetDroppedFlagGUID(pGameObj->GetGUID(), droppedFlagTeam);
+                if (droppedFlagTeam == TEAM_ALLIANCE || droppedFlagTeam == TEAM_HORDE)
+                    bg->SetDroppedFlagGUID(pGameObj->GetGUID(), droppedFlagTeam);
             }
 
     if (GameObject* linkedTrap = pGameObj->GetLinkedTrap())
