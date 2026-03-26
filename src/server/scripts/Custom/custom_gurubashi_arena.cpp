@@ -37,6 +37,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
@@ -471,6 +472,18 @@ private:
         return std::chrono::milliseconds(secondsUntilNextHour * IN_MILLISECONDS);
     }
 
+    static bool IsEightPmServerTime()
+    {
+        time_t const now = GameTime::GetGameTime();
+        tm localTime {};
+#ifdef _WIN32
+        localtime_s(&localTime, &now);
+#else
+        localtime_r(&now, &localTime);
+#endif
+        return localTime.tm_hour == 20;
+    }
+
     void ScheduleNextCheck(std::chrono::milliseconds delay)
     {
         _nextCheckTimeMs = GameTime::GetGameTimeMS() + static_cast<uint32>(delay.count());
@@ -487,7 +500,8 @@ private:
         uint32 const playerCount = CountEligiblePlayers(&summonerGuid);
         _lastEligibleCount = playerCount;
 
-        if (!force && playerCount < REQUIRED_PLAYER_COUNT)
+        bool const bypassPlayerRequirement = !force && IsEightPmServerTime();
+        if (!force && !bypassPlayerRequirement && playerCount < REQUIRED_PLAYER_COUNT)
             return SpawnResult::NotEnoughPlayers;
 
         Player* summoner = FindEligibleSummoner(summonerGuid);
