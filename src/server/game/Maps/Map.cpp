@@ -470,6 +470,8 @@ void Map::SwitchGridContainers(GameObject* obj, bool on)
 template<class T>
 void Map::DeleteFromWorld(T* obj)
 {
+    obj->CleanupsBeforeDelete();
+
     // Note: In case resurrectable corpse and pet its removed from global lists in own destructor
     delete obj;
 }
@@ -477,6 +479,8 @@ void Map::DeleteFromWorld(T* obj)
 template<>
 void Map::DeleteFromWorld(Player* player)
 {
+    player->CleanupsBeforeDelete();
+
     ObjectAccessor::RemoveObject(player);
     RemoveUpdateObject(player); /// @todo I do not know why we need this, it should be removed in ~Object anyway
     delete player;
@@ -485,6 +489,8 @@ void Map::DeleteFromWorld(Player* player)
 template<>
 void Map::DeleteFromWorld(Transport* transport)
 {
+    transport->CleanupsBeforeDelete();
+
     ObjectAccessor::RemoveObject(transport);
     delete transport;
 }
