@@ -198,6 +198,15 @@ public:
 
         sObjectMgr->AddVendorItem(vendor_entry, itemId, maxcount, incrtime, extendedcost);
 
+        if (WorldSession* session = handler->GetSession())
+        {
+            Player* player = session->GetPlayer();
+            TC_LOG_INFO("entities.player.character", "Account: {} (IP: {}) Character:[{}] {} added vendor item {} to vendor entry {} (maxcount: {}, incrtime: {}, extendedcost: {})",
+                session->GetAccountId(), session->GetRemoteAddress(),
+                player ? player->GetName() : "<none>", player ? player->GetGUID().ToString() : "<none>",
+                itemId, vendor_entry, maxcount, incrtime, extendedcost);
+        }
+
         handler->PSendSysMessage(LANG_ITEM_ADDED_TO_LIST, itemId, item->Name1.c_str(), maxcount, incrtime, extendedcost);
         return true;
     }
