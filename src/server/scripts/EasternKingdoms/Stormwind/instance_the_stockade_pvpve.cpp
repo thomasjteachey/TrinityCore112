@@ -45,6 +45,7 @@
 #include <algorithm>
 #include <charconv>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -321,6 +322,20 @@ namespace
     }
 
     GuidSet s_RecentDeathChests;
+    std::unordered_map<uint32, GuidSet> s_DeathBonusRecipientsByInstance;
+
+    bool ShouldGrantDeathHonorBonus(Player* victim)
+    {
+        if (!victim)
+            return false;
+
+        uint32 const instanceId = victim->GetInstanceId();
+        if (!instanceId)
+            return false;
+
+        GuidSet& recipients = s_DeathBonusRecipientsByInstance[instanceId];
+        return recipients.insert(victim->GetGUID()).second;
+    }
 
     void DropDeathChest(Player* victim)
     {
@@ -348,8 +363,8 @@ namespace
         if (beadCount)
             chest.AddStackableItem(beadItemId, beadCount);
 
-        chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId,
-            honorTokenCount + StockadesPvPvE::HonorTokenKillBonus);
+        uint32 const deathBonus = ShouldGrantDeathHonorBonus(victim) ? StockadesPvPvE::HonorTokenKillBonus : 0;
+        chest.AddStackableItem(StockadesPvPvE::HonorTokenItemId, honorTokenCount + deathBonus);
 
         if (bossKeyCount)
             chest.AddStackableItem(StockadesPvPvE::BossKeyItemId, bossKeyCount);
