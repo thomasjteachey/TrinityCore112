@@ -416,6 +416,16 @@ Unit::~Unit()
 
     m_Events.KillAllEvents(true);
 
+    // Cleanup should normally happen in CleanupsBeforeDelete. Keep a defensive
+    // fallback here so a partially cleaned unit does not crash during
+    // destruction (for example in exceptional shutdown paths).
+    if (!m_appliedAuras.empty() || !m_ownedAuras.empty() || !m_removedAuras.empty())
+    {
+        TC_LOG_ERROR("entities.unit", "Unit::~Unit: forcing late aura cleanup for {} (applied: {}, owned: {}, removed: {})",
+            GetGUID().ToString(), m_appliedAuras.size(), m_ownedAuras.size(), m_removedAuras.size());
+        RemoveAllAuras();
+    }
+
     _DeleteRemovedAuras();
 
     delete i_motionMaster;
