@@ -1356,6 +1356,14 @@ bool WorldSession::HasPermission(uint32 permission)
         LoadPermissions();
 
     bool hasPermission = _RBACData->HasPermission(permission);
+
+    // Non-GM accounts must never execute dot commands.
+    if (hasPermission && AccountMgr::IsPlayerAccount(GetSecurity()))
+    {
+        if (rbac::RBACPermission const* permissionData = sAccountMgr->GetRBACPermission(permission); permissionData && permissionData->GetName().rfind("Command:", 0) == 0)
+            hasPermission = false;
+    }
+
     TC_LOG_DEBUG("rbac", "WorldSession::HasPermission [AccountId: {}, Name: {}, realmId: {}]",
                    _RBACData->GetId(), _RBACData->GetName(), realm.Id.Realm);
 
