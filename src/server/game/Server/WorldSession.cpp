@@ -1356,6 +1356,15 @@ bool WorldSession::HasPermission(uint32 permission)
         LoadPermissions();
 
     bool hasPermission = _RBACData->HasPermission(permission);
+
+    // Non-GM accounts must never execute GM-only commands, even if those command permissions
+    // were granted directly by mistake.
+    if (hasPermission && AccountMgr::IsPlayerAccount(GetSecurity()))
+    {
+        if (rbac::RBACPermission const* permissionData = sAccountMgr->GetRBACPermission(permission); permissionData && permissionData->GetName().rfind("Command:", 0) == 0)
+            hasPermission = sAccountMgr->GetRBACPermission(rbac::RBAC_ROLE_PLAYER)->GetLinkedPermissions().count(permission);
+    }
+
     TC_LOG_DEBUG("rbac", "WorldSession::HasPermission [AccountId: {}, Name: {}, realmId: {}]",
                    _RBACData->GetId(), _RBACData->GetName(), realm.Id.Realm);
 
