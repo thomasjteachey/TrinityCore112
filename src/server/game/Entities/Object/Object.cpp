@@ -133,9 +133,32 @@ void Object::_Create(ObjectGuid::LowType guidlow, uint32 entry, HighGuid guidhig
 
 std::string Object::_ConcatFields(uint16 startIndex, uint16 size) const
 {
+    if (!m_uint32Values)
+    {
+        TC_LOG_ERROR("entities.object", "Object::_ConcatFields called with null values array (guid: {}, typeId: {}, valuesCount: {}, start: {}, size: {})",
+            GetGUID().ToString(), GetTypeId(), m_valuesCount, startIndex, size);
+        return "";
+    }
+
+    if (startIndex >= m_valuesCount)
+    {
+        TC_LOG_ERROR("entities.object", "Object::_ConcatFields start index out of bounds (guid: {}, typeId: {}, valuesCount: {}, start: {}, size: {})",
+            GetGUID().ToString(), GetTypeId(), m_valuesCount, startIndex, size);
+        return "";
+    }
+
+    uint16 const clampedSize = std::min<uint16>(size, m_valuesCount - startIndex);
+
     std::ostringstream ss;
-    for (uint16 index = 0; index < size; ++index)
-        ss << GetUInt32Value(index + startIndex) << ' ';
+    for (uint16 index = 0; index < clampedSize; ++index)
+        ss << m_uint32Values[index + startIndex] << ' ';
+
+    if (clampedSize != size)
+    {
+        TC_LOG_ERROR("entities.object", "Object::_ConcatFields size clamped due to bounds (guid: {}, typeId: {}, valuesCount: {}, start: {}, size: {}, usedSize: {})",
+            GetGUID().ToString(), GetTypeId(), m_valuesCount, startIndex, size, clampedSize);
+    }
+
     return ss.str();
 }
 
