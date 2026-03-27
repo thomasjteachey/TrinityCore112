@@ -183,6 +183,10 @@ bool HasLivingHostileInGurubashiBattleRing(Player const* player)
         if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
             continue;
 
+        // Stealthed/invisible players should not block non-lethal exits from the ring.
+        if (other->HasStealthAura() || other->HasInvisibilityAura())
+            continue;
+
         // Evaluate hostility without relying on transient FFA flags.
         // When a player steps out of the ring, FFA can drop before this check runs,
         // but the exit rule should still treat non-group/raid players in the ring as hostile.
@@ -307,6 +311,11 @@ void TeleportStranglethornPlayersToBattleRing()
         player->CastSpell(player, TELEPORT_VISUAL_SPELL, TRIGGERED_FULL_MASK);
         Position const destination = BuildRandomBattleRingPosition(player);
         player->NearTeleportTo(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), destination.GetOrientation(), true);
+        player->SetFullHealth();
+        for (Powers powerType = POWER_MANA; powerType < MAX_POWERS; powerType = Powers(powerType + 1))
+            if (int32 maxPower = player->GetMaxPower(powerType); maxPower > 0)
+                player->SetPower(powerType, maxPower);
+        player->RemoveArenaSpellCooldowns(true);
         player->CastSpell(player, TELEPORT_VISUAL_SPELL, TRIGGERED_FULL_MASK);
     }
 }
