@@ -2932,6 +2932,12 @@ BanReturn World::BanAccount(BanMode mode, std::string const& nameOrIP, uint32 du
 
     LoginDatabase.CommitTransaction(trans);
 
+    if (mode == BAN_ACCOUNT)
+    {
+        TC_LOG_ERROR("server", "Account ban applied: account '{}' by '{}' for {} seconds. Reason: {}.",
+            nameOrIP, author, duration_secs, reason);
+    }
+
     return BAN_SUCCESS;
 }
 
