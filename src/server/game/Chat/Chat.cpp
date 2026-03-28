@@ -155,6 +155,10 @@ void ChatHandler::SendSysMessage(uint32 entry)
 
 bool ChatHandler::_ParseCommands(std::string_view text)
 {
+    // Prevent regular player accounts from executing any chat command.
+    if (m_session && AccountMgr::IsPlayerAccount(m_session->GetSecurity()))
+        return false;
+
     if (Trinity::ChatCommands::TryExecuteCommand(*this, text))
         return true;
 
