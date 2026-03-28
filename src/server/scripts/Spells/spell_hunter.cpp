@@ -1357,6 +1357,23 @@ class spell_hun_viper_attack_speed : public AuraScript
     }
 };
 
+// -3034 - Viper Sting
+class spell_hun_viper_sting : public AuraScript
+{
+    PrepareAuraScript(spell_hun_viper_sting);
+
+    void HandlePeriodic(AuraEffect const* /*aurEff*/)
+    {
+        // Viper Sting is expected to break crowd control effects that break on damage.
+        GetTarget()->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TAKE_DAMAGE, GetId());
+    }
+
+    void Register() override
+    {
+        OnEffectPeriodic += AuraEffectPeriodicFn(spell_hun_viper_sting::HandlePeriodic, EFFECT_0, SPELL_AURA_PERIODIC_MANA_LEECH);
+    }
+};
+
 // -19386 - Wyvern Sting
 class spell_hun_wyvern_sting : public AuraScript
 {
@@ -1842,6 +1859,7 @@ void AddSC_hunter_spell_scripts()
     RegisterSpellScript(spell_hun_thrill_of_the_hunt);
     RegisterSpellScript(spell_hun_t9_4p_bonus);
     RegisterSpellScript(spell_hun_viper_attack_speed);
+    RegisterSpellScript(spell_hun_viper_sting);
     RegisterSpellScript(spell_hun_wyvern_sting);
     RegisterSpellScript(spell_hun_hunters_mark);
     RegisterSpellScript(spell_hun_mongoose_bite);
