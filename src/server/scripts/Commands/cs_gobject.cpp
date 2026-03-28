@@ -159,6 +159,10 @@ public:
         /// @todo is it really necessary to add both the real and DB table guid here ?
         sObjectMgr->AddGameobjectToGrid(guidLow, sObjectMgr->GetGameObjectData(guidLow));
 
+        TC_LOG_INFO("commands.gobject", "GameObject added by account {} (player: {}): entry {} ({}) spawnId {} at map {} ({}, {}, {}), spawnTimeSecs {}.",
+            handler->GetSession()->GetAccountId(), player->GetName(), objectId, objectInfo->name, guidLow, map->GetId(),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), spawnTimeSecs.value_or(0));
+
         handler->PSendSysMessage(LANG_GAMEOBJECT_ADD, objectId, objectInfo->name.c_str(), guidLow, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
         return true;
     }
