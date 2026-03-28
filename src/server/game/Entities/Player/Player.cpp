@@ -3981,12 +3981,7 @@ void Player::RemoveArenaSpellCooldowns(bool removeActivePetCooldowns)
 
 uint32 Player::ResetTalentsCost() const
 {
-    //first time is free
-    if (m_resetTalentsTime == 0)
-    {
-        return 0;
-    }
-    return 1 * GOLD;
+    return 0;
 }
 
 bool Player::ResetTalents(bool no_cost)
