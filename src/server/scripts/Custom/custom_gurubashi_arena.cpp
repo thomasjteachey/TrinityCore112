@@ -72,6 +72,17 @@ char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is 
 
 void ClearChestDeathLockouts();
 
+uint32 GetChestMarkRewardCount()
+{
+    time_t const now = GameTime::GetGameTime();
+    tm localTime {};
+#ifdef _WIN32
+    localtime_s(&localTime, &now);
+#else
+    localtime_r(&now, &localTime);
+#endif
+    return localTime.tm_hour == 20 ? 3u : 1u;
+}
 
 bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
 {
@@ -360,8 +371,9 @@ public:
             if (!player)
                 return;
 
+            uint32 const rewardCount = GetChestMarkRewardCount();
             ItemPosCountVec dest;
-            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, LEGIONNAIRE_MARK_OF_HONOR, 1) != EQUIP_ERR_OK)
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, LEGIONNAIRE_MARK_OF_HONOR, rewardCount) != EQUIP_ERR_OK)
             {
                 player->SendEquipError(EQUIP_ERR_INVENTORY_FULL, nullptr, nullptr);
                 me->SetLootState(GO_READY);
@@ -369,7 +381,7 @@ public:
             }
 
             if (Item* item = player->StoreNewItem(dest, LEGIONNAIRE_MARK_OF_HONOR, true))
-                player->SendNewItem(item, 1, true, false);
+                player->SendNewItem(item, rewardCount, true, false);
 
             _rewardGranted = true;
             ClearChestDeathLockouts();
