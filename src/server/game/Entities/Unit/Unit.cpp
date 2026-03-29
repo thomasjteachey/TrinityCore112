@@ -3001,17 +3001,32 @@ void Unit::_UpdateSpells(uint32 time)
     // m_auraUpdateIterator can be updated in indirect called code at aura remove to skip next planned to update but removed auras
     for (m_auraUpdateIterator = m_ownedAuras.begin(); m_auraUpdateIterator != m_ownedAuras.end();)
     {
-        Aura* i_aura = m_auraUpdateIterator->second;
+        AuraMap::iterator current = m_auraUpdateIterator;
+        Aura* i_aura = current->second;
         ++m_auraUpdateIterator;                            // need shift to next for allow update if need into aura update
+
+        if (!i_aura)
+        {
+            TC_LOG_ERROR("entities.unit", "Unit::_UpdateSpells: removing null owned aura entry on {}", GetGUID().ToString());
+            m_ownedAuras.erase(current);
+            continue;
+        }
+
         i_aura->UpdateOwner(time, this);
     }
 
     // remove expired auras - do that after updates(used in scripts?)
     for (AuraMap::iterator i = m_ownedAuras.begin(); i != m_ownedAuras.end();)
     {
-        if (i->second->IsExpired())
+        Aura* aura = i->second;
+        if (!aura)
+        {
+            TC_LOG_ERROR("entities.unit", "Unit::_UpdateSpells: removing null owned aura entry during expire pass on {}", GetGUID().ToString());
+            i = m_ownedAuras.erase(i);
+        }
+        else if (aura->IsExpired())
             RemoveOwnedAura(i, AURA_REMOVE_BY_EXPIRE);
-        else if (i->second->GetSpellInfo()->IsChanneled() && i->second->GetCasterGUID() != GetGUID() && !ObjectAccessor::GetWorldObject(*this, i->second->GetCasterGUID()))
+        else if (aura->GetSpellInfo()->IsChanneled() && aura->GetCasterGUID() != GetGUID() && !ObjectAccessor::GetWorldObject(*this, aura->GetCasterGUID()))
             RemoveOwnedAura(i, AURA_REMOVE_BY_CANCEL); // remove channeled auras when caster is not on the same map
         else
             ++i;
@@ -3028,11 +3043,19 @@ void Unit::_UpdateSpells(uint32 time)
         GameObjectList::iterator itr;
         for (itr = m_gameObj.begin(); itr != m_gameObj.end();)
         {
-            if (!(*itr)->isSpawned())
+            GameObject* gameObject = *itr;
+            if (!gameObject)
             {
-                (*itr)->SetOwnerGUID(ObjectGuid::Empty);
-                (*itr)->SetRespawnTime(0);
-                (*itr)->Delete();
+                TC_LOG_ERROR("entities.unit", "Unit::_UpdateSpells: removing null owned gameobject entry on {}", GetGUID().ToString());
+                itr = m_gameObj.erase(itr);
+                continue;
+            }
+
+            if (!gameObject->isSpawned())
+            {
+                gameObject->SetOwnerGUID(ObjectGuid::Empty);
+                gameObject->SetRespawnTime(0);
+                gameObject->Delete();
                 m_gameObj.erase(itr++);
             }
             else
