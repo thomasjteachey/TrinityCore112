@@ -916,6 +916,18 @@ void WorldSession::SendWrongFactionNotice()
 
 void WorldSession::SendChatRestrictedNotice(ChatRestrictionType restriction)
 {
+    switch (restriction)
+    {
+        case ERR_CHAT_RESTRICTED:
+        case ERR_CHAT_THROTTLED:
+        case ERR_USER_SQUELCHED:
+        case ERR_YELL_RESTRICTED:
+            break;
+        default:
+            TC_LOG_ERROR("network", "WorldSession::SendChatRestrictedNotice received invalid restriction {} for account {}", uint32(restriction), GetAccountId());
+            return;
+    }
+
     WorldPacket data(SMSG_CHAT_RESTRICTED, 1);
     data << uint8(restriction);
     SendPacket(&data);
