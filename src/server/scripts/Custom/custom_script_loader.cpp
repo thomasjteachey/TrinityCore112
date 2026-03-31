@@ -19,6 +19,10 @@
 
 // The name of this function should match:
 // void Add${NameOfDirectory}Scripts()
+// Custom / playerbot experiments
+void AddSC_playerbot_bg_integration();
+
 void AddCustomScripts()
 {
+    AddSC_playerbot_bg_integration();
 }
