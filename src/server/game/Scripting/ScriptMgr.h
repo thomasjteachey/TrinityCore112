@@ -94,6 +94,7 @@ enum RemoveMethod : uint8;
 enum ShutdownExitCode : uint32;
 enum ShutdownMask : uint32;
 enum SpellEffIndex : uint8;
+enum TeamId : uint32;
 enum WeatherState : uint32;
 enum XPColorChar : uint8;
 
@@ -278,6 +279,20 @@ class TC_GAME_API WorldScript : public ScriptObject
 
         // Called when the world is actually shut down.
         virtual void OnShutdown();
+};
+
+class TC_GAME_API BGScript : public ScriptObject
+{
+    protected:
+
+        explicit BGScript(char const* name) noexcept;
+
+    public:
+
+        ~BGScript();
+
+        virtual void OnBattlegroundStart(Battleground* bg);
+        virtual void OnBattlegroundEnd(Battleground* bg, TeamId winnerTeam);
 };
 
 class TC_GAME_API FormulaScript : public ScriptObject
@@ -1105,6 +1120,11 @@ class TC_GAME_API ScriptMgr
         void OnWorldUpdate(uint32 diff);
         void OnStartup();
         void OnShutdown();
+
+    public: /* BGScript */
+
+        void OnBattlegroundStart(Battleground* bg);
+        void OnBattlegroundEnd(Battleground* bg, TeamId winnerTeam);
 
     public: /* FormulaScript */
 
