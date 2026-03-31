@@ -47,3 +47,24 @@ Place your module in:
 3. BG start/end callbacks are hit (add temporary logs).
 4. Teams receive bot backfill symmetrically.
 5. No crash on BG shutdown / teleport out.
+
+
+## Current status (started in this tree)
+
+- ✅ Core hook bridge is in place (`BGScript`, `OnBattlegroundStart`, `OnBattlegroundEnd`).
+- 🚧 BG-only module bootstrapping has started under `src/server/scripts/Custom/Playerbots/` with a first Trinity-side `BGScript` that tracks battleground lifecycle events and logs start/end transitions.
+
+## Remaining work (in order)
+
+1. **Port `PlayerBotsBGScript` decision logic**
+   - Replace lifecycle-only tracking with actual per-BG strategy management (composition, role policies, map-specific behavior).
+2. **Port queue participation / fill behavior**
+   - Bring over the subset of `RandomPlayerbotMgr` logic needed for auto-join and symmetric team backfill.
+3. **Port required BG strategy/action classes**
+   - Only port classes referenced by steps 1 and 2 to keep scope minimal.
+4. **Add config keys (`Playerbot.BG.*`)**
+   - Define enable toggles, bracket limits, queue cadence, and fill/balance thresholds in `worldserver.conf.dist`.
+5. **Add SQL persistence (if needed by selected queue logic)**
+   - Introduce minimal tables only if your chosen queue/backfill implementation requires persistent state.
+6. **Validation pass**
+   - Verify queueing, callback hit rates, symmetric backfill, and clean BG teardown with no crash/teleport regressions.
