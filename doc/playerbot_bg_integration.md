@@ -52,12 +52,13 @@ Place your module in:
 ## Current status (started in this tree)
 
 - ✅ Core hook bridge is in place (`BGScript`, `OnBattlegroundStart`, `OnBattlegroundEnd`).
-- 🚧 BG-only module bootstrapping has started under `src/server/scripts/Custom/Playerbots/` with a first Trinity-side `BGScript` that tracks battleground lifecycle events and logs start/end transitions.
+- ✅ BG-only module bootstrapping exists under `src/server/scripts/Custom/Playerbots/`.
+- ✅ Step 1 complete (strategy management baseline): Trinity-side `PlayerbotBGScript` now builds per-BG map policies (CTF/resource/lane/skirmish), squad plans, and role composition targets on BG start, then retires per-instance plans on BG end.
 
 ## Remaining work (in order)
 
-1. **Port `PlayerBotsBGScript` decision logic**
-   - Replace lifecycle-only tracking with actual per-BG strategy management (composition, role policies, map-specific behavior).
+1. ✅ **Port `PlayerBotsBGScript` decision logic**
+   - Completed baseline per-BG strategy management in Trinity-side script scaffolding (composition targets, role policies, map-specific squad plans).
 2. **Port queue participation / fill behavior**
    - Bring over the subset of `RandomPlayerbotMgr` logic needed for auto-join and symmetric team backfill.
 3. **Port required BG strategy/action classes**
