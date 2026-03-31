@@ -42,6 +42,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ReputationMgr.h"
+#include "ScriptMgr.h"
 #include "SpellAuras.h"
 #include "TemporarySummon.h"
 #include "Transport.h"
@@ -635,6 +636,14 @@ void Battleground::EndBattleground(Team winner)
         SetWinner(PVP_TEAM_NEUTRAL);
     }
 
+    TeamId winnerTeam = TEAM_NEUTRAL;
+    if (winner == ALLIANCE)
+        winnerTeam = TEAM_ALLIANCE;
+    else if (winner == HORDE)
+        winnerTeam = TEAM_HORDE;
+
+    sScriptMgr->OnBattlegroundEnd(this, winnerTeam);
+
     CharacterDatabasePreparedStatement* stmt = nullptr;
     uint64 battlegroundId = 1;
     if (isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
@@ -957,6 +966,8 @@ void Battleground::StartBattleground()
 
     if (m_IsRated)
         TC_LOG_DEBUG("bg.arena", "Arena match type: {} started.", m_ArenaType);
+
+    sScriptMgr->OnBattlegroundStart(this);
 }
 
 void Battleground::TeleportPlayerToExploitLocation(Player* player)

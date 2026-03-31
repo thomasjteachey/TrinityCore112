@@ -1972,6 +1972,16 @@ void ScriptMgr::OnShutdown()
     FOREACH_SCRIPT(WorldScript)->OnShutdown();
 }
 
+void ScriptMgr::OnBattlegroundStart(Battleground* bg)
+{
+    FOREACH_SCRIPT(BGScript)->OnBattlegroundStart(bg);
+}
+
+void ScriptMgr::OnBattlegroundEnd(Battleground* bg, TeamId winnerTeam)
+{
+    FOREACH_SCRIPT(BGScript)->OnBattlegroundEnd(bg, winnerTeam);
+}
+
 // Achievement
 void ScriptMgr::OnAchievementCompleted(Player* player, AchievementEntry const* achievement)
 {
@@ -2474,6 +2484,22 @@ void WorldScript::OnStartup()
 }
 
 void WorldScript::OnShutdown()
+{
+}
+
+BGScript::BGScript(char const* name) noexcept
+    : ScriptObject(name)
+{
+    ScriptRegistry<BGScript>::Instance()->AddScript(this);
+}
+
+BGScript::~BGScript() = default;
+
+void BGScript::OnBattlegroundStart(Battleground* /*bg*/)
+{
+}
+
+void BGScript::OnBattlegroundEnd(Battleground* /*bg*/, TeamId /*winnerTeam*/)
 {
 }
 
@@ -3250,6 +3276,7 @@ void PlayerChoiceScript::OnResponse(WorldObject* /*object*/, Player* /*player*/,
 template class TC_GAME_API ScriptRegistry<SpellScriptLoader>;
 template class TC_GAME_API ScriptRegistry<ServerScript>;
 template class TC_GAME_API ScriptRegistry<WorldScript>;
+template class TC_GAME_API ScriptRegistry<BGScript>;
 template class TC_GAME_API ScriptRegistry<FormulaScript>;
 template class TC_GAME_API ScriptRegistry<WorldMapScript>;
 template class TC_GAME_API ScriptRegistry<InstanceMapScript>;
