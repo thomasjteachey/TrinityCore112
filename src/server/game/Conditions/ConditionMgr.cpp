@@ -56,6 +56,7 @@
 #include "WorldSession.h"
 #include "WorldStateMgr.h"
 #include "WowTime.h"
+#include <charconv>
 #include <random>
 
 char const* const ConditionMgr::StaticSourceTypeData[CONDITION_SOURCE_TYPE_MAX_DB_ALLOWED] =
