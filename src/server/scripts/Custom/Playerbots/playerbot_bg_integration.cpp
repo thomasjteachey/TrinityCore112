@@ -173,7 +173,7 @@ namespace
         uint32 enqueued = 0;
         for (uint32 i = 0; i < requestedCount; ++i)
         {
-            CharacterDatabase.Execute("INSERT INTO playerbot_bg_bootstrap_queue "
+            CharacterDatabase.PExecute("INSERT INTO playerbot_bg_bootstrap_queue "
                 "(requested_at, team_id, battleground_type_id, bot_name_prefix, state) "
                 "VALUES (NOW(), {}, {}, '{}', 'queued')", uint32(team), uint32(bgTypeId), botNamePrefix);
             ++enqueued;
