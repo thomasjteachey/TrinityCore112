@@ -4464,6 +4464,7 @@ Playerbot.BG.AutoGenerateNamePrefix = "pbbot"
 #                     RegisterPlayerbotBGRuntimeBootstrapProvider(name, callback).
 #                     Built-in provider: "sql_queue" (writes requests to character DB table
 #                     playerbot_bg_bootstrap_queue for an external worker/runtime to process).
+#                     See contrib/playerbots/bg_bootstrap_worker.py for a worker implementation.
 #        Default:     "none"
 #
 

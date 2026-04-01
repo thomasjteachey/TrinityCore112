@@ -173,6 +173,9 @@ CREATE TABLE IF NOT EXISTS playerbot_bg_bootstrap_queue (
   battleground_type_id SMALLINT UNSIGNED NOT NULL,
   bot_name_prefix VARCHAR(32) NOT NULL,
   state VARCHAR(16) NOT NULL DEFAULT 'queued',
+  attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  processed_at DATETIME NULL,
+  last_error VARCHAR(255) NOT NULL DEFAULT '',
   PRIMARY KEY (id),
   KEY idx_state_requested (state, requested_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -183,3 +186,15 @@ External runtime contract:
 1. Poll rows with `state='queued'`.
 2. Bring bots online that satisfy team/prefix/bg constraints.
 3. Update row state (for example `processing`, `done`, or `failed`).
+
+### Included worker implementation
+
+This repo now includes `contrib/playerbots/bg_bootstrap_worker.py`, which implements the external worker loop for `sql_queue`.
+
+- It claims queued rows with `FOR UPDATE SKIP LOCKED`.
+- Executes `PB_BG_BOOTSTRAP_CMD` for each row.
+- Writes `done` / `failed`, `attempts`, `processed_at`, and `last_error`.
+
+Required Python dependency:
+
+- `pymysql`
