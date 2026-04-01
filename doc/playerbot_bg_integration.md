@@ -54,13 +54,21 @@ Place your module in:
 - ✅ Core hook bridge is in place (`BGScript`, `OnBattlegroundStart`, `OnBattlegroundEnd`).
 - ✅ BG-only module bootstrapping exists under `src/server/scripts/Custom/Playerbots/`.
 - ✅ Step 1 complete (strategy management baseline): Trinity-side `PlayerbotBGScript` now builds per-BG map policies (CTF/resource/lane/skirmish), squad plans, and role composition targets on BG start, then retires per-instance plans on BG end.
+- ✅ Step 2 complete (core-side queue participation/fill behavior): BG queue-fill state is now tracked per instance, recalculated on a world update cadence, and kept symmetric using live+invited populations, min-team requirements, and free-slot caps.
 
 ## Remaining work (in order)
 
 1. ✅ **Port `PlayerBotsBGScript` decision logic**
    - Completed baseline per-BG strategy management in Trinity-side script scaffolding (composition targets, role policies, map-specific squad plans).
-2. **Port queue participation / fill behavior**
+2. ✅ **Port queue participation / fill behavior**
    - Bring over the subset of `RandomPlayerbotMgr` logic needed for auto-join and symmetric team backfill.
+   - Implemented Trinity-side queue-fill coordinator with per-instance tracking and periodic recalculation.
+   - Implemented symmetric fill policy using:
+     - current + invited population,
+     - minimum players per team,
+     - one-player max team imbalance window,
+     - available free slots per team.
+   - Added transition-only logging for queue-fill request snapshots (`initialized`, `updated`, `final snapshot`).
 3. **Port required BG strategy/action classes**
    - Only port classes referenced by steps 1 and 2 to keep scope minimal.
 4. **Add config keys (`Playerbot.BG.*`)**
