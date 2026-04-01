@@ -261,7 +261,10 @@ std::span<TransmogSetEntry const* const> TransmogMgr::GetTransmogSetsForItemModi
 
 std::span<TransmogSetItemEntry const* const> TransmogMgr::GetTransmogSetItems(uint32 transmogSetId)
 {
-    return std::ranges::equal_range(TransmogSetItemsByTransmogSet, transmogSetId, {}, &TransmogSetItemEntry::TransmogSetID);
+    auto const lowerBound = std::ranges::lower_bound(TransmogSetItemsByTransmogSet, transmogSetId, {}, &TransmogSetItemEntry::TransmogSetID);
+    auto const upperBound = std::ranges::upper_bound(lowerBound, TransmogSetItemsByTransmogSet.end(), transmogSetId, {}, &TransmogSetItemEntry::TransmogSetID);
+
+    return { lowerBound, upperBound };
 }
 
 std::span<TransmogOutfitEntryEntry const* const> TransmogMgr::GetAutomaticallyUnlockedOutfits()
