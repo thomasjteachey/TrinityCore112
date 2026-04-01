@@ -1278,7 +1278,7 @@ enum Language
     LANG_TONGUES_OF_SANCTUARY = 308,
 };
 
-enum TeamId
+enum TeamId : uint32
 {
     TEAM_ALLIANCE = 0,
     TEAM_HORDE,
