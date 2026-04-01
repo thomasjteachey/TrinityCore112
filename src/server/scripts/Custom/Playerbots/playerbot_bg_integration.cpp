@@ -108,20 +108,20 @@ namespace
     PlayerbotBGConfig LoadPlayerbotBGConfig()
     {
         PlayerbotBGConfig config;
-        config.Enabled = sConfigMgr->GetOption<bool>("Playerbot.BG.Enable", true);
-        config.QueueUpdateIntervalMs = std::max<uint32>(1000, sConfigMgr->GetOption<uint32>("Playerbot.BG.QueueUpdateMs", 5000));
-        config.MaxTeamImbalance = std::min<uint32>(5, sConfigMgr->GetOption<uint32>("Playerbot.BG.MaxTeamImbalance", 1));
-        config.MaxBackfillPerUpdate = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("Playerbot.BG.MaxBackfillPerUpdate", 3));
-        config.AutoQueueBots = sConfigMgr->GetOption<bool>("Playerbot.BG.AutoQueueBots", false);
-        config.AutoQueueBgType = BattlegroundTypeId(sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoQueueBgType", uint32(BATTLEGROUND_RB)));
-        config.BotNamePrefix = sConfigMgr->GetOption<std::string>("Playerbot.BG.BotNamePrefix", "bot");
-        config.PreferRealPlayers = sConfigMgr->GetOption<bool>("Playerbot.BG.PreferRealPlayers", true);
-        config.AutoGenerateBots = sConfigMgr->GetOption<bool>("Playerbot.BG.AutoGenerateBots", false);
-        config.AutoGenerateTargetAlliance = sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoGenerateTargetAlliance", 10);
-        config.AutoGenerateTargetHorde = sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoGenerateTargetHorde", 10);
-        config.AutoGenerateMaxCreatePerTick = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoGenerateMaxCreatePerTick", 2));
-        config.AutoGenerateNamePrefix = sConfigMgr->GetOption<std::string>("Playerbot.BG.AutoGenerateNamePrefix", "pbbot");
-        config.RuntimeBootstrapProvider = sConfigMgr->GetOption<std::string>("Playerbot.BG.RuntimeBootstrapProvider", "none");
+        config.Enabled = sConfigMgr->GetBoolDefault("Playerbot.BG.Enable", true);
+        config.QueueUpdateIntervalMs = std::max<uint32>(1000, uint32(sConfigMgr->GetIntDefault("Playerbot.BG.QueueUpdateMs", 5000)));
+        config.MaxTeamImbalance = std::min<uint32>(5, uint32(sConfigMgr->GetIntDefault("Playerbot.BG.MaxTeamImbalance", 1)));
+        config.MaxBackfillPerUpdate = std::max<uint32>(1, uint32(sConfigMgr->GetIntDefault("Playerbot.BG.MaxBackfillPerUpdate", 3)));
+        config.AutoQueueBots = sConfigMgr->GetBoolDefault("Playerbot.BG.AutoQueueBots", false);
+        config.AutoQueueBgType = BattlegroundTypeId(uint32(sConfigMgr->GetIntDefault("Playerbot.BG.AutoQueueBgType", int32(BATTLEGROUND_RB))));
+        config.BotNamePrefix = sConfigMgr->GetStringDefault("Playerbot.BG.BotNamePrefix", "bot");
+        config.PreferRealPlayers = sConfigMgr->GetBoolDefault("Playerbot.BG.PreferRealPlayers", true);
+        config.AutoGenerateBots = sConfigMgr->GetBoolDefault("Playerbot.BG.AutoGenerateBots", false);
+        config.AutoGenerateTargetAlliance = uint32(sConfigMgr->GetIntDefault("Playerbot.BG.AutoGenerateTargetAlliance", 10));
+        config.AutoGenerateTargetHorde = uint32(sConfigMgr->GetIntDefault("Playerbot.BG.AutoGenerateTargetHorde", 10));
+        config.AutoGenerateMaxCreatePerTick = std::max<uint32>(1, uint32(sConfigMgr->GetIntDefault("Playerbot.BG.AutoGenerateMaxCreatePerTick", 2)));
+        config.AutoGenerateNamePrefix = sConfigMgr->GetStringDefault("Playerbot.BG.AutoGenerateNamePrefix", "pbbot");
+        config.RuntimeBootstrapProvider = sConfigMgr->GetStringDefault("Playerbot.BG.RuntimeBootstrapProvider", "none");
         return config;
     }
 
