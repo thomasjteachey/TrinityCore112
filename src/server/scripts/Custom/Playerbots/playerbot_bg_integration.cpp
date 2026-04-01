@@ -17,11 +17,14 @@
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "Config.h"
 #include "Log.h"
 #include "ScriptMgr.h"
 
+#include <algorithm>
 #include <array>
 #include <optional>
+#include <string_view>
 #include <unordered_map>
 
 namespace
@@ -75,6 +78,72 @@ namespace
         uint32 InstanceId = 0;
         BackfillRequest LastRequest;
     };
+
+    struct PlayerbotBGConfig
+    {
+        bool Enabled = true;
+        uint32 QueueUpdateIntervalMs = 5000;
+        uint32 MaxTeamImbalance = 1;
+        uint32 MaxBackfillPerUpdate = 3;
+    };
+
+    PlayerbotBGConfig LoadPlayerbotBGConfig()
+    {
+        PlayerbotBGConfig config;
+        config.Enabled = sConfigMgr->GetOption<bool>("Playerbot.BG.Enable", true);
+        config.QueueUpdateIntervalMs = std::max<uint32>(1000, sConfigMgr->GetOption<uint32>("Playerbot.BG.QueueUpdateMs", 5000));
+        config.MaxTeamImbalance = std::min<uint32>(5, sConfigMgr->GetOption<uint32>("Playerbot.BG.MaxTeamImbalance", 1));
+        config.MaxBackfillPerUpdate = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("Playerbot.BG.MaxBackfillPerUpdate", 3));
+        return config;
+    }
+
+    enum class PlayerbotBGAction : uint8
+    {
+        HoldObjectives,
+        CaptureObjectives,
+        EscortCarrier,
+        DefendCarrierRoute,
+        PressureFrontline
+    };
+
+    struct PlayerbotBGSquadDirective
+    {
+        char const* SquadName = "main";
+        PlayerbotBGAction Action = PlayerbotBGAction::HoldObjectives;
+        uint8 Priority = 1;
+    };
+
+    char const* ToString(PlayerbotBGAction action)
+    {
+        switch (action)
+        {
+            case PlayerbotBGAction::HoldObjectives: return "HoldObjectives";
+            case PlayerbotBGAction::CaptureObjectives: return "CaptureObjectives";
+            case PlayerbotBGAction::EscortCarrier: return "EscortCarrier";
+            case PlayerbotBGAction::DefendCarrierRoute: return "DefendCarrierRoute";
+            case PlayerbotBGAction::PressureFrontline: return "PressureFrontline";
+            default: return "Unknown";
+        }
+    }
+
+    std::array<PlayerbotBGSquadDirective, 3> BuildSquadDirectives(PlayerbotMapPolicy const& policy)
+    {
+        std::array<PlayerbotBGSquadDirective, 3> directives{ };
+        for (uint8 i = 0; i < policy.SquadCount; ++i)
+        {
+            directives[i].SquadName = policy.Squads[i].Name;
+            directives[i].Priority = uint8(i + 1);
+
+            if (policy.ProfileName == std::string_view("ctf_split"))
+                directives[i].Action = i == 0 ? PlayerbotBGAction::CaptureObjectives : (i == 1 ? PlayerbotBGAction::EscortCarrier : PlayerbotBGAction::DefendCarrierRoute);
+            else if (policy.ProfileName == std::string_view("lane_pressure"))
+                directives[i].Action = i == 0 ? PlayerbotBGAction::PressureFrontline : PlayerbotBGAction::HoldObjectives;
+            else
+                directives[i].Action = i == 2 ? PlayerbotBGAction::CaptureObjectives : PlayerbotBGAction::HoldObjectives;
+        }
+
+        return directives;
+    }
 
     PlayerbotRoleTargets BuildRoleTargets(uint32 maxPlayersPerTeam)
     {
@@ -176,6 +245,10 @@ namespace
         if (!bg || bg->isArena())
             return { };
 
+        PlayerbotBGConfig const config = LoadPlayerbotBGConfig();
+        if (!config.Enabled)
+            return { };
+
         uint32 maxPlayersPerTeam = bg->GetMaxPlayersPerTeam();
         uint32 minPlayersPerTeam = bg->GetMinPlayersPerTeam();
         uint32 allianceOccupied = bg->GetPlayersCountByTeam(ALLIANCE) + bg->GetInvitedCount(ALLIANCE);
@@ -183,20 +256,20 @@ namespace
         uint32 allianceFreeSlots = bg->GetFreeSlotsForTeam(ALLIANCE);
         uint32 hordeFreeSlots = bg->GetFreeSlotsForTeam(HORDE);
 
-        uint32 constexpr MaxTeamImbalance = 1;
-
         uint32 allianceNeed = allianceOccupied < minPlayersPerTeam ? minPlayersPerTeam - allianceOccupied : 0;
         uint32 hordeNeed = hordeOccupied < minPlayersPerTeam ? minPlayersPerTeam - hordeOccupied : 0;
 
-        if (allianceOccupied > hordeOccupied + MaxTeamImbalance)
-            hordeNeed += allianceOccupied - (hordeOccupied + MaxTeamImbalance);
-        else if (hordeOccupied > allianceOccupied + MaxTeamImbalance)
-            allianceNeed += hordeOccupied - (allianceOccupied + MaxTeamImbalance);
+        if (allianceOccupied > hordeOccupied + config.MaxTeamImbalance)
+            hordeNeed += allianceOccupied - (hordeOccupied + config.MaxTeamImbalance);
+        else if (hordeOccupied > allianceOccupied + config.MaxTeamImbalance)
+            allianceNeed += hordeOccupied - (allianceOccupied + config.MaxTeamImbalance);
 
         allianceNeed = std::min(allianceNeed, allianceFreeSlots);
         hordeNeed = std::min(hordeNeed, hordeFreeSlots);
         allianceNeed = std::min(allianceNeed, maxPlayersPerTeam);
         hordeNeed = std::min(hordeNeed, maxPlayersPerTeam);
+        allianceNeed = std::min(allianceNeed, config.MaxBackfillPerUpdate);
+        hordeNeed = std::min(hordeNeed, config.MaxBackfillPerUpdate);
 
         return { uint8(allianceNeed), uint8(hordeNeed) };
     }
@@ -213,6 +286,8 @@ namespace
             void StartTracking(Battleground* bg)
             {
                 if (!bg || bg->isArena())
+                    return;
+                if (!LoadPlayerbotBGConfig().Enabled)
                     return;
 
                 ActiveQueueFillState& fillState = _activeQueueFill[bg->GetInstanceID()];
@@ -271,7 +346,7 @@ namespace
             }
 
             std::unordered_map<uint32, ActiveQueueFillState> _activeQueueFill;
-    }
+    };
 
     class PlayerbotBGStateTracker : public BGScript
     {
@@ -281,6 +356,8 @@ namespace
             void OnBattlegroundStart(Battleground* bg) override
             {
                 if (!bg)
+                    return;
+                if (!LoadPlayerbotBGConfig().Enabled)
                     return;
 
                 uint32 instanceId = bg->GetInstanceID();
@@ -292,6 +369,7 @@ namespace
                 plan.AllianceTargets = BuildRoleTargets(maxPlayersPerTeam);
                 plan.HordeTargets = BuildRoleTargets(maxPlayersPerTeam);
                 plan.Policy = BuildMapPolicy(typeId, maxPlayersPerTeam);
+                auto const directives = BuildSquadDirectives(plan.Policy);
                 PlayerbotBGQueueCoordinator::Instance().StartTracking(bg);
 
                 _activeStrategies[instanceId] = plan;
@@ -314,6 +392,9 @@ namespace
                         "Playerbot BG squad plan (instance {}, squad {}): '{}' size {} with T/H/R/M {}/{}/{}/{} -> {}",
                         instanceId, uint32(i), squad.Name, uint32(squad.DesiredSize),
                         uint32(squad.Tanks), uint32(squad.Healers), uint32(squad.RangedDps), uint32(squad.MeleeDps), squad.Objective);
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG directive (instance {}, squad '{}'): action {} priority {}",
+                        instanceId, directives[i].SquadName, ToString(directives[i].Action), uint32(directives[i].Priority));
                 }
             }
 
@@ -357,17 +438,21 @@ namespace
 
             void OnUpdate(uint32 diff) override
             {
+                PlayerbotBGConfig const config = LoadPlayerbotBGConfig();
+                if (!config.Enabled)
+                    return;
+
                 if (_updateTimer <= diff)
                 {
                     PlayerbotBGQueueCoordinator::Instance().Update();
-                    _updateTimer = 5000;
+                    _updateTimer = config.QueueUpdateIntervalMs;
                 }
                 else
                     _updateTimer -= diff;
             }
 
         private:
-            uint32 _updateTimer = 5000;
+            uint32 _updateTimer = LoadPlayerbotBGConfig().QueueUpdateIntervalMs;
     };
 }
 

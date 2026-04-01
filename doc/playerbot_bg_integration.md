@@ -69,11 +69,19 @@ Place your module in:
      - one-player max team imbalance window,
      - available free slots per team.
    - Added transition-only logging for queue-fill request snapshots (`initialized`, `updated`, `final snapshot`).
-3. **Port required BG strategy/action classes**
-   - Only port classes referenced by steps 1 and 2 to keep scope minimal.
-4. **Add config keys (`Playerbot.BG.*`)**
-   - Define enable toggles, bracket limits, queue cadence, and fill/balance thresholds in `worldserver.conf.dist`.
-5. **Add SQL persistence (if needed by selected queue logic)**
-   - Introduce minimal tables only if your chosen queue/backfill implementation requires persistent state.
+3. ✅ **Port required BG strategy/action classes**
+   - Added Trinity-side minimal directive/action classes for BG squads:
+     - `PlayerbotBGAction`
+     - `PlayerbotBGSquadDirective`
+   - Added map-profile-to-action translation (`BuildSquadDirectives`) and directive logging on BG start.
+4. ✅ **Add config keys (`Playerbot.BG.*`)**
+   - Added settings to `worldserver.conf.dist`:
+     - `Playerbot.BG.Enable`
+     - `Playerbot.BG.QueueUpdateMs`
+     - `Playerbot.BG.MaxTeamImbalance`
+     - `Playerbot.BG.MaxBackfillPerUpdate`
+   - Wired settings into runtime behavior (enable gate, queue cadence, imbalance limit, per-tick cap).
+5. ✅ **Add SQL persistence (if needed by selected queue logic)**
+   - Not required for current implementation: queue/backfill state is computed from live battleground populations + invite counts and kept in-memory per active instance.
 6. **Validation pass**
    - Verify queueing, callback hit rates, symmetric backfill, and clean BG teardown with no crash/teleport regressions.

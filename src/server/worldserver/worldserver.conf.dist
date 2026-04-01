@@ -4348,6 +4348,44 @@ Pvp.FactionBalance.Pct20 = 0.8
 ###################################################################################################
 
 ###################################################################################################
+# PLAYERBOT BATTLEGROUND SETTINGS
+#
+#    Playerbot.BG.Enable
+#        Description: Globally enables battleground-focused Playerbot integration hooks and queue-fill planning.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Playerbot.BG.Enable = 1
+
+#    Playerbot.BG.QueueUpdateMs
+#        Description: Update cadence for battleground queue-fill recomputation in milliseconds.
+#        Default:     5000
+#        Min value:   1000
+#
+
+Playerbot.BG.QueueUpdateMs = 5000
+
+#    Playerbot.BG.MaxTeamImbalance
+#        Description: Maximum allowed team-size gap before additional backfill is requested for the smaller team.
+#        Default:     1
+#        Max value:   5
+#
+
+Playerbot.BG.MaxTeamImbalance = 1
+
+#    Playerbot.BG.MaxBackfillPerUpdate
+#        Description: Hard cap for requested bot invites per team during one queue-fill update tick.
+#        Default:     3
+#        Min value:   1
+#
+
+Playerbot.BG.MaxBackfillPerUpdate = 3
+
+#
+###################################################################################################
+
+###################################################################################################
 # LOAD SETTINGS
 #
 # These settings control content loading
