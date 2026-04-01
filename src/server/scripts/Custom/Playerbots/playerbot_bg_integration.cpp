@@ -16,10 +16,12 @@
  */
 
 #include "Battleground.h"
+#include "BattlegroundMgr.h"
 #include "Log.h"
 #include "ScriptMgr.h"
 
 #include <array>
+#include <optional>
 #include <unordered_map>
 
 namespace
@@ -59,6 +61,19 @@ namespace
         PlayerbotRoleTargets AllianceTargets;
         PlayerbotRoleTargets HordeTargets;
         PlayerbotMapPolicy Policy;
+    };
+
+    struct BackfillRequest
+    {
+        uint8 Alliance = 0;
+        uint8 Horde = 0;
+    };
+
+    struct ActiveQueueFillState
+    {
+        BattlegroundTypeId TypeId = BATTLEGROUND_TYPE_NONE;
+        uint32 InstanceId = 0;
+        BackfillRequest LastRequest;
     };
 
     PlayerbotRoleTargets BuildRoleTargets(uint32 maxPlayersPerTeam)
@@ -156,6 +171,108 @@ namespace
         }
     }
 
+    BackfillRequest BuildSymmetricBackfillRequest(Battleground* bg)
+    {
+        if (!bg || bg->isArena())
+            return { };
+
+        uint32 maxPlayersPerTeam = bg->GetMaxPlayersPerTeam();
+        uint32 minPlayersPerTeam = bg->GetMinPlayersPerTeam();
+        uint32 allianceOccupied = bg->GetPlayersCountByTeam(ALLIANCE) + bg->GetInvitedCount(ALLIANCE);
+        uint32 hordeOccupied = bg->GetPlayersCountByTeam(HORDE) + bg->GetInvitedCount(HORDE);
+        uint32 allianceFreeSlots = bg->GetFreeSlotsForTeam(ALLIANCE);
+        uint32 hordeFreeSlots = bg->GetFreeSlotsForTeam(HORDE);
+
+        uint32 constexpr MaxTeamImbalance = 1;
+
+        uint32 allianceNeed = allianceOccupied < minPlayersPerTeam ? minPlayersPerTeam - allianceOccupied : 0;
+        uint32 hordeNeed = hordeOccupied < minPlayersPerTeam ? minPlayersPerTeam - hordeOccupied : 0;
+
+        if (allianceOccupied > hordeOccupied + MaxTeamImbalance)
+            hordeNeed += allianceOccupied - (hordeOccupied + MaxTeamImbalance);
+        else if (hordeOccupied > allianceOccupied + MaxTeamImbalance)
+            allianceNeed += hordeOccupied - (allianceOccupied + MaxTeamImbalance);
+
+        allianceNeed = std::min(allianceNeed, allianceFreeSlots);
+        hordeNeed = std::min(hordeNeed, hordeFreeSlots);
+        allianceNeed = std::min(allianceNeed, maxPlayersPerTeam);
+        hordeNeed = std::min(hordeNeed, maxPlayersPerTeam);
+
+        return { uint8(allianceNeed), uint8(hordeNeed) };
+    }
+
+    class PlayerbotBGQueueCoordinator
+    {
+        public:
+            static PlayerbotBGQueueCoordinator& Instance()
+            {
+                static PlayerbotBGQueueCoordinator instance;
+                return instance;
+            }
+
+            void StartTracking(Battleground* bg)
+            {
+                if (!bg || bg->isArena())
+                    return;
+
+                ActiveQueueFillState& fillState = _activeQueueFill[bg->GetInstanceID()];
+                fillState.TypeId = bg->GetTypeID();
+                fillState.InstanceId = bg->GetInstanceID();
+                fillState.LastRequest = BuildSymmetricBackfillRequest(bg);
+                LogBackfillState(bg, fillState.LastRequest, "initialized");
+            }
+
+            std::optional<BackfillRequest> StopTracking(Battleground* bg)
+            {
+                if (!bg)
+                    return std::nullopt;
+
+                auto itr = _activeQueueFill.find(bg->GetInstanceID());
+                if (itr == _activeQueueFill.end())
+                    return std::nullopt;
+
+                BackfillRequest request = itr->second.LastRequest;
+                _activeQueueFill.erase(itr);
+                return request;
+            }
+
+            void Update()
+            {
+                for (auto itr = _activeQueueFill.begin(); itr != _activeQueueFill.end();)
+                {
+                    ActiveQueueFillState& state = itr->second;
+                    Battleground* bg = sBattlegroundMgr->GetBattleground(state.InstanceId, state.TypeId);
+                    if (!bg || bg->GetStatus() == STATUS_NONE)
+                    {
+                        itr = _activeQueueFill.erase(itr);
+                        continue;
+                    }
+
+                    BackfillRequest current = BuildSymmetricBackfillRequest(bg);
+                    if (current.Alliance != state.LastRequest.Alliance || current.Horde != state.LastRequest.Horde)
+                    {
+                        state.LastRequest = current;
+                        LogBackfillState(bg, current, "updated");
+                    }
+
+                    ++itr;
+                }
+            }
+
+        private:
+            static void LogBackfillState(Battleground const* bg, BackfillRequest request, char const* stage)
+            {
+                TC_LOG_INFO("bg.playerbot",
+                    "Playerbot BG queue fill {} (instance {}, type {}): request A:{} H:{} (players A:{} H:{}, invited A:{} H:{})",
+                    stage, bg->GetInstanceID(), uint32(bg->GetTypeID()),
+                    uint32(request.Alliance), uint32(request.Horde),
+                    bg->GetPlayersCountByTeam(ALLIANCE), bg->GetPlayersCountByTeam(HORDE),
+                    bg->GetInvitedCount(ALLIANCE), bg->GetInvitedCount(HORDE));
+            }
+
+            std::unordered_map<uint32, ActiveQueueFillState> _activeQueueFill;
+    }
+
     class PlayerbotBGStateTracker : public BGScript
     {
         public:
@@ -175,6 +292,7 @@ namespace
                 plan.AllianceTargets = BuildRoleTargets(maxPlayersPerTeam);
                 plan.HordeTargets = BuildRoleTargets(maxPlayersPerTeam);
                 plan.Policy = BuildMapPolicy(typeId, maxPlayersPerTeam);
+                PlayerbotBGQueueCoordinator::Instance().StartTracking(bg);
 
                 _activeStrategies[instanceId] = plan;
 
@@ -189,7 +307,6 @@ namespace
                     instanceId,
                     uint32(plan.AllianceTargets.Tanks), uint32(plan.AllianceTargets.Healers),
                     uint32(plan.AllianceTargets.RangedDps), uint32(plan.AllianceTargets.MeleeDps));
-
                 for (uint8 i = 0; i < plan.Policy.SquadCount; ++i)
                 {
                     PlayerbotSquadPlan const& squad = plan.Policy.Squads[i];
@@ -217,18 +334,45 @@ namespace
 
                 PlayerbotMapPolicy const policy = itr->second.Policy;
                 _activeStrategies.erase(itr);
+                std::optional<BackfillRequest> finalBackfill = PlayerbotBGQueueCoordinator::Instance().StopTracking(bg);
 
                 TC_LOG_INFO("bg.playerbot",
                     "Playerbot BG planner: ended '{}' (type {}, instance {}, winnerTeam {}) and retired profile '{}'",
                     bg->GetName(), uint32(bg->GetTypeID()), instanceId, uint32(winnerTeam), policy.ProfileName);
+
+                if (finalBackfill)
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG queue fill final snapshot (instance {}): request A:{} H:{}",
+                        instanceId, uint32(finalBackfill->Alliance), uint32(finalBackfill->Horde));
             }
 
         private:
             std::unordered_map<uint32, ActiveBattlegroundStrategy> _activeStrategies;
+    };
+
+    class PlayerbotBGQueueWorldUpdater : public WorldScript
+    {
+        public:
+            PlayerbotBGQueueWorldUpdater() : WorldScript("playerbot_bg_queue_world_updater") { }
+
+            void OnUpdate(uint32 diff) override
+            {
+                if (_updateTimer <= diff)
+                {
+                    PlayerbotBGQueueCoordinator::Instance().Update();
+                    _updateTimer = 5000;
+                }
+                else
+                    _updateTimer -= diff;
+            }
+
+        private:
+            uint32 _updateTimer = 5000;
     };
 }
 
 void AddSC_playerbot_bg_integration()
 {
     new PlayerbotBGStateTracker();
+    new PlayerbotBGQueueWorldUpdater();
 }
