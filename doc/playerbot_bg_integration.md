@@ -83,5 +83,118 @@ Place your module in:
    - Wired settings into runtime behavior (enable gate, queue cadence, imbalance limit, per-tick cap).
 5. ✅ **Add SQL persistence (if needed by selected queue logic)**
    - Not required for current implementation: queue/backfill state is computed from live battleground populations + invite counts and kept in-memory per active instance.
-6. **Validation pass**
-   - Verify queueing, callback hit rates, symmetric backfill, and clean BG teardown with no crash/teleport regressions.
+6. ✅ **Validation pass (code-path scaffolding)**
+   - Added server-side auto-queue mechanism gated by config:
+     - `Playerbot.BG.AutoQueueBots`
+     - `Playerbot.BG.AutoQueueBgType`
+     - `Playerbot.BG.BotNamePrefix`
+     - `Playerbot.BG.PreferRealPlayers`
+     - `Playerbot.BG.AutoGenerateBots`
+     - `Playerbot.BG.AutoGenerateTargetAlliance`
+     - `Playerbot.BG.AutoGenerateTargetHorde`
+     - `Playerbot.BG.AutoGenerateMaxCreatePerTick`
+     - `Playerbot.BG.AutoGenerateNamePrefix`
+   - Auto-queue tick now consumes both:
+     - active-BG backfill demand (`BuildSymmetricBackfillRequest` aggregate),
+     - queue-start demand for configured BG queue (underfilled queue toward min-per-team start threshold).
+   - Important current limitation:
+     - This mechanism does **not** fabricate new character records or sessions.
+     - It queues **online candidate characters** that match `BotNamePrefix` and pass queue eligibility checks.
+     - If `PreferRealPlayers = 1`, queued bot candidates are automatically removed from queue when demand drops (for example as real players join).
+     - Auto-generation scaffolding now computes missing pool capacity and emits in-memory seed placeholders, but still needs project-specific hooks for real account/character creation + session bootstrap.
+
+## "How do I solo queue Warsong and fight bots?" (current tree reality)
+
+You need two parts:
+
+1. **Queue coordinator** (already in this tree).
+2. **A real bot runtime that can provide online bot sessions** (not in this tree yet).
+
+### What to set for Warsong testing
+
+- `Playerbot.BG.Enable = 1`
+- `Playerbot.BG.AutoQueueBots = 1`
+- `Playerbot.BG.AutoQueueBgType = 2` (`BATTLEGROUND_WS`, Warsong Gulch)
+- `Playerbot.BG.BotNamePrefix = "bot"` (or your chosen pool prefix)
+- `Playerbot.BG.PreferRealPlayers = 1` (recommended)
+- `Playerbot.BG.RuntimeBootstrapProvider = "none"` unless you have registered a runtime provider
+
+### What this gives you today
+
+- If you already have online `bot*` characters, the system can auto-queue them to satisfy queue-start and active-BG backfill demand.
+- If demand exists but there are no matching online candidates, the system logs a clear diagnostic message.
+
+### What this does **not** give you yet
+
+- No automatic account creation.
+- No automatic character creation.
+- No automatic login/session bootstrap.
+
+`Playerbot.BG.AutoGenerateBots` is scaffold-only at the moment; it creates placeholder seed records in memory and logs where real creation/bootstrap hooks should be added.
+
+### To get true "solo queue WSG vs bots"
+
+Implement or integrate a provider that can do:
+
+1. Persist/select bot account + character pool.
+2. Materialize missing bots (if pool insufficient).
+3. Log those bots in (headless or managed sessions).
+4. Hand them to this queue coordinator as online candidates.
+5. Cleanly park/logout bots when not needed.
+
+## New runtime bootstrap hook (implemented)
+
+This tree now includes a pluggable runtime bootstrap registry so another module can supply the missing "bring bots online" step.
+
+- Register a provider in code:
+  - `RegisterPlayerbotBGRuntimeBootstrapProvider("your-provider-name", callback)`
+- Callback signature:
+  - `(TeamId team, uint32 requestedCount, std::string const& botNamePrefix, BattlegroundTypeId bgTypeId) -> uint32`
+- Set config:
+  - `Playerbot.BG.RuntimeBootstrapProvider = "your-provider-name"`
+
+The BG queue updater calls the provider each tick when online candidates are below queue demand. The provider is expected to materialize/log in bot sessions and return how many it brought online.
+
+### Built-in provider: `sql_queue`
+
+This tree now registers a built-in provider named `sql_queue`. It does not log bots in directly; it writes bootstrap jobs into a Character DB table for an external bot runtime worker to consume.
+
+Set:
+
+- `Playerbot.BG.RuntimeBootstrapProvider = "sql_queue"`
+
+Required table:
+
+```sql
+CREATE TABLE IF NOT EXISTS playerbot_bg_bootstrap_queue (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  requested_at DATETIME NOT NULL,
+  team_id TINYINT UNSIGNED NOT NULL,
+  battleground_type_id SMALLINT UNSIGNED NOT NULL,
+  bot_name_prefix VARCHAR(32) NOT NULL,
+  state VARCHAR(16) NOT NULL DEFAULT 'queued',
+  attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  processed_at DATETIME NULL,
+  last_error VARCHAR(255) NOT NULL DEFAULT '',
+  PRIMARY KEY (id),
+  KEY idx_state_requested (state, requested_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+External runtime contract:
+
+1. Poll rows with `state='queued'`.
+2. Bring bots online that satisfy team/prefix/bg constraints.
+3. Update row state (for example `processing`, `done`, or `failed`).
+
+### Included worker implementation
+
+This repo now includes `contrib/playerbots/bg_bootstrap_worker.py`, which implements the external worker loop for `sql_queue`.
+
+- It claims queued rows with `FOR UPDATE SKIP LOCKED`.
+- Executes `PB_BG_BOOTSTRAP_CMD` for each row.
+- Writes `done` / `failed`, `attempts`, `processed_at`, and `last_error`.
+
+Required Python dependency:
+
+- `pymysql`

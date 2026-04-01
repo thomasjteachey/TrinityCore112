@@ -16,16 +16,24 @@
  */
 
 #include "Battleground.h"
+#include "BattlegroundQueue.h"
 #include "BattlegroundMgr.h"
 #include "Config.h"
+#include "DatabaseEnv.h"
+#include "DB2Stores.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
+#include "Player.h"
 #include "ScriptMgr.h"
 
 #include <algorithm>
 #include <array>
+#include <deque>
+#include <functional>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace
 {
@@ -85,6 +93,16 @@ namespace
         uint32 QueueUpdateIntervalMs = 5000;
         uint32 MaxTeamImbalance = 1;
         uint32 MaxBackfillPerUpdate = 3;
+        bool AutoQueueBots = false;
+        BattlegroundTypeId AutoQueueBgType = BATTLEGROUND_RB;
+        std::string BotNamePrefix = "bot";
+        bool PreferRealPlayers = true;
+        bool AutoGenerateBots = false;
+        uint32 AutoGenerateTargetAlliance = 10;
+        uint32 AutoGenerateTargetHorde = 10;
+        uint32 AutoGenerateMaxCreatePerTick = 2;
+        std::string AutoGenerateNamePrefix = "pbbot";
+        std::string RuntimeBootstrapProvider = "none";
     };
 
     PlayerbotBGConfig LoadPlayerbotBGConfig()
@@ -94,7 +112,221 @@ namespace
         config.QueueUpdateIntervalMs = std::max<uint32>(1000, sConfigMgr->GetOption<uint32>("Playerbot.BG.QueueUpdateMs", 5000));
         config.MaxTeamImbalance = std::min<uint32>(5, sConfigMgr->GetOption<uint32>("Playerbot.BG.MaxTeamImbalance", 1));
         config.MaxBackfillPerUpdate = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("Playerbot.BG.MaxBackfillPerUpdate", 3));
+        config.AutoQueueBots = sConfigMgr->GetOption<bool>("Playerbot.BG.AutoQueueBots", false);
+        config.AutoQueueBgType = BattlegroundTypeId(sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoQueueBgType", uint32(BATTLEGROUND_RB)));
+        config.BotNamePrefix = sConfigMgr->GetOption<std::string>("Playerbot.BG.BotNamePrefix", "bot");
+        config.PreferRealPlayers = sConfigMgr->GetOption<bool>("Playerbot.BG.PreferRealPlayers", true);
+        config.AutoGenerateBots = sConfigMgr->GetOption<bool>("Playerbot.BG.AutoGenerateBots", false);
+        config.AutoGenerateTargetAlliance = sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoGenerateTargetAlliance", 10);
+        config.AutoGenerateTargetHorde = sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoGenerateTargetHorde", 10);
+        config.AutoGenerateMaxCreatePerTick = std::max<uint32>(1, sConfigMgr->GetOption<uint32>("Playerbot.BG.AutoGenerateMaxCreatePerTick", 2));
+        config.AutoGenerateNamePrefix = sConfigMgr->GetOption<std::string>("Playerbot.BG.AutoGenerateNamePrefix", "pbbot");
+        config.RuntimeBootstrapProvider = sConfigMgr->GetOption<std::string>("Playerbot.BG.RuntimeBootstrapProvider", "none");
         return config;
+    }
+
+    class PlayerbotBGRuntimeBootstrap
+    {
+        public:
+            using BootstrapFn = std::function<uint32(TeamId team, uint32 requestedCount, std::string const& botNamePrefix, BattlegroundTypeId bgTypeId)>;
+
+            static PlayerbotBGRuntimeBootstrap& Instance()
+            {
+                static PlayerbotBGRuntimeBootstrap instance;
+                return instance;
+            }
+
+            void RegisterProvider(std::string name, BootstrapFn callback)
+            {
+                if (name.empty() || !callback)
+                    return;
+
+                _providers.insert_or_assign(std::move(name), std::move(callback));
+            }
+
+            uint32 BootstrapOnlineCandidates(std::string const& providerName, TeamId team, uint32 requestedCount, std::string const& botNamePrefix, BattlegroundTypeId bgTypeId) const
+            {
+                if (!requestedCount || providerName.empty() || providerName == "none")
+                    return 0;
+
+                auto itr = _providers.find(providerName);
+                if (itr == _providers.end())
+                    return 0;
+
+                return itr->second(team, requestedCount, botNamePrefix, bgTypeId);
+            }
+
+            bool HasProvider(std::string const& providerName) const
+            {
+                return _providers.find(providerName) != _providers.end();
+            }
+
+        private:
+            std::unordered_map<std::string, BootstrapFn> _providers;
+    };
+
+    uint32 EnqueueSqlBootstrapRequests(TeamId team, uint32 requestedCount, std::string const& botNamePrefix, BattlegroundTypeId bgTypeId)
+    {
+        if (!requestedCount)
+            return 0;
+
+        uint32 enqueued = 0;
+        for (uint32 i = 0; i < requestedCount; ++i)
+        {
+            CharacterDatabase.Execute("INSERT INTO playerbot_bg_bootstrap_queue "
+                "(requested_at, team_id, battleground_type_id, bot_name_prefix, state) "
+                "VALUES (NOW(), {}, {}, '{}', 'queued')", uint32(team), uint32(bgTypeId), botNamePrefix);
+            ++enqueued;
+        }
+
+        return enqueued;
+    }
+
+    struct GeneratedBotSeed
+    {
+        TeamId Team = TEAM_ALLIANCE;
+        std::string Name;
+    };
+
+    class PlayerbotBotGenerationScaffold
+    {
+        public:
+            static PlayerbotBotGenerationScaffold& Instance()
+            {
+                static PlayerbotBotGenerationScaffold instance;
+                return instance;
+            }
+
+            void Update(PlayerbotBGConfig const& config, BackfillRequest demand)
+            {
+                if (!config.AutoGenerateBots)
+                    return;
+
+                uint32 onlineAlliance = CountOnlineCandidates(TEAM_ALLIANCE, config.BotNamePrefix);
+                uint32 onlineHorde = CountOnlineCandidates(TEAM_HORDE, config.BotNamePrefix);
+                uint32 pendingAlliance = CountPending(TEAM_ALLIANCE);
+                uint32 pendingHorde = CountPending(TEAM_HORDE);
+
+                uint32 desiredAlliance = std::max<uint32>(config.AutoGenerateTargetAlliance, demand.Alliance);
+                uint32 desiredHorde = std::max<uint32>(config.AutoGenerateTargetHorde, demand.Horde);
+                uint32 missingAlliance = desiredAlliance > onlineAlliance + pendingAlliance ? desiredAlliance - (onlineAlliance + pendingAlliance) : 0;
+                uint32 missingHorde = desiredHorde > onlineHorde + pendingHorde ? desiredHorde - (onlineHorde + pendingHorde) : 0;
+
+                uint32 created = 0;
+                created += GenerateSeeds(TEAM_ALLIANCE, missingAlliance, config);
+                created += GenerateSeeds(TEAM_HORDE, missingHorde, config);
+
+                if (created)
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG generator scaffold queued {} seed(s): online A:{} H:{}, pending A:{} H:{}, desired A:{} H:{}",
+                        created, onlineAlliance, onlineHorde, pendingAlliance, pendingHorde, desiredAlliance, desiredHorde);
+            }
+
+        private:
+            static uint32 CountOnlineCandidates(TeamId team, std::string const& prefix)
+            {
+                std::shared_lock lock(*HashMapHolder<Player>::GetLock());
+                uint32 count = 0;
+                for (auto const& [_, player] : ObjectAccessor::GetPlayers())
+                    if (player && player->GetTeamId() == team && (prefix.empty() || player->GetName().starts_with(prefix)))
+                        ++count;
+
+                return count;
+            }
+
+            uint32 CountPending(TeamId team) const
+            {
+                return uint32(std::count_if(_pendingSeeds.begin(), _pendingSeeds.end(), [team](GeneratedBotSeed const& seed) { return seed.Team == team; }));
+            }
+
+            uint32 GenerateSeeds(TeamId team, uint32 missing, PlayerbotBGConfig const& config)
+            {
+                if (!missing)
+                    return 0;
+
+                uint32 toCreate = std::min<uint32>(missing, config.AutoGenerateMaxCreatePerTick);
+                for (uint32 i = 0; i < toCreate; ++i)
+                {
+                    GeneratedBotSeed seed;
+                    seed.Team = team;
+                    seed.Name = BuildSeedName(team, config.AutoGenerateNamePrefix);
+                    _pendingSeeds.push_back(seed);
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG generator scaffold created seed '{}' for team {} (placeholder only; hook real character/session creation here)",
+                        seed.Name, uint32(team));
+                }
+
+                return toCreate;
+            }
+
+            std::string BuildSeedName(TeamId team, std::string const& prefix)
+            {
+                char side = team == TEAM_ALLIANCE ? 'a' : 'h';
+                return std::string(prefix).append("_").append(1, side).append("_").append(std::to_string(++_nameSerial));
+            }
+
+            std::deque<GeneratedBotSeed> _pendingSeeds;
+            uint64 _nameSerial = 0;
+    };
+
+    bool TryAutoQueueBotPlayer(Player* player, BattlegroundTypeId bgTypeId)
+    {
+        if (!player || player->InBattleground() || player->InBattlegroundQueue() || !player->HasFreeBattlegroundQueueId() || player->IsDeserter())
+            return false;
+
+        BattlegroundTemplate const* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(bgTypeId);
+        if (!bgTemplate || bgTemplate->IsArena())
+            return false;
+
+        PVPDifficultyEntry const* bracketEntry = DB2Manager::GetBattlegroundBracketByLevel(bgTemplate->MapIDs.front(), player->GetLevel());
+        if (!bracketEntry)
+            return false;
+
+        BattlegroundQueueTypeId bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, BattlegroundQueueIdType::Battleground, false, 0);
+        if (!BattlegroundMgr::IsValidQueueId(bgQueueTypeId))
+            return false;
+
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+        GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, Team(player->GetTeam()), bracketEntry, false, false, 0);
+        player->AddBattlegroundQueueId(bgQueueTypeId);
+
+        TC_LOG_INFO("bg.playerbot",
+            "Playerbot BG auto-queued '{}' ({}) to queue {{ listId {}, type {} }} at level {} (joinTime {})",
+            player->GetName(), player->GetGUID().ToString(), uint32(bgQueueTypeId.BattlemasterListId), uint32(bgQueueTypeId.Type), uint32(player->GetLevel()), ginfo->JoinTime);
+        return true;
+    }
+
+    BackfillRequest BuildQueueStartBackfillRequest(BattlegroundTypeId bgTypeId, PlayerbotBGConfig const& config)
+    {
+        if (!config.AutoQueueBots)
+            return { };
+
+        BattlegroundTemplate const* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplateByTypeId(bgTypeId);
+        if (!bgTemplate || bgTemplate->IsArena())
+            return { };
+
+        BattlegroundQueueTypeId bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, BattlegroundQueueIdType::Battleground, false, 0);
+        if (!BattlegroundMgr::IsValidQueueId(bgQueueTypeId))
+            return { };
+
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+        uint32 allianceQueued = bgQueue.GetPlayersInQueue(TEAM_ALLIANCE);
+        uint32 hordeQueued = bgQueue.GetPlayersInQueue(TEAM_HORDE);
+        uint32 minPlayersPerTeam = bgTemplate->GetMinPlayersPerTeam();
+        if (allianceQueued == 0 && hordeQueued == 0)
+            return { };
+
+        uint32 allianceNeed = allianceQueued < minPlayersPerTeam ? minPlayersPerTeam - allianceQueued : 0;
+        uint32 hordeNeed = hordeQueued < minPlayersPerTeam ? minPlayersPerTeam - hordeQueued : 0;
+
+        if (allianceQueued > hordeQueued + config.MaxTeamImbalance)
+            hordeNeed += allianceQueued - (hordeQueued + config.MaxTeamImbalance);
+        else if (hordeQueued > allianceQueued + config.MaxTeamImbalance)
+            allianceNeed += hordeQueued - (allianceQueued + config.MaxTeamImbalance);
+
+        allianceNeed = std::min(allianceNeed, config.MaxBackfillPerUpdate);
+        hordeNeed = std::min(hordeNeed, config.MaxBackfillPerUpdate);
+        return { uint8(allianceNeed), uint8(hordeNeed) };
     }
 
     enum class PlayerbotBGAction : uint8
@@ -334,6 +566,18 @@ namespace
                 }
             }
 
+            BackfillRequest GetAggregateRequest() const
+            {
+                BackfillRequest aggregate;
+                for (auto const& [_, state] : _activeQueueFill)
+                {
+                    aggregate.Alliance = uint8(std::min<uint32>(uint32(aggregate.Alliance) + state.LastRequest.Alliance, 255));
+                    aggregate.Horde = uint8(std::min<uint32>(uint32(aggregate.Horde) + state.LastRequest.Horde, 255));
+                }
+
+                return aggregate;
+            }
+
         private:
             static void LogBackfillState(Battleground const* bg, BackfillRequest request, char const* stage)
             {
@@ -445,6 +689,7 @@ namespace
                 if (_updateTimer <= diff)
                 {
                     PlayerbotBGQueueCoordinator::Instance().Update();
+                    AutoQueueBots(config);
                     _updateTimer = config.QueueUpdateIntervalMs;
                 }
                 else
@@ -452,12 +697,190 @@ namespace
             }
 
         private:
+            static bool IsBotCandidate(Player* player, std::string const& prefix, TeamId team)
+            {
+                if (!player || player->GetTeamId() != team)
+                    return false;
+
+                if (prefix.empty())
+                    return true;
+
+                return player->GetName().starts_with(prefix);
+            }
+
+            static uint8 QueueBotCandidates(TeamId team, uint8 needed, PlayerbotBGConfig const& config)
+            {
+                if (!needed)
+                    return 0;
+
+                std::shared_lock lock(*HashMapHolder<Player>::GetLock());
+                HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+                uint8 queued = 0;
+                for (auto const& [_, player] : players)
+                {
+                    if (!IsBotCandidate(player, config.BotNamePrefix, team))
+                        continue;
+
+                    if (!TryAutoQueueBotPlayer(player, config.AutoQueueBgType))
+                        continue;
+
+                    if (++queued >= needed)
+                        break;
+                }
+
+                return queued;
+            }
+
+            static uint32 CountOnlineBotCandidates(TeamId team, PlayerbotBGConfig const& config)
+            {
+                std::shared_lock lock(*HashMapHolder<Player>::GetLock());
+                HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+                uint32 count = 0;
+                for (auto const& [_, player] : players)
+                    if (IsBotCandidate(player, config.BotNamePrefix, team))
+                        ++count;
+
+                return count;
+            }
+
+            static void BootstrapOfflineCandidatesIfNeeded(PlayerbotBGConfig const& config, BackfillRequest const& mergedNeed)
+            {
+                if (config.RuntimeBootstrapProvider.empty() || config.RuntimeBootstrapProvider == "none")
+                    return;
+
+                uint32 onlineAlliance = CountOnlineBotCandidates(TEAM_ALLIANCE, config);
+                uint32 onlineHorde = CountOnlineBotCandidates(TEAM_HORDE, config);
+                uint32 allianceMissing = mergedNeed.Alliance > onlineAlliance ? mergedNeed.Alliance - onlineAlliance : 0;
+                uint32 hordeMissing = mergedNeed.Horde > onlineHorde ? mergedNeed.Horde - onlineHorde : 0;
+
+                uint32 bootstrappedAlliance = PlayerbotBGRuntimeBootstrap::Instance().BootstrapOnlineCandidates(
+                    config.RuntimeBootstrapProvider, TEAM_ALLIANCE, allianceMissing, config.BotNamePrefix, config.AutoQueueBgType);
+                uint32 bootstrappedHorde = PlayerbotBGRuntimeBootstrap::Instance().BootstrapOnlineCandidates(
+                    config.RuntimeBootstrapProvider, TEAM_HORDE, hordeMissing, config.BotNamePrefix, config.AutoQueueBgType);
+
+                if (bootstrappedAlliance || bootstrappedHorde)
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG runtime bootstrap provider '{}' requested candidates A:{} H:{} and reported bootstrapped A:{} H:{}",
+                        config.RuntimeBootstrapProvider, allianceMissing, hordeMissing, bootstrappedAlliance, bootstrappedHorde);
+            }
+
+            static uint8 CountQueuedBotCandidates(TeamId team, PlayerbotBGConfig const& config, BattlegroundQueueTypeId queueTypeId)
+            {
+                std::shared_lock lock(*HashMapHolder<Player>::GetLock());
+                HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+                uint8 queued = 0;
+                for (auto const& [_, player] : players)
+                    if (IsBotCandidate(player, config.BotNamePrefix, team) && player->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
+                        ++queued;
+
+                return queued;
+            }
+
+            static uint8 DequeueBotCandidates(TeamId team, uint8 toRemove, PlayerbotBGConfig const& config, BattlegroundQueueTypeId queueTypeId)
+            {
+                if (!toRemove)
+                    return 0;
+
+                BattlegroundQueue& queue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+                std::shared_lock lock(*HashMapHolder<Player>::GetLock());
+                HashMapHolder<Player>::MapType const& players = ObjectAccessor::GetPlayers();
+                uint8 removed = 0;
+                for (auto const& [_, player] : players)
+                {
+                    if (!IsBotCandidate(player, config.BotNamePrefix, team))
+                        continue;
+
+                    if (!player->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || player->InBattleground())
+                        continue;
+
+                    player->RemoveBattlegroundQueueId(queueTypeId);
+                    queue.RemovePlayer(player->GetGUID(), true);
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG auto-dequeued '{}' ({}) from queue {{ listId {}, type {} }} to prioritize real players",
+                        player->GetName(), player->GetGUID().ToString(), uint32(queueTypeId.BattlemasterListId), uint32(queueTypeId.Type));
+
+                    if (++removed >= toRemove)
+                        break;
+                }
+
+                return removed;
+            }
+
+            static void AutoQueueBots(PlayerbotBGConfig const& config)
+            {
+                static uint8 noCandidateWarningCooldown = 0;
+
+                if (!config.AutoQueueBots)
+                    return;
+
+                BattlegroundQueueTypeId queueTypeId = BattlegroundMgr::BGQueueTypeId(config.AutoQueueBgType, BattlegroundQueueIdType::Battleground, false, 0);
+                if (!BattlegroundMgr::IsValidQueueId(queueTypeId))
+                    return;
+
+                BackfillRequest activeBgNeed = PlayerbotBGQueueCoordinator::Instance().GetAggregateRequest();
+                BackfillRequest queueStartNeed = BuildQueueStartBackfillRequest(config.AutoQueueBgType, config);
+                BackfillRequest mergedNeed;
+                mergedNeed.Alliance = uint8(std::min<uint32>(config.MaxBackfillPerUpdate, uint32(activeBgNeed.Alliance) + queueStartNeed.Alliance));
+                mergedNeed.Horde = uint8(std::min<uint32>(config.MaxBackfillPerUpdate, uint32(activeBgNeed.Horde) + queueStartNeed.Horde));
+                PlayerbotBotGenerationScaffold::Instance().Update(config, mergedNeed);
+                BootstrapOfflineCandidatesIfNeeded(config, mergedNeed);
+
+                uint8 queuedAllianceBots = CountQueuedBotCandidates(TEAM_ALLIANCE, config, queueTypeId);
+                uint8 queuedHordeBots = CountQueuedBotCandidates(TEAM_HORDE, config, queueTypeId);
+
+                if (config.PreferRealPlayers)
+                {
+                    if (queuedAllianceBots > mergedNeed.Alliance)
+                        queuedAllianceBots = uint8(queuedAllianceBots - DequeueBotCandidates(TEAM_ALLIANCE, uint8(queuedAllianceBots - mergedNeed.Alliance), config, queueTypeId));
+                    if (queuedHordeBots > mergedNeed.Horde)
+                        queuedHordeBots = uint8(queuedHordeBots - DequeueBotCandidates(TEAM_HORDE, uint8(queuedHordeBots - mergedNeed.Horde), config, queueTypeId));
+                }
+
+                uint8 allianceQueued = mergedNeed.Alliance > queuedAllianceBots ? QueueBotCandidates(TEAM_ALLIANCE, uint8(mergedNeed.Alliance - queuedAllianceBots), config) : 0;
+                uint8 hordeQueued = mergedNeed.Horde > queuedHordeBots ? QueueBotCandidates(TEAM_HORDE, uint8(mergedNeed.Horde - queuedHordeBots), config) : 0;
+
+                if (allianceQueued || hordeQueued)
+                    TC_LOG_INFO("bg.playerbot",
+                        "Playerbot BG auto-queue tick: requested A:{} H:{}, queued A:{} H:{}, queueType {}",
+                        uint32(mergedNeed.Alliance), uint32(mergedNeed.Horde), uint32(allianceQueued), uint32(hordeQueued), uint32(config.AutoQueueBgType));
+                else if (mergedNeed.Alliance || mergedNeed.Horde)
+                {
+                    uint32 onlineAlliance = CountOnlineBotCandidates(TEAM_ALLIANCE, config);
+                    uint32 onlineHorde = CountOnlineBotCandidates(TEAM_HORDE, config);
+                    bool shouldLog = (onlineAlliance == 0 || onlineHorde == 0 || config.AutoGenerateBots) && noCandidateWarningCooldown == 0;
+                    if (shouldLog)
+                    {
+                        TC_LOG_INFO("bg.playerbot",
+                            "Playerbot BG auto-queue could not satisfy demand (requested A:{} H:{}, online candidates A:{} H:{}, prefix '{}', autoGenerate {}). "
+                            "AutoGenerate currently creates placeholder seeds only; provide online bot sessions or integrate a real bot runtime/session bootstrap to run solo BGs. "
+                            "Configured runtime provider '{}', provider registered {}.",
+                            uint32(mergedNeed.Alliance), uint32(mergedNeed.Horde), onlineAlliance, onlineHorde, config.BotNamePrefix, config.AutoGenerateBots ? 1 : 0,
+                            config.RuntimeBootstrapProvider, PlayerbotBGRuntimeBootstrap::Instance().HasProvider(config.RuntimeBootstrapProvider) ? 1 : 0);
+                        noCandidateWarningCooldown = 6;
+                    }
+                }
+
+                if (noCandidateWarningCooldown > 0)
+                    --noCandidateWarningCooldown;
+            }
+
             uint32 _updateTimer = LoadPlayerbotBGConfig().QueueUpdateIntervalMs;
     };
 }
 
+void RegisterPlayerbotBGRuntimeBootstrapProvider(std::string const& name, std::function<uint32(TeamId, uint32, std::string const&, BattlegroundTypeId)> callback);
+
 void AddSC_playerbot_bg_integration()
 {
+    RegisterPlayerbotBGRuntimeBootstrapProvider("sql_queue", [](TeamId team, uint32 requestedCount, std::string const& botNamePrefix, BattlegroundTypeId bgTypeId) -> uint32
+    {
+        return EnqueueSqlBootstrapRequests(team, requestedCount, botNamePrefix, bgTypeId);
+    });
     new PlayerbotBGStateTracker();
     new PlayerbotBGQueueWorldUpdater();
+}
+
+void RegisterPlayerbotBGRuntimeBootstrapProvider(std::string const& name, std::function<uint32(TeamId, uint32, std::string const&, BattlegroundTypeId)> callback)
+{
+    PlayerbotBGRuntimeBootstrap::Instance().RegisterProvider(name, std::move(callback));
 }

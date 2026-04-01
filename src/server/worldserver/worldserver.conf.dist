@@ -4382,6 +4382,94 @@ Playerbot.BG.MaxTeamImbalance = 1
 
 Playerbot.BG.MaxBackfillPerUpdate = 3
 
+#    Playerbot.BG.AutoQueueBots
+#        Description: Enables server-side auto-queue of online bot candidates when BGs are underfilled
+#                     (active match backfill demand and queue-start demand are both considered).
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+
+Playerbot.BG.AutoQueueBots = 0
+
+#    Playerbot.BG.AutoQueueBgType
+#        Description: Battleground type id used for auto-queue requests.
+#                     Default uses Random Battleground queue (32 / BATTLEGROUND_RB).
+#                     Use 2 for Warsong Gulch (BATTLEGROUND_WS) solo-bot testing.
+#        Default:     32
+#
+
+Playerbot.BG.AutoQueueBgType = 32
+
+#    Playerbot.BG.BotNamePrefix
+#        Description: Only online characters whose name starts with this prefix are considered bot candidates.
+#                     If no matching online candidates exist, queue-fill cannot create playable bots by itself.
+#                     Set empty value to allow all online characters (NOT recommended).
+#        Default:     "bot"
+#
+
+Playerbot.BG.BotNamePrefix = "bot"
+
+#    Playerbot.BG.PreferRealPlayers
+#        Description: If enabled, bot candidates queued by auto-queue are removed when demand drops,
+#                     making room as real players join queues.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+#
+
+Playerbot.BG.PreferRealPlayers = 1
+
+#    Playerbot.BG.AutoGenerateBots
+#        Description: Enables bot-generation scaffolding that computes missing bot pool capacity and emits seed records.
+#                     Current scope: placeholder scaffolding only (logs + in-memory seed queue), no real character/session creation yet.
+#                     This option does NOT by itself make bots appear in BGs.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+
+Playerbot.BG.AutoGenerateBots = 0
+
+#    Playerbot.BG.AutoGenerateTargetAlliance
+#        Description: Desired minimum online+pending bot pool size for Alliance generation scaffolding.
+#        Default:     10
+#
+
+Playerbot.BG.AutoGenerateTargetAlliance = 10
+
+#    Playerbot.BG.AutoGenerateTargetHorde
+#        Description: Desired minimum online+pending bot pool size for Horde generation scaffolding.
+#        Default:     10
+#
+
+Playerbot.BG.AutoGenerateTargetHorde = 10
+
+#    Playerbot.BG.AutoGenerateMaxCreatePerTick
+#        Description: Max number of generation seed records created per update tick (per team pass).
+#        Default:     2
+#        Min value:   1
+#
+
+Playerbot.BG.AutoGenerateMaxCreatePerTick = 2
+
+#    Playerbot.BG.AutoGenerateNamePrefix
+#        Description: Name prefix used for generated bot seed placeholders.
+#        Default:     "pbbot"
+#
+
+Playerbot.BG.AutoGenerateNamePrefix = "pbbot"
+
+#    Playerbot.BG.RuntimeBootstrapProvider
+#        Description: Name of a registered runtime bootstrap provider that can bring offline bot characters online
+#                     so BG auto-queue can use them.
+#                     "none" disables this path. Providers are registered in code via
+#                     RegisterPlayerbotBGRuntimeBootstrapProvider(name, callback).
+#                     Built-in provider: "sql_queue" (writes requests to character DB table
+#                     playerbot_bg_bootstrap_queue for an external worker/runtime to process).
+#                     See contrib/playerbots/bg_bootstrap_worker.py for a worker implementation.
+#        Default:     "none"
+#
+
+Playerbot.BG.RuntimeBootstrapProvider = "none"
+
 #
 ###################################################################################################
 
