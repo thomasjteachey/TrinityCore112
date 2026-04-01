@@ -18,6 +18,7 @@
 #include "BattlegroundQueue.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
+#include "BattlegroundBotIntegration.h"
 #include "BattlegroundMgr.h"
 #include "Chat.h"
 #include "DatabaseEnv.h"
@@ -821,6 +822,23 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
 
     m_SelectionPools[TEAM_ALLIANCE].Init();
     m_SelectionPools[TEAM_HORDE].Init();
+
+    auto countQueuedPlayers = [this, bracket_id](BattlegroundQueueGroupTypes queueType)
+    {
+        uint32 playerCount = 0;
+        for (GroupsQueueType::const_iterator itr = m_QueuedGroups[bracket_id][queueType].begin(); itr != m_QueuedGroups[bracket_id][queueType].end(); ++itr)
+            if (!(*itr)->IsInvitedToBGInstanceGUID)
+                playerCount += static_cast<uint32>((*itr)->Players.size());
+
+        return playerCount;
+    };
+
+    uint32 allianceQueuedPlayers = countQueuedPlayers(BG_QUEUE_NORMAL_ALLIANCE) + countQueuedPlayers(BG_QUEUE_PREMADE_ALLIANCE);
+    uint32 hordeQueuedPlayers = countQueuedPlayers(BG_QUEUE_NORMAL_HORDE) + countQueuedPlayers(BG_QUEUE_PREMADE_HORDE);
+    uint32 allianceMissingPlayers = MinPlayersPerTeam > allianceQueuedPlayers ? MinPlayersPerTeam - allianceQueuedPlayers : 0;
+    uint32 hordeMissingPlayers = MinPlayersPerTeam > hordeQueuedPlayers ? MinPlayersPerTeam - hordeQueuedPlayers : 0;
+
+    BattlegroundBotIntegration::Instance().EnsureQueue(*this, bgTypeId, bracket_id, MinPlayersPerTeam, MaxPlayersPerTeam, allianceMissingPlayers, hordeMissingPlayers);
 
     if (bg_template->isBattleground())
     {

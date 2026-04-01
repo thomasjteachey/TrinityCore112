@@ -2788,6 +2788,27 @@ Battleground.PrematureFinishTimer = 300000
 Battleground.PremadeGroupWaitForMatch = 1800000
 
 #
+#    Playerbots.BG.WSG.AutoQueue.Enable
+#        Description: Enable WSG auto-queue fillers handled by custom_playerbots_bg_bridge.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+#
+#    Playerbots.BG.WSG.AutoQueue.Fillers
+#        Description: Comma-separated connected character names used as WSG queue fillers.
+#                     Characters must be online and eligible to queue for the bracket.
+#        Example:     "Botwarrior,Botpriest,Botmage"
+#        Default:     "" - (No filler characters configured)
+#
+#    Playerbots.BG.Offline.MaxAttemptsPerTick
+#        Description: Max offline bot headless-session start attempts processed per manager tick.
+#                     Used by the offline fill manager placeholder queue.
+#        Default:     5
+
+Playerbots.BG.WSG.AutoQueue.Enable = 0
+Playerbots.BG.WSG.AutoQueue.Fillers = ""
+Playerbots.BG.Offline.MaxAttemptsPerTick = 5
+
+#
 #    Battleground.GiveXPForKills
 #        Description: Give experience for honorable kills in battlegrounds,
 #                     the rate can be changed in the Rate.XP.BattlegroundKill setting.

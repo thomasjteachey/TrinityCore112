@@ -41,6 +41,12 @@ target_link_libraries(game-interface
     shared
     Detour)
 
+if(WITH_PLAYERBOTS_BG_BRIDGE)
+  target_compile_definitions(game-interface
+    INTERFACE
+      TRINITY_WITH_PLAYERBOTS_BG_BRIDGE)
+endif()
+
 add_library(game
   ${PRIVATE_SOURCES})
 

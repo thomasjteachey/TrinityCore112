@@ -1355,6 +1355,11 @@ void ScriptMgr::OnWorldUpdate(uint32 diff)
     FOREACH_SCRIPT(WorldScript)->OnUpdate(diff);
 }
 
+void ScriptMgr::OnBattlegroundQueueNeedBots(BattlegroundQueue& queue, BattlegroundTypeId bgTypeId, uint32 bracketId, uint32 allianceMissingPlayers, uint32 hordeMissingPlayers)
+{
+    FOREACH_SCRIPT(WorldScript)->OnBattlegroundQueueNeedBots(queue, bgTypeId, bracketId, allianceMissingPlayers, hordeMissingPlayers);
+}
+
 void ScriptMgr::OnHonorCalculation(float& honor, uint8 level, float multiplier)
 {
     FOREACH_SCRIPT(FormulaScript)->OnHonorCalculation(honor, level, multiplier);
@@ -2230,6 +2235,10 @@ void WorldScript::OnStartup()
 }
 
 void WorldScript::OnShutdown()
+{
+}
+
+void WorldScript::OnBattlegroundQueueNeedBots(BattlegroundQueue& /*queue*/, BattlegroundTypeId /*bgTypeId*/, uint32 /*bracketId*/, uint32 /*allianceMissingPlayers*/, uint32 /*hordeMissingPlayers*/)
 {
 }
 
