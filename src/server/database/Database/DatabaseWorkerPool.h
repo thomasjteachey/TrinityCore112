@@ -23,6 +23,7 @@
 #include "StringFormat.h"
 #include <array>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 template <typename T>
@@ -69,6 +70,14 @@ class DatabaseWorkerPool
         //! Enqueues a one-way SQL operation in string format that will be executed asynchronously.
         //! This method should only be used for queries that are only executed once, e.g during startup.
         void Execute(char const* sql);
+
+        //! Compatibility overload for callers still using Execute(format, args...).
+        //! Prefer PExecute() for new code.
+        template<typename... Args, std::enable_if_t<(sizeof...(Args) > 0), int> = 0>
+        void Execute(Trinity::FormatString<Args...> sql, Args&&... args)
+        {
+            this->PExecute(sql, std::forward<Args>(args)...);
+        }
 
         //! Enqueues a one-way SQL operation in string format -with variable args- that will be executed asynchronously.
         //! This method should only be used for queries that are only executed once, e.g during startup.
