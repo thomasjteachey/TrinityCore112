@@ -31,6 +31,7 @@ class Aura;
 class AuraScript;
 class Battlefield;
 class Battleground;
+class BattlegroundQueue;
 class BattlegroundMap;
 class Channel;
 class Creature;
@@ -261,6 +262,9 @@ class TC_GAME_API WorldScript : public ScriptObject
 
         // Called when the world is actually shut down.
         virtual void OnShutdown();
+
+        // Called when battleground queue processing detects missing players and bot fillers may be needed.
+        virtual void OnBattlegroundQueueNeedBots(BattlegroundQueue& queue, BattlegroundTypeId bgTypeId, uint32 bracketId, uint32 allianceMissingPlayers, uint32 hordeMissingPlayers);
 };
 
 class TC_GAME_API FormulaScript : public ScriptObject
@@ -900,6 +904,7 @@ class TC_GAME_API ScriptMgr
         void OnShutdownInitiate(ShutdownExitCode code, ShutdownMask mask);
         void OnShutdownCancel();
         void OnWorldUpdate(uint32 diff);
+        void OnBattlegroundQueueNeedBots(BattlegroundQueue& queue, BattlegroundTypeId bgTypeId, uint32 bracketId, uint32 allianceMissingPlayers, uint32 hordeMissingPlayers);
         void OnStartup();
         void OnShutdown();
 
