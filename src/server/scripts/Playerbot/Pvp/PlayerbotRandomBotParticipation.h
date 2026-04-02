@@ -28,10 +28,10 @@ struct RandomBotParticipationHooks;
 class RandomBotParticipationLifecycle
 {
 public:
-    // Neutral registration seam for manager-facing integration wiring.
-    static void RegisterManagerHooks();
+    // Manager-facing seam for per-bot update cadence/eligibility ownership.
+    static void ProcessManagerLifecycleEntryPoint(Player* player);
 
-    // Manager-facing seam: neutral lifecycle dispatcher for a random bot player.
+    // Lifecycle seam: dispatcher only, executes decisions from context.
     static void ProcessLifecycleEntryPoint(Player* player);
 
     // Seam entry points for future random-bot manager wiring (Phase 4+).
