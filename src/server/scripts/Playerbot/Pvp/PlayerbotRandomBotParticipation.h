@@ -22,6 +22,9 @@ class Player;
 
 namespace playerbot
 {
+struct PvpValues;
+struct RandomBotParticipationHooks;
+
 class RandomBotParticipationLifecycle
 {
 public:
@@ -32,8 +35,8 @@ public:
     static void ProcessLifecycleEntryPoint(Player* player);
 
     // Seam entry points for future random-bot manager wiring (Phase 4+).
-    static void ProcessBattlegroundLifecycleEntryPoint(Player* player);
-    static void ProcessArenaLifecycleEntryPoint(Player* player);
+    static void ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values, RandomBotParticipationHooks const& hooks);
+    static void ProcessArenaLifecycleEntryPoint(Player* player, PvpValues const& values, RandomBotParticipationHooks const& hooks);
 };
 }
 

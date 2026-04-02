@@ -51,6 +51,7 @@ struct PvpValues
     bool hasArenaQueue = false;
     bool hasBattlegroundInvite = false;
     bool hasArenaInvite = false;
+    bool hasArenaTeamInvite = false;
 };
 
 enum class PvpTrigger : uint8

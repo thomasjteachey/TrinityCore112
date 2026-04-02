@@ -46,18 +46,21 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    ProcessBattlegroundLifecycleEntryPoint(player);
-    ProcessArenaLifecycleEntryPoint(player);
+    PvpValues const values = PvpCore::CollectValues(player);
+    RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
+    if (!hooks.lifecycleEnabled)
+        return;
+
+    ProcessBattlegroundLifecycleEntryPoint(player, values, hooks);
+    ProcessArenaLifecycleEntryPoint(player, values, hooks);
 }
 
-void RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player)
+void RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,
+    RandomBotParticipationHooks const& hooks)
 {
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    // Hook seam for manager integration: caller determines random-bot eligibility and cadence.
-    PvpValues const values = PvpCore::CollectValues(player);
-    RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
     if (!hooks.lifecycleEnabled || !hooks.battlegroundParticipationHook)
         return;
 
@@ -65,14 +68,12 @@ void RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Pla
     BattlegroundLifecycleActions::Execute(player, battlegroundContext);
 }
 
-void RandomBotParticipationLifecycle::ProcessArenaLifecycleEntryPoint(Player* player)
+void RandomBotParticipationLifecycle::ProcessArenaLifecycleEntryPoint(Player* player, PvpValues const& values,
+    RandomBotParticipationHooks const& hooks)
 {
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    // Hook seam for manager integration: caller determines random-bot eligibility and cadence.
-    PvpValues const values = PvpCore::CollectValues(player);
-    RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
     if (!hooks.lifecycleEnabled || !hooks.arenaParticipationHook)
         return;
 
