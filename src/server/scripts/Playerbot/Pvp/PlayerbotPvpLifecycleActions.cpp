@@ -23,6 +23,7 @@
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
+#include "Log.h"
 #include "Player.h"
 #include "World.h"
 
@@ -169,6 +170,18 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
 
     return false;
 }
+
+bool HasConflictingBattlegroundLifecycleContext(playerbot::BattlegroundLifecycleContext const& context)
+{
+    return (context.queueOperation != playerbot::QueueOperationType::None) &&
+        (context.invitationResponse != playerbot::InvitationResponseType::None);
+}
+
+bool HasConflictingArenaLifecycleContext(playerbot::ArenaLifecycleContext const& context)
+{
+    return (context.queueOperation != playerbot::QueueOperationType::None) &&
+        (context.teamInteraction != playerbot::ArenaTeamInteractionType::None);
+}
 }
 
 namespace playerbot
@@ -177,6 +190,15 @@ bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycle
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
         return false;
+
+    if (HasConflictingBattlegroundLifecycleContext(context))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP battleground lifecycle no-op due to conflicting context: guid={}, queueOperation={}, invitationResponse={}, handleInProgress={}.",
+            player->GetGUID().ToString(), static_cast<uint8>(context.queueOperation), static_cast<uint8>(context.invitationResponse),
+            context.shouldHandleInProgressStatus ? 1 : 0);
+        return false;
+    }
 
     bool didExecute = false;
 
@@ -265,6 +287,14 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
         return false;
+
+    if (HasConflictingArenaLifecycleContext(context))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP arena lifecycle no-op due to conflicting context: guid={}, queueOperation={}, teamInteraction={}.",
+            player->GetGUID().ToString(), static_cast<uint8>(context.queueOperation), static_cast<uint8>(context.teamInteraction));
+        return false;
+    }
 
     bool didExecute = false;
 
