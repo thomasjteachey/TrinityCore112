@@ -30,6 +30,7 @@ struct PvpCoreConfig
     bool moduleEnabled = false;
     bool pvpCoreEnabled = false;
     bool pvpTacticsEnabled = false;
+    bool pvpLifecycleEnabled = false;
 };
 
 enum class BattlegroundState : uint8
@@ -102,6 +103,49 @@ struct BattlegroundTacticalContext
     FlagCarrierDirective flagCarrierDirective = FlagCarrierDirective::None;
 };
 
+enum class QueueOperationType : uint8
+{
+    None = 0,
+    Join,
+    Leave
+};
+
+enum class InvitationResponseType : uint8
+{
+    None = 0,
+    Accept,
+    Decline
+};
+
+enum class ArenaTeamInteractionType : uint8
+{
+    None = 0,
+    AcceptInvite,
+    DeclineInvite
+};
+
+struct BattlegroundLifecycleContext
+{
+    bool lifecycleEnabled = false;
+    QueueOperationType queueOperation = QueueOperationType::None;
+    InvitationResponseType invitationResponse = InvitationResponseType::None;
+    bool shouldHandleInProgressStatus = false;
+};
+
+struct ArenaLifecycleContext
+{
+    bool lifecycleEnabled = false;
+    QueueOperationType queueOperation = QueueOperationType::None;
+    ArenaTeamInteractionType teamInteraction = ArenaTeamInteractionType::None;
+};
+
+struct RandomBotParticipationHooks
+{
+    bool lifecycleEnabled = false;
+    bool battlegroundParticipationHook = false;
+    bool arenaParticipationHook = false;
+};
+
 class PvpCore
 {
 public:
@@ -111,14 +155,23 @@ public:
     static PvpValues CollectValues(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);
     static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
+    static BattlegroundLifecycleContext BuildBattlegroundLifecycleContext(Player const* player, PvpValues const& values);
+    static ArenaLifecycleContext BuildArenaLifecycleContext(Player const* player, PvpValues const& values);
+    static RandomBotParticipationHooks BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values);
 
 private:
+    static bool IsLifecycleEnabled();
     static bool IsInBattlegroundQueue(Player const* player);
     static BattlegroundState DetectBattlegroundState(Player const* player, bool inQueue);
     static BattlegroundObjectiveSelection SelectObjectiveSkeleton(PvpValues const& values);
     static BattlegroundMovementPrimitive SelectMovementPrimitiveSkeleton(PvpValues const& values,
         BattlegroundObjectiveSelection const& objective);
     static FlagCarrierDirective SelectFlagCarrierDirectiveSkeleton(PvpValues const& values);
+    static QueueOperationType SelectBattlegroundQueueOperationSkeleton(PvpValues const& values);
+    static InvitationResponseType SelectBattlegroundInvitationResponseSkeleton(PvpValues const& values);
+    static bool ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values);
+    static QueueOperationType SelectArenaQueueOperationSkeleton(PvpValues const& values);
+    static ArenaTeamInteractionType SelectArenaTeamInteractionSkeleton(PvpValues const& values);
 };
 }
 
