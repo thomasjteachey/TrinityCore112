@@ -20,8 +20,10 @@
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpLifecycleActions.h"
 
+#include "Log.h"
 #include "Player.h"
 
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
@@ -42,23 +44,98 @@ constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
 
+enum class LifecycleObservationReason : uint8
+{
+    GateDisabled = 0,
+    CadenceThrottled,
+    InvalidPlayerState,
+    NoLifecycleHooksActive,
+    BattlegroundLifecycleExecuted,
+    ArenaLifecycleExecuted
+};
+
+struct LifecycleObservationCounters
+{
+    std::atomic<uint64> gateDisabled{ 0 };
+    std::atomic<uint64> cadenceThrottled{ 0 };
+    std::atomic<uint64> invalidPlayerState{ 0 };
+    std::atomic<uint64> noLifecycleHooksActive{ 0 };
+    std::atomic<uint64> battlegroundLifecycleExecuted{ 0 };
+    std::atomic<uint64> arenaLifecycleExecuted{ 0 };
+};
+
+LifecycleObservationCounters g_LifecycleObservationCounters;
+
+void ObserveLifecycleReason(LifecycleObservationReason reason, ObjectGuid const& guid)
+{
+    char const* reasonLabel = "unknown";
+    uint64 total = 0;
+
+    switch (reason)
+    {
+        case LifecycleObservationReason::GateDisabled:
+            total = ++g_LifecycleObservationCounters.gateDisabled;
+            reasonLabel = "gate-disabled";
+            break;
+        case LifecycleObservationReason::CadenceThrottled:
+            total = ++g_LifecycleObservationCounters.cadenceThrottled;
+            reasonLabel = "cadence-throttled";
+            break;
+        case LifecycleObservationReason::InvalidPlayerState:
+            total = ++g_LifecycleObservationCounters.invalidPlayerState;
+            reasonLabel = "invalid-player-state";
+            break;
+        case LifecycleObservationReason::NoLifecycleHooksActive:
+            total = ++g_LifecycleObservationCounters.noLifecycleHooksActive;
+            reasonLabel = "no-lifecycle-hooks-active";
+            break;
+        case LifecycleObservationReason::BattlegroundLifecycleExecuted:
+            total = ++g_LifecycleObservationCounters.battlegroundLifecycleExecuted;
+            reasonLabel = "battleground-lifecycle-executed";
+            break;
+        case LifecycleObservationReason::ArenaLifecycleExecuted:
+            total = ++g_LifecycleObservationCounters.arenaLifecycleExecuted;
+            reasonLabel = "arena-lifecycle-executed";
+            break;
+        default:
+            break;
+    }
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "Playerbot PvP lifecycle observation: reason={} guid={} count={}.",
+        reasonLabel, guid.ToString(), total);
+}
+
 bool CanProcessPlayerLifecycle(Player const* player)
 {
     if (!player)
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, ObjectGuid::Empty);
         return false;
+    }
+
+    ObjectGuid const guid = player->GetGUID();
 
     if (!IsLifecycleGateEnabled())
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         return false;
+    }
 
     if (!player->IsInWorld() || player->IsBeingTeleported())
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
         return false;
+    }
 
-    uint64 const playerGuid = player->GetGUID().GetRawValue();
+    uint64 const playerGuid = guid.GetRawValue();
     LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[playerGuid];
     if (nextProcessTime > now)
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
         return false;
+    }
 
     nextProcessTime = now + RandomBotLifecycleCadenceInterval;
     return true;
@@ -92,41 +169,64 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 
 void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 {
-    if (!player || !IsLifecycleGateEnabled())
+    if (!player)
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, ObjectGuid::Empty);
         return;
+    }
+
+    ObjectGuid const guid = player->GetGUID();
+
+    if (!IsLifecycleGateEnabled())
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        return;
+    }
 
     PvpValues const values = PvpCore::CollectValues(player);
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
     if (!hooks.lifecycleEnabled)
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         return;
+    }
 
-    ProcessBattlegroundLifecycleEntryPoint(player, values, hooks);
-    ProcessArenaLifecycleEntryPoint(player, values, hooks);
+    if (!hooks.battlegroundParticipationHook && !hooks.arenaParticipationHook)
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
+        return;
+    }
+
+    if (ProcessBattlegroundLifecycleEntryPoint(player, values, hooks))
+        ObserveLifecycleReason(LifecycleObservationReason::BattlegroundLifecycleExecuted, guid);
+
+    if (ProcessArenaLifecycleEntryPoint(player, values, hooks))
+        ObserveLifecycleReason(LifecycleObservationReason::ArenaLifecycleExecuted, guid);
 }
 
-void RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,
+bool RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,
     RandomBotParticipationHooks const& hooks)
 {
     if (!player || !IsLifecycleGateEnabled())
-        return;
+        return false;
 
     if (!hooks.lifecycleEnabled || !hooks.battlegroundParticipationHook)
-        return;
+        return false;
 
     BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
-    BattlegroundLifecycleActions::Execute(player, battlegroundContext);
+    return BattlegroundLifecycleActions::Execute(player, battlegroundContext);
 }
 
-void RandomBotParticipationLifecycle::ProcessArenaLifecycleEntryPoint(Player* player, PvpValues const& values,
+bool RandomBotParticipationLifecycle::ProcessArenaLifecycleEntryPoint(Player* player, PvpValues const& values,
     RandomBotParticipationHooks const& hooks)
 {
     if (!player || !IsLifecycleGateEnabled())
-        return;
+        return false;
 
     if (!hooks.lifecycleEnabled || !hooks.arenaParticipationHook)
-        return;
+        return false;
 
     ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
-    ArenaLifecycleActions::Execute(player, arenaContext);
+    return ArenaLifecycleActions::Execute(player, arenaContext);
 }
 }
