@@ -70,6 +70,26 @@ Output in this phase:
 - Validate lifecycle debug logs include deterministic no-op guard output when lifecycle hooks are active but built contexts are both no-op.
 - Inspect lifecycle reason counters through the manager snapshot seam to verify gate-disabled, cadence-throttled, invalid-state, no-hook, and executed-path counts are incrementing as expected during runtime checks.
 
+### Phase 6 manual validation procedure (pre-Phase-4, validation-only)
+
+- Config prerequisites:
+  - `Playerbot.Enable = 1`
+  - `Playerbot.PvpCore.Enable = 1`
+  - `Playerbot.PvpLifecycle.Enable = 1`
+  - Optional for branch visibility tests: enable `playerbots.pvp.lifecycle` debug log filtering in your logger config.
+- In-game command hook:
+  - Run `.playerbot pvp lifecycle snapshot` from a GM account to print `RandomBotParticipationManager::GetLifecycleObservationSnapshot()` counters.
+- Expected log lines:
+  - Branch marker line: `Playerbot PvP lifecycle branch: guid=<...> branch=<...>.`
+  - Observation reason line: `Playerbot PvP lifecycle observation: reason=<...> guid=<...> count=<...>.`
+  - Dispatcher summary line: `Playerbot PvP lifecycle dispatcher complete: guid=<...>, didExecuteBattleground=<0|1>, didExecuteArena=<0|1>.`
+- Expected counter movement patterns:
+  - `gateDisabled` increases only when any lifecycle gate in `Playerbot.Enable && Playerbot.PvpCore.Enable && Playerbot.PvpLifecycle.Enable` is false at runtime.
+  - `cadenceThrottled` increases during repeated `OnUpdate` calls inside the manager-owned cadence interval.
+  - `invalidPlayerState` increases for null/out-of-world/teleporting players.
+  - `noLifecycleHooksActive` increases when lifecycle gate is on but both participation hooks are false.
+  - `battlegroundLifecycleExecuted`/`arenaLifecycleExecuted` increase only when their corresponding lifecycle action path actually executes.
+
 ## Porting policy
 
 - Keep each commit focused on one subsystem and compilable.

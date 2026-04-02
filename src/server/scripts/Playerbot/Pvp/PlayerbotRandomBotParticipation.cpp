@@ -118,6 +118,11 @@ void ObserveLifecycleReason(LifecycleObservationReason reason, ObjectGuid const&
         reasonLabel, guid.ToString(), total);
 }
 
+void LogLifecycleBranchSummary(ObjectGuid const& guid, char const* branchLabel)
+{
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "Playerbot PvP lifecycle branch: guid={} branch={}.", guid.ToString(), branchLabel);
+}
+
 bool CanProcessPlayerLifecycle(Player const* player)
 {
     if (!player)
@@ -196,6 +201,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 {
     if (!player)
     {
+        LogLifecycleBranchSummary(ObjectGuid::Empty, "invalid-player-state");
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, ObjectGuid::Empty);
         return;
     }
@@ -204,6 +210,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     if (!IsLifecycleGateEnabled())
     {
+        LogLifecycleBranchSummary(guid, "gate-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         return;
     }
@@ -212,12 +219,14 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
     if (!hooks.lifecycleEnabled)
     {
+        LogLifecycleBranchSummary(guid, "hooks-lifecycle-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         return;
     }
 
     if (!hooks.battlegroundParticipationHook && !hooks.arenaParticipationHook)
     {
+        LogLifecycleBranchSummary(guid, "no-lifecycle-hooks-active");
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
         return;
     }
@@ -226,6 +235,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
     if (IsNoOp(battlegroundContext) && IsNoOp(arenaContext))
     {
+        LogLifecycleBranchSummary(guid, "active-hooks-no-op-context");
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle dispatcher no-op with active hooks: guid={}, bgHook={}, arenaHook={}.",
             guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
@@ -238,10 +248,16 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ArenaLifecycleActions::Execute(player, arenaContext);
 
     if (didExecuteBattleground)
+    {
+        LogLifecycleBranchSummary(guid, "battleground-lifecycle-executed");
         ObserveLifecycleReason(LifecycleObservationReason::BattlegroundLifecycleExecuted, guid);
+    }
 
     if (didExecuteArena)
+    {
+        LogLifecycleBranchSummary(guid, "arena-lifecycle-executed");
         ObserveLifecycleReason(LifecycleObservationReason::ArenaLifecycleExecuted, guid);
+    }
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}.",
