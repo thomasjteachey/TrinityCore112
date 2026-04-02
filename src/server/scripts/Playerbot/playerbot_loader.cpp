@@ -30,6 +30,7 @@ public:
     void OnConfigLoad(bool /*reload*/) override
     {
         playerbot::PvpCore::LoadConfig();
+        playerbot::RandomBotParticipationManager::ResetCadence();
     }
 
     void OnStartup() override
