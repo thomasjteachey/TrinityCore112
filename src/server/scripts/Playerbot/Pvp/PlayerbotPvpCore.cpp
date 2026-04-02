@@ -18,6 +18,7 @@
 #include "PlayerbotPvpCore.h"
 
 #include "Battleground.h"
+#include "BattlegroundMgr.h"
 #include "Configuration/Config.h"
 #include "Player.h"
 
@@ -49,8 +50,22 @@ PvpValues PvpCore::CollectValues(Player const* player)
 
     values.inBattleground = player->InBattleground();
     values.inBattlegroundQueue = IsInBattlegroundQueue(player);
-    values.hasInvite = !values.inBattleground && values.inBattlegroundQueue;
     values.battlegroundState = DetectBattlegroundState(player, values.inBattlegroundQueue);
+
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        bool const isArenaQueue = BattlegroundMgr::BGArenaType(bgQueueTypeId) != 0;
+        bool const isInvited = player->IsInvitedForBattlegroundQueueType(bgQueueTypeId);
+
+        values.hasArenaQueue = values.hasArenaQueue || isArenaQueue;
+        values.hasBattlegroundQueue = values.hasBattlegroundQueue || !isArenaQueue;
+        values.hasArenaInvite = values.hasArenaInvite || (isArenaQueue && isInvited);
+        values.hasBattlegroundInvite = values.hasBattlegroundInvite || (!isArenaQueue && isInvited);
+    }
 
     if (values.inBattleground)
         values.battlegroundTypeId = player->GetBattlegroundTypeId();
@@ -71,7 +86,7 @@ bool PvpCore::IsTriggerActive(PvpTrigger trigger, PvpValues const& values)
         case PvpTrigger::BgActive:
             return values.battlegroundState == BattlegroundState::Active;
         case PvpTrigger::BgInviteActive:
-            return values.hasInvite;
+            return values.hasBattlegroundInvite;
         case PvpTrigger::InBattlegroundWithoutFlag:
         case PvpTrigger::PlayerHasFlag:
         case PvpTrigger::EnemyFlagCarrierNear:
@@ -224,41 +239,53 @@ FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const
 
 QueueOperationType PvpCore::SelectBattlegroundQueueOperationSkeleton(PvpValues const& values)
 {
-    (void)values;
+    if (values.inBattleground)
+        return QueueOperationType::None;
 
-    // Phase 3 safety default: no-op until explicit non-placeholder join/leave triggers are introduced.
+    if (values.hasBattlegroundQueue && !values.hasBattlegroundInvite)
+        return QueueOperationType::Leave;
+
+    if (!values.inBattlegroundQueue && !values.hasBattlegroundQueue && !values.hasBattlegroundInvite)
+        return QueueOperationType::Join;
+
     return QueueOperationType::None;
 }
 
 InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(PvpValues const& values)
 {
-    (void)values;
+    if (!values.hasBattlegroundInvite)
+        return InvitationResponseType::None;
 
-    // Phase 3 safety default: no-op until explicit invite response triggers are introduced.
-    return InvitationResponseType::None;
+    if (values.inBattleground)
+        return InvitationResponseType::Decline;
+
+    return InvitationResponseType::Accept;
 }
 
 bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
 {
-    (void)values;
-
-    // Phase 3 safety default: no-op until explicit in-progress handling triggers are introduced.
-    return false;
+    return values.battlegroundState == BattlegroundState::Active;
 }
 
 QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& values)
 {
-    (void)values;
+    if (values.inBattleground)
+        return QueueOperationType::None;
 
-    // Phase 3 safety default: no-op until explicit non-placeholder join/leave triggers are introduced.
+    if (values.hasArenaQueue && !values.hasArenaInvite)
+        return QueueOperationType::Leave;
+
+    if (!values.inBattlegroundQueue && !values.hasArenaQueue && !values.hasArenaInvite)
+        return QueueOperationType::Join;
+
     return QueueOperationType::None;
 }
 
 ArenaTeamInteractionType PvpCore::SelectArenaTeamInteractionSkeleton(PvpValues const& values)
 {
-    (void)values;
+    if (values.hasArenaInvite)
+        return ArenaTeamInteractionType::AcceptInvite;
 
-    // Phase 3 safety default: no-op until explicit arena team interaction triggers are introduced.
     return ArenaTeamInteractionType::None;
 }
 }

@@ -47,7 +47,10 @@ struct PvpValues
     BattlegroundTypeId battlegroundTypeId = BATTLEGROUND_TYPE_NONE;
     bool inBattleground = false;
     bool inBattlegroundQueue = false;
-    bool hasInvite = false;
+    bool hasBattlegroundQueue = false;
+    bool hasArenaQueue = false;
+    bool hasBattlegroundInvite = false;
+    bool hasArenaInvite = false;
 };
 
 enum class PvpTrigger : uint8

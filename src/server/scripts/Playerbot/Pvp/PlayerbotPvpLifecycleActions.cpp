@@ -17,8 +17,13 @@
 
 #include "PlayerbotPvpLifecycleActions.h"
 
+#include "BattlegroundMgr.h"
+#include "BattlegroundQueue.h"
+#include "DBCStores.h"
 #include "Log.h"
 #include "Player.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 namespace
 {
@@ -26,6 +31,72 @@ bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
+}
+
+bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
+{
+    if (!player || player->InBattleground())
+        return false;
+
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bgTemplate)
+        return false;
+
+    if (!player->CanJoinToBattleground(bgTemplate) || !player->HasFreeBattlegroundQueueId())
+        return false;
+
+    BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
+    if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    if (player->GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+        return false;
+
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
+    if (!bracketEntry)
+        return false;
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+    GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
+    if (!ginfo)
+        return false;
+
+    uint32 const queueSlot = player->AddBattlegroundQueueId(bgQueueTypeId);
+    uint32 const avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
+
+    WorldPacket statusPacket;
+    sBattlegroundMgr->BuildBattlegroundStatusPacket(&statusPacket, bgTemplate, queueSlot, STATUS_WAIT_QUEUE, avgTime, 0, arenaType, 0);
+    player->SendDirectMessage(&statusPacket);
+    return true;
+}
+
+bool ProcessQueuePortAction(Player* player, bool accept, bool arenaOnly)
+{
+    if (!player || !player->GetSession() || !player->InBattlegroundQueue())
+        return false;
+
+    bool executed = false;
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        bool const isArenaQueue = BattlegroundMgr::BGArenaType(bgQueueTypeId) != 0;
+        if (arenaOnly != isArenaQueue)
+            continue;
+
+        if (accept && !player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
+            continue;
+
+        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
+        packet << uint8(BattlegroundMgr::BGArenaType(bgQueueTypeId)) << uint8(0)
+               << uint32(BattlegroundMgr::BGTemplateId(bgQueueTypeId)) << uint16(0x1F90) << uint8(accept ? 1 : 0);
+        player->GetSession()->HandleBattleFieldPortOpcode(packet);
+        executed = true;
+    }
+
+    return executed;
 }
 }
 
@@ -54,10 +125,10 @@ bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycle
     switch (context.invitationResponse)
     {
         case InvitationResponseType::Accept:
-            didExecute = AcceptInvitePlaceholder(player) || didExecute;
+            didExecute = AcceptInvitePrimitive(player) || didExecute;
             break;
         case InvitationResponseType::Decline:
-            didExecute = DeclineInvitePlaceholder(player) || didExecute;
+            didExecute = DeclineInvitePrimitive(player) || didExecute;
             break;
         case InvitationResponseType::None:
         default:
@@ -65,7 +136,7 @@ bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycle
     }
 
     if (context.shouldHandleInProgressStatus)
-        didExecute = HandleInProgressStatusPlaceholder(player) || didExecute;
+        didExecute = HandleInProgressStatusPrimitive(player) || didExecute;
 
     return didExecute;
 }
@@ -75,9 +146,7 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle battleground queue join primitive placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    return QueuePlayer(player, BATTLEGROUND_RB, 0);
 }
 
 bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
@@ -85,39 +154,41 @@ bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle battleground queue leave primitive placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    return ProcessQueuePortAction(player, false, false);
 }
 
-bool BattlegroundLifecycleActions::AcceptInvitePlaceholder(Player* player)
+bool BattlegroundLifecycleActions::AcceptInvitePrimitive(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle battleground invite accept placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    return ProcessQueuePortAction(player, true, false);
 }
 
-bool BattlegroundLifecycleActions::DeclineInvitePlaceholder(Player* player)
+bool BattlegroundLifecycleActions::DeclineInvitePrimitive(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle battleground invite decline placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    return ProcessQueuePortAction(player, false, false);
 }
 
-bool BattlegroundLifecycleActions::HandleInProgressStatusPlaceholder(Player* player)
+bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle battleground in-progress status placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    if (!player->InBattleground())
+        return false;
+
+    if (Battleground* battleground = player->GetBattleground())
+    {
+        if (battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return false;
+    }
+
+    player->LeaveBattleground();
+    return true;
 }
 
 bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const& context)
@@ -143,10 +214,10 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
     switch (context.teamInteraction)
     {
         case ArenaTeamInteractionType::AcceptInvite:
-            didExecute = AcceptTeamInvitePlaceholder(player) || didExecute;
+            didExecute = AcceptTeamInvitePrimitive(player) || didExecute;
             break;
         case ArenaTeamInteractionType::DeclineInvite:
-            didExecute = DeclineTeamInvitePlaceholder(player) || didExecute;
+            didExecute = DeclineTeamInvitePrimitive(player) || didExecute;
             break;
         case ArenaTeamInteractionType::None:
         default:
@@ -161,9 +232,7 @@ bool ArenaLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle arena queue join primitive placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    return QueuePlayer(player, BATTLEGROUND_AA, ARENA_TYPE_2v2);
 }
 
 bool ArenaLifecycleActions::LeaveQueuePrimitive(Player* player)
@@ -171,28 +240,38 @@ bool ArenaLifecycleActions::LeaveQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle arena queue leave primitive placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    return ProcessQueuePortAction(player, false, true);
 }
 
-bool ArenaLifecycleActions::AcceptTeamInvitePlaceholder(Player* player)
+bool ArenaLifecycleActions::AcceptTeamInvitePrimitive(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle arena team accept placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    if (!player->GetSession())
+        return false;
+
+    if (!player->GetArenaTeamIdInvited())
+        return false;
+
+    WorldPacket packet(CMSG_ARENA_TEAM_ACCEPT);
+    player->GetSession()->HandleArenaTeamAcceptOpcode(packet);
+    return true;
 }
 
-bool ArenaLifecycleActions::DeclineTeamInvitePlaceholder(Player* player)
+bool ArenaLifecycleActions::DeclineTeamInvitePrimitive(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    TC_LOG_DEBUG("playerbot", "Playerbot PvP lifecycle arena team decline placeholder for player {}.",
-        player->GetGUID().ToString());
-    return false;
+    if (!player->GetSession())
+        return false;
+
+    if (!player->GetArenaTeamIdInvited())
+        return false;
+
+    WorldPacket packet(CMSG_ARENA_TEAM_DECLINE);
+    player->GetSession()->HandleArenaTeamDeclineOpcode(packet);
+    return true;
 }
 }

@@ -18,7 +18,10 @@
 #include "Log.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
+#include "Player.h"
 #include "ScriptMgr.h"
+#include "World.h"
+#include "WorldSession.h"
 
 namespace
 {
@@ -42,6 +45,37 @@ public:
             config.moduleEnabled ? "true" : "false", config.pvpCoreEnabled ? "true" : "false",
             config.pvpTacticsEnabled ? "true" : "false", config.pvpLifecycleEnabled ? "true" : "false");
     }
+
+    void OnUpdate(uint32 diff) override
+    {
+        updateAccumulatorMs += diff;
+        if (updateAccumulatorMs < 1000)
+            return;
+
+        updateAccumulatorMs = 0;
+
+        playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+        if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpLifecycleEnabled)
+            return;
+
+        SessionMap const& sessions = sWorld->GetAllSessions();
+        for (SessionMap::const_iterator itr = sessions.begin(); itr != sessions.end(); ++itr)
+        {
+            Player* player = itr->second ? itr->second->GetPlayer() : nullptr;
+            if (!player)
+                continue;
+
+            playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
+            playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(player, values);
+            if (!hooks.battlegroundParticipationHook && !hooks.arenaParticipationHook)
+                continue;
+
+            playerbot::RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
+        }
+    }
+
+private:
+    uint32 updateAccumulatorMs = 0;
 };
 }
 
