@@ -224,47 +224,41 @@ FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const
 
 QueueOperationType PvpCore::SelectBattlegroundQueueOperationSkeleton(PvpValues const& values)
 {
-    // Phase 3 safety default: no-op until explicit non-placeholder join/leave triggers are introduced.
-    if (IsTriggerActive(PvpTrigger::BgQueueing, values) || IsTriggerActive(PvpTrigger::BgWaiting, values) ||
-        IsTriggerActive(PvpTrigger::BgActive, values))
-        return QueueOperationType::None;
+    (void)values;
 
+    // Phase 3 safety default: no-op until explicit non-placeholder join/leave triggers are introduced.
     return QueueOperationType::None;
 }
 
 InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(PvpValues const& values)
 {
-    // Phase 3 safety default: no-op until explicit invite response triggers are introduced.
-    if (IsTriggerActive(PvpTrigger::BgInviteActive, values))
-        return InvitationResponseType::None;
+    (void)values;
 
+    // Phase 3 safety default: no-op until explicit invite response triggers are introduced.
     return InvitationResponseType::None;
 }
 
 bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
 {
-    // Phase 3 safety default: no-op until explicit in-progress handling triggers are introduced.
-    if (IsTriggerActive(PvpTrigger::BgActive, values))
-        return false;
+    (void)values;
 
+    // Phase 3 safety default: no-op until explicit in-progress handling triggers are introduced.
     return false;
 }
 
 QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& values)
 {
-    // Phase 3 safety default: no-op until explicit non-placeholder join/leave triggers are introduced.
-    if (values.inBattleground || values.inBattlegroundQueue)
-        return QueueOperationType::None;
+    (void)values;
 
+    // Phase 3 safety default: no-op until explicit non-placeholder join/leave triggers are introduced.
     return QueueOperationType::None;
 }
 
 ArenaTeamInteractionType PvpCore::SelectArenaTeamInteractionSkeleton(PvpValues const& values)
 {
-    // Phase 3 safety default: no-op until explicit arena team interaction triggers are introduced.
-    if (IsTriggerActive(PvpTrigger::BgInviteActive, values))
-        return ArenaTeamInteractionType::None;
+    (void)values;
 
+    // Phase 3 safety default: no-op until explicit arena team interaction triggers are introduced.
     return ArenaTeamInteractionType::None;
 }
 }
