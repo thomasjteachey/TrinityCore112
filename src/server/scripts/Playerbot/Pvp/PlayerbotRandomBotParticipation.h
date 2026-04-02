@@ -25,12 +25,23 @@ namespace playerbot
 struct PvpValues;
 struct RandomBotParticipationHooks;
 
+struct LifecycleObservationSnapshot
+{
+    uint64 gateDisabled = 0;
+    uint64 cadenceThrottled = 0;
+    uint64 invalidPlayerState = 0;
+    uint64 noLifecycleHooksActive = 0;
+    uint64 battlegroundLifecycleExecuted = 0;
+    uint64 arenaLifecycleExecuted = 0;
+};
+
 class RandomBotParticipationManager
 {
 public:
     static void ResetCadence();
     static void OnPlayerLogout(Player const* player);
     static void ProcessPlayerLifecycle(Player* player);
+    static LifecycleObservationSnapshot GetLifecycleObservationSnapshot();
 };
 
 class RandomBotParticipationLifecycle
