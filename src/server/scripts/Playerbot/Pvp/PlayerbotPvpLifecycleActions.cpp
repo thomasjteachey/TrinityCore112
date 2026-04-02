@@ -126,6 +126,54 @@ bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool
 
     return removed;
 }
+
+bool AcceptMatchingInvite(Player* player, bool arenaInvite)
+{
+    if (!player || player->InBattleground())
+        return false;
+
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        bool const isArenaQueue = BattlegroundMgr::BGArenaType(bgQueueTypeId) != 0;
+        if (arenaInvite != isArenaQueue)
+            continue;
+
+        if (!player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
+            continue;
+
+        BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+        GroupQueueInfo ginfo;
+        if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            continue;
+
+        Battleground* battleground = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
+        if (!battleground)
+            continue;
+
+        if (!player->InBattleground())
+            player->SetBattlegroundEntryPoint();
+
+        if (!player->IsAlive())
+        {
+            player->ResurrectPlayer(1.0f);
+            player->SpawnCorpseBones();
+        }
+
+        player->FinishTaxiFlight();
+        bgQueue.RemovePlayer(player->GetGUID(), false);
+        player->SetBattlegroundId(battleground->GetInstanceID(), bgTypeId);
+        player->SetBGTeam(ginfo.Team);
+        sBattlegroundMgr->SendToBattleground(player, ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
+        return true;
+    }
+
+    return false;
+}
 }
 
 namespace playerbot
@@ -187,8 +235,10 @@ bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
 
 bool BattlegroundLifecycleActions::AcceptInvitePrimitive(Player* player)
 {
-    (void)player;
-    return false;
+    if (!player || !IsLifecycleGateEnabled())
+        return false;
+
+    return AcceptMatchingInvite(player, false);
 }
 
 bool BattlegroundLifecycleActions::DeclineInvitePrimitive(Player* player)

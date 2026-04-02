@@ -244,10 +244,11 @@ QueueOperationType PvpCore::SelectBattlegroundQueueOperationSkeleton(PvpValues c
     if (values.inBattleground)
         return QueueOperationType::None;
 
-    if (values.hasBattlegroundQueue && !values.hasBattlegroundInvite)
+    if (values.hasBattlegroundQueue && values.hasArenaInvite)
         return QueueOperationType::Leave;
 
-    if (!values.inBattlegroundQueue && !values.hasBattlegroundQueue && !values.hasBattlegroundInvite)
+    if (!values.inBattlegroundQueue && !values.hasBattlegroundQueue && !values.hasBattlegroundInvite &&
+        !values.hasArenaQueue && !values.hasArenaInvite)
         return QueueOperationType::Join;
 
     return QueueOperationType::None;
@@ -258,7 +259,10 @@ InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(Pvp
     if (!values.hasBattlegroundInvite)
         return InvitationResponseType::None;
 
-    return InvitationResponseType::Decline;
+    if (values.inBattleground)
+        return InvitationResponseType::Decline;
+
+    return InvitationResponseType::Accept;
 }
 
 bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
@@ -271,10 +275,11 @@ QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& v
     if (values.inBattleground)
         return QueueOperationType::None;
 
-    if (values.hasArenaQueue && !values.hasArenaInvite)
+    if (values.hasArenaQueue && values.hasBattlegroundInvite)
         return QueueOperationType::Leave;
 
-    if (!values.inBattlegroundQueue && !values.hasArenaQueue && !values.hasArenaInvite)
+    if (!values.inBattlegroundQueue && !values.hasArenaQueue && !values.hasArenaInvite &&
+        !values.hasBattlegroundQueue && !values.hasBattlegroundInvite)
         return QueueOperationType::Join;
 
     return QueueOperationType::None;
