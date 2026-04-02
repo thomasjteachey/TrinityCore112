@@ -33,28 +33,50 @@ bool IsLifecycleGateEnabled()
 
 namespace playerbot
 {
+void RandomBotParticipationLifecycle::RegisterManagerHooks()
+{
+    if (!IsLifecycleGateEnabled())
+        return;
+
+    // Intentionally neutral/no-op: manager-owned integration points are declared and ready for explicit wiring.
+}
+
 void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    // Hook seam for manager integration: caller determines whether this player is a random bot.
-    PvpValues const values = PvpCore::CollectValues(player);
-    RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
+    ProcessBattlegroundLifecycleEntryPoint(player);
+    ProcessArenaLifecycleEntryPoint(player);
+}
 
-    if (!hooks.lifecycleEnabled)
+void RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player)
+{
+    if (!player || !IsLifecycleGateEnabled())
         return;
 
-    if (hooks.battlegroundParticipationHook)
-    {
-        BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
-        BattlegroundLifecycleActions::Execute(player, battlegroundContext);
-    }
+    // Hook seam for manager integration: caller determines random-bot eligibility and cadence.
+    PvpValues const values = PvpCore::CollectValues(player);
+    RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
+    if (!hooks.lifecycleEnabled || !hooks.battlegroundParticipationHook)
+        return;
 
-    if (hooks.arenaParticipationHook)
-    {
-        ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
-        ArenaLifecycleActions::Execute(player, arenaContext);
-    }
+    BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
+    BattlegroundLifecycleActions::Execute(player, battlegroundContext);
+}
+
+void RandomBotParticipationLifecycle::ProcessArenaLifecycleEntryPoint(Player* player)
+{
+    if (!player || !IsLifecycleGateEnabled())
+        return;
+
+    // Hook seam for manager integration: caller determines random-bot eligibility and cadence.
+    PvpValues const values = PvpCore::CollectValues(player);
+    RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
+    if (!hooks.lifecycleEnabled || !hooks.arenaParticipationHook)
+        return;
+
+    ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
+    ArenaLifecycleActions::Execute(player, arenaContext);
 }
 }

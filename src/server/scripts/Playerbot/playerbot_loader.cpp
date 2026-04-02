@@ -23,17 +23,6 @@
 
 namespace
 {
-class PlayerbotPvpLifecyclePlayerScript final : public PlayerScript
-{
-public:
-    PlayerbotPvpLifecyclePlayerScript() : PlayerScript("PlayerbotPvpLifecyclePlayerScript") { }
-
-    void OnLogin(Player* player, bool /*firstLogin*/) override
-    {
-        playerbot::RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
-    }
-};
-
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -47,6 +36,7 @@ public:
     void OnStartup() override
     {
         playerbot::PvpCore::LoadConfig();
+        playerbot::RandomBotParticipationLifecycle::RegisterManagerHooks();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
 
         TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}, pvp tactics: {}, pvp lifecycle: {}).",
@@ -59,5 +49,4 @@ public:
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
-    new PlayerbotPvpLifecyclePlayerScript();
 }

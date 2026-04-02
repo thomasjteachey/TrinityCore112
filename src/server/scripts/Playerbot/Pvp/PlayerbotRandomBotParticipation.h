@@ -25,7 +25,15 @@ namespace playerbot
 class RandomBotParticipationLifecycle
 {
 public:
+    // Neutral registration seam for manager-facing integration wiring.
+    static void RegisterManagerHooks();
+
+    // Manager-facing seam: neutral lifecycle dispatcher for a random bot player.
     static void ProcessLifecycleEntryPoint(Player* player);
+
+    // Seam entry points for future random-bot manager wiring (Phase 4+).
+    static void ProcessBattlegroundLifecycleEntryPoint(Player* player);
+    static void ProcessArenaLifecycleEntryPoint(Player* player);
 };
 }
 
