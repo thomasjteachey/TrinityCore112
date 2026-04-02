@@ -13,6 +13,10 @@ message("")
 # Make the script module list available in the current scope
 GetScriptModuleList(SCRIPT_MODULE_LIST)
 
+if(NOT PLAYERBOT)
+  list(REMOVE_ITEM SCRIPT_MODULE_LIST Playerbot)
+endif()
+
 # Make the native install offset available in this scope
 GetInstallOffset(INSTALL_OFFSET)
 
@@ -39,6 +43,9 @@ endif()
 # variables set above
 foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
   ScriptModuleNameToVariable(${SCRIPT_MODULE} SCRIPT_MODULE_VARIABLE)
+  if(SCRIPT_MODULE STREQUAL "Playerbot" AND ${SCRIPT_MODULE_VARIABLE} STREQUAL "default")
+    set(${SCRIPT_MODULE_VARIABLE} "disabled")
+  endif()
   if(${SCRIPT_MODULE_VARIABLE} STREQUAL "default")
     if(SCRIPTS_USE_WHITELIST)
       list(FIND SCRIPTS_WHITELIST "${SCRIPT_MODULE}" INDEX)
