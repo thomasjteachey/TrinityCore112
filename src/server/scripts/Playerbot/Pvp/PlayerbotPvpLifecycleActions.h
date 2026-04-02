@@ -31,9 +31,9 @@ public:
 
     static bool JoinQueuePrimitive(Player* player);
     static bool LeaveQueuePrimitive(Player* player);
-    static bool AcceptInvitePlaceholder(Player* player);
-    static bool DeclineInvitePlaceholder(Player* player);
-    static bool HandleInProgressStatusPlaceholder(Player* player);
+    static bool AcceptInvitePrimitive(Player* player);
+    static bool DeclineInvitePrimitive(Player* player);
+    static bool HandleInProgressStatusPrimitive(Player* player);
 };
 
 class ArenaLifecycleActions
@@ -43,8 +43,8 @@ public:
 
     static bool JoinQueuePrimitive(Player* player);
     static bool LeaveQueuePrimitive(Player* player);
-    static bool AcceptTeamInvitePlaceholder(Player* player);
-    static bool DeclineTeamInvitePlaceholder(Player* player);
+    static bool AcceptTeamInvitePrimitive(Player* player);
+    static bool DeclineTeamInvitePrimitive(Player* player);
 };
 }
 
