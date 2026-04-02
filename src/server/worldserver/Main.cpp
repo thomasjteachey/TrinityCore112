@@ -199,6 +199,16 @@ extern int main(int argc, char** argv)
         return 1;
     }
 
+    fs::path playerbotConfig = configFile.parent_path() / "playerbots.conf";
+    if (fs::exists(playerbotConfig))
+    {
+        if (!sConfigMgr->LoadAdditionalFile(playerbotConfig.generic_string(), true, configError))
+        {
+            printf("Error in additional config file: %s\n", configError.c_str());
+            return 1;
+        }
+    }
+
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
 
     std::shared_ptr<Trinity::Asio::IoContext> ioContext = std::make_shared<Trinity::Asio::IoContext>();
