@@ -18,7 +18,6 @@
 #include "Log.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
-#include "Player.h"
 #include "ScriptMgr.h"
 
 namespace
@@ -46,25 +45,9 @@ public:
 
 };
 
-class PlayerbotPvpLifecyclePlayerScript final : public PlayerScript
-{
-public:
-    PlayerbotPvpLifecyclePlayerScript() : PlayerScript("PlayerbotPvpLifecyclePlayerScript") { }
-
-    void OnMapChanged(Player* player) override
-    {
-        playerbot::RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
-    }
-
-    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
-    {
-        playerbot::RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
-    }
-};
 }
 
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
-    new PlayerbotPvpLifecyclePlayerScript();
 }

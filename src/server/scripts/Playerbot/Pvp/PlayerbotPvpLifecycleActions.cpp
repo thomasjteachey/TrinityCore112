@@ -62,12 +62,7 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!ginfo)
         return false;
 
-    uint32 const queueSlot = player->AddBattlegroundQueueId(bgQueueTypeId);
-    uint32 const avgTime = bgQueue.GetAverageQueueWaitTime(ginfo, bracketEntry->GetBracketId());
-
-    WorldPacket statusPacket;
-    sBattlegroundMgr->BuildBattlegroundStatusPacket(&statusPacket, bgTemplate, queueSlot, STATUS_WAIT_QUEUE, avgTime, 0, arenaType, 0);
-    player->SendDirectMessage(&statusPacket);
+    player->AddBattlegroundQueueId(bgQueueTypeId);
     return true;
 }
 
