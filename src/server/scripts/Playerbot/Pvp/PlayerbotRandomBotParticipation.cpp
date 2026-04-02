@@ -23,6 +23,7 @@
 #include "Player.h"
 
 #include <chrono>
+#include <mutex>
 #include <unordered_map>
 
 namespace
@@ -39,6 +40,7 @@ using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
+std::mutex g_RandomBotLifecycleCadenceLock;
 
 bool CanProcessPlayerLifecycle(Player const* player)
 {
@@ -53,6 +55,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
 
     uint64 const playerGuid = player->GetGUID().GetRawValue();
     LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[playerGuid];
     if (nextProcessTime > now)
         return false;
@@ -66,7 +69,17 @@ namespace playerbot
 {
 void RandomBotParticipationManager::ResetCadence()
 {
+    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.clear();
+}
+
+void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
+{
+    if (!player)
+        return;
+
+    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+    g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
 }
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)

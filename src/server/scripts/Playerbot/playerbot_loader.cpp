@@ -55,6 +55,11 @@ public:
     {
         playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
     }
+
+    void OnLogout(Player* player) override
+    {
+        playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
+    }
 };
 
 }
