@@ -22,6 +22,9 @@
 
 #include "Player.h"
 
+#include <chrono>
+#include <unordered_map>
+
 namespace
 {
 bool IsLifecycleGateEnabled()
@@ -30,16 +33,48 @@ bool IsLifecycleGateEnabled()
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
 }
 
+using LifecycleCadenceClock = std::chrono::steady_clock;
+using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
+
+constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
+
+std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
+
+bool CanProcessPlayerLifecycle(Player const* player)
+{
+    if (!player)
+        return false;
+
+    if (!IsLifecycleGateEnabled())
+        return false;
+
+    if (!player->IsInWorld() || player->IsBeingTeleported())
+        return false;
+
+    uint64 const playerGuid = player->GetGUID().GetRawValue();
+    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+    LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[playerGuid];
+    if (nextProcessTime > now)
+        return false;
+
+    nextProcessTime = now + RandomBotLifecycleCadenceInterval;
+    return true;
+}
 }
 
 namespace playerbot
 {
-void RandomBotParticipationLifecycle::ProcessManagerLifecycleEntryPoint(Player* player)
+void RandomBotParticipationManager::ResetCadence()
 {
-    if (!PvpCore::CanProcessRandomBotLifecycle(player))
+    g_NextRandomBotLifecycleProcessTimeByGuid.clear();
+}
+
+void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
+{
+    if (!CanProcessPlayerLifecycle(player))
         return;
 
-    ProcessLifecycleEntryPoint(player);
+    RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
 }
 
 void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)

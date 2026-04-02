@@ -22,19 +22,9 @@
 #include "Configuration/Config.h"
 #include "Player.h"
 
-#include <chrono>
-#include <unordered_map>
-
 namespace
 {
 playerbot::PvpCoreConfig g_PvpCoreConfig;
-
-using LifecycleCadenceClock = std::chrono::steady_clock;
-using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
-
-constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
-
-std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
@@ -55,32 +45,6 @@ void PvpCore::LoadConfig()
 PvpCoreConfig const& PvpCore::GetConfig()
 {
     return g_PvpCoreConfig;
-}
-
-bool PvpCore::CanProcessRandomBotLifecycle(Player const* player)
-{
-    if (!player)
-        return false;
-
-    if (!IsLifecycleGateEnabled(g_PvpCoreConfig))
-        return false;
-
-    if (!player->IsInWorld() || player->IsBeingTeleported())
-        return false;
-
-    uint64 const playerGuid = player->GetGUID().GetRawValue();
-    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
-    LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[playerGuid];
-    if (nextProcessTime > now)
-        return false;
-
-    nextProcessTime = now + RandomBotLifecycleCadenceInterval;
-    return true;
-}
-
-void PvpCore::ResetRandomBotLifecycleCadence()
-{
-    g_NextRandomBotLifecycleProcessTimeByGuid.clear();
 }
 
 PvpValues PvpCore::CollectValues(Player const* player)
