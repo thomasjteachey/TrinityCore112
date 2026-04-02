@@ -66,6 +66,19 @@ struct LifecycleObservationCounters
 
 LifecycleObservationCounters g_LifecycleObservationCounters;
 
+bool IsNoOp(playerbot::BattlegroundLifecycleContext const& context)
+{
+    return context.queueOperation == playerbot::QueueOperationType::None &&
+        context.invitationResponse == playerbot::InvitationResponseType::None &&
+        !context.shouldHandleInProgressStatus;
+}
+
+bool IsNoOp(playerbot::ArenaLifecycleContext const& context)
+{
+    return context.queueOperation == playerbot::QueueOperationType::None &&
+        context.teamInteraction == playerbot::ArenaTeamInteractionType::None;
+}
+
 void ObserveLifecycleReason(LifecycleObservationReason reason, ObjectGuid const& guid)
 {
     char const* reasonLabel = "unknown";
@@ -167,6 +180,18 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
 }
 
+LifecycleObservationSnapshot RandomBotParticipationManager::GetLifecycleObservationSnapshot()
+{
+    LifecycleObservationSnapshot snapshot;
+    snapshot.gateDisabled = g_LifecycleObservationCounters.gateDisabled.load(std::memory_order_relaxed);
+    snapshot.cadenceThrottled = g_LifecycleObservationCounters.cadenceThrottled.load(std::memory_order_relaxed);
+    snapshot.invalidPlayerState = g_LifecycleObservationCounters.invalidPlayerState.load(std::memory_order_relaxed);
+    snapshot.noLifecycleHooksActive = g_LifecycleObservationCounters.noLifecycleHooksActive.load(std::memory_order_relaxed);
+    snapshot.battlegroundLifecycleExecuted = g_LifecycleObservationCounters.battlegroundLifecycleExecuted.load(std::memory_order_relaxed);
+    snapshot.arenaLifecycleExecuted = g_LifecycleObservationCounters.arenaLifecycleExecuted.load(std::memory_order_relaxed);
+    return snapshot;
+}
+
 void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 {
     if (!player)
@@ -197,11 +222,30 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         return;
     }
 
-    if (ProcessBattlegroundLifecycleEntryPoint(player, values, hooks))
+    BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
+    ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
+    if (IsNoOp(battlegroundContext) && IsNoOp(arenaContext))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle dispatcher no-op with active hooks: guid={}, bgHook={}, arenaHook={}.",
+            guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
+        return;
+    }
+
+    bool const didExecuteBattleground = hooks.battlegroundParticipationHook &&
+        BattlegroundLifecycleActions::Execute(player, battlegroundContext);
+    bool const didExecuteArena = hooks.arenaParticipationHook &&
+        ArenaLifecycleActions::Execute(player, arenaContext);
+
+    if (didExecuteBattleground)
         ObserveLifecycleReason(LifecycleObservationReason::BattlegroundLifecycleExecuted, guid);
 
-    if (ProcessArenaLifecycleEntryPoint(player, values, hooks))
+    if (didExecuteArena)
         ObserveLifecycleReason(LifecycleObservationReason::ArenaLifecycleExecuted, guid);
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}.",
+        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0);
 }
 
 bool RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,

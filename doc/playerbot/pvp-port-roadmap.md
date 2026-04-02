@@ -64,6 +64,12 @@ Output in this phase:
 - Arena smoke tests (2v2/3v3 queue, engage, reset).
 - Regression checks for non-PvP behavior when PvP flags are off.
 
+### Lifecycle observability checks
+
+- Validate lifecycle debug logs include dispatcher completion with explicit battleground/arena `didExecute` booleans.
+- Validate lifecycle debug logs include deterministic no-op guard output when lifecycle hooks are active but built contexts are both no-op.
+- Inspect lifecycle reason counters through the manager snapshot seam to verify gate-disabled, cadence-throttled, invalid-state, no-hook, and executed-path counts are incrementing as expected during runtime checks.
+
 ## Porting policy
 
 - Keep each commit focused on one subsystem and compilable.
