@@ -46,9 +46,21 @@ public:
 
 };
 
+class PlayerbotLifecyclePlayerScript final : public PlayerScript
+{
+public:
+    PlayerbotLifecyclePlayerScript() : PlayerScript("PlayerbotLifecyclePlayerScript") { }
+
+    void OnMapChanged(Player* player) override
+    {
+        playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
+    }
+};
+
 }
 
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
+    new PlayerbotLifecyclePlayerScript();
 }
