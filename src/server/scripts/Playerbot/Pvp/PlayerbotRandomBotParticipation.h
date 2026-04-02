@@ -29,6 +29,7 @@ class RandomBotParticipationManager
 {
 public:
     static void ResetCadence();
+    static void OnPlayerLogout(Player const* player);
     static void ProcessPlayerLifecycle(Player* player);
 };
 
