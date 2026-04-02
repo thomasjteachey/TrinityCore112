@@ -33,6 +33,7 @@ void PvpCore::LoadConfig()
     g_PvpCoreConfig.moduleEnabled = sConfigMgr->GetBoolDefault("Playerbot.Enable", false);
     g_PvpCoreConfig.pvpCoreEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpCore.Enable", false);
     g_PvpCoreConfig.pvpTacticsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpTactics.Enable", false);
+    g_PvpCoreConfig.pvpLifecycleEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpLifecycle.Enable", false);
 }
 
 PvpCoreConfig const& PvpCore::GetConfig()
@@ -95,6 +96,54 @@ BattlegroundTacticalContext PvpCore::BuildBattlegroundTacticalContext(Player con
     context.movement = SelectMovementPrimitiveSkeleton(values, context.objective);
     context.flagCarrierDirective = SelectFlagCarrierDirectiveSkeleton(values);
     return context;
+}
+
+BattlegroundLifecycleContext PvpCore::BuildBattlegroundLifecycleContext(Player const* player, PvpValues const& values)
+{
+    BattlegroundLifecycleContext context;
+    context.lifecycleEnabled = IsLifecycleEnabled();
+    if (!context.lifecycleEnabled || !player)
+        return context;
+
+    context.queueOperation = SelectBattlegroundQueueOperationSkeleton(values);
+    context.invitationResponse = SelectBattlegroundInvitationResponseSkeleton(values);
+    context.shouldHandleInProgressStatus = ShouldHandleBattlegroundInProgressStatusSkeleton(values);
+    return context;
+}
+
+ArenaLifecycleContext PvpCore::BuildArenaLifecycleContext(Player const* player, PvpValues const& values)
+{
+    ArenaLifecycleContext context;
+    context.lifecycleEnabled = IsLifecycleEnabled();
+    if (!context.lifecycleEnabled || !player)
+        return context;
+
+    context.queueOperation = SelectArenaQueueOperationSkeleton(values);
+    context.teamInteraction = SelectArenaTeamInteractionSkeleton(values);
+    return context;
+}
+
+RandomBotParticipationHooks PvpCore::BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values)
+{
+    RandomBotParticipationHooks hooks;
+    hooks.lifecycleEnabled = IsLifecycleEnabled();
+    if (!hooks.lifecycleEnabled || !player)
+        return hooks;
+
+    BattlegroundLifecycleContext bgContext = BuildBattlegroundLifecycleContext(player, values);
+    ArenaLifecycleContext arenaContext = BuildArenaLifecycleContext(player, values);
+
+    hooks.battlegroundParticipationHook = (bgContext.queueOperation != QueueOperationType::None) ||
+        (bgContext.invitationResponse != InvitationResponseType::None) || bgContext.shouldHandleInProgressStatus;
+    hooks.arenaParticipationHook = (arenaContext.queueOperation != QueueOperationType::None) ||
+        (arenaContext.teamInteraction != ArenaTeamInteractionType::None);
+
+    return hooks;
+}
+
+bool PvpCore::IsLifecycleEnabled()
+{
+    return g_PvpCoreConfig.moduleEnabled && g_PvpCoreConfig.pvpCoreEnabled && g_PvpCoreConfig.pvpLifecycleEnabled;
 }
 
 bool PvpCore::IsInBattlegroundQueue(Player const* player)
@@ -171,5 +220,45 @@ FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const
         return FlagCarrierDirective::ProtectTeamCarrier;
 
     return FlagCarrierDirective::None;
+}
+
+QueueOperationType PvpCore::SelectBattlegroundQueueOperationSkeleton(PvpValues const& values)
+{
+    if (IsTriggerActive(PvpTrigger::BgQueueing, values) || IsTriggerActive(PvpTrigger::BgWaiting, values) ||
+        IsTriggerActive(PvpTrigger::BgActive, values))
+    {
+        return QueueOperationType::None;
+    }
+
+    return QueueOperationType::Join;
+}
+
+InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(PvpValues const& values)
+{
+    if (IsTriggerActive(PvpTrigger::BgInviteActive, values))
+        return InvitationResponseType::Accept;
+
+    return InvitationResponseType::None;
+}
+
+bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
+{
+    return IsTriggerActive(PvpTrigger::BgActive, values);
+}
+
+QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& values)
+{
+    if (values.inBattleground || values.inBattlegroundQueue)
+        return QueueOperationType::None;
+
+    return QueueOperationType::Join;
+}
+
+ArenaTeamInteractionType PvpCore::SelectArenaTeamInteractionSkeleton(PvpValues const& values)
+{
+    if (IsTriggerActive(PvpTrigger::BgInviteActive, values))
+        return ArenaTeamInteractionType::AcceptInvite;
+
+    return ArenaTeamInteractionType::None;
 }
 }
