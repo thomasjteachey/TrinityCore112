@@ -16,9 +16,13 @@
  */
 
 #include "Log.h"
+#include "Chat.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
+#include "RBAC.h"
 #include "ScriptMgr.h"
+
+using namespace Trinity::ChatCommands;
 
 namespace
 {
@@ -62,10 +66,59 @@ public:
     }
 };
 
+class PlayerbotLifecycleCommandScript final : public CommandScript
+{
+public:
+    PlayerbotLifecycleCommandScript() : CommandScript("PlayerbotLifecycleCommandScript") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable playerbotPvpLifecycleTable =
+        {
+            { "snapshot", HandlePlayerbotPvpLifecycleSnapshotCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+        };
+
+        static ChatCommandTable playerbotPvpTable =
+        {
+            { "lifecycle", playerbotPvpLifecycleTable },
+        };
+
+        static ChatCommandTable playerbotTable =
+        {
+            { "pvp", playerbotPvpTable },
+        };
+
+        static ChatCommandTable commandTable =
+        {
+            { "playerbot", playerbotTable },
+        };
+
+        return commandTable;
+    }
+
+    static bool HandlePlayerbotPvpLifecycleSnapshotCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        playerbot::LifecycleObservationSnapshot const snapshot = playerbot::RandomBotParticipationManager::GetLifecycleObservationSnapshot();
+
+        handler->PSendSysMessage("Playerbot PvP lifecycle observation snapshot:");
+        handler->PSendSysMessage(" - gateDisabled: " UI64FMTD, snapshot.gateDisabled);
+        handler->PSendSysMessage(" - cadenceThrottled: " UI64FMTD, snapshot.cadenceThrottled);
+        handler->PSendSysMessage(" - invalidPlayerState: " UI64FMTD, snapshot.invalidPlayerState);
+        handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
+        handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
+        handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+};
+
 }
 
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
     new PlayerbotLifecyclePlayerScript();
+    new PlayerbotLifecycleCommandScript();
 }
