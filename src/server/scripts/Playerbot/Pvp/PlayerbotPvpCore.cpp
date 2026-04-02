@@ -67,6 +67,8 @@ PvpValues PvpCore::CollectValues(Player const* player)
         values.hasBattlegroundInvite = values.hasBattlegroundInvite || (!isArenaQueue && isInvited);
     }
 
+    values.hasArenaTeamInvite = player->GetArenaTeamIdInvited() != 0;
+
     if (values.inBattleground)
         values.battlegroundTypeId = player->GetBattlegroundTypeId();
 
@@ -256,10 +258,7 @@ InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(Pvp
     if (!values.hasBattlegroundInvite)
         return InvitationResponseType::None;
 
-    if (values.inBattleground)
-        return InvitationResponseType::Decline;
-
-    return InvitationResponseType::Accept;
+    return InvitationResponseType::Decline;
 }
 
 bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
@@ -283,9 +282,13 @@ QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& v
 
 ArenaTeamInteractionType PvpCore::SelectArenaTeamInteractionSkeleton(PvpValues const& values)
 {
-    if (values.hasArenaInvite)
-        return ArenaTeamInteractionType::AcceptInvite;
+    if (!values.hasArenaTeamInvite)
+        return ArenaTeamInteractionType::None;
 
-    return ArenaTeamInteractionType::None;
+    if (values.inBattleground || values.inBattlegroundQueue)
+        return ArenaTeamInteractionType::DeclineInvite;
+
+    return ArenaTeamInteractionType::AcceptInvite;
+
 }
 }

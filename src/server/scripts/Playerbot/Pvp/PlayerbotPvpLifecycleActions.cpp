@@ -20,10 +20,11 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "DBCStores.h"
-#include "Log.h"
+#include "ArenaTeam.h"
+#include "ArenaTeamMgr.h"
+#include "CharacterCache.h"
 #include "Player.h"
-#include "WorldPacket.h"
-#include "WorldSession.h"
+#include "World.h"
 
 namespace
 {
@@ -70,12 +71,43 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     return true;
 }
 
-bool ProcessQueuePortAction(Player* player, bool accept, bool arenaOnly)
+bool RemovePlayerFromQueue(Player* player, BattlegroundQueueTypeId bgQueueTypeId, bool scheduleNonArenaUpdate)
 {
-    if (!player || !player->GetSession() || !player->InBattlegroundQueue())
+    if (!player || bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
         return false;
 
-    bool executed = false;
+    BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bgTemplate)
+        return false;
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+    GroupQueueInfo ginfo;
+    if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+        return false;
+
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
+    if (!bracketEntry)
+        return false;
+
+    player->RemoveBattlegroundQueueId(bgQueueTypeId);
+    bgQueue.RemovePlayer(player->GetGUID(), true);
+
+    if (scheduleNonArenaUpdate && !ginfo.ArenaType)
+    {
+        sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId,
+            bracketEntry->GetBracketId());
+    }
+
+    return true;
+}
+
+bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate)
+{
+    if (!player || !player->InBattlegroundQueue())
+        return false;
+
+    bool removed = false;
     for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
     {
         BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
@@ -86,17 +118,13 @@ bool ProcessQueuePortAction(Player* player, bool accept, bool arenaOnly)
         if (arenaOnly != isArenaQueue)
             continue;
 
-        if (accept && !player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
+        if (invitedOnly && !player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
             continue;
 
-        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
-        packet << uint8(BattlegroundMgr::BGArenaType(bgQueueTypeId)) << uint8(0)
-               << uint32(BattlegroundMgr::BGTemplateId(bgQueueTypeId)) << uint16(0x1F90) << uint8(accept ? 1 : 0);
-        player->GetSession()->HandleBattleFieldPortOpcode(packet);
-        executed = true;
+        removed = RemovePlayerFromQueue(player, bgQueueTypeId, scheduleNonArenaUpdate) || removed;
     }
 
-    return executed;
+    return removed;
 }
 }
 
@@ -154,15 +182,13 @@ bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return ProcessQueuePortAction(player, false, false);
+    return RemoveMatchingQueues(player, false, false, true);
 }
 
 bool BattlegroundLifecycleActions::AcceptInvitePrimitive(Player* player)
 {
-    if (!player || !IsLifecycleGateEnabled())
-        return false;
-
-    return ProcessQueuePortAction(player, true, false);
+    (void)player;
+    return false;
 }
 
 bool BattlegroundLifecycleActions::DeclineInvitePrimitive(Player* player)
@@ -170,7 +196,7 @@ bool BattlegroundLifecycleActions::DeclineInvitePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return ProcessQueuePortAction(player, false, false);
+    return RemoveMatchingQueues(player, false, true, true);
 }
 
 bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* player)
@@ -187,7 +213,6 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return false;
     }
 
-    player->LeaveBattleground();
     return true;
 }
 
@@ -240,7 +265,7 @@ bool ArenaLifecycleActions::LeaveQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return ProcessQueuePortAction(player, false, true);
+    return RemoveMatchingQueues(player, true, false, false);
 }
 
 bool ArenaLifecycleActions::AcceptTeamInvitePrimitive(Player* player)
@@ -248,15 +273,22 @@ bool ArenaLifecycleActions::AcceptTeamInvitePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    if (!player->GetSession())
+    uint32 const invitedArenaTeamId = player->GetArenaTeamIdInvited();
+    if (!invitedArenaTeamId)
         return false;
 
-    if (!player->GetArenaTeamIdInvited())
+    ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(invitedArenaTeamId);
+    if (!arenaTeam)
         return false;
 
-    WorldPacket packet(CMSG_ARENA_TEAM_ACCEPT);
-    player->GetSession()->HandleArenaTeamAcceptOpcode(packet);
-    return true;
+    if (arenaTeam->GetMember(player->GetGUID()))
+        return false;
+
+    if (!sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_GUILD) &&
+        player->GetTeam() != sCharacterCache->GetCharacterTeamByGuid(arenaTeam->GetCaptain()))
+        return false;
+
+    return arenaTeam->AddMember(player->GetGUID());
 }
 
 bool ArenaLifecycleActions::DeclineTeamInvitePrimitive(Player* player)
@@ -264,14 +296,10 @@ bool ArenaLifecycleActions::DeclineTeamInvitePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    if (!player->GetSession())
-        return false;
-
     if (!player->GetArenaTeamIdInvited())
         return false;
 
-    WorldPacket packet(CMSG_ARENA_TEAM_DECLINE);
-    player->GetSession()->HandleArenaTeamDeclineOpcode(packet);
+    player->SetArenaTeamIdInvited(0);
     return true;
 }
 }
