@@ -155,8 +155,6 @@ class PvpCore
 public:
     static void LoadConfig();
     static PvpCoreConfig const& GetConfig();
-    static bool CanProcessRandomBotLifecycle(Player const* player);
-    static void ResetRandomBotLifecycleCadence();
 
     static PvpValues CollectValues(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);

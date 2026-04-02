@@ -25,12 +25,16 @@ namespace playerbot
 struct PvpValues;
 struct RandomBotParticipationHooks;
 
+class RandomBotParticipationManager
+{
+public:
+    static void ResetCadence();
+    static void ProcessPlayerLifecycle(Player* player);
+};
+
 class RandomBotParticipationLifecycle
 {
 public:
-    // Manager-facing seam for per-bot update cadence/eligibility ownership.
-    static void ProcessManagerLifecycleEntryPoint(Player* player);
-
     // Lifecycle seam: dispatcher only, executes decisions from context.
     static void ProcessLifecycleEntryPoint(Player* player);
 
