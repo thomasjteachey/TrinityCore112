@@ -35,7 +35,7 @@ public:
     void OnStartup() override
     {
         playerbot::PvpCore::LoadConfig();
-        playerbot::RandomBotParticipationLifecycle::RegisterManagerHooks();
+        playerbot::PvpCore::ResetRandomBotLifecycleCadence();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
 
         TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}, pvp tactics: {}, pvp lifecycle: {}).",

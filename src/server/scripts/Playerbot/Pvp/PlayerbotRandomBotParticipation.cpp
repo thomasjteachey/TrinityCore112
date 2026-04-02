@@ -22,60 +22,29 @@
 
 #include "Player.h"
 
-#include <chrono>
-#include <unordered_map>
-
 namespace
 {
-using CadenceClock = std::chrono::steady_clock;
-using TimePoint = CadenceClock::time_point;
-
-constexpr std::chrono::milliseconds LifecycleCadenceInterval(2000);
-
-bool g_ManagerHooksRegistered = false;
-std::unordered_map<uint64, TimePoint> g_NextLifecycleProcessTimeByGuid;
-
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
 }
 
-bool IsEligibleForLifecycleProcessing(Player const* player)
-{
-    return player && player->IsInWorld() && !player->IsBeingTeleported();
-}
-
-bool IsCadenceReady(Player* player)
-{
-    if (!player)
-        return false;
-
-    uint64 const playerGuid = player->GetGUID().GetRawValue();
-    TimePoint const now = CadenceClock::now();
-    TimePoint& nextProcessTime = g_NextLifecycleProcessTimeByGuid[playerGuid];
-    if (nextProcessTime > now)
-        return false;
-
-    nextProcessTime = now + LifecycleCadenceInterval;
-    return true;
-}
 }
 
 namespace playerbot
 {
-void RandomBotParticipationLifecycle::RegisterManagerHooks()
+void RandomBotParticipationLifecycle::ProcessManagerLifecycleEntryPoint(Player* player)
 {
-    if (!IsLifecycleGateEnabled())
+    if (!PvpCore::CanProcessRandomBotLifecycle(player))
         return;
 
-    g_ManagerHooksRegistered = true;
-    g_NextLifecycleProcessTimeByGuid.clear();
+    ProcessLifecycleEntryPoint(player);
 }
 
 void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 {
-    if (!g_ManagerHooksRegistered || !IsLifecycleGateEnabled() || !IsEligibleForLifecycleProcessing(player) || !IsCadenceReady(player))
+    if (!player || !IsLifecycleGateEnabled())
         return;
 
     PvpValues const values = PvpCore::CollectValues(player);
