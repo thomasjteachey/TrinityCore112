@@ -1100,6 +1100,7 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
+    sScriptMgr->OnPlayerUpdate(this, p_time);
 
     UpdateStarfireSnare();
     VerifyStarfireSnare();

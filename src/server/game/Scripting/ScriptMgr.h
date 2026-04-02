@@ -703,6 +703,9 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player is bound to an instance
         virtual void OnBindToInstance(Player* player, Difficulty difficulty, uint32 mapId, bool permanent, uint8 extendState);
 
+        // Called once per player update tick
+        virtual void OnUpdate(Player* player, uint32 diff);
+
         // Called when a player switches to a new zone
         virtual void OnUpdateZone(Player* player, uint32 newZone, uint32 newArea);
 
@@ -1036,6 +1039,7 @@ class TC_GAME_API ScriptMgr
         void OnPlayerFailedDelete(ObjectGuid guid, uint32 accountId);
         void OnPlayerSave(Player* player);
         void OnPlayerBindToInstance(Player* player, Difficulty difficulty, uint32 mapid, bool permanent, uint8 extendState);
+        void OnPlayerUpdate(Player* player, uint32 diff);
         void OnPlayerUpdateZone(Player* player, uint32 newZone, uint32 newArea);
         void OnQuestObjectiveProgress(Player* player, Quest const* quest, uint32 objectiveIndex, uint16 progress);
         void OnQuestStatusChange(Player* player, uint32 questId);

@@ -51,7 +51,7 @@ class PlayerbotLifecyclePlayerScript final : public PlayerScript
 public:
     PlayerbotLifecyclePlayerScript() : PlayerScript("PlayerbotLifecyclePlayerScript") { }
 
-    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
     }
