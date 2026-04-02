@@ -18,10 +18,22 @@
 #include "Configuration/Config.h"
 #include "Log.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
+#include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "ScriptMgr.h"
 
 namespace
 {
+class PlayerbotPvpLifecyclePlayerScript final : public PlayerScript
+{
+public:
+    PlayerbotPvpLifecyclePlayerScript() : PlayerScript("PlayerbotPvpLifecyclePlayerScript") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        playerbot::RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
+    }
+};
+
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -47,4 +59,5 @@ public:
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
+    new PlayerbotPvpLifecyclePlayerScript();
 }
