@@ -29,6 +29,7 @@ struct PvpCoreConfig
 {
     bool moduleEnabled = false;
     bool pvpCoreEnabled = false;
+    bool pvpTacticsEnabled = false;
 };
 
 enum class BattlegroundState : uint8
@@ -61,6 +62,46 @@ enum class PvpTrigger : uint8
     TeamFlagCarrierNear
 };
 
+enum class BattlegroundObjectiveType : uint8
+{
+    None = 0,
+    AssaultNode,
+    DefendNode,
+    CaptureFlag,
+    AttackFlagCarrier,
+    ProtectFlagCarrier
+};
+
+enum class BattlegroundMovementPrimitive : uint8
+{
+    None = 0,
+    MoveToObjectivePosition,
+    MoveToObjectiveUnit,
+    FollowFlagCarrier
+};
+
+enum class FlagCarrierDirective : uint8
+{
+    None = 0,
+    AttackEnemyCarrier,
+    ProtectTeamCarrier
+};
+
+struct BattlegroundObjectiveSelection
+{
+    BattlegroundObjectiveType type = BattlegroundObjectiveType::None;
+    uint32 objectiveId = 0;
+};
+
+struct BattlegroundTacticalContext
+{
+    bool tacticsEnabled = false;
+    bool shouldEvaluate = false;
+    BattlegroundObjectiveSelection objective;
+    BattlegroundMovementPrimitive movement = BattlegroundMovementPrimitive::None;
+    FlagCarrierDirective flagCarrierDirective = FlagCarrierDirective::None;
+};
+
 class PvpCore
 {
 public:
@@ -69,10 +110,15 @@ public:
 
     static PvpValues CollectValues(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);
+    static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
 
 private:
     static bool IsInBattlegroundQueue(Player const* player);
     static BattlegroundState DetectBattlegroundState(Player const* player, bool inQueue);
+    static BattlegroundObjectiveSelection SelectObjectiveSkeleton(PvpValues const& values);
+    static BattlegroundMovementPrimitive SelectMovementPrimitiveSkeleton(PvpValues const& values,
+        BattlegroundObjectiveSelection const& objective);
+    static FlagCarrierDirective SelectFlagCarrierDirectiveSkeleton(PvpValues const& values);
 };
 }
 

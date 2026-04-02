@@ -37,8 +37,9 @@ public:
         playerbot::PvpCore::LoadConfig();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
 
-        TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}).",
-            config.moduleEnabled ? "true" : "false", config.pvpCoreEnabled ? "true" : "false");
+        TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}, pvp tactics: {}).",
+            config.moduleEnabled ? "true" : "false", config.pvpCoreEnabled ? "true" : "false",
+            config.pvpTacticsEnabled ? "true" : "false");
     }
 };
 }
