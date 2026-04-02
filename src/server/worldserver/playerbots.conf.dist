@@ -33,3 +33,12 @@ Playerbot.Enable = 0
 #                     1 - (Enabled)
 
 Playerbot.PvpCore.Enable = 0
+
+#    Playerbot.PvpTactics.Enable
+#        Description: Enables battleground tactical scaffolding (objective selection, movement primitives,
+#                     and flag-carrier attack/protect placeholder decisions).
+#                     This phase wires tactical APIs only and does not add spell/class rotation logic.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PvpTactics.Enable = 0

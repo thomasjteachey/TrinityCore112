@@ -32,6 +32,7 @@ void PvpCore::LoadConfig()
 {
     g_PvpCoreConfig.moduleEnabled = sConfigMgr->GetBoolDefault("Playerbot.Enable", false);
     g_PvpCoreConfig.pvpCoreEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpCore.Enable", false);
+    g_PvpCoreConfig.pvpTacticsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpTactics.Enable", false);
 }
 
 PvpCoreConfig const& PvpCore::GetConfig()
@@ -82,6 +83,20 @@ bool PvpCore::IsTriggerActive(PvpTrigger trigger, PvpValues const& values)
     return false;
 }
 
+BattlegroundTacticalContext PvpCore::BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values)
+{
+    BattlegroundTacticalContext context;
+    context.tacticsEnabled = g_PvpCoreConfig.moduleEnabled && g_PvpCoreConfig.pvpCoreEnabled && g_PvpCoreConfig.pvpTacticsEnabled;
+    if (!context.tacticsEnabled || !player || !IsTriggerActive(PvpTrigger::BgActive, values))
+        return context;
+
+    context.shouldEvaluate = true;
+    context.objective = SelectObjectiveSkeleton(values);
+    context.movement = SelectMovementPrimitiveSkeleton(values, context.objective);
+    context.flagCarrierDirective = SelectFlagCarrierDirectiveSkeleton(values);
+    return context;
+}
+
 bool PvpCore::IsInBattlegroundQueue(Player const* player)
 {
     if (!player)
@@ -112,5 +127,49 @@ BattlegroundState PvpCore::DetectBattlegroundState(Player const* player, bool in
     }
 
     return BattlegroundState::None;
+}
+
+BattlegroundObjectiveSelection PvpCore::SelectObjectiveSkeleton(PvpValues const& values)
+{
+    BattlegroundObjectiveSelection objective;
+
+    if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
+        objective.type = BattlegroundObjectiveType::AttackFlagCarrier;
+    else if (IsTriggerActive(PvpTrigger::PlayerHasFlag, values) || IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
+        objective.type = BattlegroundObjectiveType::ProtectFlagCarrier;
+
+    return objective;
+}
+
+BattlegroundMovementPrimitive PvpCore::SelectMovementPrimitiveSkeleton(PvpValues const& values,
+    BattlegroundObjectiveSelection const& objective)
+{
+    if (!IsTriggerActive(PvpTrigger::BgActive, values))
+        return BattlegroundMovementPrimitive::None;
+
+    switch (objective.type)
+    {
+        case BattlegroundObjectiveType::AttackFlagCarrier:
+        case BattlegroundObjectiveType::ProtectFlagCarrier:
+            return BattlegroundMovementPrimitive::MoveToObjectiveUnit;
+        case BattlegroundObjectiveType::AssaultNode:
+        case BattlegroundObjectiveType::DefendNode:
+        case BattlegroundObjectiveType::CaptureFlag:
+            return BattlegroundMovementPrimitive::MoveToObjectivePosition;
+        case BattlegroundObjectiveType::None:
+        default:
+            return BattlegroundMovementPrimitive::None;
+    }
+}
+
+FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const& values)
+{
+    if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
+        return FlagCarrierDirective::AttackEnemyCarrier;
+
+    if (IsTriggerActive(PvpTrigger::PlayerHasFlag, values) || IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
+        return FlagCarrierDirective::ProtectTeamCarrier;
+
+    return FlagCarrierDirective::None;
 }
 }
