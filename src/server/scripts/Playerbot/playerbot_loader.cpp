@@ -17,6 +17,7 @@
 
 #include "Configuration/Config.h"
 #include "Log.h"
+#include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "ScriptMgr.h"
 
 namespace
@@ -26,11 +27,18 @@ class PlayerbotBootstrapWorldScript final : public WorldScript
 public:
     PlayerbotBootstrapWorldScript() : WorldScript("PlayerbotBootstrapWorldScript") { }
 
+    void OnConfigLoad(bool /*reload*/) override
+    {
+        playerbot::PvpCore::LoadConfig();
+    }
+
     void OnStartup() override
     {
-        bool const enabled = sConfigMgr->GetBoolDefault("Playerbot.Enable", false);
+        playerbot::PvpCore::LoadConfig();
+        playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
 
-        TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}).", enabled ? "true" : "false");
+        TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}).",
+            config.moduleEnabled ? "true" : "false", config.pvpCoreEnabled ? "true" : "false");
     }
 };
 }

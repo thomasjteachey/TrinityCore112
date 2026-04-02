@@ -25,3 +25,11 @@
 #                     1 - (Enabled)
 
 Playerbot.Enable = 0
+
+#    Playerbot.PvpCore.Enable
+#        Description: Enables Playerbot PvP core trigger/value scaffolding and battleground state detection.
+#                     This phase only wires infrastructure and does not execute class spell logic.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PvpCore.Enable = 0
