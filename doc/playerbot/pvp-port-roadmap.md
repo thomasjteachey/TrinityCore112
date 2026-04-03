@@ -212,65 +212,81 @@ Loader path and lifecycle gates remain preserved as-is:
   - Regression safety:
     - With `Playerbot.PvpCore.Enable = 0` or `Playerbot.PvpLifecycle.Enable = 0`, lifecycle remains gated and no queue/tactical/class PvP behavior executes.
 
-### Phase-6 runtime validation + closeout signoff (2026-04-03)
+### Phase-6 runtime validation + closeout signoff (2026-04-03, build-integration rerun)
 
 #### Validation commands run
 
-1. Compile DB coverage checks:
+1. Build integration fix + generator refresh:
+   - `cmake -S . -B build -DPLAYERBOT=1 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`
+   - Key outcome lines:
+     - `* Build with scripts     : Yes (static)`
+     - `|   +- Playerbot`
+     - `-- Build files have been written to: /workspace/TrinityCore112/build`
+   - Exit code: `0`.
+
+2. Compile DB coverage checks:
    - `python3 - <<'PY' ...` (checked `compile_commands.json` and `build/compile_commands.json` for:
      - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp`
      - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp`
      - `src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp`)
-   - Observed outcome: all three files had `0` entries in both compile DB files.
+   - Observed outcome (both DB files): each path had `1` entry.
+   - Exit code: `0`.
 
-2. Build graph ownership checks:
-   - `ninja -C build -t targets all | rg 'Playerbot'`
-   - `ninja -C build -t targets all | rg -i 'scripts.dir.*/Pvp'`
-   - Observed outcome: no Playerbot PvP object targets were present.
-
-3. Compile-db-derived syntax checks (fallback-derived from existing scripts compile command flags):
-   - `python3 - <<'PY' ...` (extract first `src/server/scripts/*.cpp` compile command from `build/compile_commands.json`, strip source/output args, run `-fsyntax-only` for each Playerbot PvP `.cpp` file above)
-   - Observed outcome: all three syntax checks exited `0` with no diagnostics.
+3. Compile-db-derived syntax checks:
+   - `python3 - <<'PY' ...` (for each touched Playerbot PvP `.cpp`, derive command flags from `build/compile_commands.json` and run `-fsyntax-only`)
+   - Observed outcome:
+     - `FILE src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp` -> `EXIT 0`
+     - `FILE src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp` -> `EXIT 0`
+     - `FILE src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp` -> `EXIT 0`
+   - Exit code: `0`.
 
 4. Narrow object-target builds:
-   - `ninja -C build src/server/scripts/CMakeFiles/scripts.dir/Playerbot/Pvp/PlayerbotPvpCore.cpp.o`
-   - `ninja -C build src/server/scripts/CMakeFiles/scripts.dir/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp.o`
-   - `ninja -C build src/server/scripts/CMakeFiles/scripts.dir/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp.o`
-   - Observed outcome: each failed with `unknown target`.
+   - `ninja -C build src/server/scripts/CMakeFiles/scripts.dir/Playerbot/Pvp/PlayerbotPvpCore.cpp.o src/server/scripts/CMakeFiles/scripts.dir/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp.o src/server/scripts/CMakeFiles/scripts.dir/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp.o`
+   - Key outcome lines:
+     - `[3/5] Building CXX object ...PlayerbotRandomBotParticipation.cpp.o`
+     - `[4/5] Building CXX object ...PlayerbotPvpLifecycleActions.cpp.o`
+     - `[5/5] Building CXX object ...PlayerbotPvpCore.cpp.o`
+   - Exit code: `0`.
 
-5. Static invariant/observability presence checks:
-   - `rg -n "ProcessPlayerLifecycle\(player\)|moduleEnabled && config\.pvpCoreEnabled && config\.pvpLifecycleEnabled|RandomBotLifecycleCadenceInterval|Playerbot PvP lifecycle branch|Playerbot PvP lifecycle observation|dispatcher complete|player has flag|enemy flagcarrier near|team flagcarrier near|Playerbot\.PvpClassSpells\.Enable = 0" ...`
-   - Observed outcome: all expected markers/gates/ordering text were found in source/config.
+5. Runtime execution attempt prerequisites:
+   - `test -x build/bin/worldserver && echo 'worldserver-binary-present' || echo 'worldserver-binary-missing'`
+   - Outcome: `worldserver-binary-missing`.
+   - Exit code: `0`.
+   - Attempted to build runtime binary for manual checks:
+     - `ninja -C build worldserver`
+     - Build began (`[1/1104] ...`) but was manually interrupted in this environment:
+       - `ninja: build stopped: interrupted by user.`
+     - Exit code: `2`.
+
+6. Static invariant/observability presence checks:
+   - `rg -n "ProcessPlayerLifecycle\(player\)|moduleEnabled && config\.pvpCoreEnabled && config\.pvpLifecycleEnabled|RandomBotLifecycleCadenceInterval|Playerbot PvP lifecycle branch|Playerbot PvP lifecycle observation|Playerbot PvP lifecycle dispatcher complete|player has flag|enemy flagcarrier near|team flagcarrier near|Playerbot\.PvpClassSpells\.Enable = 0|gateDisabled|cadenceThrottled|invalidPlayerState|noLifecycleHooksActive|battlegroundLifecycleExecuted|arenaLifecycleExecuted|HandlePlayerbotPvpLifecycleSnapshotCommand" ...`
+   - Observed outcome: all expected invariant, trigger-ordering, log, and snapshot counter markers found.
+   - Exit code: `0`.
 
 #### Runtime/manual validation outcomes
 
-- Battleground queue + invite behavior: **blocked** (no runtime worldserver/BG session executed in this environment).
-- WSG/EotS objective trigger checks (`player has flag`, `enemy flagcarrier near`, `team flagcarrier near`): **blocked** for live execution; static code path presence confirmed.
-- Trigger ordering emergency/objective first: **statically confirmed** by ordered tactical table priority (`player has flag` > timer > enemy carrier > team carrier > sustain).
-- Arena queue/team invite behavior unchanged: **statically confirmed** in lifecycle primitive selection and dispatcher wiring; live queue test **blocked**.
-- Regression with PvP flags OFF: **statically confirmed** via lifecycle gate checks and default-off config values; live runtime toggle test **blocked**.
+- Battleground queue + invite behavior: **blocked** (no runnable worldserver/BG session completed in this environment).
+- WSG/EotS objective trigger checks (`player has flag`, `enemy flagcarrier near`, `team flagcarrier near`): **blocked for live execution**; static code-path presence confirmed.
+- Trigger ordering emergency/objective first: **statically confirmed** (`player has flag` > timer > enemy carrier > team carrier > sustain priorities).
+- Arena queue/team invite behavior unchanged: **statically confirmed** in lifecycle context/action wiring; live arena test **blocked**.
+- Regression with PvP flags OFF: **statically confirmed** via lifecycle gate checks and default-off config; live toggle test **blocked**.
 
 #### Observability verification outcomes
 
-- Lifecycle log formats for:
-  - branch marker,
-  - reason observation,
-  - dispatcher completion booleans,
-  are **statically confirmed** in `PlayerbotRandomBotParticipation.cpp`.
-- `.playerbot pvp lifecycle snapshot` command exposure and counter printing are **statically confirmed** in `playerbot_loader.cpp`.
-- Counter movement verification (`gateDisabled`, `cadenceThrottled`, `invalidPlayerState`, `noLifecycleHooksActive`, `battlegroundLifecycleExecuted`, `arenaLifecycleExecuted`) is **blocked for live observation** because runtime execution was not performed.
+- Lifecycle log formats for branch marker, reason observation, and dispatcher completion booleans are **present** in source.
+- `.playerbot pvp lifecycle snapshot` command exposure and counter printing are **present** in loader command script.
+- Counter movement runtime verification for `gateDisabled`, `cadenceThrottled`, `invalidPlayerState`, `noLifecycleHooksActive`, `battlegroundLifecycleExecuted`, `arenaLifecycleExecuted` remains **blocked** without a live worldserver session.
 
 #### Remaining blockers / divergences
 
-- **Blocker:** current generated build graph does not include Playerbot PvP objects (compile DB entries absent; object targets unknown).
-- **Blocker:** no in-game runtime session was executed for BG/Arena/manual command verification in this environment.
-- No new functional divergences were introduced in this closeout pass; blockers are validation-environment/build-integration related.
+- **Build-integration blocker resolved:** Playerbot PvP files are now generated in compile DB and narrow object targets build successfully.
+- **Remaining blocker:** runtime/manual in-world validation checklist could not be completed in this container session (no completed worldserver runtime).
+- No new functional divergences were introduced in this signoff rerun.
 
 #### Go/No-Go recommendation
 
-- **Recommendation: NO-GO (as of 2026-04-03)** for final Phase-6 signoff until blockers are cleared:
-  1. Playerbot PvP sources are included in build graph/compile DB and narrow object builds succeed.
-  2. Runtime manual checklist is executed in-world (BG/Arena + `.playerbot pvp lifecycle snapshot`) with logs captured.
+- **Recommendation: NO-GO for final production signoff (as of 2026-04-03)** due to incomplete live runtime evidence.
+- **Sub-recommendation: GO for Phase-6 build-integration and compile-validation gate** (compile DB inclusion + syntax + narrow object build checks all pass).
 
 #### Explicit preservation statement
 
