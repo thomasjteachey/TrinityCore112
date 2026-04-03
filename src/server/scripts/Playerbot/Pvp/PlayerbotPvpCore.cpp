@@ -221,6 +221,8 @@ ClassSpecProfile DetectClassSpecProfile(Player const* player)
 
 SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target, bool inMelee)
 {
+    // Phase-4 divergence: we preserve upstream trigger/action vocabulary and ordered fallback intent,
+    // but execute through this consolidated selector instead of full per-class TriggerNode/ActionNode factories.
     SpellDecision decision;
     if (!player || !target)
         return decision;
@@ -280,15 +282,17 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("shield slam", { 47488, 23922 }))
                 return decision;
-            if (inMelee && tryAction("melee pressure", { 47486, 47485, 12294, 23881, 47498 }))
+            if (inMelee && tryAction("mortal strike", { 47486, 12294 }))
+                return decision;
+            if (inMelee && tryAction("bloodthirst", { 23881 }))
+                return decision;
+            if (inMelee && tryAction("slam", { 47475, 47474, 25242, 1464 }))
                 return decision;
             if (!targetAlreadySlowed && inMelee && tryAction("piercing howl", { 12323 }))
                 return decision;
             if (!targetAlreadySlowed && inMelee && tryAction("mocking blow", { 20560 }))
                 return decision;
             if (!targetAlreadySlowed && inMelee && tryAction("hamstring", { 1715 }))
-                return decision;
-            if (highRageAvailable && inMelee && tryAction("slam", { 47475, 47474, 25242, 1464 }))
                 return decision;
             if (highRageAvailable && inMelee && tryAction("heroic strike", { 47450, 47449, 78 }))
                 return decision;
@@ -311,11 +315,17 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             if (targetCriticalHealth && tryAction("hammer of wrath", { 48806, 24275 }))
                 return decision;
-            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("retribution burst", { 35395, 53385, 53408, 20271 }))
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("crusader strike", { 35395 }))
                 return decision;
-            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("protection burst", { 48827, 53595, 48819 }))
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("divine storm", { 53385 }))
                 return decision;
-            if (inMelee && tryAction("melee burst", { 35395, 53385, 53408, 20271, 48819 }))
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("shield of righteousness", { 61411, 53600 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("hammer of the righteous", { 53595 }))
+                return decision;
+            if (inMelee && tryAction("judgement of wisdom", { 53408, 20271 }))
+                return decision;
+            if (inMelee && tryAction("crusader strike", { 35395 }))
                 return decision;
             if (rangedWindow && tryAction("ranged pressure", { 48801, 48806 }))
                 return decision;
@@ -332,14 +342,21 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 49001, 13555, 13554, 1978 }))
                     if (tryAction("serpent sting", { 49001, 13555, 1978 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Primary &&
-                    tryAction("beast mastery shots", { 49045, 49052, 53351, 49001 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("aimed shot", { 49050, 19434 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Secondary && tryAction("marksmanship shots", { 53209, 19434, 53351, 49045 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("arcane shot", { 49045 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Tertiary && tryAction("survival shots", { 60053, 53351, 49052, 49045 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("chimera shot", { 53209 }))
                     return decision;
-                if (tryAction("ranged shot priority", { 53351, 53209, 60053, 19434, 49045, 49052, 49001 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("aimed shot", { 49050, 19434 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("explosive shot", { 60053 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("black arrow", { 63672 }))
+                    return decision;
+                if (tryAction("steady shot", { 49052 }))
+                    return decision;
+                if (tryAction("arcane shot", { 49045 }))
                     return decision;
             }
             if (tryAction("bestial wrath", { 19574 }, true))
@@ -355,13 +372,15 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (player->GetComboPoints() >= 4)
                     if (tryAction("finisher", { 57993, 48668 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Primary && tryAction("assassination builders", { 48666, 57993, 48668 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("mutilate", { 48666 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Secondary && tryAction("combat builders", { 48638, 48668, 48657 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("sinister strike", { 48638, 1752 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Tertiary && tryAction("subtlety builders", { 48657, 48638, 48668 }))
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("backstab", { 48657, 53 }))
                     return decision;
-                if (tryAction("builder chain", { 48666, 48638, 57993, 48668, 48657 }))
+                if (tryAction("sinister strike", { 48638, 1752 }))
+                    return decision;
+                if (tryAction("backstab", { 48657, 53 }))
                     return decision;
             }
             if (tryAction("killing spree", { 51690 }, true))
@@ -372,7 +391,9 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             if (rangedWindow)
             {
-                if (specProfile != ClassSpecProfile::Tertiary && tryAction("discipline-holy pressure", { 48123, 48127, 48066 }))
+                if (specProfile != ClassSpecProfile::Tertiary && tryAction("smite", { 48123, 10934, 585 }))
+                    return decision;
+                if (specProfile != ClassSpecProfile::Tertiary && tryAction("mind blast", { 48127, 10946, 8092 }))
                     return decision;
                 if (!TargetHasAuraFromPlayer(target, player, { 48125, 25368, 10894, 589 }))
                     if (tryAction("shadow word: pain", { 48125, 25368, 589 }))
@@ -380,7 +401,11 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 48300, 2944 }))
                     if (tryAction("devouring plague", { 48300, 2944 }))
                         return decision;
-                if (tryAction("shadow nuke chain", { 48127, 48156, 48158, 48123 }))
+                if (tryAction("mind blast", { 48127, 10946, 8092 }))
+                    return decision;
+                if (tryAction("mind flay", { 48156, 17311, 15407 }))
+                    return decision;
+                if (tryAction("mind sear", { 48158, 53022 }))
                     return decision;
             }
             break;
@@ -389,13 +414,21 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             if (lowHealth && tryAction("icebound fortitude", { 48792 }, true))
                 return decision;
-            if (inMelee && specProfile == ClassSpecProfile::Primary && tryAction("blood strike chain", { 55050, 49924, 55262 }))
+            if (inMelee && specProfile == ClassSpecProfile::Primary && tryAction("heart strike", { 55050 }))
                 return decision;
-            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("frost strike chain", { 55268, 51425, 49184 }))
+            if (inMelee && specProfile == ClassSpecProfile::Primary && tryAction("death strike", { 49924, 49923 }))
                 return decision;
-            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("unholy strike chain", { 55090, 49921, 45477 }))
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("frost strike", { 55268, 49143 }))
                 return decision;
-            if (inMelee && tryAction("melee rune strike chain", { 55268, 51425, 55090, 49924, 55050, 49921, 45477 }))
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("obliterate", { 51425, 49020 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("scourge strike", { 55090 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("plague strike", { 49921, 45462 }))
+                return decision;
+            if (inMelee && tryAction("death strike", { 49924, 49923 }))
+                return decision;
+            if (inMelee && tryAction("blood strike", { 49930, 49929, 45902 }))
                 return decision;
             if (rangedWindow && tryAction("death coil pressure", { 49895, 47632 }))
                 return decision;
@@ -410,9 +443,13 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
                     if (tryAction("flame shock", { 49233, 8050 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Secondary && tryAction("enhancement chain", { 17364, 60103, 49231 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("stormstrike", { 17364 }))
                     return decision;
-                if (tryAction("melee chain", { 17364, 60103, 49231 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("lava lash", { 60103 }))
+                    return decision;
+                if (tryAction("stormstrike", { 17364 }))
+                    return decision;
+                if (tryAction("lightning bolt", { 49238, 403 }))
                     return decision;
             }
             else if (rangedWindow)
@@ -420,11 +457,15 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
                     if (tryAction("flame shock", { 49233, 8050 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Primary && tryAction("elemental chain", { 60043, 49238, 49271 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("lava burst", { 60043 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Tertiary && tryAction("resto pressure", { 49238, 49271, 49233 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("lightning bolt", { 49238, 403 }))
                     return decision;
-                if (tryAction("caster chain", { 60043, 49238, 49271 }))
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("lightning bolt", { 49238, 403 }))
+                    return decision;
+                if (tryAction("chain lightning", { 49271, 421 }))
+                    return decision;
+                if (tryAction("lightning bolt", { 49238, 403 }))
                     return decision;
             }
             if (tryAction("feral spirit", { 51533 }, true))
@@ -440,13 +481,21 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 42891, 12654 }))
                     if (tryAction("living bomb", { 42891, 12654 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Primary && tryAction("arcane chain", { 42897, 44781, 42846, 42873 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("arcane barrage", { 44781 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Secondary && tryAction("fire chain", { 42833, 42891, 42873 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("arcane blast", { 42897, 30451 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Tertiary && tryAction("frost chain", { 42842, 42914, 42833 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("fireball", { 42833, 133 }))
                     return decision;
-                if (tryAction("caster chain", { 42897, 42842, 42833, 42846, 42914, 42873 }))
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("frostbolt", { 42842, 116 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("ice lance", { 42914, 30455 }))
+                    return decision;
+                if (tryAction("frostfire bolt", { 47610, 44614 }))
+                    return decision;
+                if (tryAction("frostbolt", { 42842, 116 }))
+                    return decision;
+                if (tryAction("fireball", { 42833, 133 }))
                     return decision;
             }
             if (tryAction("burst cooldown", { 12042, 12472 }, true))
@@ -465,13 +514,21 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 47811, 348 }))
                     if (tryAction("immolate", { 47811, 348 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Primary && tryAction("affliction chain", { 48181, 47843, 47813, 47809 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("haunt", { 48181 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Secondary && tryAction("demonology chain", { 59672, 47809, 47813, 59164 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("unstable affliction", { 47843, 30108 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Tertiary && tryAction("destruction chain", { 59172, 17962, 47838, 47809 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("metamorphosis", { 59672 }, true))
                     return decision;
-                if (tryAction("warlock chain", { 48181, 47843, 59172, 17962, 47838, 47809 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("shadow bolt", { 47809, 686 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("chaos bolt", { 59172 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("conflagrate", { 17962 }))
+                    return decision;
+                if (tryAction("incinerate", { 47838, 29722 }))
+                    return decision;
+                if (tryAction("shadow bolt", { 47809, 686 }))
                     return decision;
             }
             break;
@@ -485,9 +542,11 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 48574, 1822 }))
                     if (tryAction("rake", { 48574, 1822 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Tertiary && tryAction("feral chain", { 48566, 48572, 48574 }))
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("mangle (cat)", { 48566, 33876 }))
                     return decision;
-                if (tryAction("melee chain", { 48566, 48572, 48574 }))
+                if (tryAction("mangle (cat)", { 48566, 33876 }))
+                    return decision;
+                if (tryAction("shred", { 48572, 5221 }))
                     return decision;
             }
             else if (rangedWindow)
@@ -495,11 +554,15 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 if (!TargetHasAuraFromPlayer(target, player, { 48463, 8921 }))
                     if (tryAction("moonfire", { 48463, 8921 }))
                         return decision;
-                if (specProfile == ClassSpecProfile::Primary && tryAction("balance chain", { 48461, 48465, 48463 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("wrath", { 48461, 5176 }))
                     return decision;
-                if (specProfile == ClassSpecProfile::Secondary && tryAction("restoration pressure", { 48461, 48463, 8921 }))
+                if (specProfile == ClassSpecProfile::Primary && tryAction("starfire", { 48465, 2912 }))
                     return decision;
-                if (tryAction("caster chain", { 48461, 48465, 48463 }))
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("wrath", { 48461, 5176 }))
+                    return decision;
+                if (tryAction("starfire", { 48465, 2912 }))
+                    return decision;
+                if (tryAction("wrath", { 48461, 5176 }))
                     return decision;
             }
             if (tryAction("burst cooldown", { 53201, 17116 }, true))
@@ -533,29 +596,29 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
         float priority;
     };
 
+    // Preserve Warsong/Battleground trigger intent as an explicit ordered chain:
+    // highest-priority emergency handling first, then raid/bg pressure, then sustain.
     std::array<TacticalRule, 9> const rules =
     {{
-        { "bg waiting", bgWaiting, "bg move to start", 50.0f },
-        { "bg active", bgActive, "bg move to objective", 50.0f },
-        { "often", often, "bg check objective", 51.0f },
         { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values), "bg move to objective", 90.0f },
+        { "timer bg", periodicRefresh, "bg reset objective force", 80.0f },
         { "enemy flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::EnemyFlagCarrierNear, values), "attack enemy flag carrier", 70.0f },
         { "team flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::TeamFlagCarrierNear, values), "bg protect fc", 65.0f },
+        { "often", often, "bg check objective", 51.0f },
+        { "bg waiting", bgWaiting, "bg move to start", 50.0f },
+        { "bg active", bgActive, "bg move to objective", 50.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
-        { "low mana", lowMana, "bg use buff", 45.0f },
-        { "timer bg", periodicRefresh, "bg reset objective force", 80.0f }
+        { "low mana", lowMana, "bg use buff", 45.0f }
     }};
 
     for (TacticalRule const& rule : rules)
     {
-        if (!rule.condition)
-            continue;
-
-        if (!decision.actionName || rule.priority > decision.priority)
+        if (rule.condition)
         {
             decision.triggerName = rule.triggerName;
             decision.actionName = rule.actionName;
             decision.priority = rule.priority;
+            return decision;
         }
     }
 

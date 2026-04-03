@@ -127,3 +127,32 @@ Loader path and lifecycle gates remain preserved as-is:
 - Loader update path remains exactly `RandomBotParticipationManager::ProcessPlayerLifecycle(Player*)`.
 - Lifecycle gate chain remains exactly `Playerbot.Enable && Playerbot.PvpCore.Enable && Playerbot.PvpLifecycle.Enable`.
 - Manager cadence ownership and interval remain unchanged.
+
+### Phase-4 review follow-up (class behavior parity corrections)
+
+- Exact reference files consulted in this pass:
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/StrategyContext.h`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/TriggerContext.h`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/Strategy/BattlegroundStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Strategy/ArmsWarriorStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Hunter/Strategy/MarksmanshipHunterStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Rogue/Strategy/DpsRogueStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Mage/Strategy/FrostMageStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Dk/Strategy/FrostDKStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Shaman/Strategy/EnhancementShamanStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Priest/Strategy/ShadowPriestStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Paladin/Strategy/DpsPaladinStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Druid/Strategy/FeralDruidStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warlock/Strategy/DestructionWarlockStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Bot/RandomPlayerbotMgr.cpp`
+- Exact local files touched in this pass:
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpClassActions.cpp`
+  - `src/server/worldserver/playerbots.conf.dist`
+  - `doc/playerbot/pvp-port-roadmap.md`
+  - `compile_commands.json`
+- One-line intentional divergences still true after this pass:
+  - Flag-carrier trigger queries are still hard-disabled (`false`) because BG objective ownership/proximity seams are not yet ported in this Trinity slice.
+  - Class behavior remains table-driven in a consolidated selector rather than full upstream `TriggerNode`/`ActionNode` graph factories.
+- Preservation statement:
+  - Loader path remains exactly `RandomBotParticipationManager::ProcessPlayerLifecycle(Player*)`; lifecycle gate chain remains exactly `Playerbot.Enable && Playerbot.PvpCore.Enable && Playerbot.PvpLifecycle.Enable`; cadence ownership and interval remain manager-owned and unchanged.

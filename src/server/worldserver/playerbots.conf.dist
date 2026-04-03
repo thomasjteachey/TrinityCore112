@@ -55,8 +55,9 @@ Playerbot.PvpLifecycle.Enable = 0
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
 #                     Current implementation provides reference-aligned trigger/action vocabulary
-#                     and priority layering (offense, defensive, interrupt/cc, sustain/boost)
-#                     for all playable classes while remaining default OFF.
+#                     plus explicit ordered fallback alternates and strict cast-point validation
+#                     (known rank, cooldown/GCD/cast state, resource cost, range/LOS, target validity).
+#                     Feature remains default OFF.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 
