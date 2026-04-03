@@ -18,6 +18,7 @@
 #include "PlayerbotRandomBotParticipation.h"
 
 #include "PlayerbotPvpCore.h"
+#include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
 
 #include "Log.h"
@@ -246,6 +247,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         BattlegroundLifecycleActions::Execute(player, battlegroundContext);
     bool const didExecuteArena = hooks.arenaParticipationHook &&
         ArenaLifecycleActions::Execute(player, arenaContext);
+    PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
+    bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
 
     if (didExecuteBattleground)
     {
@@ -260,8 +263,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     }
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}.",
-        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0);
+        "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}, didExecuteClassSpell={}.",
+        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0, didExecuteClassSpell ? 1 : 0);
 }
 
 bool RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,

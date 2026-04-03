@@ -22,6 +22,8 @@
 #include "Configuration/Config.h"
 #include "Player.h"
 
+#include <array>
+
 namespace
 {
 playerbot::PvpCoreConfig g_PvpCoreConfig;
@@ -29,6 +31,37 @@ playerbot::PvpCoreConfig g_PvpCoreConfig;
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
+}
+
+bool IsClassSpellGateEnabled(playerbot::PvpCoreConfig const& config)
+{
+    return config.moduleEnabled && config.pvpCoreEnabled && config.pvpClassSpellsEnabled;
+}
+
+bool IsWarriorArmsSliceCandidate(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_WARRIOR)
+        return false;
+
+    // Reference-aligned intent: this minimal slice mirrors Arms strategy priority around Mortal Strike.
+    constexpr std::array<uint32, 3> mortalStrikeRanks{ 47486, 47485, 12294 };
+    for (uint32 spellId : mortalStrikeRanks)
+        if (player->HasSpell(spellId))
+            return true;
+
+    return false;
+}
+
+bool HasKnownSpell(Player const* player, std::initializer_list<uint32> spellIds)
+{
+    if (!player)
+        return false;
+
+    for (uint32 spellId : spellIds)
+        if (player->HasSpell(spellId))
+            return true;
+
+    return false;
 }
 }
 
@@ -40,6 +73,7 @@ void PvpCore::LoadConfig()
     g_PvpCoreConfig.pvpCoreEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpCore.Enable", false);
     g_PvpCoreConfig.pvpTacticsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpTactics.Enable", false);
     g_PvpCoreConfig.pvpLifecycleEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpLifecycle.Enable", false);
+    g_PvpCoreConfig.pvpClassSpellsEnabled = sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.Enable", false);
 }
 
 PvpCoreConfig const& PvpCore::GetConfig()
@@ -142,6 +176,50 @@ ArenaLifecycleContext PvpCore::BuildArenaLifecycleContext(Player const* player, 
 
     context.queueOperation = SelectArenaQueueOperationSkeleton(values);
     context.teamInteraction = SelectArenaTeamInteractionSkeleton(values);
+    return context;
+}
+
+PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpValues const& values)
+{
+    PvpClassSpellContext context;
+    context.classSpellsEnabled = IsClassSpellGateEnabled(g_PvpCoreConfig);
+    if (!context.classSpellsEnabled || !player || !values.inBattleground || !IsTriggerActive(PvpTrigger::BgActive, values))
+        return context;
+
+    if (!IsWarriorArmsSliceCandidate(player))
+        return context;
+
+    Unit const* target = player->GetVictim();
+    if (!target || !target->IsAlive() || target->GetGUID() == player->GetGUID())
+        return context;
+
+    bool const targetCriticalHealth = target->HealthBelowPct(20);
+    bool const enemyOutOfMelee = !player->IsWithinMeleeRange(target);
+    bool const tasteForBlood = player->HasAura(60503);
+    bool const targetAlreadySlowed = target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED);
+    bool const highRageAvailable = player->GetPower(POWER_RAGE) >= 500;
+    bool const hasBattleShout = player->HasAura(6673);
+    bool const inBattleStance = player->HasAura(2457);
+
+    // Reference mirror from ArmsWarriorStrategy trigger intent, keeping priority ordering explicit.
+    if (targetCriticalHealth && HasKnownSpell(player, { 47471, 5308 }))
+        context.actionType = PvpClassSpellActionType::Execute;
+    else if (enemyOutOfMelee && HasKnownSpell(player, { 11578, 100 }))
+        context.actionType = PvpClassSpellActionType::Charge;
+    else if (tasteForBlood && HasKnownSpell(player, { 7384 }))
+        context.actionType = PvpClassSpellActionType::Overpower;
+    else if (HasKnownSpell(player, { 47486, 12294 }))
+        context.actionType = PvpClassSpellActionType::MortalStrike;
+    else if (!targetAlreadySlowed && HasKnownSpell(player, { 1715 }))
+        context.actionType = PvpClassSpellActionType::Hamstring;
+    else if (highRageAvailable && HasKnownSpell(player, { 47450, 78 }))
+        context.actionType = PvpClassSpellActionType::HeroicStrike;
+    else if (!hasBattleShout && HasKnownSpell(player, { 47436, 6673 }))
+        context.actionType = PvpClassSpellActionType::BattleShout;
+    else if (!inBattleStance && HasKnownSpell(player, { 2457 }))
+        context.actionType = PvpClassSpellActionType::BattleStance;
+
+    context.shouldExecute = context.actionType != PvpClassSpellActionType::None;
     return context;
 }
 

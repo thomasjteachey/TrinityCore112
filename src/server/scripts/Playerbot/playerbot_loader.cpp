@@ -43,9 +43,10 @@ public:
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
 
-        TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}, pvp tactics: {}, pvp lifecycle: {}).",
+        TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}, pvp tactics: {}, pvp lifecycle: {}, pvp class spells: {}).",
             config.moduleEnabled ? "true" : "false", config.pvpCoreEnabled ? "true" : "false",
-            config.pvpTacticsEnabled ? "true" : "false", config.pvpLifecycleEnabled ? "true" : "false");
+            config.pvpTacticsEnabled ? "true" : "false", config.pvpLifecycleEnabled ? "true" : "false",
+            config.pvpClassSpellsEnabled ? "true" : "false");
     }
 
 };

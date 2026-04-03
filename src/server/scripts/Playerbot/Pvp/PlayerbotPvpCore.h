@@ -31,6 +31,7 @@ struct PvpCoreConfig
     bool pvpCoreEnabled = false;
     bool pvpTacticsEnabled = false;
     bool pvpLifecycleEnabled = false;
+    bool pvpClassSpellsEnabled = false;
 };
 
 enum class BattlegroundState : uint8
@@ -128,6 +129,26 @@ enum class ArenaTeamInteractionType : uint8
     DeclineInvite
 };
 
+enum class PvpClassSpellActionType : uint8
+{
+    None = 0,
+    Charge,
+    BattleStance,
+    BattleShout,
+    MortalStrike,
+    Execute,
+    Overpower,
+    Hamstring,
+    HeroicStrike
+};
+
+struct PvpClassSpellContext
+{
+    bool classSpellsEnabled = false;
+    bool shouldExecute = false;
+    PvpClassSpellActionType actionType = PvpClassSpellActionType::None;
+};
+
 struct BattlegroundLifecycleContext
 {
     bool lifecycleEnabled = false;
@@ -161,6 +182,7 @@ public:
     static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
     static BattlegroundLifecycleContext BuildBattlegroundLifecycleContext(Player const* player, PvpValues const& values);
     static ArenaLifecycleContext BuildArenaLifecycleContext(Player const* player, PvpValues const& values);
+    static PvpClassSpellContext BuildClassSpellContext(Player const* player, PvpValues const& values);
     static RandomBotParticipationHooks BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values);
 
 private:
