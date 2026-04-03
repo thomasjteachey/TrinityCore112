@@ -46,7 +46,9 @@ Playerbot.PvpTactics.Enable = 0
 
 #    Playerbot.PvpLifecycle.Enable
 #        Description: Enables battleground/arena queue participation lifecycle scaffolding and random-bot
-#                     participation hooks. This phase wires lifecycle entry points only and does not
+#                     participation hooks. Real players are always excluded from these hooks.
+#                     Battleground queue primitive currently targets Warsong Gulch.
+#                     This phase wires lifecycle entry points only and does not
 #                     include class spell logic, queue cadence tuning, or SQL payloads.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
