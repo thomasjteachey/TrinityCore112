@@ -27,6 +27,8 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
+#include "StringConvert.h"
+#include "StringFormat.h"
 #include "Util.h"
 
 #include <algorithm>
@@ -280,10 +282,12 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
         accountList += std::to_string(accountId);
     }
 
-    QueryResult result = CharacterDatabase.Query(
+    std::string const query = Trinity::StringFormat(
         "SELECT guid, account, level, race FROM characters "
         "WHERE online = 0 AND account IN ({}) AND level >= {} AND level <= {}",
-        accountList, config.minLevel, config.maxLevel);
+        accountList, static_cast<uint32>(config.minLevel), static_cast<uint32>(config.maxLevel));
+
+    QueryResult result = CharacterDatabase.Query(query.c_str());
 
     if (!result)
         return candidates;
@@ -292,10 +296,10 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
     {
         Field* fields = result->Fetch();
         RandomBotPoolCandidate candidate;
-        candidate.lowGuid = fields[0].Get<uint32>();
-        candidate.account = fields[1].Get<uint32>();
-        candidate.level = fields[2].Get<uint8>();
-        candidate.race = fields[3].Get<uint8>();
+        candidate.lowGuid = fields[0].GetUInt32();
+        candidate.account = fields[1].GetUInt32();
+        candidate.level = fields[2].GetUInt8();
+        candidate.race = fields[3].GetUInt8();
         candidates.push_back(candidate);
     }
     while (result->NextRow());
