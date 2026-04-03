@@ -48,6 +48,7 @@ struct RandomBotPopulationSnapshot
     uint32 onlineAllianceRandomBots = 0;
     uint32 onlineHordeRandomBots = 0;
     uint32 offlinePoolSize = 0;
+    uint32 maxOnlineBotsPerAccount = 0;
     uint64 rebalanceTicks = 0;
     uint64 loginAttempts = 0;
     uint64 loginSuccess = 0;

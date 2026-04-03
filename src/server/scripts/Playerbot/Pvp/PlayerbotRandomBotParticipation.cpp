@@ -27,8 +27,6 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
-#include "StringConvert.h"
-#include "StringFormat.h"
 #include "Util.h"
 
 #include <algorithm>
@@ -89,6 +87,7 @@ struct RandomBotPopulationConfig
     uint8 minLevel = 10;
     uint8 maxLevel = 80;
     uint8 allianceRatioPercent = 50;
+    uint32 maxOnlineBotsPerAccount = 0;
     uint32 selectionHistorySize = 48;
     std::unordered_set<uint32> botAccountIds;
 };
@@ -282,12 +281,10 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
         accountList += std::to_string(accountId);
     }
 
-    std::string const query = Trinity::StringFormat(
+    QueryResult result = CharacterDatabase.Query(
         "SELECT guid, account, level, race FROM characters "
         "WHERE online = 0 AND account IN ({}) AND level >= {} AND level <= {}",
-        accountList, static_cast<uint32>(config.minLevel), static_cast<uint32>(config.maxLevel));
-
-    QueryResult result = CharacterDatabase.Query(query.c_str());
+        accountList, config.minLevel, config.maxLevel);
 
     if (!result)
         return candidates;
@@ -296,15 +293,45 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
     {
         Field* fields = result->Fetch();
         RandomBotPoolCandidate candidate;
-        candidate.lowGuid = fields[0].GetUInt32();
-        candidate.account = fields[1].GetUInt32();
-        candidate.level = fields[2].GetUInt8();
-        candidate.race = fields[3].GetUInt8();
+        candidate.lowGuid = fields[0].Get<uint32>();
+        candidate.account = fields[1].Get<uint32>();
+        candidate.level = fields[2].Get<uint8>();
+        candidate.race = fields[3].Get<uint8>();
         candidates.push_back(candidate);
     }
     while (result->NextRow());
 
     return candidates;
+}
+
+std::unordered_map<uint32, uint32> QueryOnlineBotCountsByAccount(RandomBotPopulationConfig const& config)
+{
+    std::unordered_map<uint32, uint32> onlineByAccount;
+    if (config.botAccountIds.empty())
+        return onlineByAccount;
+
+    std::string accountList;
+    accountList.reserve(config.botAccountIds.size() * 6);
+    for (uint32 accountId : config.botAccountIds)
+    {
+        if (!accountList.empty())
+            accountList += ',';
+        accountList += std::to_string(accountId);
+    }
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT account, COUNT(*) FROM characters WHERE online = 1 AND account IN ({}) GROUP BY account",
+        accountList);
+    if (!result)
+        return onlineByAccount;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        onlineByAccount[fields[0].Get<uint32>()] = fields[1].Get<uint32>();
+    } while (result->NextRow());
+
+    return onlineByAccount;
 }
 
 void TrackRecentSelection(RandomBotPopulationState& state, uint32 lowGuid)
@@ -340,7 +367,8 @@ uint64 ComputeDeterministicCandidateScore(RandomBotPoolCandidate const& candidat
 }
 
 std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState const& state,
-    std::vector<RandomBotPoolCandidate> pool, uint32 requiredCount, uint32 currentAllianceOnline, uint32 currentHordeOnline)
+    std::vector<RandomBotPoolCandidate> pool, uint32 requiredCount, uint32 currentAllianceOnline, uint32 currentHordeOnline,
+    std::unordered_map<uint32, uint32> onlineByAccount)
 {
     if (!requiredCount || pool.empty())
         return {};
@@ -377,6 +405,14 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
 
         if (!shouldTake)
             continue;
+
+        if (state.config.maxOnlineBotsPerAccount > 0)
+        {
+            uint32 const onlineOnAccount = onlineByAccount[candidate.account];
+            if (onlineOnAccount >= state.config.maxOnlineBotsPerAccount)
+                continue;
+            onlineByAccount[candidate.account] = onlineOnAccount + 1;
+        }
 
         selected.push_back(candidate);
         if (candidateTeam == TEAM_ALLIANCE)
@@ -444,13 +480,14 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     {
         uint32 const needed = target - online.total;
         std::vector<RandomBotPoolCandidate> const pool = QueryOfflinePool(state.config);
+        std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
         if (pool.empty())
         {
             state.skippedNoCandidatePool++;
             return false;
         }
 
-        std::vector<RandomBotPoolCandidate> const selection = PickLoginCandidates(state, pool, needed, online.alliance, online.horde);
+        std::vector<RandomBotPoolCandidate> const selection = PickLoginCandidates(state, pool, needed, online.alliance, online.horde, onlineByAccount);
         for (RandomBotPoolCandidate const& candidate : selection)
         {
             state.loginAttempts++;
@@ -507,6 +544,7 @@ void LoadPopulationConfigLocked(RandomBotPopulationState& state)
     config.minLevel = static_cast<uint8>(std::clamp<int32>(sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.MinLevel", 10), 1, 80));
     config.maxLevel = static_cast<uint8>(std::clamp<int32>(sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.MaxLevel", 80), 1, 80));
     config.allianceRatioPercent = static_cast<uint8>(std::clamp<int32>(sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.AllianceRatioPercent", 50), 0, 100));
+    config.maxOnlineBotsPerAccount = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.MaxOnlineBotsPerAccount", 0));
     config.selectionHistorySize = std::max<int32>(1, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.SelectionHistorySize", 48));
 
     if (config.targetMax < config.targetMin)
@@ -532,9 +570,9 @@ void LoadPopulationConfigLocked(RandomBotPopulationState& state)
         state.recentSelectedLowGuidSet.erase(guid);
     }
 
-    TC_LOG_INFO("playerbots.population", "Random bot population config loaded: enabled={}, targetMin={}, targetMax={}, intervalMs={}, levelRange=[{}, {}], allianceRatio={}, accountPoolSize={}.",
+    TC_LOG_INFO("playerbots.population", "Random bot population config loaded: enabled={}, targetMin={}, targetMax={}, intervalMs={}, levelRange=[{}, {}], allianceRatio={}, maxPerAccount={}, accountPoolSize={}.",
         state.config.enabled ? 1 : 0, state.config.targetMin, state.config.targetMax, state.config.rebalanceIntervalMs,
-        state.config.minLevel, state.config.maxLevel, state.config.allianceRatioPercent, state.config.botAccountIds.size());
+        state.config.minLevel, state.config.maxLevel, state.config.allianceRatioPercent, state.config.maxOnlineBotsPerAccount, state.config.botAccountIds.size());
 }
 }
 
@@ -653,6 +691,7 @@ RandomBotPopulationSnapshot RandomBotParticipationManager::GetPopulationSnapshot
     snapshot.onlineAllianceRandomBots = online.alliance;
     snapshot.onlineHordeRandomBots = online.horde;
     snapshot.offlinePoolSize = static_cast<uint32>(QueryOfflinePool(g_RandomPopulation.config).size());
+    snapshot.maxOnlineBotsPerAccount = g_RandomPopulation.config.maxOnlineBotsPerAccount;
     snapshot.rebalanceTicks = g_RandomPopulation.rebalanceTicks;
     snapshot.loginAttempts = g_RandomPopulation.loginAttempts;
     snapshot.loginSuccess = g_RandomPopulation.loginSuccess;

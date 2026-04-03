@@ -122,6 +122,13 @@ Playerbot.RandomPopulation.MaxLevel = 80
 
 Playerbot.RandomPopulation.AllianceRatioPercent = 50
 
+#    Playerbot.RandomPopulation.MaxOnlineBotsPerAccount
+#        Description: Maximum random bots allowed online at once per account during candidate selection.
+#                     Set to 0 to disable the cap (allows multiple bots per account without manager-side limit).
+#        Default:     0
+
+Playerbot.RandomPopulation.MaxOnlineBotsPerAccount = 0
+
 #    Playerbot.RandomPopulation.SelectionHistorySize
 #        Description: Number of recently selected offline bot guids to deprioritize during deterministic
 #                     candidate ordering to reduce immediate repeats while preserving reproducibility.
