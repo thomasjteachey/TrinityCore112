@@ -103,7 +103,7 @@ Output in this phase:
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/StrategyContext.h` (strategy naming context for PvP strategy enable surface)
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/TriggerContext.h` (trigger naming semantics used by PvP/class strategies)
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/Strategy/BattlegroundStrategy.cpp` (battleground-active trigger context)
-  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Strategy/ArmsWarriorStrategy.{h,cpp}` (Arms priority and trigger/action intent)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Strategy/ArmsWarriorStrategy.{h,cpp}` (Arms priority ordering and ActionNode-style fallback intent)
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Trigger/WarriorTriggers.{h,cpp}` (trigger activation semantics for sudden death, taste for blood, high rage, battle stance/shout, and mobility)
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Action/WarriorActions.{h,cpp}` (useful/possible checks and spell action targeting semantics)
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Strategy/*Strategy*.{h,cpp}` (default PvP action ordering across class/spec strategies used as class parity baseline)
@@ -117,8 +117,8 @@ Output in this phase:
   - `doc/playerbot/pvp-port-roadmap.md`
 - Intentional divergences:
   - Spell resolution uses known-rank lookup by spell ID instead of action-node factories, because the Trinity slice does not yet port the full `NamedObjectFactory<ActionNode>` class AI stack.
-  - Trigger/action selection is executed in a consolidated class context builder instead of individual `TriggerNode`/`ActionNode` factories to preserve existing Trinity lifecycle topology.
-  - Arms `piercing howl -> mocking blow -> hamstring` fallback is collapsed to direct `hamstring` execution because only `hamstring` is currently represented in the local class-spell bridge.
+  - Trigger/action selection is executed in consolidated table-driven context builders instead of individual `TriggerNode`/`ActionNode` factories to preserve existing Trinity lifecycle topology.
+  - Battleground trigger decisions mirror `bg waiting/bg active/often/low health/low mana/timer bg` ordering as a tactical decision table, but remain context-only (no dedicated battleground action executor in this Phase-4 slice).
   - Spec strategy selection is inferred from active-spec talent ownership and rank-known spell availability, because full strategy graph context objects are not yet instantiated in this module.
 
 Loader path and lifecycle gates remain preserved as-is:

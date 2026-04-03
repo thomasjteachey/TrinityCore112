@@ -18,6 +18,7 @@
 #include "PlayerbotPvpClassActions.h"
 
 #include "Player.h"
+#include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
 
@@ -28,14 +29,32 @@ bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast)
     if (!player || !spellId || !player->HasSpell(spellId))
         return false;
 
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
     if (player->GetSpellHistory()->HasCooldown(spellId) || player->IsNonMeleeSpellCast(false))
         return false;
 
     Unit* target = selfCast ? static_cast<Unit*>(player) : player->GetVictim();
     if (!target || !target->IsAlive())
         return false;
-    if (!selfCast && (!player->IsWithinLOSInMap(target) || !player->IsWithinDistInMap(target, 35.0f)))
+    if (!selfCast && !player->IsValidAttackTarget(target))
         return false;
+
+    if (!player->IsWithinLOSInMap(target))
+        return false;
+
+    if (!selfCast)
+    {
+        float const maxRange = spellInfo->GetMaxRange(false);
+        if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
+            return false;
+    }
+
+    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+        if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
+            return false;
 
     player->CastSpell(target, spellId, false);
     return true;

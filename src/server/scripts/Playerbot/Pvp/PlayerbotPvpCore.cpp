@@ -109,6 +109,13 @@ struct SpellDecision
     bool selfCast = false;
 };
 
+struct TacticalDecision
+{
+    char const* triggerName = nullptr;
+    char const* actionName = nullptr;
+    float priority = 0.0f;
+};
+
 enum class ClassSpecProfile : uint8
 {
     Unknown = 0,
@@ -229,10 +236,12 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
     bool const targetAlreadySlowed = target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED);
     bool const highRageAvailable = player->GetPower(POWER_RAGE) >= 600;
     bool const lowRageAvailable = player->GetPower(POWER_RAGE) < 200;
+    bool const lowHealth = player->HealthBelowPct(40);
     bool const enemyOutOfMelee = !inMelee;
     bool const enemyInChargeReach = player->IsWithinDistInMap(target, 25.0f) && player->IsWithinLOSInMap(target);
     bool const mediumHealth = player->HealthBelowPct(60);
     bool const almostFullHealth = player->GetHealthPct() >= 85.0f;
+    bool const enemyCasting = target->HasUnitState(UNIT_STATE_CASTING);
     ClassSpecProfile const specProfile = DetectClassSpecProfile(player);
     auto tryAction = [&](char const* actionName, std::initializer_list<uint32> spellIds, bool selfCast = false) -> bool
     {
@@ -249,6 +258,8 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
     switch (player->GetClass())
     {
         case CLASS_WARRIOR:
+            if (enemyCasting && inMelee && tryAction("pummel", { 6552 }))
+                return decision;
             if (enemyOutOfMelee && enemyInChargeReach && tryAction("charge", { 11578, 11577, 100 }))
                 return decision;
             if (!inBattleStance && tryAction("battle stance", { 2457 }, true))
@@ -271,7 +282,7 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             if (inMelee && tryAction("melee pressure", { 47486, 47485, 12294, 23881, 47498 }))
                 return decision;
-            if (!targetAlreadySlowed && inMelee && tryAction("hamstring", { 1715 }))
+            if (!targetAlreadySlowed && inMelee && tryAction("snare fallback chain", { 12323, 20560, 1715 }))
                 return decision; // reference fallback chain: piercing howl -> mocking blow -> hamstring
             if (highRageAvailable && inMelee && tryAction("slam", { 47475, 47474, 25242, 1464 }))
                 return decision;
@@ -290,6 +301,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_PALADIN:
+            if (enemyCasting && inMelee && tryAction("hammer of justice", { 10308, 853 }))
+                return decision;
+            if (lowHealth && tryAction("divine protection", { 498 }, true))
+                return decision;
             if (targetCriticalHealth && tryAction("hammer of wrath", { 48806, 24275 }))
                 return decision;
             if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("retribution burst", { 35395, 53385, 53408, 20271 }))
@@ -304,6 +319,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_HUNTER:
+            if (enemyCasting && rangedWindow && tryAction("silencing shot", { 34490 }))
+                return decision;
+            if (lowHealth && tryAction("deterrence", { 19263 }, true))
+                return decision;
             if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 49001, 13555, 13554, 1978 }))
@@ -323,6 +342,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_ROGUE:
+            if (enemyCasting && inMelee && tryAction("kick", { 1766 }))
+                return decision;
+            if (lowHealth && tryAction("evasion", { 26669, 5277 }, true))
+                return decision;
             if (inMelee)
             {
                 if (player->GetComboPoints() >= 4)
@@ -341,6 +364,8 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_PRIEST:
+            if (lowHealth && tryAction("dispersion", { 47585 }, true))
+                return decision;
             if (rangedWindow)
             {
                 if (specProfile != ClassSpecProfile::Tertiary && tryAction("discipline-holy pressure", { 48123, 48127, 48066 }))
@@ -356,6 +381,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
             }
             break;
         case CLASS_DEATH_KNIGHT:
+            if (enemyCasting && inMelee && tryAction("mind freeze", { 47528 }))
+                return decision;
+            if (lowHealth && tryAction("icebound fortitude", { 48792 }, true))
+                return decision;
             if (inMelee && specProfile == ClassSpecProfile::Primary && tryAction("blood strike chain", { 55050, 49924, 55262 }))
                 return decision;
             if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("frost strike chain", { 55268, 51425, 49184 }))
@@ -368,6 +397,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_SHAMAN:
+            if (enemyCasting && rangedWindow && tryAction("wind shear", { 57994 }))
+                return decision;
+            if (lowHealth && tryAction("shamanistic rage", { 30823 }, true))
+                return decision;
             if (inMelee)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
@@ -394,6 +427,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_MAGE:
+            if (enemyCasting && rangedWindow && tryAction("counterspell", { 2139 }))
+                return decision;
+            if (lowHealth && tryAction("ice block", { 45438 }, true))
+                return decision;
             if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 42891, 12654 }))
@@ -412,6 +449,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             break;
         case CLASS_WARLOCK:
+            if (enemyCasting && rangedWindow && tryAction("spell lock", { 19647 }))
+                return decision;
+            if (lowHealth && tryAction("death coil", { 47860, 6789 }))
+                return decision;
             if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 47813, 172 }))
@@ -431,6 +472,10 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
             }
             break;
         case CLASS_DRUID:
+            if (enemyCasting && rangedWindow && tryAction("bash", { 8983 }))
+                return decision;
+            if (lowHealth && tryAction("barkskin", { 22812 }, true))
+                return decision;
             if (inMelee)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 48574, 1822 }))
@@ -458,6 +503,50 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
             break;
         default:
             break;
+    }
+
+    return decision;
+}
+
+TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, playerbot::PvpValues const& values)
+{
+    TacticalDecision decision;
+    if (!player)
+        return decision;
+
+    bool const lowHealth = player->HealthBelowPct(35);
+    bool const lowMana = player->GetPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 25.0f;
+    bool const periodicRefresh = values.battlegroundState == playerbot::BattlegroundState::Active;
+
+    struct TacticalRule
+    {
+        char const* triggerName;
+        bool condition;
+        char const* actionName;
+        float priority;
+    };
+
+    std::array<TacticalRule, 8> const rules =
+    {{
+        { "bg waiting", values.battlegroundState == playerbot::BattlegroundState::WaitingToStart, "bg move to start", 50.0f },
+        { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values), "bg move to objective", 90.0f },
+        { "enemy flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::EnemyFlagCarrierNear, values), "attack enemy flag carrier", 70.0f },
+        { "team flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::TeamFlagCarrierNear, values), "bg protect fc", 65.0f },
+        { "bg active", values.battlegroundState == playerbot::BattlegroundState::Active, "bg move to objective", 50.0f },
+        { "low health", lowHealth, "bg use buff", 45.0f },
+        { "low mana", lowMana, "bg use buff", 45.0f },
+        { "timer bg", periodicRefresh, "bg reset objective force", 80.0f }
+    }};
+
+    for (TacticalRule const& rule : rules)
+    {
+        if (!rule.condition)
+            continue;
+
+        decision.triggerName = rule.triggerName;
+        decision.actionName = rule.actionName;
+        decision.priority = rule.priority;
+        return decision;
     }
 
     return decision;
@@ -547,6 +636,10 @@ BattlegroundTacticalContext PvpCore::BuildBattlegroundTacticalContext(Player con
         return context;
 
     context.shouldEvaluate = true;
+    TacticalDecision const decision = SelectBattlegroundTacticalDecision(player, values);
+    context.triggerName = decision.triggerName;
+    context.actionName = decision.actionName;
+    context.actionPriority = decision.priority;
     context.objective = SelectObjectiveSkeleton(values);
     context.movement = SelectMovementPrimitiveSkeleton(values, context.objective);
     context.flagCarrierDirective = SelectFlagCarrierDirectiveSkeleton(values);

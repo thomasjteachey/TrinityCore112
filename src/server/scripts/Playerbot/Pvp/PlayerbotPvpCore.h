@@ -103,6 +103,9 @@ struct BattlegroundTacticalContext
 {
     bool tacticsEnabled = false;
     bool shouldEvaluate = false;
+    char const* triggerName = nullptr;
+    char const* actionName = nullptr;
+    float actionPriority = 0.0f;
     BattlegroundObjectiveSelection objective;
     BattlegroundMovementPrimitive movement = BattlegroundMovementPrimitive::None;
     FlagCarrierDirective flagCarrierDirective = FlagCarrierDirective::None;
