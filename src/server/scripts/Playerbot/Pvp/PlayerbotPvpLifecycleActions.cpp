@@ -19,11 +19,15 @@
 
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
+#include "BattlegroundEY.h"
+#include "BattlegroundWS.h"
 #include "DBCStores.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
 #include "Log.h"
+#include "MotionMaster.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "World.h"
 
@@ -189,6 +193,65 @@ bool IsTacticalAction(char const* actionName, char const* expected)
 {
     return actionName && expected && std::strcmp(actionName, expected) == 0;
 }
+
+Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)
+{
+    if (!player || directive == playerbot::FlagCarrierDirective::None || !player->InBattleground())
+        return nullptr;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return nullptr;
+
+    TeamId const botTeam = player->GetTeamId();
+    TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+
+    if (BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(battleground))
+    {
+        ObjectGuid carrierGuid = ObjectGuid::Empty;
+        if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier)
+            carrierGuid = bgWs->GetFlagPickerGUID(botTeam);
+        else if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier)
+            carrierGuid = bgWs->GetFlagPickerGUID(enemyTeam);
+
+        if (carrierGuid.IsEmpty())
+            return nullptr;
+
+        return ObjectAccessor::FindConnectedPlayer(carrierGuid);
+    }
+
+    if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+    {
+        ObjectGuid const carrierGuid = bgEy->GetFlagPickerGUID();
+        if (carrierGuid.IsEmpty())
+            return nullptr;
+
+        Player* carrier = ObjectAccessor::FindConnectedPlayer(carrierGuid);
+        if (!carrier)
+            return nullptr;
+
+        if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier && carrier->GetTeamId() != botTeam)
+            return carrier;
+        if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrier->GetTeamId() == botTeam)
+            return carrier;
+    }
+
+    return nullptr;
+}
+
+bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId())
+        return false;
+
+    if (!player->IsWithinLOSInMap(target))
+        return false;
+
+    if (!player->IsWithinDistInMap(target, desiredDistance))
+        player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
+
+    return true;
+}
 }
 
 namespace playerbot
@@ -336,6 +399,28 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         return false;
     }
 
+    if (context.movement == BattlegroundMovementPrimitive::MoveToObjectiveUnit ||
+        context.movement == BattlegroundMovementPrimitive::FollowFlagCarrier ||
+        context.flagCarrierDirective != FlagCarrierDirective::None)
+    {
+        if (Player* carrier = FindFlagCarrierForDirective(player, context.flagCarrierDirective))
+            return MoveTowardUnit(player, carrier, 20.0f);
+    }
+
+    if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition)
+    {
+        if (Battleground* battleground = player->GetBattleground())
+        {
+            if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
+            {
+                Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
+                if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                    player->GetMotionMaster()->MovePoint(0, destination);
+                return true;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -368,7 +453,11 @@ bool BattlegroundTacticalActions::AttackEnemyFlagCarrierPrimitive(Player* player
     if (!player || !player->InBattleground())
         return false;
 
-    return context.flagCarrierDirective == FlagCarrierDirective::AttackEnemyCarrier;
+    if (context.flagCarrierDirective != FlagCarrierDirective::AttackEnemyCarrier)
+        return false;
+
+    Player* enemyCarrier = FindFlagCarrierForDirective(player, FlagCarrierDirective::AttackEnemyCarrier);
+    return MoveTowardUnit(player, enemyCarrier, 15.0f);
 }
 
 bool BattlegroundTacticalActions::ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context)
@@ -376,7 +465,11 @@ bool BattlegroundTacticalActions::ProtectFlagCarrierPrimitive(Player* player, Ba
     if (!player || !player->InBattleground())
         return false;
 
-    return context.flagCarrierDirective == FlagCarrierDirective::ProtectTeamCarrier;
+    if (context.flagCarrierDirective != FlagCarrierDirective::ProtectTeamCarrier)
+        return false;
+
+    Player* teamCarrier = FindFlagCarrierForDirective(player, FlagCarrierDirective::ProtectTeamCarrier);
+    return MoveTowardUnit(player, teamCarrier, 18.0f);
 }
 
 bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const& context)

@@ -120,7 +120,7 @@ Output in this phase:
 - Intentional divergences:
   - Spell resolution uses known-rank lookup by spell ID instead of action-node factories, because the Trinity slice does not yet port the full `NamedObjectFactory<ActionNode>` class AI stack.
   - Trigger/action selection is executed in consolidated table-driven context builders plus primitive tactical execution stubs instead of individual `TriggerNode`/`ActionNode` factories, to preserve existing Trinity lifecycle topology.
-  - Flag-carrier ownership/proximity triggers (`player has flag`, `enemy flagcarrier near`, `team flagcarrier near`) still return false in this slice because objective-state query seams are not yet ported from the upstream AI stack.
+  - (Historical in Phase-4) Flag-carrier ownership/proximity triggers were hard-disabled before objective-state seams were added in the later Phase-5/Phase-6 completion pass.
   - Spec strategy selection is inferred from active-spec talent ownership and rank-known spell availability, because full strategy graph context objects are not yet instantiated in this module.
 
 Loader path and lifecycle gates remain preserved as-is:
@@ -156,3 +156,58 @@ Loader path and lifecycle gates remain preserved as-is:
   - Class behavior remains table-driven in a consolidated selector rather than full upstream `TriggerNode`/`ActionNode` graph factories.
 - Preservation statement:
   - Loader path remains exactly `RandomBotParticipationManager::ProcessPlayerLifecycle(Player*)`; lifecycle gate chain remains exactly `Playerbot.Enable && Playerbot.PvpCore.Enable && Playerbot.PvpLifecycle.Enable`; cadence ownership and interval remain manager-owned and unchanged.
+
+### Phase-5 / Phase-6 completion pass (validation-ready behavior)
+
+- Exact reference files consulted in this pass:
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/StrategyContext.h`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/TriggerContext.h`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/Strategy/BattlegroundStrategy.cpp`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/Trigger/PvpTriggers.{h,cpp}`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Strategy/*Strategy*.{h,cpp}`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Trigger/*Triggers*.{h,cpp}`
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Action/*Actions*.{h,cpp}`
+  - `playerbot reference/mod-playerbots-master/src/Bot/RandomPlayerbotMgr.cpp`
+- Exact local files touched in this pass:
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.h`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp`
+  - `src/server/worldserver/playerbots.conf.dist`
+  - `doc/playerbot/pvp-port-roadmap.md`
+- One-line intentional divergences still true after this pass:
+  - Class behavior remains table-driven in a consolidated selector rather than full upstream `TriggerNode`/`ActionNode` graph factories.
+  - Objective navigation still uses safe local movement primitives (follow/move-point) rather than full upstream tactical pathing graph and role-coordination state.
+- Preservation statement:
+  - Loader update path remains exactly `RandomBotParticipationManager::ProcessPlayerLifecycle(Player*)`.
+  - Lifecycle gate chain remains exactly `Playerbot.Enable && Playerbot.PvpCore.Enable && Playerbot.PvpLifecycle.Enable`.
+  - Cadence ownership/interval remain manager-owned and unchanged.
+  - Queue policy in lifecycle actions remains unchanged.
+  - Class-slice default remains OFF unless explicitly enabled.
+
+### Phase-6 validation upgrade checklist (compile + smoke)
+
+- Compile validation:
+  - Confirm `compile_commands.json` includes all touched Playerbot PvP `.cpp` paths.
+  - Run per-file syntax checks:
+    - `clang++ -std=c++20 -fsyntax-only <flags-from-compile_commands> src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp`
+    - `clang++ -std=c++20 -fsyntax-only <flags-from-compile_commands> src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp`
+  - Run narrow object-target builds for touched objects from existing build tree.
+- Lifecycle observability expectations (runtime):
+  - `.playerbot pvp lifecycle snapshot` must still expose `gateDisabled`, `cadenceThrottled`, `invalidPlayerState`, `noLifecycleHooksActive`, `battlegroundLifecycleExecuted`, and `arenaLifecycleExecuted`.
+  - `playerbots.pvp.lifecycle` debug logs must still include:
+    - branch marker lines
+    - reason observation lines
+    - dispatcher completion lines including battleground/arena/tactical/class booleans.
+- Explicit manual verification checklist:
+  - Battleground queueing:
+    - Bot can join BG queue with lifecycle gates enabled.
+    - BG invites are accepted/declined according to existing lifecycle context policy.
+  - Battleground objective behavior:
+    - In WSG/EotS when bot carries objective flag, `player has flag` trigger can activate and objective movement executes.
+    - In WSG/EotS when enemy carrier is near, `enemy flagcarrier near` trigger can activate and `attack enemy flag carrier` movement executes.
+    - In WSG/EotS when friendly carrier is near (and not in both-flags-out suppression window for WSG), `team flagcarrier near` trigger can activate and `bg protect fc` movement executes.
+    - Trigger ordering semantics still prefer emergency/objective handling before sustain actions.
+  - Arena behavior:
+    - Arena queue join/leave and team invite handling continue to execute with unchanged policy.
+  - Regression safety:
+    - With `Playerbot.PvpCore.Enable = 0` or `Playerbot.PvpLifecycle.Enable = 0`, lifecycle remains gated and no queue/tactical/class PvP behavior executes.

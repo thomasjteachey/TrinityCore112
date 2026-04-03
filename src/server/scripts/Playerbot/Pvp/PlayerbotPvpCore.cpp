@@ -19,7 +19,10 @@
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "BattlegroundEY.h"
+#include "BattlegroundWS.h"
 #include "Configuration/Config.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellHistory.h"
 
@@ -82,6 +85,66 @@ bool TargetHasShieldImmunityAura(Unit const* target)
 {
     return target && (target->HasAura(642) || target->HasAura(45438) || target->HasAura(41450) ||
         target->HasAura(1022) || target->HasAura(5599) || target->HasAura(10278));
+}
+
+bool IsFlagCarrierNear(Player const* player, ObjectGuid const& carrierGuid, float maxDistance)
+{
+    if (!player || carrierGuid.IsEmpty())
+        return false;
+
+    Player const* carrier = ObjectAccessor::FindConnectedPlayer(carrierGuid);
+    if (!carrier || !carrier->IsAlive() || carrier->GetMapId() != player->GetMapId())
+        return false;
+
+    return player->IsWithinDistInMap(carrier, maxDistance);
+}
+
+void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& values)
+{
+    if (!player || !values.inBattleground)
+        return;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    TeamId const botTeam = player->GetTeamId();
+    TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+    ObjectGuid const playerGuid = player->GetGUID();
+
+    if (BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(battleground))
+    {
+        ObjectGuid const enemyCarrierGuid = bgWs->GetFlagPickerGUID(botTeam);
+        ObjectGuid const teamCarrierGuid = bgWs->GetFlagPickerGUID(enemyTeam);
+
+        values.playerHasFlag = (teamCarrierGuid == playerGuid);
+        values.enemyFlagCarrierNear = IsFlagCarrierNear(player, enemyCarrierGuid, 100.0f);
+
+        bool const bothFlagsNotAtBase =
+            bgWs->GetFlagState(ALLIANCE) != BG_WS_FLAG_STATE_ON_BASE &&
+            bgWs->GetFlagState(HORDE) != BG_WS_FLAG_STATE_ON_BASE;
+        if (!bothFlagsNotAtBase)
+            values.teamFlagCarrierNear = IsFlagCarrierNear(player, teamCarrierGuid, 200.0f);
+
+        return;
+    }
+
+    if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+    {
+        ObjectGuid const carrierGuid = bgEy->GetFlagPickerGUID();
+        if (carrierGuid.IsEmpty())
+            return;
+
+        values.playerHasFlag = (carrierGuid == playerGuid);
+        Player const* carrier = ObjectAccessor::FindConnectedPlayer(carrierGuid);
+        if (!carrier || !carrier->IsAlive() || carrier->GetMapId() != player->GetMapId())
+            return;
+
+        if (carrier->GetTeamId() == botTeam)
+            values.teamFlagCarrierNear = player->IsWithinDistInMap(carrier, 200.0f);
+        else
+            values.enemyFlagCarrierNear = player->IsWithinDistInMap(carrier, 100.0f);
+    }
 }
 
 uint8 CountMeleeAttackers(Player const* player)
@@ -672,6 +735,8 @@ PvpValues PvpCore::CollectValues(Player const* player)
     if (values.inBattleground)
         values.battlegroundTypeId = player->GetBattlegroundTypeId();
 
+    PopulateObjectiveStateTriggers(player, values);
+
     return values;
 }
 
@@ -692,11 +757,11 @@ bool PvpCore::IsTriggerActive(PvpTrigger trigger, PvpValues const& values)
         case PvpTrigger::InBattlegroundWithoutFlag:
             return values.inBattleground;
         case PvpTrigger::PlayerHasFlag:
-            return false; // Phase-4 divergence: battleground flag ownership lookups are not yet wired in this Trinity slice.
+            return values.playerHasFlag;
         case PvpTrigger::EnemyFlagCarrierNear:
-            return false; // Phase-4 divergence: enemy flag-carrier proximity queries require map-objective scans not yet ported.
+            return values.enemyFlagCarrierNear;
         case PvpTrigger::TeamFlagCarrierNear:
-            return false; // Phase-4 divergence: team flag-carrier proximity queries require BG objective state APIs not yet ported.
+            return values.teamFlagCarrierNear;
         default:
             break;
     }
