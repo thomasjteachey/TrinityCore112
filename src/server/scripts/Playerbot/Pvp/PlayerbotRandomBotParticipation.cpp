@@ -217,11 +217,17 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     }
 
     PvpValues const values = PvpCore::CollectValues(player);
+    PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
+    bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
+
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
     if (!hooks.lifecycleEnabled)
     {
         LogLifecycleBranchSummary(guid, "hooks-lifecycle-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteClassSpell={}.",
+            guid.ToString(), didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -229,6 +235,9 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     {
         LogLifecycleBranchSummary(guid, "no-lifecycle-hooks-active");
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteClassSpell={}.",
+            guid.ToString(), didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -240,6 +249,9 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle dispatcher no-op with active hooks: guid={}, bgHook={}, arenaHook={}.",
             guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteClassSpell={}.",
+            guid.ToString(), didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -247,8 +259,6 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         BattlegroundLifecycleActions::Execute(player, battlegroundContext);
     bool const didExecuteArena = hooks.arenaParticipationHook &&
         ArenaLifecycleActions::Execute(player, arenaContext);
-    PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
-    bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
 
     if (didExecuteBattleground)
     {

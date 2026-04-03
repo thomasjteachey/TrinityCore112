@@ -97,21 +97,29 @@ Output in this phase:
 - Gate incomplete systems behind explicit config flags.
 - Preserve references in comments when behavior is intentionally mirrored.
 
-### Phase-4 Slice 1 parity mapping
+### Phase-4 Slice 1 parity mapping (updated)
 
 - Reference files mapped:
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/StrategyContext.h` (strategy naming context for PvP strategy enable surface)
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/TriggerContext.h` (trigger naming semantics used by PvP/class strategies)
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/Strategy/BattlegroundStrategy.cpp` (battleground-active trigger context)
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Strategy/ArmsWarriorStrategy.{h,cpp}` (Arms priority and trigger/action intent)
-  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Trigger/WarriorTriggers.h` (named trigger semantics: mortal strike, overpower/taste for blood, execute, hamstring, charge)
-  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Action/WarriorActions.h` (spell action naming/selection targets)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Trigger/WarriorTriggers.{h,cpp}` (trigger activation semantics for sudden death, taste for blood, high rage, battle stance/shout, and mobility)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Action/WarriorActions.{h,cpp}` (useful/possible checks and spell action targeting semantics)
+  - `playerbot reference/mod-playerbots-master/src/Bot/RandomPlayerbotMgr.cpp` (manager-owned cadence and lifecycle topology expectations)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Strategy/*Strategy.cpp` (class default-action ordering used to extend parity selection across all playable classes)
 - Port files touched:
   - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.{h,cpp}`
-  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpClassActions.{h,cpp}`
-  - `src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp`
-  - `src/server/scripts/Playerbot/playerbot_loader.cpp`
-  - `src/server/worldserver/playerbots.conf.dist`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpClassActions.cpp`
+  - `doc/playerbot/pvp-port-roadmap.md`
 - Intentional divergences:
   - Spell resolution uses known-rank lookup by spell ID instead of action-node factories, because the Trinity slice does not yet port the full `NamedObjectFactory<ActionNode>` class AI stack.
   - Trigger checks are condensed into a single context builder/executor path to keep the current lifecycle topology unchanged while still mirroring Arms trigger priority order.
+  - `piercing howl`/`mocking blow` fallback is represented by direct `hamstring` execution because this Trinity slice does not yet expose those fallback actions in the PvP class action enum.
+  - `slam`/`victory rush`/`retaliation`/`shattering throw` priorities are intentionally deferred to later slices because this Phase-4 Slice 1 scope is constrained to the direct Arms baseline decision chain used for primary PvP pressure setup.
+  - All classes currently mirror reference default-action priority spell choices (known-rank/cooldown/range checks) without full per-class trigger graph port because TriggerContext/ActionNode class stacks are still outside this slice’s topology constraints.
+
+Loader path and lifecycle gates remain preserved as-is:
+- Loader update path remains exactly `RandomBotParticipationManager::ProcessPlayerLifecycle(Player*)`.
+- Lifecycle gate chain remains exactly `Playerbot.Enable && Playerbot.PvpCore.Enable && Playerbot.PvpLifecycle.Enable`.
+- Manager cadence ownership and interval remain unchanged.

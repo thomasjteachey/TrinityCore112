@@ -129,24 +129,12 @@ enum class ArenaTeamInteractionType : uint8
     DeclineInvite
 };
 
-enum class PvpClassSpellActionType : uint8
-{
-    None = 0,
-    Charge,
-    BattleStance,
-    BattleShout,
-    MortalStrike,
-    Execute,
-    Overpower,
-    Hamstring,
-    HeroicStrike
-};
-
 struct PvpClassSpellContext
 {
     bool classSpellsEnabled = false;
     bool shouldExecute = false;
-    PvpClassSpellActionType actionType = PvpClassSpellActionType::None;
+    uint32 spellId = 0;
+    bool selfCast = false;
 };
 
 struct BattlegroundLifecycleContext
