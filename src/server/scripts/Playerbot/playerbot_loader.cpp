@@ -35,20 +35,33 @@ public:
     {
         playerbot::PvpCore::LoadConfig();
         playerbot::RandomBotParticipationManager::ResetCadence();
+        playerbot::RandomBotParticipationManager::LoadPopulationConfig();
     }
 
     void OnStartup() override
     {
         playerbot::PvpCore::LoadConfig();
         playerbot::RandomBotParticipationManager::ResetCadence();
+        playerbot::RandomBotParticipationManager::LoadPopulationConfig();
+        playerbot::RandomBotParticipationManager::OnStartupBootstrap();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+        playerbot::RandomBotPopulationSnapshot const population = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
 
         TC_LOG_INFO("server.loading", "Playerbot bootstrap loaded (enabled: {}, pvp core: {}, pvp tactics: {}, pvp lifecycle: {}, pvp class spells: {}).",
             config.moduleEnabled ? "true" : "false", config.pvpCoreEnabled ? "true" : "false",
             config.pvpTacticsEnabled ? "true" : "false", config.pvpLifecycleEnabled ? "true" : "false",
             config.pvpClassSpellsEnabled ? "true" : "false");
+
+        TC_LOG_INFO("server.loading", "Playerbot random population bootstrap (configEnabled: {}, runtimeEnabled: {}, target=[{}, {}], onlineBots: {}, loginOrchestration: {}).",
+            population.configEnabled ? "true" : "false", population.runtimeEnabled ? "true" : "false",
+            population.targetMin, population.targetMax, population.onlineRandomBots,
+            population.supportsLoginOrchestration ? "true" : "false");
     }
 
+    void OnUpdate(uint32 diff) override
+    {
+        playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
+    }
 };
 
 class PlayerbotLifecyclePlayerScript final : public PlayerScript
@@ -84,9 +97,19 @@ public:
             { "lifecycle", playerbotPvpLifecycleTable },
         };
 
+        static ChatCommandTable playerbotRandomPopulationTable =
+        {
+            { "status", HandlePlayerbotPopulationStatusCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "start", HandlePlayerbotPopulationStartCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "stop", HandlePlayerbotPopulationStopCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "rebalance now", HandlePlayerbotPopulationRebalanceCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+            { "list", HandlePlayerbotPopulationPoolCommand, rbac::RBAC_PERM_COMMAND_GM, Console::Yes },
+        };
+
         static ChatCommandTable playerbotTable =
         {
             { "pvp", playerbotPvpTable },
+            { "population", playerbotRandomPopulationTable },
         };
 
         static ChatCommandTable commandTable =
@@ -111,6 +134,74 @@ public:
         handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
         handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
         handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+
+    static bool HandlePlayerbotPopulationStatusCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        playerbot::RandomBotPopulationSnapshot const snapshot = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
+        handler->PSendSysMessage("Playerbot random population status:");
+        handler->PSendSysMessage(" - configEnabled: %u", snapshot.configEnabled ? 1u : 0u);
+        handler->PSendSysMessage(" - runtimeEnabled: %u", snapshot.runtimeEnabled ? 1u : 0u);
+        handler->PSendSysMessage(" - loginOrchestrationSupported: %u", snapshot.supportsLoginOrchestration ? 1u : 0u);
+        handler->PSendSysMessage(" - targetRange: %u-%u", snapshot.targetMin, snapshot.targetMax);
+        handler->PSendSysMessage(" - maxOnlineBotsPerAccount: %u (0 means unlimited)", snapshot.maxOnlineBotsPerAccount);
+        handler->PSendSysMessage(" - onlineRandomBots: %u (alliance=%u horde=%u)", snapshot.onlineRandomBots,
+            snapshot.onlineAllianceRandomBots, snapshot.onlineHordeRandomBots);
+        handler->PSendSysMessage(" - offlinePoolSize: %u", snapshot.offlinePoolSize);
+        handler->PSendSysMessage(" - rebalanceTicks: " UI64FMTD, snapshot.rebalanceTicks);
+        handler->PSendSysMessage(" - loginAttempts/success: " UI64FMTD "/" UI64FMTD, snapshot.loginAttempts, snapshot.loginSuccess);
+        handler->PSendSysMessage(" - logoutAttempts/success: " UI64FMTD "/" UI64FMTD, snapshot.logoutAttempts, snapshot.logoutSuccess);
+        handler->PSendSysMessage(" - skippedSafetyRealPlayers: " UI64FMTD, snapshot.skippedSafetyRealPlayers);
+        handler->PSendSysMessage(" - skippedNoCandidatePool: " UI64FMTD, snapshot.skippedNoCandidatePool);
+        handler->PSendSysMessage(" - skippedIntegrationGap: " UI64FMTD, snapshot.skippedIntegrationGap);
+        handler->PSendSysMessage(" - lastRebalanceUnixTime: " UI64FMTD, snapshot.lastRebalanceUnixTime);
+        return true;
+    }
+
+    static bool HandlePlayerbotPopulationStartCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        playerbot::RandomBotParticipationManager::SetPopulationRuntimeEnabled(true);
+        handler->PSendSysMessage("Playerbot random population manager runtime state set to STARTED.");
+        return true;
+    }
+
+    static bool HandlePlayerbotPopulationStopCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        playerbot::RandomBotParticipationManager::SetPopulationRuntimeEnabled(false);
+        handler->PSendSysMessage("Playerbot random population manager runtime state set to STOPPED.");
+        return true;
+    }
+
+    static bool HandlePlayerbotPopulationRebalanceCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        bool const executed = playerbot::RandomBotParticipationManager::TriggerImmediateRebalance();
+        handler->PSendSysMessage("Playerbot random population rebalance executed: %u", executed ? 1u : 0u);
+        return true;
+    }
+
+    static bool HandlePlayerbotPopulationPoolCommand(ChatHandler* handler)
+    {
+        if (!handler)
+            return false;
+
+        playerbot::RandomBotPopulationSnapshot const snapshot = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
+        handler->PSendSysMessage("Playerbot random population pool stats:");
+        handler->PSendSysMessage(" - offlinePoolSize: %u", snapshot.offlinePoolSize);
+        handler->PSendSysMessage(" - targetRange: %u-%u", snapshot.targetMin, snapshot.targetMax);
+        handler->PSendSysMessage(" - onlineRandomBots: %u", snapshot.onlineRandomBots);
         return true;
     }
 };

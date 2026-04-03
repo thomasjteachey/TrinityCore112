@@ -65,3 +65,73 @@ Playerbot.PvpLifecycle.Enable = 0
 #                     1 - (Enabled)
 
 Playerbot.PvpClassSpells.Enable = 0
+
+#    Playerbot.RandomPopulation.Enable
+#        Description: Enables random-bot population manager orchestration. When enabled and runtime started,
+#                     periodic rebalance ticks evaluate online random-bot count (bots are always identified as
+#                     players without a real session) against target range and attempt login/logout actions.
+#                     Real players are hard-excluded from all lifecycle and population automation.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.RandomPopulation.Enable = 0
+
+#    Playerbot.RandomPopulation.TargetMin
+#        Description: Minimum target number of online random bots maintained by the population manager.
+#        Default:     0
+
+Playerbot.RandomPopulation.TargetMin = 0
+
+#    Playerbot.RandomPopulation.TargetMax
+#        Description: Maximum target number of online random bots maintained by the population manager.
+#                     If greater than TargetMin, rebalance deterministically rotates target in range.
+#        Default:     0
+
+Playerbot.RandomPopulation.TargetMax = 0
+
+#    Playerbot.RandomPopulation.RebalanceIntervalMs
+#        Description: Rebalance cadence for population manager ticks in milliseconds.
+#        Default:     15000 (15 seconds)
+
+Playerbot.RandomPopulation.RebalanceIntervalMs = 15000
+
+#    Playerbot.RandomPopulation.BotAccountIds
+#        Description: Comma-separated account IDs reserved for random population bot pool selection.
+#                     Only characters from these accounts are considered for offline pool candidate picks.
+#                     Keep this list strictly bot-only to prevent selecting real-player characters.
+#        Default:     "" (empty, no pool)
+
+Playerbot.RandomPopulation.BotAccountIds =
+
+#    Playerbot.RandomPopulation.MinLevel
+#        Description: Minimum character level for offline pool selection.
+#        Default:     10
+
+Playerbot.RandomPopulation.MinLevel = 10
+
+#    Playerbot.RandomPopulation.MaxLevel
+#        Description: Maximum character level for offline pool selection.
+#        Default:     80
+
+Playerbot.RandomPopulation.MaxLevel = 80
+
+#    Playerbot.RandomPopulation.AllianceRatioPercent
+#        Description: Soft alliance percentage target used while selecting login candidates.
+#                     50 means roughly even faction split over time.
+#        Default:     50
+
+Playerbot.RandomPopulation.AllianceRatioPercent = 50
+
+#    Playerbot.RandomPopulation.MaxOnlineBotsPerAccount
+#        Description: Maximum random bots allowed online at once per account during candidate selection.
+#                     Set to 0 to disable the cap (allows multiple bots per account without manager-side limit).
+#        Default:     0
+
+Playerbot.RandomPopulation.MaxOnlineBotsPerAccount = 0
+
+#    Playerbot.RandomPopulation.SelectionHistorySize
+#        Description: Number of recently selected offline bot guids to deprioritize during deterministic
+#                     candidate ordering to reduce immediate repeats while preserving reproducibility.
+#        Default:     48
+
+Playerbot.RandomPopulation.SelectionHistorySize = 48

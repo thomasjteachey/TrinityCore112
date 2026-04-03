@@ -21,13 +21,24 @@
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
 
+#include "Configuration/Config.h"
+#include "DatabaseEnv.h"
+#include "GameTime.h"
+#include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
+#include "Util.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <deque>
+#include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -66,6 +77,52 @@ struct LifecycleObservationCounters
 };
 
 LifecycleObservationCounters g_LifecycleObservationCounters;
+
+struct RandomBotPopulationConfig
+{
+    bool enabled = false;
+    uint32 targetMin = 0;
+    uint32 targetMax = 0;
+    uint32 rebalanceIntervalMs = 15000;
+    uint8 minLevel = 10;
+    uint8 maxLevel = 80;
+    uint8 allianceRatioPercent = 50;
+    uint32 maxOnlineBotsPerAccount = 0;
+    uint32 selectionHistorySize = 48;
+    std::unordered_set<uint32> botAccountIds;
+};
+
+struct RandomBotPoolCandidate
+{
+    uint32 lowGuid = 0;
+    uint32 account = 0;
+    uint8 level = 1;
+    uint8 race = 0;
+};
+
+struct RandomBotPopulationState
+{
+    RandomBotPopulationConfig config;
+    bool runtimeEnabled = false;
+    bool startupBootstrapDone = false;
+    bool rebalanceRequested = false;
+    uint32 rebalanceTimerMs = 0;
+    uint64 rebalanceEpoch = 0;
+    uint64 rebalanceTicks = 0;
+    uint64 loginAttempts = 0;
+    uint64 loginSuccess = 0;
+    uint64 logoutAttempts = 0;
+    uint64 logoutSuccess = 0;
+    uint64 skippedSafetyRealPlayers = 0;
+    uint64 skippedNoCandidatePool = 0;
+    uint64 skippedIntegrationGap = 0;
+    uint64 lastRebalanceUnixTime = 0;
+    std::deque<uint32> recentSelectedLowGuids;
+    std::unordered_set<uint32> recentSelectedLowGuidSet;
+};
+
+RandomBotPopulationState g_RandomPopulation;
+std::mutex g_RandomPopulationLock;
 
 bool IsNoOp(playerbot::BattlegroundLifecycleContext const& context)
 {
@@ -166,6 +223,357 @@ bool CanProcessPlayerLifecycle(Player const* player)
     nextProcessTime = now + RandomBotLifecycleCadenceInterval;
     return true;
 }
+
+bool IsRandomBotCandidate(Player const* player, std::unordered_set<uint32> const& /*botAccounts*/)
+{
+    if (!player)
+        return false;
+
+    if (player->GetSession())
+        return false;
+
+    return true;
+}
+
+struct OnlineRandomBotMetrics
+{
+    uint32 total = 0;
+    uint32 alliance = 0;
+    uint32 horde = 0;
+    std::vector<ObjectGuid> guids;
+};
+
+OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(std::unordered_set<uint32> const& botAccounts)
+{
+    OnlineRandomBotMetrics metrics;
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+    {
+        if (!IsRandomBotCandidate(player, botAccounts))
+            continue;
+
+        ++metrics.total;
+        if (player->GetTeamId() == TEAM_ALLIANCE)
+            ++metrics.alliance;
+        else if (player->GetTeamId() == TEAM_HORDE)
+            ++metrics.horde;
+
+        metrics.guids.push_back(guid);
+    }
+
+    return metrics;
+}
+
+std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig const& config)
+{
+    std::vector<RandomBotPoolCandidate> candidates;
+
+    if (config.botAccountIds.empty())
+        return candidates;
+
+    std::string accountList;
+    accountList.reserve(config.botAccountIds.size() * 6);
+    for (uint32 accountId : config.botAccountIds)
+    {
+        if (!accountList.empty())
+            accountList += ',';
+        accountList += std::to_string(accountId);
+    }
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT guid, account, level, race FROM characters "
+        "WHERE online = 0 AND account IN ({}) AND level >= {} AND level <= {}",
+        accountList, config.minLevel, config.maxLevel);
+
+    if (!result)
+        return candidates;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        RandomBotPoolCandidate candidate;
+        candidate.lowGuid = fields[0].Get<uint32>();
+        candidate.account = fields[1].Get<uint32>();
+        candidate.level = fields[2].Get<uint8>();
+        candidate.race = fields[3].Get<uint8>();
+        candidates.push_back(candidate);
+    }
+    while (result->NextRow());
+
+    return candidates;
+}
+
+std::unordered_map<uint32, uint32> QueryOnlineBotCountsByAccount(RandomBotPopulationConfig const& config)
+{
+    std::unordered_map<uint32, uint32> onlineByAccount;
+    if (config.botAccountIds.empty())
+        return onlineByAccount;
+
+    std::string accountList;
+    accountList.reserve(config.botAccountIds.size() * 6);
+    for (uint32 accountId : config.botAccountIds)
+    {
+        if (!accountList.empty())
+            accountList += ',';
+        accountList += std::to_string(accountId);
+    }
+
+    QueryResult result = CharacterDatabase.Query(
+        "SELECT account, COUNT(*) FROM characters WHERE online = 1 AND account IN ({}) GROUP BY account",
+        accountList);
+    if (!result)
+        return onlineByAccount;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        onlineByAccount[fields[0].Get<uint32>()] = fields[1].Get<uint32>();
+    } while (result->NextRow());
+
+    return onlineByAccount;
+}
+
+void TrackRecentSelection(RandomBotPopulationState& state, uint32 lowGuid)
+{
+    if (!lowGuid)
+        return;
+
+    uint32 const historyLimit = std::max<uint32>(state.config.selectionHistorySize, 1);
+
+    if (state.recentSelectedLowGuidSet.find(lowGuid) == state.recentSelectedLowGuidSet.end())
+    {
+        state.recentSelectedLowGuids.push_back(lowGuid);
+        state.recentSelectedLowGuidSet.insert(lowGuid);
+    }
+
+    while (state.recentSelectedLowGuids.size() > historyLimit)
+    {
+        uint32 const dropped = state.recentSelectedLowGuids.front();
+        state.recentSelectedLowGuids.pop_front();
+        state.recentSelectedLowGuidSet.erase(dropped);
+    }
+}
+
+uint64 ComputeDeterministicCandidateScore(RandomBotPoolCandidate const& candidate, uint64 epoch, bool wasRecent)
+{
+    uint64 score = (static_cast<uint64>(candidate.lowGuid) * 2654435761ULL) ^ (epoch * 11400714819323198485ULL);
+    score ^= static_cast<uint64>(candidate.account) << 17;
+    score ^= static_cast<uint64>(candidate.level) << 9;
+    if (wasRecent)
+        score = std::numeric_limits<uint64>::max() - score;
+
+    return score;
+}
+
+std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState const& state,
+    std::vector<RandomBotPoolCandidate> pool, uint32 requiredCount, uint32 currentAllianceOnline, uint32 currentHordeOnline,
+    std::unordered_map<uint32, uint32> onlineByAccount)
+{
+    if (!requiredCount || pool.empty())
+        return {};
+
+    std::stable_sort(pool.begin(), pool.end(), [&](RandomBotPoolCandidate const& left, RandomBotPoolCandidate const& right)
+    {
+        bool const leftRecent = state.recentSelectedLowGuidSet.find(left.lowGuid) != state.recentSelectedLowGuidSet.end();
+        bool const rightRecent = state.recentSelectedLowGuidSet.find(right.lowGuid) != state.recentSelectedLowGuidSet.end();
+        uint64 const leftScore = ComputeDeterministicCandidateScore(left, state.rebalanceEpoch + 1, leftRecent);
+        uint64 const rightScore = ComputeDeterministicCandidateScore(right, state.rebalanceEpoch + 1, rightRecent);
+        return leftScore < rightScore;
+    });
+
+    std::vector<RandomBotPoolCandidate> selected;
+    selected.reserve(std::min<uint32>(requiredCount, static_cast<uint32>(pool.size())));
+
+    uint32 projectedAlliance = currentAllianceOnline;
+    uint32 projectedHorde = currentHordeOnline;
+
+    for (RandomBotPoolCandidate const& candidate : pool)
+    {
+        if (selected.size() >= requiredCount)
+            break;
+
+        TeamId const candidateTeam = Player::TeamForRace(candidate.race) == ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE;
+        uint32 const totalProjected = projectedAlliance + projectedHorde;
+        uint32 const alliancePercent = totalProjected ? static_cast<uint32>((projectedAlliance * 100) / totalProjected) : 50;
+
+        bool shouldTake = true;
+        if (candidateTeam == TEAM_ALLIANCE && alliancePercent > state.config.allianceRatioPercent + 10)
+            shouldTake = false;
+        if (candidateTeam == TEAM_HORDE && alliancePercent + 10 < state.config.allianceRatioPercent)
+            shouldTake = false;
+
+        if (!shouldTake)
+            continue;
+
+        if (state.config.maxOnlineBotsPerAccount > 0)
+        {
+            uint32 const onlineOnAccount = onlineByAccount[candidate.account];
+            if (onlineOnAccount >= state.config.maxOnlineBotsPerAccount)
+                continue;
+            onlineByAccount[candidate.account] = onlineOnAccount + 1;
+        }
+
+        selected.push_back(candidate);
+        if (candidateTeam == TEAM_ALLIANCE)
+            ++projectedAlliance;
+        else
+            ++projectedHorde;
+    }
+
+    for (RandomBotPoolCandidate const& candidate : pool)
+    {
+        if (selected.size() >= requiredCount)
+            break;
+
+        auto const exists = std::find_if(selected.begin(), selected.end(), [&](RandomBotPoolCandidate const& value)
+        {
+            return value.lowGuid == candidate.lowGuid;
+        });
+
+        if (exists == selected.end())
+            selected.push_back(candidate);
+    }
+
+    return selected;
+}
+
+bool SupportsLoginOrchestration()
+{
+    return false;
+}
+
+bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
+{
+    TC_LOG_INFO("playerbots.population", "Random bot population manager selected offline bot guidLow={} account={} level={} (login orchestration unavailable in this module).",
+        candidate.lowGuid, candidate.account, candidate.level);
+    return false;
+}
+
+bool TryLogoutRandomBot(ObjectGuid const& guid)
+{
+    TC_LOG_INFO("playerbots.population", "Random bot population manager selected online bot guid={} for logout (logout orchestration unavailable in this module).",
+        guid.ToString());
+    return false;
+}
+
+bool RebalanceRandomPopulation(RandomBotPopulationState& state)
+{
+    state.rebalanceEpoch++;
+    state.rebalanceTicks++;
+    state.lastRebalanceUnixTime = static_cast<uint64>(GameTime::GetGameTime());
+
+    OnlineRandomBotMetrics const online = CollectOnlineRandomBotMetrics(state.config.botAccountIds);
+
+    uint32 target = state.config.targetMin;
+    if (state.config.targetMax > state.config.targetMin)
+    {
+        uint64 const span = static_cast<uint64>(state.config.targetMax - state.config.targetMin + 1);
+        target = state.config.targetMin + static_cast<uint32>(state.rebalanceEpoch % span);
+    }
+
+    TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} target={} range=[{}, {}] enabled={} runtime={}",
+        state.rebalanceTicks, online.total, target, state.config.targetMin, state.config.targetMax,
+        state.config.enabled ? 1 : 0, state.runtimeEnabled ? 1 : 0);
+
+    if (online.total < target)
+    {
+        uint32 const needed = target - online.total;
+        std::vector<RandomBotPoolCandidate> const pool = QueryOfflinePool(state.config);
+        std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
+        if (pool.empty())
+        {
+            state.skippedNoCandidatePool++;
+            return false;
+        }
+
+        std::vector<RandomBotPoolCandidate> const selection = PickLoginCandidates(state, pool, needed, online.alliance, online.horde, onlineByAccount);
+        for (RandomBotPoolCandidate const& candidate : selection)
+        {
+            state.loginAttempts++;
+            TrackRecentSelection(state, candidate.lowGuid);
+            if (TryLoginBotCharacter(candidate))
+                state.loginSuccess++;
+            else
+                state.skippedIntegrationGap++;
+        }
+
+        return !selection.empty();
+    }
+
+    if (online.total > target)
+    {
+        uint32 const excess = online.total - target;
+        uint32 processed = 0;
+        for (ObjectGuid const& guid : online.guids)
+        {
+            if (processed >= excess)
+                break;
+
+            if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
+            {
+                if (player->GetSession())
+                {
+                    state.skippedSafetyRealPlayers++;
+                    continue;
+                }
+            }
+
+            state.logoutAttempts++;
+            if (TryLogoutRandomBot(guid))
+                state.logoutSuccess++;
+            else
+                state.skippedIntegrationGap++;
+
+            ++processed;
+        }
+
+        return processed > 0;
+    }
+
+    return false;
+}
+
+void LoadPopulationConfigLocked(RandomBotPopulationState& state)
+{
+    RandomBotPopulationConfig config;
+    config.enabled = sConfigMgr->GetBoolDefault("Playerbot.RandomPopulation.Enable", false);
+    config.targetMin = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMin", 0));
+    config.targetMax = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.TargetMax", 0));
+    config.rebalanceIntervalMs = std::max<int32>(1000, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.RebalanceIntervalMs", 15000));
+    config.minLevel = static_cast<uint8>(std::clamp<int32>(sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.MinLevel", 10), 1, 80));
+    config.maxLevel = static_cast<uint8>(std::clamp<int32>(sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.MaxLevel", 80), 1, 80));
+    config.allianceRatioPercent = static_cast<uint8>(std::clamp<int32>(sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.AllianceRatioPercent", 50), 0, 100));
+    config.maxOnlineBotsPerAccount = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.MaxOnlineBotsPerAccount", 0));
+    config.selectionHistorySize = std::max<int32>(1, sConfigMgr->GetIntDefault("Playerbot.RandomPopulation.SelectionHistorySize", 48));
+
+    if (config.targetMax < config.targetMin)
+        std::swap(config.targetMin, config.targetMax);
+    if (config.maxLevel < config.minLevel)
+        std::swap(config.maxLevel, config.minLevel);
+
+    std::string const rawBotAccounts = sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", "");
+    for (std::string_view token : Trinity::Tokenize(rawBotAccounts, ',', false))
+        if (Optional<uint32> accountId = Trinity::StringTo<uint32>(token))
+            if (*accountId > 0)
+                config.botAccountIds.insert(*accountId);
+
+    state.config = std::move(config);
+    state.runtimeEnabled = state.config.enabled;
+    state.rebalanceTimerMs = 0;
+    state.rebalanceRequested = false;
+
+    while (state.recentSelectedLowGuids.size() > state.config.selectionHistorySize)
+    {
+        uint32 const guid = state.recentSelectedLowGuids.front();
+        state.recentSelectedLowGuids.pop_front();
+        state.recentSelectedLowGuidSet.erase(guid);
+    }
+
+    TC_LOG_INFO("playerbots.population", "Random bot population config loaded: enabled={}, targetMin={}, targetMax={}, intervalMs={}, levelRange=[{}, {}], allianceRatio={}, maxPerAccount={}, accountPoolSize={}.",
+        state.config.enabled ? 1 : 0, state.config.targetMin, state.config.targetMax, state.config.rebalanceIntervalMs,
+        state.config.minLevel, state.config.maxLevel, state.config.allianceRatioPercent, state.config.maxOnlineBotsPerAccount, state.config.botAccountIds.size());
+}
 }
 
 namespace playerbot
@@ -174,6 +582,46 @@ void RandomBotParticipationManager::ResetCadence()
 {
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.clear();
+}
+
+void RandomBotParticipationManager::LoadPopulationConfig()
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    LoadPopulationConfigLocked(g_RandomPopulation);
+}
+
+void RandomBotParticipationManager::OnStartupBootstrap()
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    if (!g_RandomPopulation.startupBootstrapDone)
+    {
+        g_RandomPopulation.startupBootstrapDone = true;
+        g_RandomPopulation.rebalanceRequested = true;
+    }
+}
+
+void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+
+    if (!g_RandomPopulation.config.enabled || !g_RandomPopulation.runtimeEnabled)
+        return;
+
+    if (g_RandomPopulation.config.botAccountIds.empty())
+    {
+        g_RandomPopulation.skippedNoCandidatePool++;
+        return;
+    }
+
+    if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs)
+        g_RandomPopulation.rebalanceTimerMs += diffMs;
+
+    if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs && !g_RandomPopulation.rebalanceRequested)
+        return;
+
+    g_RandomPopulation.rebalanceTimerMs = 0;
+    g_RandomPopulation.rebalanceRequested = false;
+    RebalanceRandomPopulation(g_RandomPopulation);
 }
 
 void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
@@ -193,6 +641,28 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
 }
 
+void RandomBotParticipationManager::SetPopulationRuntimeEnabled(bool enabled)
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    g_RandomPopulation.runtimeEnabled = enabled;
+    if (enabled)
+        g_RandomPopulation.rebalanceRequested = true;
+}
+
+bool RandomBotParticipationManager::IsPopulationRuntimeEnabled()
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    return g_RandomPopulation.runtimeEnabled;
+}
+
+bool RandomBotParticipationManager::TriggerImmediateRebalance()
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    g_RandomPopulation.rebalanceRequested = true;
+    g_RandomPopulation.rebalanceTimerMs = g_RandomPopulation.config.rebalanceIntervalMs;
+    return RebalanceRandomPopulation(g_RandomPopulation);
+}
+
 LifecycleObservationSnapshot RandomBotParticipationManager::GetLifecycleObservationSnapshot()
 {
     LifecycleObservationSnapshot snapshot;
@@ -202,6 +672,36 @@ LifecycleObservationSnapshot RandomBotParticipationManager::GetLifecycleObservat
     snapshot.noLifecycleHooksActive = g_LifecycleObservationCounters.noLifecycleHooksActive.load(std::memory_order_relaxed);
     snapshot.battlegroundLifecycleExecuted = g_LifecycleObservationCounters.battlegroundLifecycleExecuted.load(std::memory_order_relaxed);
     snapshot.arenaLifecycleExecuted = g_LifecycleObservationCounters.arenaLifecycleExecuted.load(std::memory_order_relaxed);
+    return snapshot;
+}
+
+RandomBotPopulationSnapshot RandomBotParticipationManager::GetPopulationSnapshot()
+{
+    RandomBotPopulationSnapshot snapshot;
+
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    OnlineRandomBotMetrics const online = CollectOnlineRandomBotMetrics(g_RandomPopulation.config.botAccountIds);
+
+    snapshot.configEnabled = g_RandomPopulation.config.enabled;
+    snapshot.runtimeEnabled = g_RandomPopulation.runtimeEnabled;
+    snapshot.supportsLoginOrchestration = SupportsLoginOrchestration();
+    snapshot.targetMin = g_RandomPopulation.config.targetMin;
+    snapshot.targetMax = g_RandomPopulation.config.targetMax;
+    snapshot.onlineRandomBots = online.total;
+    snapshot.onlineAllianceRandomBots = online.alliance;
+    snapshot.onlineHordeRandomBots = online.horde;
+    snapshot.offlinePoolSize = static_cast<uint32>(QueryOfflinePool(g_RandomPopulation.config).size());
+    snapshot.maxOnlineBotsPerAccount = g_RandomPopulation.config.maxOnlineBotsPerAccount;
+    snapshot.rebalanceTicks = g_RandomPopulation.rebalanceTicks;
+    snapshot.loginAttempts = g_RandomPopulation.loginAttempts;
+    snapshot.loginSuccess = g_RandomPopulation.loginSuccess;
+    snapshot.logoutAttempts = g_RandomPopulation.logoutAttempts;
+    snapshot.logoutSuccess = g_RandomPopulation.logoutSuccess;
+    snapshot.skippedSafetyRealPlayers = g_RandomPopulation.skippedSafetyRealPlayers;
+    snapshot.skippedNoCandidatePool = g_RandomPopulation.skippedNoCandidatePool;
+    snapshot.skippedIntegrationGap = g_RandomPopulation.skippedIntegrationGap;
+    snapshot.lastRebalanceUnixTime = g_RandomPopulation.lastRebalanceUnixTime;
+
     return snapshot;
 }
 
