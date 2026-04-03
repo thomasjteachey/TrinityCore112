@@ -18,72 +18,22 @@
 #include "PlayerbotPvpClassActions.h"
 
 #include "Player.h"
+#include "SpellHistory.h"
 #include "Unit.h"
-
-#include <array>
 
 namespace
 {
-uint32 FindKnownSpell(Player const* player, std::initializer_list<uint32> spellIds)
+bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast)
 {
-    if (!player)
-        return 0;
-
-    for (uint32 spellId : spellIds)
-        if (player->HasSpell(spellId))
-            return spellId;
-
-    return 0;
-}
-
-uint32 ResolveSpellId(Player const* player, playerbot::PvpClassSpellActionType actionType)
-{
-    switch (actionType)
-    {
-        case playerbot::PvpClassSpellActionType::Charge:
-            return FindKnownSpell(player, { 11578, 11577, 100 });
-        case playerbot::PvpClassSpellActionType::BattleStance:
-            return FindKnownSpell(player, { 2457 });
-        case playerbot::PvpClassSpellActionType::BattleShout:
-            return FindKnownSpell(player, { 47436, 47435, 6673 });
-        case playerbot::PvpClassSpellActionType::MortalStrike:
-            return FindKnownSpell(player, { 47486, 47485, 12294 });
-        case playerbot::PvpClassSpellActionType::Execute:
-            return FindKnownSpell(player, { 47471, 25236, 20662, 20661, 5308 });
-        case playerbot::PvpClassSpellActionType::Overpower:
-            return FindKnownSpell(player, { 7384 });
-        case playerbot::PvpClassSpellActionType::Hamstring:
-            return FindKnownSpell(player, { 1715 });
-        case playerbot::PvpClassSpellActionType::HeroicStrike:
-            return FindKnownSpell(player, { 47450, 47449, 78 });
-        case playerbot::PvpClassSpellActionType::None:
-        default:
-            break;
-    }
-
-    return 0;
-}
-
-bool CastResolvedSpell(Player* player, playerbot::PvpClassSpellActionType actionType)
-{
-    if (!player || actionType == playerbot::PvpClassSpellActionType::None)
+    if (!player || !spellId || !player->HasSpell(spellId))
         return false;
 
-    if (player->IsNonMeleeSpellCast(false))
+    if (player->GetSpellHistory()->HasCooldown(spellId) || player->IsNonMeleeSpellCast(false))
         return false;
 
-    uint32 const spellId = ResolveSpellId(player, actionType);
-    if (!spellId)
+    Unit* target = selfCast ? static_cast<Unit*>(player) : player->GetVictim();
+    if (!target || !target->IsAlive())
         return false;
-
-    Unit* target = player;
-    if (actionType != playerbot::PvpClassSpellActionType::BattleStance &&
-        actionType != playerbot::PvpClassSpellActionType::BattleShout)
-    {
-        target = player->GetVictim();
-        if (!target || !target->IsAlive())
-            return false;
-    }
 
     player->CastSpell(target, spellId, false);
     return true;
@@ -97,6 +47,6 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
-    return CastResolvedSpell(player, context.actionType);
+    return CastDirectSpell(player, context.spellId, context.selfCast);
 }
 }

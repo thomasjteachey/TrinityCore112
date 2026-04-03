@@ -21,6 +21,7 @@
 #include "BattlegroundMgr.h"
 #include "Configuration/Config.h"
 #include "Player.h"
+#include "SpellHistory.h"
 
 #include <array>
 
@@ -38,30 +39,227 @@ bool IsClassSpellGateEnabled(playerbot::PvpCoreConfig const& config)
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpClassSpellsEnabled;
 }
 
-bool IsWarriorArmsSliceCandidate(Player const* player)
+bool HasRendFromPlayer(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_WARRIOR)
+    if (!player || !target)
         return false;
 
-    // Reference-aligned intent: this minimal slice mirrors Arms strategy priority around Mortal Strike.
-    constexpr std::array<uint32, 3> mortalStrikeRanks{ 47486, 47485, 12294 };
-    for (uint32 spellId : mortalStrikeRanks)
-        if (player->HasSpell(spellId))
+    constexpr std::array<uint32, 10> rendRanks{ 47465, 47466, 25208, 11574, 11573, 11572, 6547, 6546, 772, 0 };
+    for (uint32 spellId : rendRanks)
+    {
+        if (!spellId)
+            continue;
+
+        if (target->HasAura(spellId, player->GetGUID()))
+            return true;
+    }
+
+    return false;
+}
+
+uint32 SelectFirstReadySpell(Player const* player, std::initializer_list<uint32> spellIds)
+{
+    for (uint32 spellId : spellIds)
+        if (spellId && player->HasSpell(spellId) && !player->GetSpellHistory()->HasCooldown(spellId))
+            return spellId;
+
+    return 0;
+}
+
+bool TargetHasAuraFromPlayer(Unit const* target, Player const* player, std::initializer_list<uint32> spellIds)
+{
+    if (!target || !player)
+        return false;
+
+    for (uint32 spellId : spellIds)
+        if (spellId && target->HasAura(spellId, player->GetGUID()))
             return true;
 
     return false;
 }
 
-bool HasKnownSpell(Player const* player, std::initializer_list<uint32> spellIds)
+uint32 SelectReferenceClassSpell(Player const* player, Unit const* target, bool inMelee)
 {
-    if (!player)
-        return false;
+    if (!player || !target)
+        return 0;
 
-    for (uint32 spellId : spellIds)
-        if (player->HasSpell(spellId))
-            return true;
+    bool const targetCriticalHealth = target->HealthBelowPct(20);
+    bool const rangedWindow = player->IsWithinDistInMap(target, 35.0f) && player->IsWithinLOSInMap(target);
+    bool const hasSuddenDeath = player->HasAura(52437);
+    bool const tasteForBlood = player->HasAura(60503);
+    bool const hasBattleShout = player->HasAura(6673);
+    bool const inBattleStance = player->HasAura(2457);
+    bool const hasRendAura = HasRendFromPlayer(player, target);
+    bool const targetAlreadySlowed = target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED);
+    bool const highRageAvailable = player->GetPower(POWER_RAGE) >= 600;
+    bool const lowRageAvailable = player->GetPower(POWER_RAGE) < 200;
+    bool const enemyOutOfMelee = !inMelee;
+    bool const enemyInChargeReach = player->IsWithinDistInMap(target, 25.0f) && player->IsWithinLOSInMap(target);
 
-    return false;
+    switch (player->GetClass())
+    {
+        case CLASS_WARRIOR:
+            if (enemyOutOfMelee && enemyInChargeReach)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 11578, 11577, 100 }))
+                    return spellId; // charge
+            if (!inBattleStance)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 2457 }))
+                    return spellId; // battle stance
+            if (!hasBattleShout)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 47436, 47435, 6673 }))
+                    return spellId; // battle shout
+            if (!hasRendAura && inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 47465, 47466, 25208, 772 }))
+                    return spellId; // rend
+            if ((targetCriticalHealth || hasSuddenDeath) && inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 47471, 25236, 5308 }))
+                    return spellId; // execute
+            if (tasteForBlood && inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 7384 }))
+                    return spellId; // overpower
+            if (inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 47486, 47485, 12294, 23881, 47498 }))
+                    return spellId; // mortal strike / bloodthirst / devestate fallback
+            if (lowRageAvailable)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 2687 }))
+                    return spellId; // bloodrage
+            if (uint32 spellId = SelectFirstReadySpell(player, { 12292 }))
+                return spellId; // death wish
+            if (!targetAlreadySlowed && inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 1715 }))
+                    return spellId; // hamstring
+            if (highRageAvailable && inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 47450, 47449, 78 }))
+                    return spellId; // heroic strike
+            break;
+        case CLASS_PALADIN:
+            if (targetCriticalHealth)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48806, 24275 }))
+                    return spellId; // hammer of wrath
+            if (inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 35395, 53385, 53408, 20271, 48819 }))
+                    return spellId; // crusader strike/divine storm/judgement/consecration
+            if (rangedWindow)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48801, 48806 }))
+                    return spellId; // exorcism/hammer of wrath
+            if (uint32 spellId = SelectFirstReadySpell(player, { 31884 }))
+                return spellId; // avenging wrath
+            break;
+        case CLASS_HUNTER:
+            if (rangedWindow)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 49001, 13555, 13554, 1978 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 49001, 13555, 1978 }))
+                        return spellId; // serpent sting
+                if (uint32 spellId = SelectFirstReadySpell(player, { 53351, 53209, 60053, 19434, 49045, 49052, 49001 }))
+                    return spellId; // kill shot/chimera/explosive/aimed/arcane/steady/serpent sting
+            }
+            if (uint32 spellId = SelectFirstReadySpell(player, { 19574 }))
+                return spellId; // bestial wrath
+            break;
+        case CLASS_ROGUE:
+            if (inMelee)
+            {
+                if (player->GetComboPoints() >= 4)
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 57993, 48668 }))
+                        return spellId; // envenom/eviscerate
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48666, 48638, 57993, 48668, 48657 }))
+                    return spellId; // mutilate/sinister strike/envenom/eviscerate/backstab
+            }
+            if (uint32 spellId = SelectFirstReadySpell(player, { 51690 }))
+                return spellId; // killing spree
+            break;
+        case CLASS_PRIEST:
+            if (rangedWindow)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 48125, 25368, 10894, 589 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 48125, 25368, 589 }))
+                        return spellId; // shadow word: pain
+                if (!TargetHasAuraFromPlayer(target, player, { 48300, 2944 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 48300, 2944 }))
+                        return spellId; // devouring plague
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48127, 48156, 48158, 48123 }))
+                    return spellId; // mind blast/mind flay/shadow word: death/smite
+            }
+            break;
+        case CLASS_DEATH_KNIGHT:
+            if (inMelee)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 55268, 51425, 55090, 49924, 55050, 49921, 45477 }))
+                    return spellId; // obliterate/frost strike/scourge strike/heart strike/death+plague+icy touch
+            if (rangedWindow)
+                if (uint32 spellId = SelectFirstReadySpell(player, { 49895, 47632 }))
+                    return spellId; // death coil/rune strike fallback
+            break;
+        case CLASS_SHAMAN:
+            if (inMelee)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 49233, 8050 }))
+                        return spellId; // flame shock
+                if (uint32 spellId = SelectFirstReadySpell(player, { 17364, 60103, 49231 }))
+                    return spellId; // stormstrike/lava lash/earth shock
+            }
+            else if (rangedWindow)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 49233, 8050 }))
+                        return spellId; // flame shock
+                if (uint32 spellId = SelectFirstReadySpell(player, { 60043, 49238, 49271 }))
+                    return spellId; // lava burst/lightning bolt/chain lightning
+            }
+            if (uint32 spellId = SelectFirstReadySpell(player, { 51533 }))
+                return spellId; // feral spirit
+            break;
+        case CLASS_MAGE:
+            if (rangedWindow)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 42891, 12654 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 42891, 12654 }))
+                        return spellId; // living bomb / ignite-style maintenance
+                if (uint32 spellId = SelectFirstReadySpell(player, { 42897, 42842, 42833, 42846, 42914, 42873 }))
+                    return spellId; // arcane blast/frostbolt/fireball/arcane missiles/ice lance/fire blast
+            }
+            if (uint32 spellId = SelectFirstReadySpell(player, { 12042, 12472 }))
+                return spellId; // arcane power/icy veins
+            break;
+        case CLASS_WARLOCK:
+            if (rangedWindow)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 47813, 172 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 47813, 172 }))
+                        return spellId; // corruption
+                if (!TargetHasAuraFromPlayer(target, player, { 47811, 348 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 47811, 348 }))
+                        return spellId; // immolate
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48181, 47843, 59172, 17962, 47838, 47809 }))
+                    return spellId; // immolate/conflagrate/chaos bolt/incinerate/corruption/UA/haunt/shadow bolt
+            }
+            break;
+        case CLASS_DRUID:
+            if (inMelee)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 48574, 1822 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 48574, 1822 }))
+                        return spellId; // rake
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48566, 48572, 48574 }))
+                    return spellId; // mangle(cat)/shred/rake
+            }
+            else if (rangedWindow)
+            {
+                if (!TargetHasAuraFromPlayer(target, player, { 48463, 8921 }))
+                    if (uint32 spellId = SelectFirstReadySpell(player, { 48463, 8921 }))
+                        return spellId; // moonfire
+                if (uint32 spellId = SelectFirstReadySpell(player, { 48461, 48465, 48463 }))
+                    return spellId; // wrath/starfire/moonfire
+            }
+            if (uint32 spellId = SelectFirstReadySpell(player, { 53201, 17116 }))
+                return spellId; // starfall/nature's swiftness style pressure
+            break;
+        default:
+            break;
+    }
+
+    return 0;
 }
 }
 
@@ -186,40 +384,14 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (!context.classSpellsEnabled || !player || !values.inBattleground || !IsTriggerActive(PvpTrigger::BgActive, values))
         return context;
 
-    if (!IsWarriorArmsSliceCandidate(player))
-        return context;
-
     Unit const* target = player->GetVictim();
     if (!target || !target->IsAlive() || target->GetGUID() == player->GetGUID())
         return context;
 
-    bool const targetCriticalHealth = target->HealthBelowPct(20);
-    bool const enemyOutOfMelee = !player->IsWithinMeleeRange(target);
-    bool const tasteForBlood = player->HasAura(60503);
-    bool const targetAlreadySlowed = target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED);
-    bool const highRageAvailable = player->GetPower(POWER_RAGE) >= 500;
-    bool const hasBattleShout = player->HasAura(6673);
-    bool const inBattleStance = player->HasAura(2457);
+    bool const inMelee = player->IsWithinMeleeRange(target);
 
-    // Reference mirror from ArmsWarriorStrategy trigger intent, keeping priority ordering explicit.
-    if (targetCriticalHealth && HasKnownSpell(player, { 47471, 5308 }))
-        context.actionType = PvpClassSpellActionType::Execute;
-    else if (enemyOutOfMelee && HasKnownSpell(player, { 11578, 100 }))
-        context.actionType = PvpClassSpellActionType::Charge;
-    else if (tasteForBlood && HasKnownSpell(player, { 7384 }))
-        context.actionType = PvpClassSpellActionType::Overpower;
-    else if (HasKnownSpell(player, { 47486, 12294 }))
-        context.actionType = PvpClassSpellActionType::MortalStrike;
-    else if (!targetAlreadySlowed && HasKnownSpell(player, { 1715 }))
-        context.actionType = PvpClassSpellActionType::Hamstring;
-    else if (highRageAvailable && HasKnownSpell(player, { 47450, 78 }))
-        context.actionType = PvpClassSpellActionType::HeroicStrike;
-    else if (!hasBattleShout && HasKnownSpell(player, { 47436, 6673 }))
-        context.actionType = PvpClassSpellActionType::BattleShout;
-    else if (!inBattleStance && HasKnownSpell(player, { 2457 }))
-        context.actionType = PvpClassSpellActionType::BattleStance;
-
-    context.shouldExecute = context.actionType != PvpClassSpellActionType::None;
+    context.spellId = SelectReferenceClassSpell(player, target, inMelee);
+    context.shouldExecute = context.spellId != 0;
     return context;
 }
 
