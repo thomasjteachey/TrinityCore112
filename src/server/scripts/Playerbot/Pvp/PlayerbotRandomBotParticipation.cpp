@@ -27,6 +27,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
+#include "StringConvert.h"
 #include "Util.h"
 
 #include <algorithm>
