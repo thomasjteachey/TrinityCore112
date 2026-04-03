@@ -34,6 +34,8 @@ bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast)
     Unit* target = selfCast ? static_cast<Unit*>(player) : player->GetVictim();
     if (!target || !target->IsAlive())
         return false;
+    if (!selfCast && (!player->IsWithinLOSInMap(target) || !player->IsWithinDistInMap(target, 35.0f)))
+        return false;
 
     player->CastSpell(target, spellId, false);
     return true;

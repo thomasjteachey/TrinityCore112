@@ -133,6 +133,7 @@ struct PvpClassSpellContext
 {
     bool classSpellsEnabled = false;
     bool shouldExecute = false;
+    char const* actionName = nullptr;
     uint32 spellId = 0;
     bool selfCast = false;
 };

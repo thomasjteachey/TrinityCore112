@@ -78,15 +78,151 @@ bool TargetHasAuraFromPlayer(Unit const* target, Player const* player, std::init
     return false;
 }
 
-uint32 SelectReferenceClassSpell(Player const* player, Unit const* target, bool inMelee)
+bool TargetHasShieldImmunityAura(Unit const* target)
 {
-    if (!player || !target)
+    return target && (target->HasAura(642) || target->HasAura(45438) || target->HasAura(41450) ||
+        target->HasAura(1022) || target->HasAura(5599) || target->HasAura(10278));
+}
+
+uint8 CountMeleeAttackers(Player const* player)
+{
+    if (!player)
         return 0;
+
+    uint8 attackers = 0;
+    for (Unit const* attacker : player->getAttackers())
+    {
+        if (!attacker || !attacker->IsAlive() || attacker->GetVictim() != player)
+            continue;
+
+        if (attacker->IsWithinMeleeRange(player))
+            ++attackers;
+    }
+
+    return attackers;
+}
+
+struct SpellDecision
+{
+    char const* actionName = nullptr;
+    uint32 spellId = 0;
+    bool selfCast = false;
+};
+
+enum class ClassSpecProfile : uint8
+{
+    Unknown = 0,
+    Primary,
+    Secondary,
+    Tertiary
+};
+
+ClassSpecProfile DetectClassSpecProfile(Player const* player)
+{
+    if (!player)
+        return ClassSpecProfile::Unknown;
+
+    uint8 const activeSpec = player->GetActiveSpec();
+    switch (player->GetClass())
+    {
+        case CLASS_WARRIOR:
+            if (player->HasTalent(46924, activeSpec)) // bladestorm
+                return ClassSpecProfile::Primary;      // Arms
+            if (player->HasTalent(23881, activeSpec)) // bloodthirst
+                return ClassSpecProfile::Secondary;    // Fury
+            if (player->HasTalent(46968, activeSpec)) // shockwave
+                return ClassSpecProfile::Tertiary;     // Protection
+            break;
+        case CLASS_PALADIN:
+            if (player->HasTalent(20473, activeSpec)) // holy shock
+                return ClassSpecProfile::Primary;      // Holy
+            if (player->HasTalent(31935, activeSpec)) // avenger's shield
+                return ClassSpecProfile::Secondary;    // Protection
+            if (player->HasTalent(53385, activeSpec)) // divine storm
+                return ClassSpecProfile::Tertiary;     // Retribution
+            break;
+        case CLASS_HUNTER:
+            if (player->HasTalent(19574, activeSpec)) // bestial wrath
+                return ClassSpecProfile::Primary;      // Beast Mastery
+            if (player->HasTalent(53209, activeSpec)) // chimera shot
+                return ClassSpecProfile::Secondary;    // Marksmanship
+            if (player->HasTalent(60053, activeSpec)) // explosive shot
+                return ClassSpecProfile::Tertiary;     // Survival
+            break;
+        case CLASS_ROGUE:
+            if (player->HasTalent(48666, activeSpec)) // mutilate
+                return ClassSpecProfile::Primary;      // Assassination
+            if (player->HasTalent(51690, activeSpec)) // killing spree
+                return ClassSpecProfile::Secondary;    // Combat
+            if (player->HasTalent(51713, activeSpec)) // shadow dance
+                return ClassSpecProfile::Tertiary;     // Subtlety
+            break;
+        case CLASS_PRIEST:
+            if (player->HasTalent(47540, activeSpec)) // penance
+                return ClassSpecProfile::Primary;      // Discipline
+            if (player->HasTalent(34861, activeSpec)) // circle of healing (rank 1)
+                return ClassSpecProfile::Secondary;    // Holy
+            if (player->HasTalent(34914, activeSpec)) // vampiric touch (rank 1)
+                return ClassSpecProfile::Tertiary;     // Shadow
+            break;
+        case CLASS_DEATH_KNIGHT:
+            if (player->HasTalent(55050, activeSpec)) // heart strike
+                return ClassSpecProfile::Primary;      // Blood
+            if (player->HasTalent(49184, activeSpec)) // howling blast
+                return ClassSpecProfile::Secondary;    // Frost
+            if (player->HasTalent(55090, activeSpec)) // scourge strike
+                return ClassSpecProfile::Tertiary;     // Unholy
+            break;
+        case CLASS_SHAMAN:
+            if (player->HasTalent(59159, activeSpec)) // thunderstorm
+                return ClassSpecProfile::Primary;      // Elemental
+            if (player->HasTalent(51533, activeSpec)) // feral spirit
+                return ClassSpecProfile::Secondary;    // Enhancement
+            if (player->HasTalent(61295, activeSpec)) // riptide (rank 1)
+                return ClassSpecProfile::Tertiary;     // Restoration
+            break;
+        case CLASS_MAGE:
+            if (player->HasTalent(44425, activeSpec)) // arcane barrage
+                return ClassSpecProfile::Primary;      // Arcane
+            if (player->HasTalent(11113, activeSpec)) // blast wave (fire tree marker)
+                return ClassSpecProfile::Secondary;    // Fire
+            if (player->HasTalent(12472, activeSpec)) // icy veins
+                return ClassSpecProfile::Tertiary;     // Frost
+            break;
+        case CLASS_WARLOCK:
+            if (player->HasTalent(48181, activeSpec)) // haunt
+                return ClassSpecProfile::Primary;      // Affliction
+            if (player->HasTalent(59672, activeSpec)) // metamorphosis
+                return ClassSpecProfile::Secondary;    // Demonology
+            if (player->HasTalent(59172, activeSpec)) // chaos bolt
+                return ClassSpecProfile::Tertiary;     // Destruction
+            break;
+        case CLASS_DRUID:
+            if (player->HasTalent(53201, activeSpec)) // starfall
+                return ClassSpecProfile::Primary;      // Balance
+            if (player->HasTalent(33891, activeSpec)) // tree of life
+                return ClassSpecProfile::Secondary;    // Restoration
+            if (player->HasTalent(33876, activeSpec)) // mangle
+                return ClassSpecProfile::Tertiary;     // Feral
+            break;
+        default:
+            break;
+    }
+
+    return ClassSpecProfile::Unknown;
+}
+
+SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target, bool inMelee)
+{
+    SpellDecision decision;
+    if (!player || !target)
+        return decision;
 
     bool const targetCriticalHealth = target->HealthBelowPct(20);
     bool const rangedWindow = player->IsWithinDistInMap(target, 35.0f) && player->IsWithinLOSInMap(target);
     bool const hasSuddenDeath = player->HasAura(52437);
-    bool const tasteForBlood = player->HasAura(60503);
+    bool const hasTasteForBlood = player->HasAura(60503);
+    bool const hasVictoryRush = player->HasAura(32216);
     bool const hasBattleShout = player->HasAura(6673);
     bool const inBattleStance = player->HasAura(2457);
     bool const hasRendAura = HasRendFromPlayer(player, target);
@@ -95,171 +231,236 @@ uint32 SelectReferenceClassSpell(Player const* player, Unit const* target, bool 
     bool const lowRageAvailable = player->GetPower(POWER_RAGE) < 200;
     bool const enemyOutOfMelee = !inMelee;
     bool const enemyInChargeReach = player->IsWithinDistInMap(target, 25.0f) && player->IsWithinLOSInMap(target);
+    bool const mediumHealth = player->HealthBelowPct(60);
+    bool const almostFullHealth = player->GetHealthPct() >= 85.0f;
+    ClassSpecProfile const specProfile = DetectClassSpecProfile(player);
+    auto tryAction = [&](char const* actionName, std::initializer_list<uint32> spellIds, bool selfCast = false) -> bool
+    {
+        if (uint32 spellId = SelectFirstReadySpell(player, spellIds))
+        {
+            decision.actionName = actionName;
+            decision.spellId = spellId;
+            decision.selfCast = selfCast;
+            return true;
+        }
+        return false;
+    };
 
     switch (player->GetClass())
     {
         case CLASS_WARRIOR:
-            if (enemyOutOfMelee && enemyInChargeReach)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 11578, 11577, 100 }))
-                    return spellId; // charge
-            if (!inBattleStance)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 2457 }))
-                    return spellId; // battle stance
-            if (!hasBattleShout)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 47436, 47435, 6673 }))
-                    return spellId; // battle shout
-            if (!hasRendAura && inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 47465, 47466, 25208, 772 }))
-                    return spellId; // rend
-            if ((targetCriticalHealth || hasSuddenDeath) && inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 47471, 25236, 5308 }))
-                    return spellId; // execute
-            if (tasteForBlood && inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 7384 }))
-                    return spellId; // overpower
-            if (inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 47486, 47485, 12294, 23881, 47498 }))
-                    return spellId; // mortal strike / bloodthirst / devestate fallback
-            if (lowRageAvailable)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 2687 }))
-                    return spellId; // bloodrage
-            if (uint32 spellId = SelectFirstReadySpell(player, { 12292 }))
-                return spellId; // death wish
-            if (!targetAlreadySlowed && inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 1715 }))
-                    return spellId; // hamstring
-            if (highRageAvailable && inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 47450, 47449, 78 }))
-                    return spellId; // heroic strike
+            if (enemyOutOfMelee && enemyInChargeReach && tryAction("charge", { 11578, 11577, 100 }))
+                return decision;
+            if (!inBattleStance && tryAction("battle stance", { 2457 }, true))
+                return decision;
+            if (!hasBattleShout && tryAction("battle shout", { 47436, 47435, 6673 }, true))
+                return decision;
+            if (!hasRendAura && inMelee && tryAction("rend", { 47465, 47466, 25208, 772 }))
+                return decision;
+            if ((targetCriticalHealth || hasSuddenDeath) && inMelee && tryAction("execute", { 47471, 25236, 5308 }))
+                return decision;
+            if (hasTasteForBlood && inMelee && tryAction("overpower", { 7384 }))
+                return decision;
+            if (hasVictoryRush && inMelee && tryAction("victory rush", { 34428 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Primary && tryAction("mortal strike", { 47486, 47498 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("bloodthirst", { 47450, 23881 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("shield slam", { 47488, 23922 }))
+                return decision;
+            if (inMelee && tryAction("melee pressure", { 47486, 47485, 12294, 23881, 47498 }))
+                return decision;
+            if (!targetAlreadySlowed && inMelee && tryAction("hamstring", { 1715 }))
+                return decision; // reference fallback chain: piercing howl -> mocking blow -> hamstring
+            if (highRageAvailable && inMelee && tryAction("slam", { 47475, 47474, 25242, 1464 }))
+                return decision;
+            if (highRageAvailable && inMelee && tryAction("heroic strike", { 47450, 47449, 78 }))
+                return decision;
+            if (lowRageAvailable && tryAction("bloodrage", { 2687 }, true))
+                return decision;
+            if (tryAction("death wish", { 12292 }, true))
+                return decision;
+            if (mediumHealth && tryAction("enraged regeneration", { 55694 }, true))
+                return decision;
+            if (almostFullHealth && CountMeleeAttackers(player) >= 2 && tryAction("retaliation", { 20230 }, true))
+                return decision;
+            if (TargetHasShieldImmunityAura(target) && player->IsWithinDistInMap(target, 30.0f) && player->IsWithinLOSInMap(target) &&
+                tryAction("shattering throw", { 64382 }))
+                return decision;
             break;
         case CLASS_PALADIN:
-            if (targetCriticalHealth)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48806, 24275 }))
-                    return spellId; // hammer of wrath
-            if (inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 35395, 53385, 53408, 20271, 48819 }))
-                    return spellId; // crusader strike/divine storm/judgement/consecration
-            if (rangedWindow)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48801, 48806 }))
-                    return spellId; // exorcism/hammer of wrath
-            if (uint32 spellId = SelectFirstReadySpell(player, { 31884 }))
-                return spellId; // avenging wrath
+            if (targetCriticalHealth && tryAction("hammer of wrath", { 48806, 24275 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("retribution burst", { 35395, 53385, 53408, 20271 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("protection burst", { 48827, 53595, 48819 }))
+                return decision;
+            if (inMelee && tryAction("melee burst", { 35395, 53385, 53408, 20271, 48819 }))
+                return decision;
+            if (rangedWindow && tryAction("ranged pressure", { 48801, 48806 }))
+                return decision;
+            if (tryAction("avenging wrath", { 31884 }, true))
+                return decision;
             break;
         case CLASS_HUNTER:
             if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 49001, 13555, 13554, 1978 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 49001, 13555, 1978 }))
-                        return spellId; // serpent sting
-                if (uint32 spellId = SelectFirstReadySpell(player, { 53351, 53209, 60053, 19434, 49045, 49052, 49001 }))
-                    return spellId; // kill shot/chimera/explosive/aimed/arcane/steady/serpent sting
+                    if (tryAction("serpent sting", { 49001, 13555, 1978 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Primary &&
+                    tryAction("beast mastery shots", { 49045, 49052, 53351, 49001 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("marksmanship shots", { 53209, 19434, 53351, 49045 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("survival shots", { 60053, 53351, 49052, 49045 }))
+                    return decision;
+                if (tryAction("ranged shot priority", { 53351, 53209, 60053, 19434, 49045, 49052, 49001 }))
+                    return decision;
             }
-            if (uint32 spellId = SelectFirstReadySpell(player, { 19574 }))
-                return spellId; // bestial wrath
+            if (tryAction("bestial wrath", { 19574 }, true))
+                return decision;
             break;
         case CLASS_ROGUE:
             if (inMelee)
             {
                 if (player->GetComboPoints() >= 4)
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 57993, 48668 }))
-                        return spellId; // envenom/eviscerate
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48666, 48638, 57993, 48668, 48657 }))
-                    return spellId; // mutilate/sinister strike/envenom/eviscerate/backstab
+                    if (tryAction("finisher", { 57993, 48668 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Primary && tryAction("assassination builders", { 48666, 57993, 48668 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("combat builders", { 48638, 48668, 48657 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("subtlety builders", { 48657, 48638, 48668 }))
+                    return decision;
+                if (tryAction("builder chain", { 48666, 48638, 57993, 48668, 48657 }))
+                    return decision;
             }
-            if (uint32 spellId = SelectFirstReadySpell(player, { 51690 }))
-                return spellId; // killing spree
+            if (tryAction("killing spree", { 51690 }, true))
+                return decision;
             break;
         case CLASS_PRIEST:
             if (rangedWindow)
             {
+                if (specProfile != ClassSpecProfile::Tertiary && tryAction("discipline-holy pressure", { 48123, 48127, 48066 }))
+                    return decision;
                 if (!TargetHasAuraFromPlayer(target, player, { 48125, 25368, 10894, 589 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 48125, 25368, 589 }))
-                        return spellId; // shadow word: pain
+                    if (tryAction("shadow word: pain", { 48125, 25368, 589 }))
+                        return decision;
                 if (!TargetHasAuraFromPlayer(target, player, { 48300, 2944 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 48300, 2944 }))
-                        return spellId; // devouring plague
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48127, 48156, 48158, 48123 }))
-                    return spellId; // mind blast/mind flay/shadow word: death/smite
+                    if (tryAction("devouring plague", { 48300, 2944 }))
+                        return decision;
+                if (tryAction("shadow nuke chain", { 48127, 48156, 48158, 48123 }))
+                    return decision;
             }
             break;
         case CLASS_DEATH_KNIGHT:
-            if (inMelee)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 55268, 51425, 55090, 49924, 55050, 49921, 45477 }))
-                    return spellId; // obliterate/frost strike/scourge strike/heart strike/death+plague+icy touch
-            if (rangedWindow)
-                if (uint32 spellId = SelectFirstReadySpell(player, { 49895, 47632 }))
-                    return spellId; // death coil/rune strike fallback
+            if (inMelee && specProfile == ClassSpecProfile::Primary && tryAction("blood strike chain", { 55050, 49924, 55262 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Secondary && tryAction("frost strike chain", { 55268, 51425, 49184 }))
+                return decision;
+            if (inMelee && specProfile == ClassSpecProfile::Tertiary && tryAction("unholy strike chain", { 55090, 49921, 45477 }))
+                return decision;
+            if (inMelee && tryAction("melee rune strike chain", { 55268, 51425, 55090, 49924, 55050, 49921, 45477 }))
+                return decision;
+            if (rangedWindow && tryAction("death coil pressure", { 49895, 47632 }))
+                return decision;
             break;
         case CLASS_SHAMAN:
             if (inMelee)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 49233, 8050 }))
-                        return spellId; // flame shock
-                if (uint32 spellId = SelectFirstReadySpell(player, { 17364, 60103, 49231 }))
-                    return spellId; // stormstrike/lava lash/earth shock
+                    if (tryAction("flame shock", { 49233, 8050 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("enhancement chain", { 17364, 60103, 49231 }))
+                    return decision;
+                if (tryAction("melee chain", { 17364, 60103, 49231 }))
+                    return decision;
             }
             else if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 49233, 8050 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 49233, 8050 }))
-                        return spellId; // flame shock
-                if (uint32 spellId = SelectFirstReadySpell(player, { 60043, 49238, 49271 }))
-                    return spellId; // lava burst/lightning bolt/chain lightning
+                    if (tryAction("flame shock", { 49233, 8050 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Primary && tryAction("elemental chain", { 60043, 49238, 49271 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("resto pressure", { 49238, 49271, 49233 }))
+                    return decision;
+                if (tryAction("caster chain", { 60043, 49238, 49271 }))
+                    return decision;
             }
-            if (uint32 spellId = SelectFirstReadySpell(player, { 51533 }))
-                return spellId; // feral spirit
+            if (tryAction("feral spirit", { 51533 }, true))
+                return decision;
             break;
         case CLASS_MAGE:
             if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 42891, 12654 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 42891, 12654 }))
-                        return spellId; // living bomb / ignite-style maintenance
-                if (uint32 spellId = SelectFirstReadySpell(player, { 42897, 42842, 42833, 42846, 42914, 42873 }))
-                    return spellId; // arcane blast/frostbolt/fireball/arcane missiles/ice lance/fire blast
+                    if (tryAction("living bomb", { 42891, 12654 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Primary && tryAction("arcane chain", { 42897, 44781, 42846, 42873 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("fire chain", { 42833, 42891, 42873 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("frost chain", { 42842, 42914, 42833 }))
+                    return decision;
+                if (tryAction("caster chain", { 42897, 42842, 42833, 42846, 42914, 42873 }))
+                    return decision;
             }
-            if (uint32 spellId = SelectFirstReadySpell(player, { 12042, 12472 }))
-                return spellId; // arcane power/icy veins
+            if (tryAction("burst cooldown", { 12042, 12472 }, true))
+                return decision;
             break;
         case CLASS_WARLOCK:
             if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 47813, 172 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 47813, 172 }))
-                        return spellId; // corruption
+                    if (tryAction("corruption", { 47813, 172 }))
+                        return decision;
                 if (!TargetHasAuraFromPlayer(target, player, { 47811, 348 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 47811, 348 }))
-                        return spellId; // immolate
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48181, 47843, 59172, 17962, 47838, 47809 }))
-                    return spellId; // immolate/conflagrate/chaos bolt/incinerate/corruption/UA/haunt/shadow bolt
+                    if (tryAction("immolate", { 47811, 348 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Primary && tryAction("affliction chain", { 48181, 47843, 47813, 47809 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("demonology chain", { 59672, 47809, 47813, 59164 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("destruction chain", { 59172, 17962, 47838, 47809 }))
+                    return decision;
+                if (tryAction("warlock chain", { 48181, 47843, 59172, 17962, 47838, 47809 }))
+                    return decision;
             }
             break;
         case CLASS_DRUID:
             if (inMelee)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 48574, 1822 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 48574, 1822 }))
-                        return spellId; // rake
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48566, 48572, 48574 }))
-                    return spellId; // mangle(cat)/shred/rake
+                    if (tryAction("rake", { 48574, 1822 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Tertiary && tryAction("feral chain", { 48566, 48572, 48574 }))
+                    return decision;
+                if (tryAction("melee chain", { 48566, 48572, 48574 }))
+                    return decision;
             }
             else if (rangedWindow)
             {
                 if (!TargetHasAuraFromPlayer(target, player, { 48463, 8921 }))
-                    if (uint32 spellId = SelectFirstReadySpell(player, { 48463, 8921 }))
-                        return spellId; // moonfire
-                if (uint32 spellId = SelectFirstReadySpell(player, { 48461, 48465, 48463 }))
-                    return spellId; // wrath/starfire/moonfire
+                    if (tryAction("moonfire", { 48463, 8921 }))
+                        return decision;
+                if (specProfile == ClassSpecProfile::Primary && tryAction("balance chain", { 48461, 48465, 48463 }))
+                    return decision;
+                if (specProfile == ClassSpecProfile::Secondary && tryAction("restoration pressure", { 48461, 48463, 8921 }))
+                    return decision;
+                if (tryAction("caster chain", { 48461, 48465, 48463 }))
+                    return decision;
             }
-            if (uint32 spellId = SelectFirstReadySpell(player, { 53201, 17116 }))
-                return spellId; // starfall/nature's swiftness style pressure
+            if (tryAction("burst cooldown", { 53201, 17116 }, true))
+                return decision;
             break;
         default:
             break;
     }
 
-    return 0;
+    return decision;
 }
 }
 
@@ -390,7 +591,10 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     bool const inMelee = player->IsWithinMeleeRange(target);
 
-    context.spellId = SelectReferenceClassSpell(player, target, inMelee);
+    SpellDecision const decision = SelectReferenceClassSpell(player, target, inMelee);
+    context.actionName = decision.actionName;
+    context.spellId = decision.spellId;
+    context.selfCast = decision.selfCast;
     context.shouldExecute = context.spellId != 0;
     return context;
 }
