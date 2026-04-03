@@ -140,6 +140,13 @@ bool CanProcessPlayerLifecycle(Player const* player)
         return false;
     }
 
+    // Playerbot lifecycle hooks must never run for real players.
+    if (player->GetSession())
+    {
+        ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        return false;
+    }
+
     if (!player->IsInWorld() || player->IsBeingTeleported())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);

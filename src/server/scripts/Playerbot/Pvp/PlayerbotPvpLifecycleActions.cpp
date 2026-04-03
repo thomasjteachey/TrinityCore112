@@ -309,7 +309,7 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return QueuePlayer(player, BATTLEGROUND_RB, 0);
+    return QueuePlayer(player, BATTLEGROUND_WS, 0);
 }
 
 bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
