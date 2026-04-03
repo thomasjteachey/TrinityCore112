@@ -27,6 +27,8 @@
 #include "Player.h"
 #include "World.h"
 
+#include <cstring>
+
 namespace
 {
 bool IsLifecycleGateEnabled()
@@ -182,6 +184,11 @@ bool HasConflictingArenaLifecycleContext(playerbot::ArenaLifecycleContext const&
     return (context.queueOperation != playerbot::QueueOperationType::None) &&
         (context.teamInteraction != playerbot::ArenaTeamInteractionType::None);
 }
+
+bool IsTacticalAction(char const* actionName, char const* expected)
+{
+    return actionName && expected && std::strcmp(actionName, expected) == 0;
+}
 }
 
 namespace playerbot
@@ -281,6 +288,95 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
 
     return true;
+}
+
+bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalContext const& context)
+{
+    if (!player || !context.tacticsEnabled || !context.shouldEvaluate || !context.actionName)
+        return false;
+
+    if (IsTacticalAction(context.actionName, "bg move to start"))
+        return MoveToStartPrimitive(player);
+    if (IsTacticalAction(context.actionName, "bg move to objective"))
+        return MoveToObjectivePrimitive(player, context);
+    if (IsTacticalAction(context.actionName, "bg check objective"))
+        return CheckObjectivePrimitive(player, context);
+    if (IsTacticalAction(context.actionName, "bg reset objective force"))
+        return ResetObjectiveForcePrimitive(player);
+    if (IsTacticalAction(context.actionName, "bg use buff"))
+        return UseBuffPrimitive(player);
+    if (IsTacticalAction(context.actionName, "attack enemy flag carrier"))
+        return AttackEnemyFlagCarrierPrimitive(player, context);
+    if (IsTacticalAction(context.actionName, "bg protect fc"))
+        return ProtectFlagCarrierPrimitive(player, context);
+
+    return false;
+}
+
+bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    if (Battleground* battleground = player->GetBattleground())
+        return battleground->GetStatus() == STATUS_WAIT_JOIN;
+
+    return false;
+}
+
+bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    if (context.objective.type == BattlegroundObjectiveType::None &&
+        context.movement == BattlegroundMovementPrimitive::None &&
+        context.flagCarrierDirective == FlagCarrierDirective::None)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
+}
+
+bool BattlegroundTacticalActions::ResetObjectiveForcePrimitive(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    return true;
+}
+
+bool BattlegroundTacticalActions::UseBuffPrimitive(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    return true;
+}
+
+bool BattlegroundTacticalActions::AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    return context.flagCarrierDirective == FlagCarrierDirective::AttackEnemyCarrier;
+}
+
+bool BattlegroundTacticalActions::ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    return context.flagCarrierDirective == FlagCarrierDirective::ProtectTeamCarrier;
 }
 
 bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const& context)

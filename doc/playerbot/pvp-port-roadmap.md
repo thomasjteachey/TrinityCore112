@@ -112,13 +112,15 @@ Output in this phase:
   - `playerbot reference/mod-playerbots-master/src/Bot/RandomPlayerbotMgr.cpp` (manager-owned cadence and lifecycle topology expectations)
 - Port files touched:
   - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.{h,cpp}`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.{h,cpp}`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp`
   - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpClassActions.cpp`
   - `src/server/worldserver/playerbots.conf.dist`
   - `doc/playerbot/pvp-port-roadmap.md`
 - Intentional divergences:
   - Spell resolution uses known-rank lookup by spell ID instead of action-node factories, because the Trinity slice does not yet port the full `NamedObjectFactory<ActionNode>` class AI stack.
-  - Trigger/action selection is executed in consolidated table-driven context builders instead of individual `TriggerNode`/`ActionNode` factories to preserve existing Trinity lifecycle topology.
-  - Battleground trigger decisions mirror `bg waiting/bg active/often/low health/low mana/timer bg` ordering as a tactical decision table, but remain context-only (no dedicated battleground action executor in this Phase-4 slice).
+  - Trigger/action selection is executed in consolidated table-driven context builders plus primitive tactical execution stubs instead of individual `TriggerNode`/`ActionNode` factories, to preserve existing Trinity lifecycle topology.
+  - Flag-carrier ownership/proximity triggers (`player has flag`, `enemy flagcarrier near`, `team flagcarrier near`) still return false in this slice because objective-state query seams are not yet ported from the upstream AI stack.
   - Spec strategy selection is inferred from active-spec talent ownership and rank-known spell availability, because full strategy graph context objects are not yet instantiated in this module.
 
 Loader path and lifecycle gates remain preserved as-is:

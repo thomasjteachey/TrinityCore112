@@ -217,6 +217,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     }
 
     PvpValues const values = PvpCore::CollectValues(player);
+    BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
+    bool const didExecuteTactical = BattlegroundTacticalActions::Execute(player, tacticalContext);
     PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
 
@@ -226,8 +228,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         LogLifecycleBranchSummary(guid, "hooks-lifecycle-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteClassSpell={}.",
-            guid.ToString(), didExecuteClassSpell ? 1 : 0);
+            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
+            guid.ToString(), didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -236,8 +238,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         LogLifecycleBranchSummary(guid, "no-lifecycle-hooks-active");
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteClassSpell={}.",
-            guid.ToString(), didExecuteClassSpell ? 1 : 0);
+            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
+            guid.ToString(), didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -250,8 +252,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
             "Playerbot PvP lifecycle dispatcher no-op with active hooks: guid={}, bgHook={}, arenaHook={}.",
             guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteClassSpell={}.",
-            guid.ToString(), didExecuteClassSpell ? 1 : 0);
+            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
+            guid.ToString(), didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -273,8 +275,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     }
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}, didExecuteClassSpell={}.",
-        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+        "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}, didExecuteTactical={}, didExecuteClassSpell={}.",
+        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0, didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
 }
 
 bool RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,

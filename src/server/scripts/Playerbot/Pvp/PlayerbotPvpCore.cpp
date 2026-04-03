@@ -282,8 +282,12 @@ SpellDecision SelectReferenceClassSpell(Player const* player, Unit const* target
                 return decision;
             if (inMelee && tryAction("melee pressure", { 47486, 47485, 12294, 23881, 47498 }))
                 return decision;
-            if (!targetAlreadySlowed && inMelee && tryAction("snare fallback chain", { 12323, 20560, 1715 }))
-                return decision; // reference fallback chain: piercing howl -> mocking blow -> hamstring
+            if (!targetAlreadySlowed && inMelee && tryAction("piercing howl", { 12323 }))
+                return decision;
+            if (!targetAlreadySlowed && inMelee && tryAction("mocking blow", { 20560 }))
+                return decision;
+            if (!targetAlreadySlowed && inMelee && tryAction("hamstring", { 1715 }))
+                return decision;
             if (highRageAvailable && inMelee && tryAction("slam", { 47475, 47474, 25242, 1464 }))
                 return decision;
             if (highRageAvailable && inMelee && tryAction("heroic strike", { 47450, 47449, 78 }))
@@ -516,7 +520,10 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
 
     bool const lowHealth = player->HealthBelowPct(35);
     bool const lowMana = player->GetPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 25.0f;
-    bool const periodicRefresh = values.battlegroundState == playerbot::BattlegroundState::Active;
+    bool const bgActive = values.battlegroundState == playerbot::BattlegroundState::Active;
+    bool const bgWaiting = values.battlegroundState == playerbot::BattlegroundState::WaitingToStart;
+    bool const periodicRefresh = bgActive;
+    bool const often = bgActive;
 
     struct TacticalRule
     {
@@ -526,13 +533,14 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
         float priority;
     };
 
-    std::array<TacticalRule, 8> const rules =
+    std::array<TacticalRule, 9> const rules =
     {{
-        { "bg waiting", values.battlegroundState == playerbot::BattlegroundState::WaitingToStart, "bg move to start", 50.0f },
+        { "bg waiting", bgWaiting, "bg move to start", 50.0f },
+        { "bg active", bgActive, "bg move to objective", 50.0f },
+        { "often", often, "bg check objective", 51.0f },
         { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values), "bg move to objective", 90.0f },
         { "enemy flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::EnemyFlagCarrierNear, values), "attack enemy flag carrier", 70.0f },
         { "team flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::TeamFlagCarrierNear, values), "bg protect fc", 65.0f },
-        { "bg active", values.battlegroundState == playerbot::BattlegroundState::Active, "bg move to objective", 50.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
         { "low mana", lowMana, "bg use buff", 45.0f },
         { "timer bg", periodicRefresh, "bg reset objective force", 80.0f }
@@ -543,10 +551,12 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
         if (!rule.condition)
             continue;
 
-        decision.triggerName = rule.triggerName;
-        decision.actionName = rule.actionName;
-        decision.priority = rule.priority;
-        return decision;
+        if (!decision.actionName || rule.priority > decision.priority)
+        {
+            decision.triggerName = rule.triggerName;
+            decision.actionName = rule.actionName;
+            decision.priority = rule.priority;
+        }
     }
 
     return decision;
@@ -617,10 +627,13 @@ bool PvpCore::IsTriggerActive(PvpTrigger trigger, PvpValues const& values)
         case PvpTrigger::BgInviteActive:
             return values.hasBattlegroundInvite;
         case PvpTrigger::InBattlegroundWithoutFlag:
+            return values.inBattleground;
         case PvpTrigger::PlayerHasFlag:
+            return false; // Phase-4 divergence: battleground flag ownership lookups are not yet wired in this Trinity slice.
         case PvpTrigger::EnemyFlagCarrierNear:
+            return false; // Phase-4 divergence: enemy flag-carrier proximity queries require map-objective scans not yet ported.
         case PvpTrigger::TeamFlagCarrierNear:
-            return false;
+            return false; // Phase-4 divergence: team flag-carrier proximity queries require BG objective state APIs not yet ported.
         default:
             break;
     }
@@ -632,7 +645,10 @@ BattlegroundTacticalContext PvpCore::BuildBattlegroundTacticalContext(Player con
 {
     BattlegroundTacticalContext context;
     context.tacticsEnabled = g_PvpCoreConfig.moduleEnabled && g_PvpCoreConfig.pvpCoreEnabled && g_PvpCoreConfig.pvpTacticsEnabled;
-    if (!context.tacticsEnabled || !player || !IsTriggerActive(PvpTrigger::BgActive, values))
+    if (!context.tacticsEnabled || !player)
+        return context;
+
+    if (!IsTriggerActive(PvpTrigger::BgWaiting, values) && !IsTriggerActive(PvpTrigger::BgActive, values))
         return context;
 
     context.shouldEvaluate = true;
