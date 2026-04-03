@@ -33,24 +33,38 @@ bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast)
     if (!spellInfo)
         return false;
 
-    if (player->GetSpellHistory()->HasCooldown(spellId) || player->IsNonMeleeSpellCast(false))
+    if (player->GetSpellHistory()->HasCooldown(spellId) ||
+        player->GetSpellHistory()->HasGlobalCooldown(spellInfo) ||
+        player->IsNonMeleeSpellCast(false, false, true))
         return false;
 
     Unit* target = selfCast ? static_cast<Unit*>(player) : player->GetVictim();
     if (!target || !target->IsAlive())
         return false;
-    if (!selfCast && !player->IsValidAttackTarget(target))
-        return false;
-
-    if (!player->IsWithinLOSInMap(target))
+    if (selfCast && target != player)
         return false;
 
     if (!selfCast)
     {
-        float const maxRange = spellInfo->GetMaxRange(false);
-        if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
+        if (spellInfo->IsPositive())
+        {
+            if (!player->IsValidAssistTarget(target, spellInfo))
+                return false;
+        }
+        else if (!player->IsValidAttackTarget(target, spellInfo))
             return false;
     }
+
+    if (!player->IsWithinLOSInMap(target))
+        return false;
+
+    float const maxRange = spellInfo->GetMaxRange(false);
+    if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
+        return false;
+
+    float const minRange = spellInfo->GetMinRange(false);
+    if (minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
+        return false;
 
     if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
