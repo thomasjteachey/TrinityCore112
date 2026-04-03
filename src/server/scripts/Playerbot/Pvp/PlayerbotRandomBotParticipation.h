@@ -18,6 +18,8 @@
 #ifndef TRINITY_PLAYERBOT_RANDOM_BOT_PARTICIPATION_H
 #define TRINITY_PLAYERBOT_RANDOM_BOT_PARTICIPATION_H
 
+#include "Define.h"
+
 class Player;
 
 namespace playerbot

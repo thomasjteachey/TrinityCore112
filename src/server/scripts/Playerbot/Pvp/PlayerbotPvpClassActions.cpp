@@ -18,6 +18,7 @@
 #include "PlayerbotPvpClassActions.h"
 
 #include "Player.h"
+#include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
