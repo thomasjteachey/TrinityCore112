@@ -36,7 +36,8 @@ Playerbot.PvpCore.Enable = 0
 
 #    Playerbot.PvpTactics.Enable
 #        Description: Enables battleground tactical trigger/action selection plus primitive execution
-#                     stubs for waiting/active/often/low-health/low-mana/timer-bg flows.
+#                     for waiting/active/often/low-health/low-mana/timer-bg flows, including
+#                     objective-state flag-carrier pursuit/protection movement in WSG/EotS contexts.
 #                     This remains default OFF and does not change queue policy or class rotation logic.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
