@@ -54,8 +54,9 @@ Playerbot.PvpLifecycle.Enable = 0
 
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
-#                     Current slice is reference-aligned Warrior Arms trigger/action priority for
-#                     battleground/arena combat contexts.
+#                     Current implementation provides reference-vocabulary trigger/action ordering
+#                     for all playable classes, including expanded Warrior Arms deferred actions
+#                     (slam, victory rush, retaliation, shattering throw) while remaining default OFF.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
 

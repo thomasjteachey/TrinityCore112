@@ -97,7 +97,7 @@ Output in this phase:
 - Gate incomplete systems behind explicit config flags.
 - Preserve references in comments when behavior is intentionally mirrored.
 
-### Phase-4 Slice 1 parity mapping (updated)
+### Phase-4 parity mapping (updated)
 
 - Reference files mapped:
   - `playerbot reference/mod-playerbots-master/src/Ai/Base/StrategyContext.h` (strategy naming context for PvP strategy enable surface)
@@ -106,18 +106,20 @@ Output in this phase:
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Strategy/ArmsWarriorStrategy.{h,cpp}` (Arms priority and trigger/action intent)
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Trigger/WarriorTriggers.{h,cpp}` (trigger activation semantics for sudden death, taste for blood, high rage, battle stance/shout, and mobility)
   - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Action/WarriorActions.{h,cpp}` (useful/possible checks and spell action targeting semantics)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Strategy/*Strategy*.{h,cpp}` (default PvP action ordering across class/spec strategies used as class parity baseline)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Trigger/*Triggers*.{h,cpp}` (trigger vocabulary and useful gating used to keep action naming and ordering aligned)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Action/*Actions*.{h,cpp}` (spell useful/possible checks mirrored where Trinity APIs allow)
   - `playerbot reference/mod-playerbots-master/src/Bot/RandomPlayerbotMgr.cpp` (manager-owned cadence and lifecycle topology expectations)
-  - `playerbot reference/mod-playerbots-master/src/Ai/Class/*/Strategy/*Strategy.cpp` (class default-action ordering used to extend parity selection across all playable classes)
 - Port files touched:
   - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.{h,cpp}`
   - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpClassActions.cpp`
+  - `src/server/worldserver/playerbots.conf.dist`
   - `doc/playerbot/pvp-port-roadmap.md`
 - Intentional divergences:
   - Spell resolution uses known-rank lookup by spell ID instead of action-node factories, because the Trinity slice does not yet port the full `NamedObjectFactory<ActionNode>` class AI stack.
-  - Trigger checks are condensed into a single context builder/executor path to keep the current lifecycle topology unchanged while still mirroring Arms trigger priority order.
-  - `piercing howl`/`mocking blow` fallback is represented by direct `hamstring` execution because this Trinity slice does not yet expose those fallback actions in the PvP class action enum.
-  - `slam`/`victory rush`/`retaliation`/`shattering throw` priorities are intentionally deferred to later slices because this Phase-4 Slice 1 scope is constrained to the direct Arms baseline decision chain used for primary PvP pressure setup.
-  - All classes currently mirror reference default-action priority spell choices (known-rank/cooldown/range checks) without full per-class trigger graph port because TriggerContext/ActionNode class stacks are still outside this slice’s topology constraints.
+  - Trigger/action selection is executed in a consolidated class context builder instead of individual `TriggerNode`/`ActionNode` factories to preserve existing Trinity lifecycle topology.
+  - Arms `piercing howl -> mocking blow -> hamstring` fallback is collapsed to direct `hamstring` execution because only `hamstring` is currently represented in the local class-spell bridge.
+  - Spec strategy selection is inferred from active-spec talent ownership and rank-known spell availability, because full strategy graph context objects are not yet instantiated in this module.
 
 Loader path and lifecycle gates remain preserved as-is:
 - Loader update path remains exactly `RandomBotParticipationManager::ProcessPlayerLifecycle(Player*)`.
