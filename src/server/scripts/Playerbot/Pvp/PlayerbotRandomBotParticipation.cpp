@@ -281,7 +281,7 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
         accountList += std::to_string(accountId);
     }
 
-    QueryResult result = CharacterDatabase.Query(
+    QueryResult result = CharacterDatabase.PQuery(
         "SELECT guid, account, level, race FROM characters "
         "WHERE online = 0 AND account IN ({}) AND level >= {} AND level <= {}",
         accountList, config.minLevel, config.maxLevel);
@@ -293,10 +293,10 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
     {
         Field* fields = result->Fetch();
         RandomBotPoolCandidate candidate;
-        candidate.lowGuid = fields[0].Get<uint32>();
-        candidate.account = fields[1].Get<uint32>();
-        candidate.level = fields[2].Get<uint8>();
-        candidate.race = fields[3].Get<uint8>();
+        candidate.lowGuid = fields[0].GetUInt32();
+        candidate.account = fields[1].GetUInt32();
+        candidate.level = fields[2].GetUInt8();
+        candidate.race = fields[3].GetUInt8();
         candidates.push_back(candidate);
     }
     while (result->NextRow());
@@ -319,7 +319,7 @@ std::unordered_map<uint32, uint32> QueryOnlineBotCountsByAccount(RandomBotPopula
         accountList += std::to_string(accountId);
     }
 
-    QueryResult result = CharacterDatabase.Query(
+    QueryResult result = CharacterDatabase.PQuery(
         "SELECT account, COUNT(*) FROM characters WHERE online = 1 AND account IN ({}) GROUP BY account",
         accountList);
     if (!result)
@@ -328,7 +328,7 @@ std::unordered_map<uint32, uint32> QueryOnlineBotCountsByAccount(RandomBotPopula
     do
     {
         Field* fields = result->Fetch();
-        onlineByAccount[fields[0].Get<uint32>()] = fields[1].Get<uint32>();
+        onlineByAccount[fields[0].GetUInt32()] = fields[1].GetUInt32();
     } while (result->NextRow());
 
     return onlineByAccount;
