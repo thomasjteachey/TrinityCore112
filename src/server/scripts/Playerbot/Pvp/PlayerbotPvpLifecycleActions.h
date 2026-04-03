@@ -36,6 +36,20 @@ public:
     static bool HandleInProgressStatusPrimitive(Player* player);
 };
 
+class BattlegroundTacticalActions
+{
+public:
+    static bool Execute(Player* player, BattlegroundTacticalContext const& context);
+
+    static bool MoveToStartPrimitive(Player* player);
+    static bool MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context);
+    static bool CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context);
+    static bool ResetObjectiveForcePrimitive(Player* player);
+    static bool UseBuffPrimitive(Player* player);
+    static bool AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
+    static bool ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
+};
+
 class ArenaLifecycleActions
 {
 public:
