@@ -96,3 +96,22 @@ Output in this phase:
 - Prefer adapter wrappers when AC and Trinity APIs differ.
 - Gate incomplete systems behind explicit config flags.
 - Preserve references in comments when behavior is intentionally mirrored.
+
+### Phase-4 Slice 1 parity mapping
+
+- Reference files mapped:
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/StrategyContext.h` (strategy naming context for PvP strategy enable surface)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/TriggerContext.h` (trigger naming semantics used by PvP/class strategies)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Base/Strategy/BattlegroundStrategy.cpp` (battleground-active trigger context)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Strategy/ArmsWarriorStrategy.{h,cpp}` (Arms priority and trigger/action intent)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Trigger/WarriorTriggers.h` (named trigger semantics: mortal strike, overpower/taste for blood, execute, hamstring, charge)
+  - `playerbot reference/mod-playerbots-master/src/Ai/Class/Warrior/Action/WarriorActions.h` (spell action naming/selection targets)
+- Port files touched:
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.{h,cpp}`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotPvpClassActions.{h,cpp}`
+  - `src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp`
+  - `src/server/scripts/Playerbot/playerbot_loader.cpp`
+  - `src/server/worldserver/playerbots.conf.dist`
+- Intentional divergences:
+  - Spell resolution uses known-rank lookup by spell ID instead of action-node factories, because the Trinity slice does not yet port the full `NamedObjectFactory<ActionNode>` class AI stack.
+  - Trigger checks are condensed into a single context builder/executor path to keep the current lifecycle topology unchanged while still mirroring Arms trigger priority order.
