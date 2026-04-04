@@ -21,14 +21,20 @@
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
 
+#include "AccountMgr.h"
 #include "Configuration/Config.h"
+#include "CharacterCache.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "StringConvert.h"
 #include "Util.h"
+#include "World.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include <algorithm>
 #include <atomic>
@@ -198,8 +204,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
         return false;
     }
 
-    // Playerbot lifecycle hooks must never run for real players.
-    if (player->GetSession())
+    if (!playerbot::IsManagedRandomBot(player))
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         return false;
@@ -225,15 +230,44 @@ bool CanProcessPlayerLifecycle(Player const* player)
     return true;
 }
 
-bool IsRandomBotCandidate(Player const* player, std::unordered_set<uint32> const& /*botAccounts*/)
+uint32 ResolvePlayerAccountId(Player const* player)
 {
     if (!player)
+        return 0;
+
+    if (WorldSession const* session = player->GetSession())
+        return session->GetAccountId();
+
+    return sCharacterCache->GetCharacterAccountIdByGuid(player->GetGUID());
+}
+
+bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts)
+{
+    if (!player || botAccounts.empty())
         return false;
 
-    if (player->GetSession())
+    uint32 const accountId = ResolvePlayerAccountId(player);
+    if (!accountId || botAccounts.find(accountId) == botAccounts.end())
         return false;
+
+    if (WorldSession const* session = player->GetSession())
+    {
+        // Safety invariant: connected human sessions are never treated as managed random bots.
+        return session->PlayerDisconnected();
+    }
 
     return true;
+}
+
+std::unordered_set<uint32> GetManagedBotAccountIdsSnapshot()
+{
+    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    return g_RandomPopulation.config.botAccountIds;
+}
+
+bool IsRandomBotCandidate(Player const* player, std::unordered_set<uint32> const& botAccounts)
+{
+    return IsManagedRandomBotImpl(player, botAccounts);
 }
 
 struct OnlineRandomBotMetrics
@@ -441,21 +475,77 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
 
 bool SupportsLoginOrchestration()
 {
-    return false;
+    return true;
 }
 
 bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
 {
-    TC_LOG_INFO("playerbots.population", "Random bot population manager selected offline bot guidLow={} account={} level={} (login orchestration unavailable in this module).",
-        candidate.lowGuid, candidate.account, candidate.level);
-    return false;
+    if (!candidate.lowGuid || !candidate.account)
+    {
+        TC_LOG_ERROR("playerbots.population", "Random bot login skipped due to invalid candidate payload (guidLow={}, account={}).",
+            candidate.lowGuid, candidate.account);
+        return false;
+    }
+
+    if (sWorld->FindSession(candidate.account))
+    {
+        TC_LOG_WARN("playerbots.population", "Random bot login skipped: account {} already has an active world session (candidate guidLow={}).",
+            candidate.account, candidate.lowGuid);
+        return false;
+    }
+
+    std::string accountName;
+    if (!sAccountMgr->GetName(candidate.account, accountName))
+    {
+        TC_LOG_ERROR("playerbots.population", "Random bot login failed: unable to resolve account name for account {} (candidate guidLow={}).",
+            candidate.account, candidate.lowGuid);
+        return false;
+    }
+
+    AccountTypes const security = static_cast<AccountTypes>(sAccountMgr->GetSecurity(candidate.account, int32(realmid)));
+    uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
+    WorldSession* session = new WorldSession(candidate.account, std::move(accountName), nullptr, security, expansion, 0, Minutes(0),
+        LOCALE_enUS, 0, false);
+    sWorld->AddSession(session);
+
+    WorldPacket loginPacket(CMSG_PLAYER_LOGIN, 8);
+    ObjectGuid const playerGuid = ObjectGuid::Create<HighGuid::Player>(candidate.lowGuid);
+    loginPacket << playerGuid;
+    session->HandlePlayerLoginOpcode(loginPacket);
+
+    TC_LOG_INFO("playerbots.population", "Random bot login dispatched: guid={} guidLow={} account={} level={}.",
+        playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    return true;
 }
 
 bool TryLogoutRandomBot(ObjectGuid const& guid)
 {
-    TC_LOG_INFO("playerbots.population", "Random bot population manager selected online bot guid={} for logout (logout orchestration unavailable in this module).",
-        guid.ToString());
-    return false;
+    Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+    if (!player)
+    {
+        TC_LOG_WARN("playerbots.population", "Random bot logout skipped: guid {} is no longer online.", guid.ToString());
+        return false;
+    }
+
+    if (!playerbot::IsManagedRandomBot(player))
+    {
+        TC_LOG_WARN("playerbots.population", "Random bot logout safety skip: guid {} account {} is not a managed random bot.",
+            guid.ToString(), ResolvePlayerAccountId(player));
+        return false;
+    }
+
+    WorldSession* session = player->GetSession();
+    if (!session)
+    {
+        TC_LOG_WARN("playerbots.population", "Random bot logout skipped: managed bot guid {} account {} has no world session. TODO: add sessionless bot eviction adapter.",
+            guid.ToString(), ResolvePlayerAccountId(player));
+        return false;
+    }
+
+    TC_LOG_INFO("playerbots.population", "Random bot logout dispatched: guid={} account={}.", guid.ToString(), session->GetAccountId());
+    session->LogoutPlayer(true);
+    session->KickPlayer("Random bot population manager logout");
+    return true;
 }
 
 bool RebalanceRandomPopulation(RandomBotPopulationState& state)
@@ -513,9 +603,11 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
 
             if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
             {
-                if (player->GetSession())
+                if (!IsManagedRandomBotImpl(player, state.config.botAccountIds))
                 {
                     state.skippedSafetyRealPlayers++;
+                    TC_LOG_WARN("playerbots.population", "Random bot logout safety skip: guid={} account={} is not a managed random bot.",
+                        guid.ToString(), ResolvePlayerAccountId(player));
                     continue;
                 }
             }
@@ -579,6 +671,11 @@ void LoadPopulationConfigLocked(RandomBotPopulationState& state)
 
 namespace playerbot
 {
+bool IsManagedRandomBot(Player const* player)
+{
+    return IsManagedRandomBotImpl(player, GetManagedBotAccountIdsSnapshot());
+}
+
 void RandomBotParticipationManager::ResetCadence()
 {
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);

@@ -69,7 +69,8 @@ Playerbot.PvpClassSpells.Enable = 0
 #    Playerbot.RandomPopulation.Enable
 #        Description: Enables random-bot population manager orchestration. When enabled and runtime started,
 #                     periodic rebalance ticks evaluate online random-bot count (bots are always identified as
-#                     players without a real session) against target range and attempt login/logout actions.
+#                     explicit managed bot accounts from Playerbot.RandomPopulation.BotAccountIds and attempt
+#                     server-side login/logout orchestration for those accounts/characters only.
 #                     Real players are hard-excluded from all lifecycle and population automation.
 #        Default:     0 - (Disabled)
 #                     1 - (Enabled)
@@ -98,6 +99,8 @@ Playerbot.RandomPopulation.RebalanceIntervalMs = 15000
 #    Playerbot.RandomPopulation.BotAccountIds
 #        Description: Comma-separated account IDs reserved for random population bot pool selection.
 #                     Only characters from these accounts are considered for offline pool candidate picks.
+#                     This list is also the explicit managed identity boundary for lifecycle/login/logout:
+#                     characters outside this list are always treated as real-player safety scope.
 #                     Keep this list strictly bot-only to prevent selecting real-player characters.
 #        Default:     "" (empty, no pool)
 
