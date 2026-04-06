@@ -59,7 +59,7 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
-bool CastDirectSpell(Player* player, PvpClassSpellContext const& context)
+bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context)
 {
     if (!player || !context.spellId || !player->HasSpell(context.spellId))
         return false;
@@ -77,20 +77,20 @@ bool CastDirectSpell(Player* player, PvpClassSpellContext const& context)
 
     if (!target || !target->IsAlive())
         return false;
-    if (context.targetMode == PvpClassSpellContext::TargetMode::Self && target != player)
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self && target != player)
         return false;
 
-    if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy)
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
             return false;
     }
-    else if (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+    else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
         if (!player->IsValidAssistTarget(target, spellInfo))
             return false;
     }
-    else if (context.targetMode == PvpClassSpellContext::TargetMode::None)
+    else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::None)
         return false;
 
     if (!player->IsWithinLOSInMap(target))

@@ -241,11 +241,7 @@ Unit const* SelectAllyTarget(Player const* player)
     if (!player)
         return nullptr;
 
-    ObjectGuid const selectedGuid = player->GetSelection();
-    if (selectedGuid.IsEmpty())
-        return nullptr;
-
-    Unit const* selected = ObjectAccessor::GetUnit(*player, selectedGuid);
+    Unit const* selected = player->GetSelectedUnit();
     if (!selected || !selected->IsAlive() || selected->GetGUID() == player->GetGUID())
         return nullptr;
 
@@ -698,14 +694,10 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     bool hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
     if (!hasValidTarget)
     {
-        ObjectGuid const selectedGuid = player->GetSelection();
-        if (!selectedGuid.IsEmpty())
+        if (Unit const* selectedTarget = player->GetSelectedUnit())
         {
-            if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid))
-            {
-                target = selectedTarget;
-                hasValidTarget = target->IsAlive() && target->GetGUID() != player->GetGUID();
-            }
+            target = selectedTarget;
+            hasValidTarget = target->IsAlive() && target->GetGUID() != player->GetGUID();
         }
     }
 
