@@ -912,7 +912,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 {
     PvpClassSpellContext context;
     context.classSpellsEnabled = IsClassSpellGateEnabled(g_PvpCoreConfig);
-    if (!context.classSpellsEnabled || !player || !values.inBattleground || !IsTriggerActive(PvpTrigger::BgActive, values))
+    if (!context.classSpellsEnabled || !player)
+        return context;
+
+    bool const inActiveBattleground = values.inBattleground && IsTriggerActive(PvpTrigger::BgActive, values);
+    bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
+    if (!inActiveBattleground && !inActiveDuel)
         return context;
 
     Unit const* target = SelectCombatTarget(player);
