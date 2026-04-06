@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpClassActions.h"
 
+#include "GameTime.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
@@ -25,8 +26,40 @@
 #include "SpellHistory.h"
 #include "Unit.h"
 
+#include <sstream>
+#include <unordered_map>
+
 namespace
 {
+char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
+
+void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted)
+{
+    if (!player || !player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS || !player->duel->Opponent)
+        return;
+
+    Player* opponent = player->duel->Opponent;
+    if (!opponent || !opponent->GetSession())
+        return;
+
+    static std::unordered_map<uint64, uint32> s_LastDecisionWhisperByBot;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& lastWhisperMs = s_LastDecisionWhisperByBot[player->GetGUID().GetRawValue()];
+    if ((nowMs - lastWhisperMs) < 700)
+        return;
+
+    std::ostringstream message;
+    message << "[PvP duel] " << player->GetName() << " decision="
+        << (context.actionName ? context.actionName : "none")
+        << " spell=" << context.spellId
+        << " target=" << GetTargetModeLabel(context.targetMode)
+        << " success=" << (casted ? "yes" : "no")
+        << " reason=" << (context.reason ? context.reason : "none");
+
+    player->Whisper(message.str(), LANG_UNIVERSAL, opponent);
+    lastWhisperMs = nowMs;
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
 {
     switch (mode)
@@ -121,6 +154,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         return false;
 
     bool const casted = CastDirectSpell(player, context);
+    NotifyDuelDecision(player, context, casted);
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP class execution: action={} spell={} target_mode={} target_guid={} success={} reason={}.",
         context.actionName ? context.actionName : "none",
