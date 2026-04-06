@@ -476,7 +476,7 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
 
 bool SupportsLoginOrchestration()
 {
-    return false;
+    return true;
 }
 
 bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
