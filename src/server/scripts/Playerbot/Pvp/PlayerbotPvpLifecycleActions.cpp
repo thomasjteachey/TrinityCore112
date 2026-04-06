@@ -222,6 +222,13 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         packet << arenaType << uint8(0) << uint32(packetBgTypeId) << uint16(0x1F90) << uint8(1);
         session->HandleBattleFieldPortOpcode(packet);
 
+        if (player->IsBeingTeleportedFar())
+        {
+            EmitLifecycleDiagnostic(player, "invite-accept-far-teleport-pending",
+                "Issuing server-side HandleMoveWorldportAck for bot teleport finalization.");
+            session->HandleMoveWorldportAck();
+        }
+
         if (!player->InBattleground() && !player->IsBeingTeleported())
         {
             EmitLifecycleDiagnostic(player, "invite-accept-no-transition",
