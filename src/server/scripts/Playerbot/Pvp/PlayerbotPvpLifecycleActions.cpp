@@ -259,6 +259,46 @@ bool HasConflictingBattlegroundLifecycleContext(playerbot::BattlegroundLifecycle
         (context.invitationResponse != playerbot::InvitationResponseType::None);
 }
 
+bool HandleBattlegroundDeathState(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    if (player->IsAlive())
+        return false;
+
+    if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+    {
+        if (player->getDeathState() == JUST_DIED)
+            player->KillPlayer();
+
+        player->BuildPlayerRepop();
+        player->RepopAtGraveyard();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP death handling: guid={} action=release-spirit.",
+            player->GetGUID().ToString());
+        return true;
+    }
+
+    if (Battleground* battleground = player->GetBattleground())
+    {
+        if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
+        {
+            Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 8.0f))
+            {
+                player->GetMotionMaster()->MovePoint(0, destination);
+                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                    "Playerbot PvP death handling: guid={} action=move-ghost-to-graveyard graveyard={}",
+                    player->GetGUID().ToString(), graveyard->ID);
+                return true;
+            }
+        }
+    }
+
+    return true;
+}
+
 bool HasConflictingArenaLifecycleContext(playerbot::ArenaLifecycleContext const& context)
 {
     return (context.queueOperation != playerbot::QueueOperationType::None) &&
@@ -385,7 +425,7 @@ Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirect
 
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 {
-    if (!player || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId())
+    if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId())
         return false;
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
@@ -606,6 +646,9 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
 bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
 {
+    if (!player || !player->IsAlive())
+        return false;
+
     Unit* target = AcquireCombatTarget(player, scanDistance);
     if (!target)
     {
@@ -724,12 +767,18 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return false;
     }
 
+    if (HandleBattlegroundDeathState(player))
+        return true;
+
     return true;
 }
 
 bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !context.tacticsEnabled || !context.shouldEvaluate || !context.actionName)
+        return false;
+
+    if (!player->IsAlive())
         return false;
 
     if (IsTacticalAction(context.actionName, "bg move to start"))
@@ -800,14 +849,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     {
         if (Battleground* battleground = player->GetBattleground())
         {
-            if (teamHasHumans && battleground->GetTypeID(true) == BATTLEGROUND_WS)
-            {
-                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP FC movement blocked: guid={} reason=team-has-humans.",
-                    player->GetGUID().ToString());
-                return false;
-            }
-
             uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
             TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
             TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
