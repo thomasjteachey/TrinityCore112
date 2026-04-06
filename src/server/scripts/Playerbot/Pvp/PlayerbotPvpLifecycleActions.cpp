@@ -70,6 +70,8 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
         return false;
 
     player->AddBattlegroundQueueId(bgQueueTypeId);
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
+        bracketEntry->GetBracketId());
     return true;
 }
 
