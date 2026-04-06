@@ -476,7 +476,7 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
 
 bool SupportsLoginOrchestration()
 {
-    return true;
+    return false;
 }
 
 bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
@@ -595,6 +595,15 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     if (online.total < target)
     {
         uint32 const needed = target - online.total;
+        if (!SupportsLoginOrchestration())
+        {
+            state.skippedIntegrationGap += needed;
+            TC_LOG_WARN("playerbots.population",
+                "Random bot login orchestration is not supported in this build/runtime path; skipping {} planned login attempts.",
+                needed);
+            return false;
+        }
+
         std::vector<RandomBotPoolCandidate> const pool = QueryOfflinePool(state.config);
         std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
         if (pool.empty())
