@@ -75,6 +75,12 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!player || player->InBattleground())
         return false;
 
+    // Allow managed bots to keep participating in queue/invite lifecycle even if
+    // they died in the open world. Battleground queue/port handlers can reject
+    // dead actors, so recover to alive before queueing.
+    if (!player->IsAlive())
+        player->ResurrectPlayer(1.0f);
+
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bgTemplate)
         return false;
@@ -172,6 +178,11 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
 {
     if (!player || player->InBattleground())
         return false;
+
+    // Keep battleground/arena participation consistent for dead managed bots:
+    // invites should still be accepted and transitioned immediately.
+    if (!player->IsAlive())
+        player->ResurrectPlayer(1.0f);
 
     for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
     {
@@ -300,11 +311,6 @@ bool CanIssueBotMovement(Player const* player)
         return false;
 
     if (player->HasUnitState(UNIT_STATE_ROOT) || player->HasUnitState(UNIT_STATE_STUNNED))
-        return false;
-
-    // Player MotionMaster movement splines can bypass expected snare feel for
-    // managed bots. When snared, do not inject synthetic movement commands.
-    if (player->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED))
         return false;
 
     return true;
