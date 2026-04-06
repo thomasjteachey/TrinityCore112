@@ -53,7 +53,10 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!bgTemplate)
         return false;
 
-    if (!player->CanJoinToBattleground(bgTemplate) || !player->HasFreeBattlegroundQueueId())
+    // Managed random bots can run on disconnected virtual sessions where RBAC
+    // battleground permissions are not always populated like live client sessions.
+    // Gate queue eligibility by battleground level + free queue slots instead.
+    if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
         return false;
 
     BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
