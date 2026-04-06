@@ -17,6 +17,8 @@
 
 #include "Log.h"
 #include "Chat.h"
+#include "GameTime.h"
+#include "Player.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
@@ -77,6 +79,31 @@ public:
     void OnLogout(Player* player) override
     {
         playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
+    }
+
+    void OnDuelRequest(Player* target, Player* challenger) override
+    {
+        if (!target || !challenger)
+            return;
+
+        if (!playerbot::IsManagedRandomBot(target))
+            return;
+
+        if (!target->duel || !challenger->duel || target->duel->State != DUEL_STATE_CHALLENGED)
+            return;
+
+        if (target->duel->Opponent != challenger || challenger->duel->Opponent != target)
+            return;
+
+        time_t const now = GameTime::GetGameTime();
+        target->duel->StartTime = now + 3;
+        challenger->duel->StartTime = now + 3;
+
+        target->duel->State = DUEL_STATE_COUNTDOWN;
+        challenger->duel->State = DUEL_STATE_COUNTDOWN;
+
+        target->SendDuelCountdown(3000);
+        challenger->SendDuelCountdown(3000);
     }
 };
 
