@@ -28,7 +28,7 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
-#include "SpellAura.h"
+#include "SpellAuras.h"
 #include "SpellHistory.h"
 #include "Unit.h"
 
