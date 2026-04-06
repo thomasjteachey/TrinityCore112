@@ -56,6 +56,8 @@ struct PvpValues
     bool playerHasFlag = false;
     bool enemyFlagCarrierNear = false;
     bool teamFlagCarrierNear = false;
+    uint32 battlegroundTeamHumanCount = 0;
+    bool battlegroundTeamHasHumans = false;
 };
 
 enum class PvpTrigger : uint8
@@ -190,6 +192,8 @@ public:
     static ArenaLifecycleContext BuildArenaLifecycleContext(Player const* player, PvpValues const& values);
     static PvpClassSpellContext BuildClassSpellContext(Player const* player, PvpValues const& values);
     static RandomBotParticipationHooks BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values);
+    static uint32 CountHumanPlayersOnBattlegroundTeam(Player const* player);
+    static bool TeamHasHumanPlayers(Player const* player);
 
 private:
     static bool IsLifecycleEnabled();
