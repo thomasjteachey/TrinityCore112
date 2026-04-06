@@ -516,19 +516,29 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     session->HandlePlayerLoginOpcode(loginPacket);
 
     Player* loggedInPlayer = session->GetPlayer();
-    if (!loggedInPlayer || loggedInPlayer->GetGUID() != playerGuid || !loggedInPlayer->IsInWorld())
+    if (loggedInPlayer && loggedInPlayer->GetGUID() != playerGuid)
     {
         TC_LOG_WARN("playerbots.population",
-            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} hasPlayer={} inWorld={}.",
+            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} hasPlayer={} guidMismatch=1.",
             playerGuid.ToString(), candidate.lowGuid, candidate.account, loggedInPlayer ? 1 : 0,
-            (loggedInPlayer && loggedInPlayer->IsInWorld()) ? 1 : 0);
+            1);
 
         session->KickPlayer("Random bot login verification failed");
         return false;
     }
 
-    TC_LOG_INFO("playerbots.population", "Random bot login successful: guid={} guidLow={} account={} level={}.",
-        playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    if (loggedInPlayer)
+    {
+        TC_LOG_INFO("playerbots.population", "Random bot login successful: guid={} guidLow={} account={} level={}.",
+            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    }
+    else
+    {
+        TC_LOG_INFO("playerbots.population",
+            "Random bot login dispatched: guid={} guidLow={} account={} level={} (player materialization pending).",
+            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    }
+
     return true;
 }
 
