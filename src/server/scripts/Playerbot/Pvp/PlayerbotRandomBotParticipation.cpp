@@ -30,6 +30,7 @@
 #include "Log.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "Realm.h"
 #include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
@@ -502,6 +503,7 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
         return false;
     }
 
+    ObjectGuid const playerGuid = ObjectGuid::Create<HighGuid::Player>(candidate.lowGuid);
     int32 const realmId = static_cast<int32>(realm.Id.Realm);
     AccountTypes const security = static_cast<AccountTypes>(sAccountMgr->GetSecurity(candidate.account, realmId));
     uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
@@ -510,12 +512,33 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     sWorld->AddSession(session);
 
     WorldPacket loginPacket(CMSG_PLAYER_LOGIN, 8);
-    ObjectGuid const playerGuid = ObjectGuid::Create<HighGuid::Player>(candidate.lowGuid);
     loginPacket << playerGuid;
     session->HandlePlayerLoginOpcode(loginPacket);
 
-    TC_LOG_INFO("playerbots.population", "Random bot login dispatched: guid={} guidLow={} account={} level={}.",
-        playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    Player* loggedInPlayer = session->GetPlayer();
+    if (loggedInPlayer && loggedInPlayer->GetGUID() != playerGuid)
+    {
+        TC_LOG_WARN("playerbots.population",
+            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} hasPlayer={} guidMismatch=1.",
+            playerGuid.ToString(), candidate.lowGuid, candidate.account, loggedInPlayer ? 1 : 0,
+            1);
+
+        session->KickPlayer("Random bot login verification failed");
+        return false;
+    }
+
+    if (loggedInPlayer)
+    {
+        TC_LOG_INFO("playerbots.population", "Random bot login successful: guid={} guidLow={} account={} level={}.",
+            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    }
+    else
+    {
+        TC_LOG_INFO("playerbots.population",
+            "Random bot login dispatched: guid={} guidLow={} account={} level={} (player materialization pending).",
+            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+    }
+
     return true;
 }
 
