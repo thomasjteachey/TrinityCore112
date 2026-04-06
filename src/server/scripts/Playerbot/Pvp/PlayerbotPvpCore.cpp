@@ -664,12 +664,12 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
     std::array<TacticalRule, 9> const rules =
     {{
         { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values), "bg move to objective", 90.0f },
-        { "timer bg", periodicRefresh, "bg reset objective force", 80.0f },
         { "enemy flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::EnemyFlagCarrierNear, values), "attack enemy flag carrier", 70.0f },
         { "team flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::TeamFlagCarrierNear, values), "bg protect fc", 65.0f },
-        { "often", often, "bg check objective", 51.0f },
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
         { "bg active", bgActive, "bg move to objective", 50.0f },
+        { "often", often, "bg check objective", 51.0f },
+        { "timer bg", periodicRefresh, "bg reset objective force", 80.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
         { "low mana", lowMana, "bg use buff", 45.0f }
     }};
@@ -920,7 +920,7 @@ BattlegroundMovementPrimitive PvpCore::SelectMovementPrimitiveSkeleton(PvpValues
             return BattlegroundMovementPrimitive::MoveToObjectivePosition;
         case BattlegroundObjectiveType::None:
         default:
-            return BattlegroundMovementPrimitive::None;
+            return BattlegroundMovementPrimitive::MoveToObjectivePosition;
     }
 }
 
