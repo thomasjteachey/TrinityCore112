@@ -60,6 +60,8 @@ struct RandomBotPopulationSnapshot
     uint64 lastRebalanceUnixTime = 0;
 };
 
+bool IsManagedRandomBot(Player const* player);
+
 class RandomBotParticipationManager
 {
 public:
