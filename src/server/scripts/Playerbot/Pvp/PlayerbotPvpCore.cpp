@@ -28,6 +28,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellHistory.h"
+#include "Unit.h"
 
 #include <array>
 
@@ -236,6 +237,133 @@ bool HasHostileTarget(Player const* player, Unit const* target)
     return player && target && target->IsAlive() && target->GetGUID() != player->GetGUID() && player->IsValidAttackTarget(target);
 }
 
+bool HasAnyAura(Unit const* unit, std::initializer_list<uint32> spellIds)
+{
+    if (!unit)
+        return false;
+
+    for (uint32 spellId : spellIds)
+        if (unit->HasAura(spellId))
+            return true;
+
+    return false;
+}
+
+bool IsPhysicalDamageClass(uint8 classId)
+{
+    return classId == CLASS_WARRIOR || classId == CLASS_ROGUE || classId == CLASS_HUNTER;
+}
+
+bool IsUsingTwoHander(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+    return mainHand && mainHand->GetTemplate() && mainHand->GetTemplate()->InventoryType == INVTYPE_2HWEAPON;
+}
+
+bool IsMeleeClass(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    switch (player->GetClass())
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+            return true;
+        case CLASS_SHAMAN:
+        case CLASS_PALADIN:
+            return IsUsingTwoHander(player);
+        default:
+            return false;
+    }
+}
+
+bool HasBreakableCrowdControl(Unit const* unit)
+{
+    // Approximation list for common "break on damage" PvP CCs.
+    return HasAnyAura(unit, { 118, 12824, 12825, 12826, 28272, 28271, 61305, 61721, 6770, 2070, 11297, 1776, 2094, 5782, 6213, 6215, 5484, 5246 });
+}
+
+bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return true;
+
+    if (target->HasAura(642)) // Divine Shield
+        return true;
+
+    if (IsPhysicalDamageClass(player->GetClass()) && HasAnyAura(target, { 1022, 5599, 10278 })) // Blessing of Protection ranks
+        return true;
+
+    if (HasBreakableCrowdControl(target))
+        return true;
+
+    return false;
+}
+
+Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || !candidate->IsAlive() || candidate == player)
+            continue;
+        if (!player->IsValidAttackTarget(candidate))
+            continue;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (requireReachable && distance > 35.0f)
+            continue;
+
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
+Unit const* SelectCombatTarget(Player const* player)
+{
+    if (!player)
+        return nullptr;
+
+    auto isTargetUsable = [&](Unit const* candidate)
+    {
+        if (!HasHostileTarget(player, candidate))
+            return false;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            return false;
+        return true;
+    };
+
+    Unit const* target = player->GetVictim();
+    if (isTargetUsable(target))
+        return target;
+
+    target = player->GetSelectedUnit();
+    if (isTargetUsable(target))
+        return target;
+
+    return SelectClosestEnemyTarget(player, true);
+}
+
 Unit const* SelectAllyTarget(Player const* player)
 {
     if (!player)
@@ -261,25 +389,42 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         return decision;
 
     bool const targetClose = player->IsWithinDistInMap(target, 8.0f);
+    bool const enemyOnTop = player->IsWithinDistInMap(target, 5.0f);
+    bool const enemyNear = player->IsWithinDistInMap(target, 15.0f);
 
-    if (!targetClose && !target->HasAura(1978) && IsSpellReady(player, 1978))
+    if (!targetClose && target->GetClass() == CLASS_ROGUE && !target->HasAura(1130) && IsSpellReady(player, 1130))
+        return { "hunter mark", "mark rogue targets for anti-stealth pressure", 1130, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!targetClose && target->GetClass() == CLASS_ROGUE && !target->HasAura(1978) && IsSpellReady(player, 1978))
         return { "hunter serpent sting", "apply ranged dot pressure", 1978, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
     if (!targetClose && IsSpellReady(player, 5116))
         return { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
-    if (targetClose && IsSpellReady(player, 2974))
+    if (enemyOnTop && IsSpellReady(player, 2974))
         return { "hunter wing clip", "close-range fallback snare", 2974, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (enemyOnTop && target->HasAura(2974) && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
+        return { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 1499)) && IsSpellReady(player, 19503))
+        return { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (enemyOnTop && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503))
+        return { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (enemyOnTop && IsMeleeClass(target) && !IsSpellReady(player, 19503) && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 1499)) && IsSpellReady(player, 19263))
+        return { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self };
 
-    if (!inMelee && IsSpellReady(player, 19434))
+    if (!enemyNear && IsSpellReady(player, 19434))
         return { "hunter aimed shot", "long cast pressure from range", 19434, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!inMelee && IsSpellReady(player, 3045))
+        return { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!inMelee && IsSpellReady(player, 2643))
         return { "hunter multi-shot", "ranged burst pressure", 2643, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!targetClose && target->GetPowerType() == POWER_MANA && !target->HasAura(3034) && IsSpellReady(player, 3034))
+        return { "hunter viper sting", "drain mana on mana users", 3034, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!inMelee && IsSpellReady(player, 3044))
         return { "hunter arcane shot", "ranged instant pressure", 3044, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-
-    if (player->HealthBelowPct(25) && inMelee && IsSpellReady(player, 5384))
-        return { "hunter feign death", "defensive reset under melee pressure", 5384, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->HasAura(19506) && IsSpellReady(player, 19506))
+        return { "hunter trueshot aura", "maintain personal buff aura", 19506, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->IsInCombat() && IsSpellReady(player, 982))
+        return { "hunter revive pet", "recover pet out of combat", 982, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
 }
@@ -292,20 +437,26 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
 
-    if (player->HealthBelowPct(25) && IsSpellReady(player, 11958))
+    if (player->HealthBelowPct(10) && IsSpellReady(player, 11958))
         return { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (player->HasUnitState(UNIT_STATE_STUNNED) && IsSpellReady(player, 1953))
+        return { "mage blink", "break stun pressure when possible", 1953, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!IsSpellReady(player, 11958) && IsSpellReady(player, 12472))
+        return { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (closePressure && IsSpellReady(player, 122))
         return { "mage frost nova", "close defensive peel", 122, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (closePressure && IsMeleeClass(target) && IsSpellReady(player, 120))
+        return { "mage cone of cold", "defensive snare versus nearby melee", 120, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (closePressure && IsSpellReady(player, 1953))
         return { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!closePressure && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 2139))
+    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 2139))
         return { "mage counterspell", "interrupt enemy cast at range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(118) && !closePressure && IsSpellReady(player, 118))
+    if (!player->HasAura(11426) && IsSpellReady(player, 11426))
+        return { "mage ice barrier", "maintain defensive absorb shield", 11426, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (target->HealthBelowPct(10) && IsSpellReady(player, 2136))
+        return { "mage fire blast", "instant execute pressure on low health target", 2136, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!target->HasAura(118) && !closePressure && target->GetClass() != CLASS_DRUID && IsSpellReady(player, 118))
         return { "mage polymorph", "safe ranged crowd control", 118, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (closePressure && IsSpellReady(player, 120))
-        return { "mage cone of cold", "short-range defensive pressure", 120, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (closePressure && IsSpellReady(player, 2136))
-        return { "mage fire blast", "instant close burst", 2136, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 116))
         return { "mage frostbolt", "default ranged pressure", 116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
@@ -350,14 +501,28 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         return decision;
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
-    if (closePressure && IsSpellReady(player, 5782))
-        return { "warlock fear", "close defensive control", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!player->IsInCombat() && IsSpellReady(player, 697))
+        return { "warlock summon voidwalker", "maintain voidwalker pet while out of combat", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (player->IsInCombat() && IsSpellReady(player, 697))
+        return { "warlock summon voidwalker", "recover voidwalker in combat when absent", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (player->HealthBelowPct(45) && IsSpellReady(player, 7812))
+        return { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->HasAura(19028) && IsSpellReady(player, 19028))
+        return { "warlock soul link", "maintain soul link when pet is available", 19028, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if ((target->GetClass() == CLASS_PALADIN || target->GetClass() == CLASS_PRIEST) && !target->HasAura(5782) && IsSpellReady(player, 5782))
+        return { "warlock fear", "prioritize fear control on healer targets", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->GetPowerType() == POWER_MANA && !target->HasAura(1714) && IsSpellReady(player, 1714))
+        return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!target->HasAura(172) && IsSpellReady(player, 172))
         return { "warlock corruption", "maintain corruption dot", 172, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(980) && IsSpellReady(player, 980))
-        return { "warlock curse of agony", "apply curse pressure", 980, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if ((target->HealthBelowPct(20) || (closePressure && IsMeleeClass(target))) && IsSpellReady(player, 6789))
+        return { "warlock death coil", "peel melee or finish low enemy target", 6789, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19647))
         return { "warlock spell lock", "pet interrupt when available", 19647, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (player->GetPower(POWER_MANA) < 400 && IsSpellReady(player, 1454))
+        return { "warlock life tap", "convert health to mana for sustained casting", 1454, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (player->HasAura(17941) && IsSpellReady(player, 686))
+        return { "warlock shadow bolt", "consume nightfall proc for instant pressure", 686, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 686))
         return { "warlock shadow bolt", "default ranged pressure", 686, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
@@ -370,18 +535,30 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     if (!HasHostileTarget(player, target))
         return decision;
 
-    if (!player->IsWithinMeleeRange(target) && IsSpellReady(player, 100))
-        return { "warrior charge", "close gap to target", 100, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(1715) && IsSpellReady(player, 1715))
+    if (!player->HasAura(6673) && IsSpellReady(player, 6673))
+        return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->IsWithinMeleeRange(target) && !player->IsInCombat() && IsSpellReady(player, 100))
+        return { "warrior charge", "close gap to target from out of combat", 100, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!player->IsWithinMeleeRange(target) && player->IsInCombat() && IsSpellReady(player, 20252))
+        return { "warrior intercept", "close gap to target while in combat", 20252, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if ((!target->HasAura(1715) || (target->GetAura(1715) && target->GetAura(1715)->GetDuration() < 3000)) && IsSpellReady(player, 1715))
         return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(772) && IsSpellReady(player, 772))
-        return { "warrior rend", "bleed pressure baseline", 772, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 6552))
+        return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsMeleeClass(target) && IsSpellReady(player, 71))
+        return { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsMeleeClass(target) && IsSpellReady(player, 676))
+        return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if ((player->HasAuraWithMechanic(1 << MECHANIC_FEAR) || player->HasAuraWithMechanic(1 << MECHANIC_SAPPED)) && player->HasAura(2458) && IsSpellReady(player, 18499))
+        return { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->HealthBelowPct(20) && IsSpellReady(player, 5308))
         return { "warrior execute", "finisher at low enemy health", 5308, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->GetClass() == CLASS_ROGUE && !target->HasAura(772) && IsSpellReady(player, 772))
+        return { "warrior rend", "apply anti-stealth bleed pressure on rogues", 772, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (profileSelection.profile == ClassicClassProfile::PrimaryClassic && IsSpellReady(player, 12294))
         return { "warrior mortal strike", "arms-like burst pressure", 12294, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsSpellReady(player, 7384))
-        return { "warrior overpower", "classic melee punish", 7384, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 1680))
+        return { "warrior whirlwind", "fallback aoe melee pressure", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
     return decision;
 }
@@ -392,20 +569,64 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
     if (!HasHostileTarget(player, target))
         return decision;
 
+    if (!player->IsInCombat() && !player->HasAura(1784) && IsSpellReady(player, 1784))
+        return { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 1766))
         return { "rogue kick", "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (player->HealthBelowPct(40) && IsSpellReady(player, 5277))
         return { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 2983))
+    if (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f) && IsSpellReady(player, 2983))
         return { "rogue sprint", "close gap for melee pressure", 2983, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (IsSpellReady(player, 1776))
-        return { "rogue gouge", "short control in melee", 1776, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (player->GetComboPoints() >= 3 && IsSpellReady(player, 2098))
+    if (player->GetComboPoints() >= 5 && IsSpellReady(player, 408))
+        return { "rogue kidney shot", "primary stun finisher at full combo points", 408, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (player->GetComboPoints() >= 5 && IsSpellReady(player, 2098))
         return { "rogue eviscerate", "combo finisher pressure", 2098, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (player->HasSpell(53) && IsSpellReady(player, 53))
-        return { "rogue backstab", "positional melee pressure", 53, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsSpellReady(player, 1752))
-        return { "rogue sinister strike", "default combo builder", 1752, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->GetClass() != CLASS_DRUID && (target->GetClass() == CLASS_PALADIN || target->GetClass() == CLASS_SHAMAN) && IsSpellReady(player, 2094))
+        return { "rogue blind", "cross-cc secondary healer/support target", 2094, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554))
+        return { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 16511))
+        return { "rogue hemorrhage", "default subtlety combo point builder", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+
+    return decision;
+}
+
+SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
+{
+    SpellDecision decision;
+    if (!HasHostileTarget(player, target))
+        return decision;
+
+    if (!player->IsInCombat())
+    {
+        if (!player->HasAura(8232) && IsSpellReady(player, 8232))
+            return { "shaman windfury weapon", "maintain weapon imbue out of combat", 8232, playerbot::PvpClassSpellContext::TargetMode::Self };
+        if (!player->HasAura(324) && IsSpellReady(player, 324))
+            return { "shaman lightning shield", "maintain shield buff out of combat", 324, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
+
+    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 8042))
+        return { "shaman earth shock", "interrupt enemy cast with shock", 8042, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->GetPowerType() == POWER_MANA && IsSpellReady(player, 8177))
+        return { "shaman grounding totem", "counter incoming caster pressure", 8177, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsSpellReady(player, 16166))
+        return { "shaman elemental mastery", "trigger burst throughput cooldown", 16166, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsSpellReady(player, 421))
+        return { "shaman chain lightning", "primary burst cast on kill target", 421, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsMeleeClass(target) && player->IsWithinDistInMap(target, 10.0f) && IsSpellReady(player, 2484))
+        return { "shaman earthbind totem", "kite nearby melee pressure", 2484, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 8056))
+        return { "shaman frost shock", "snare medium-range melee threats", 8056, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->GetClass() == CLASS_ROGUE && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 8170))
+        return { "shaman poison cleansing totem", "answer rogue poison pressure", 8170, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if ((target->GetClass() == CLASS_PRIEST || target->GetClass() == CLASS_WARLOCK) && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 8143))
+        return { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (player->HealthBelowPct(50) && IsSpellReady(player, 8004))
+        return { "shaman lesser healing wave", "self-sustain while focused", 8004, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsSpellReady(player, 370))
+        return { "shaman purge", "strip enemy magical effects by default", 370, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 403))
+        return { "shaman lightning bolt", "fallback ranged damage cast", 403, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
     return decision;
 }
@@ -440,6 +661,8 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
             return SelectWarriorSpell(player, target, profileSelection);
         case CLASS_ROGUE:
             return SelectRogueSpell(player, target);
+        case CLASS_SHAMAN:
+            return SelectShamanSpell(player, target);
         default:
             decision.reason = "class-not-in-this-pass";
             return decision;
@@ -690,16 +913,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (!context.classSpellsEnabled || !player || !values.inBattleground || !IsTriggerActive(PvpTrigger::BgActive, values))
         return context;
 
-    Unit const* target = player->GetVictim();
-    bool hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
-    if (!hasValidTarget)
-    {
-        if (Unit const* selectedTarget = player->GetSelectedUnit())
-        {
-            target = selectedTarget;
-            hasValidTarget = target->IsAlive() && target->GetGUID() != player->GetGUID();
-        }
-    }
+    Unit const* target = SelectCombatTarget(player);
+    bool const hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
 
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     Unit const* allyTarget = SelectAllyTarget(player);
@@ -716,6 +931,34 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         context.targetGuid = context.allyTargetGuid;
     else if (context.targetMode == PvpClassSpellContext::TargetMode::Self)
         context.targetGuid = player->GetGUID();
+    if (player->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_ROOT)))
+    {
+        if (IsSpellReady(player, 42292))
+        {
+            context.actionName = "pvp trinket";
+            context.reason = "break major crowd control with medallion";
+            context.spellId = 42292;
+            context.targetMode = PvpClassSpellContext::TargetMode::Self;
+            context.targetGuid = player->GetGUID();
+        }
+        else if (IsSpellReady(player, 7744))
+        {
+            context.actionName = "will of the forsaken";
+            context.reason = "break fear/charm/sleep with racial";
+            context.spellId = 7744;
+            context.targetMode = PvpClassSpellContext::TargetMode::Self;
+            context.targetGuid = player->GetGUID();
+        }
+        else if (IsSpellReady(player, 20589))
+        {
+            context.actionName = "escape artist";
+            context.reason = "break movement-impairing control with racial";
+            context.spellId = 20589;
+            context.targetMode = PvpClassSpellContext::TargetMode::Self;
+            context.targetGuid = player->GetGUID();
+        }
+    }
+
     context.shouldExecute = context.spellId != 0;
 
     char const* targetModeLabel = "none";
