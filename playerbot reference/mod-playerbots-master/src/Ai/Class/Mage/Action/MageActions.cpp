@@ -140,5 +140,11 @@ bool CastBlinkBackAction::Execute(Event event)
         return false;
     // can cast spell check passed in isUseful()
     bot->SetOrientation(bot->GetAngle(target) + M_PI);
-    return CastSpellAction::Execute(event);
+    if (!CastSpellAction::Execute(event))
+        return false;
+
+    // Blink is an instant teleport; refresh cached position immediately instead of
+    // waiting for CurrentPositionValue's long minChangeInterval.
+    RESET_AI_VALUE(WorldPosition, "current position");
+    return true;
 }
