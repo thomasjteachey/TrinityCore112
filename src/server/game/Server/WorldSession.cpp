@@ -284,6 +284,7 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     /// If necessary, kick the player because the client didn't send anything for too long
     /// (or they've been idling in character select)
     if (m_Socket && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
+    {
         m_Socket->CloseSocket();
     }
 
