@@ -115,8 +115,10 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     m_GUIDLow(0),
     _player(nullptr),
     m_Socket(std::move(sock)),
+    m_virtualSession(!m_Socket),
     _security(sec),
     _accountId(id),
+    m_sessionMapKey(id),
     _accountName(std::move(name)),
     m_expansion(expansion),
     _logoutTime(0),
@@ -480,7 +482,14 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
         }
 
         if (!m_Socket)
+        {
+            // Virtual (socketless) sessions are server-driven actors (for example managed bots)
+            // and must not be culled by the disconnected-client path.
+            if (m_virtualSession && !forceExit)
+                return true;
+
             return false;                                       //Will remove this session from the world session map
+        }
     }
 
     return true;

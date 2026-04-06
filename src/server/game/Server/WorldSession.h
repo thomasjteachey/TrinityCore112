@@ -442,6 +442,9 @@ class TC_GAME_API WorldSession
         bool PlayerLogoutWithSave() const { return m_playerLogout && m_playerSave; }
         bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
         bool PlayerDisconnected() const { return !m_Socket; }
+        bool IsVirtualSession() const { return m_virtualSession; }
+        uint32 GetSessionMapKey() const { return m_sessionMapKey; }
+        void SetSessionMapKey(uint32 key) { m_sessionMapKey = key; }
 
         void ReadAddonsInfo(ByteBuffer& data);
         void SendAddonsInfo();
@@ -1223,11 +1226,13 @@ class TC_GAME_API WorldSession
         ObjectGuid::LowType m_GUIDLow;                      // set logined or recently logout player (while m_playerRecentlyLogout set)
         Player* _player;
         std::shared_ptr<WorldSocket> m_Socket;
+        bool m_virtualSession;
         std::string m_Address;                              // Current Remote Address
      // std::string m_LAddress;                             // Last Attempted Remote Adress - we can not set attempted ip for a non-existing session!
 
         AccountTypes _security;
         uint32 _accountId;
+        uint32 m_sessionMapKey;
         std::string _accountName;
         uint8 m_expansion;
 

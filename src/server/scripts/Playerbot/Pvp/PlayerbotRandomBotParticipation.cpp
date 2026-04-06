@@ -476,7 +476,7 @@ std::vector<RandomBotPoolCandidate> PickLoginCandidates(RandomBotPopulationState
 
 bool SupportsLoginOrchestration()
 {
-    return false;
+    return true;
 }
 
 bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
@@ -488,10 +488,11 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
         return false;
     }
 
-    if (sWorld->FindSession(candidate.account))
+    uint32 const virtualSessionKey = 0xF0000000u | (candidate.lowGuid & 0x0FFFFFFFu);
+    if (sWorld->FindSession(virtualSessionKey))
     {
-        TC_LOG_WARN("playerbots.population", "Random bot login skipped: account {} already has an active world session (candidate guidLow={}).",
-            candidate.account, candidate.lowGuid);
+        TC_LOG_WARN("playerbots.population", "Random bot login skipped: virtual session key {} already active (candidate guidLow={} account={}).",
+            virtualSessionKey, candidate.lowGuid, candidate.account);
         return false;
     }
 
@@ -509,6 +510,7 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
     WorldSession* session = new WorldSession(candidate.account, std::move(accountName), nullptr, security, expansion, 0, Minutes(0),
         LOCALE_enUS, 0, false);
+    session->SetSessionMapKey(virtualSessionKey);
     sWorld->AddSession(session);
     session->AllowCharacterLogin(playerGuid);
 
