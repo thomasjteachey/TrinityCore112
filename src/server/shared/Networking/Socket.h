@@ -115,7 +115,12 @@ public:
     void CloseSocket()
     {
         if (_closed.exchange(true))
+        {
+            TC_LOG_TRACE("network", "Socket::CloseSocket: already closed for {}:{} (this={:p})", GetRemoteIpAddress().to_string(), GetRemotePort(), static_cast<void const*>(this));
             return;
+        }
+
+        TC_LOG_DEBUG("network", "Socket::CloseSocket: closing {}:{} (this={:p})", GetRemoteIpAddress().to_string(), GetRemotePort(), static_cast<void const*>(this));
 
         boost::system::error_code shutdownError;
         _socket.shutdown(boost::asio::socket_base::shutdown_send, shutdownError);
