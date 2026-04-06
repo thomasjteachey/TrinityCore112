@@ -253,8 +253,9 @@ bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> con
 
     if (WorldSession const* session = player->GetSession())
     {
-        // Safety invariant: connected human sessions are never treated as managed random bots.
-        return session->PlayerDisconnected();
+        // BotAccountIds is an explicit allow-list; treat listed accounts as
+        // managed bots even when their virtual session is marked connected.
+        return true;
     }
 
     return true;

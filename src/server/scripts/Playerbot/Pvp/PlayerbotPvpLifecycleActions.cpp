@@ -181,11 +181,12 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         if (!session)
             continue;
 
-        // Queue the opcode packet to mirror the reference module flow and avoid
-        // processing invite acceptance inline during AI update iteration.
+        // Execute invite acceptance directly. Managed random bots can run on
+        // disconnected virtual sessions where queued outbound packets are not
+        // guaranteed to be pumped like real client traffic.
         WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
         packet << arenaType << uint8(0) << uint32(packetBgTypeId) << uint16(0x1F90) << uint8(1);
-        session->QueuePacket(new WorldPacket(packet));
+        session->HandleBattleFieldPortOpcode(packet);
         return true;
     }
 
