@@ -63,6 +63,9 @@ constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
+std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
+std::mutex g_StartupReviveLock;
+bool g_StartupRevivePending = false;
 
 enum class LifecycleObservationReason : uint8
 {
@@ -229,6 +232,28 @@ bool CanProcessPlayerLifecycle(Player const* player)
 
     nextProcessTime = now + RandomBotLifecycleCadenceInterval;
     return true;
+}
+
+void TryReviveManagedBotAfterStartup(Player* player)
+{
+    if (!player || !playerbot::IsManagedRandomBot(player))
+        return;
+
+    bool shouldAttemptRevive = false;
+    {
+        std::lock_guard<std::mutex> startupReviveLock(g_StartupReviveLock);
+        if (!g_StartupRevivePending)
+            return;
+
+        auto const [_, inserted] = g_StartupRevivedManagedBotGuids.emplace(player->GetGUID().GetRawValue());
+        shouldAttemptRevive = inserted;
+    }
+
+    if (!shouldAttemptRevive || player->IsAlive())
+        return;
+
+    player->ResurrectPlayer(1.0f);
+    TC_LOG_INFO("playerbots.population", "Startup managed bot revive applied: guid={}", player->GetGUID().ToString());
 }
 
 uint32 ResolvePlayerAccountId(Player const* player)
@@ -717,6 +742,10 @@ void RandomBotParticipationManager::ResetCadence()
 {
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.clear();
+
+    std::lock_guard<std::mutex> startupReviveLock(g_StartupReviveLock);
+    g_StartupRevivePending = false;
+    g_StartupRevivedManagedBotGuids.clear();
 }
 
 void RandomBotParticipationManager::LoadPopulationConfig()
@@ -732,6 +761,10 @@ void RandomBotParticipationManager::OnStartupBootstrap()
     {
         g_RandomPopulation.startupBootstrapDone = true;
         g_RandomPopulation.rebalanceRequested = true;
+
+        std::lock_guard<std::mutex> startupReviveLock(g_StartupReviveLock);
+        g_StartupRevivePending = true;
+        g_StartupRevivedManagedBotGuids.clear();
     }
 }
 
@@ -770,6 +803,8 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
+    TryReviveManagedBotAfterStartup(player);
+
     if (!CanProcessPlayerLifecycle(player))
         return;
 
