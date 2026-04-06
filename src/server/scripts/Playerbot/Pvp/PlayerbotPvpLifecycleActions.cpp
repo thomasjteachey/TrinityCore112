@@ -160,15 +160,32 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         if ((arenaType != 0) != arenaInvite)
             continue;
 
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+        GroupQueueInfo ginfo;
+        if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            continue;
+
+        BattlegroundTypeId packetBgTypeId = bgTypeId;
+        if (arenaType != 0)
+        {
+            // Arena invites can target dynamic map-specific arena templates rather
+            // than BATTLEGROUND_AA; resolve the invited instance type first.
+            Battleground* invited = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, BATTLEGROUND_TYPE_NONE);
+            if (!invited)
+                continue;
+
+            packetBgTypeId = invited->GetTypeID();
+        }
+
         WorldSession* session = player->GetSession();
         if (!session)
             continue;
 
-        // Route invite acceptance through the core opcode handler so playerbots
-        // execute the same battlefield-port flow as real players.
-        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 9);
-        packet << arenaType << uint8(0) << uint32(bgTypeId) << uint16(0) << uint8(1);
-        session->HandleBattleFieldPortOpcode(packet);
+        // Queue the opcode packet to mirror the reference module flow and avoid
+        // processing invite acceptance inline during AI update iteration.
+        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
+        packet << arenaType << uint8(0) << uint32(packetBgTypeId) << uint16(0x1F90) << uint8(1);
+        session->QueuePacket(new WorldPacket(packet));
         return true;
     }
 
