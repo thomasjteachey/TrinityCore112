@@ -509,6 +509,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player || !player->InBattleground())
         return false;
 
+    if (EngageNearestEnemyPlayer(player, 80.0f))
+        return true;
+
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
         context.flagCarrierDirective == FlagCarrierDirective::None)
