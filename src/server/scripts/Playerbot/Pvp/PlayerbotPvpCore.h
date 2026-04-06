@@ -140,9 +140,19 @@ struct PvpClassSpellContext
     bool classSpellsEnabled = false;
     bool shouldExecute = false;
     char const* actionName = nullptr;
+    char const* reason = nullptr;
     uint32 spellId = 0;
     bool selfCast = false;
+    enum class TargetMode : uint8
+    {
+        None = 0,
+        Enemy,
+        Self,
+        Ally
+    };
+    TargetMode targetMode = TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;
+    ObjectGuid allyTargetGuid = ObjectGuid::Empty;
 };
 
 struct BattlegroundLifecycleContext
