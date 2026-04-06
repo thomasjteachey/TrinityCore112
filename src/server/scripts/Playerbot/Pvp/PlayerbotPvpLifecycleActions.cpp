@@ -22,6 +22,8 @@
 #include "BattlegroundEY.h"
 #include "BattlegroundWS.h"
 #include "DBCStores.h"
+#include "Time/GameTime.h"
+#include "GameObject.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
@@ -41,6 +43,7 @@
 #include <cmath>
 #include <limits>
 #include <sstream>
+#include <unordered_map>
 
 namespace
 {
@@ -394,6 +397,102 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     return true;
 }
 
+std::unordered_map<uint64, uint32> g_WsgReturnAttemptNotBeforeMsByGuid;
+
+GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
+{
+    if (!player || !bgWs || !player->GetMap())
+        return nullptr;
+
+    uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    if (bgWs->GetFlagState(botBgTeam) != BG_WS_FLAG_STATE_ON_GROUND)
+        return nullptr;
+
+    ObjectGuid const droppedFlagGuid = bgWs->GetDroppedFlagGUID(botBgTeam);
+    if (droppedFlagGuid.IsEmpty())
+        return nullptr;
+
+    return player->GetMap()->GetGameObject(droppedFlagGuid);
+}
+
+bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag, float veryCloseDistance)
+{
+    if (!player || !droppedFlag || !player->GetMap())
+        return false;
+
+    uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    float const botDistance = player->GetDistance(droppedFlag);
+
+    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player* teammate = itr->GetSource();
+        if (!teammate || teammate == player || !teammate->IsAlive())
+            continue;
+        if (teammate->GetBattlegroundId() != player->GetBattlegroundId())
+            continue;
+
+        uint32 const teammateBgTeam = teammate->GetBGTeam() ? teammate->GetBGTeam() : teammate->GetTeam();
+        if (teammateBgTeam != botBgTeam || playerbot::IsManagedRandomBot(teammate))
+            continue;
+
+        float const teammateDistance = teammate->GetDistance(droppedFlag);
+        if (teammateDistance <= veryCloseDistance && teammateDistance <= botDistance + 1.0f)
+            return true;
+    }
+
+    return false;
+}
+
+bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(player->GetBattleground());
+    if (!bgWs || bgWs->GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    GameObject* droppedFlag = GetFriendlyDroppedWsgFlag(player, bgWs);
+    if (!droppedFlag)
+        return false;
+
+    uint64 const botRawGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& attemptNotBeforeMs = g_WsgReturnAttemptNotBeforeMsByGuid[botRawGuid];
+
+    if (HumanTeammateNearDroppedFlag(player, droppedFlag, 7.0f))
+    {
+        attemptNotBeforeMs = nowMs + urand(700, 1300);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP WSG return yielded: guid={} reason=nearby-human-priority wait_until_ms={}.",
+            player->GetGUID().ToString(), attemptNotBeforeMs);
+        return false;
+    }
+
+    if (attemptNotBeforeMs == 0)
+    {
+        attemptNotBeforeMs = nowMs + urand(350, 900);
+        return false;
+    }
+
+    if (nowMs < attemptNotBeforeMs)
+        return false;
+
+    if (!player->IsWithinDistInMap(droppedFlag, 10.0f))
+    {
+        player->GetMotionMaster()->MovePoint(0, droppedFlag->GetPosition());
+        return true;
+    }
+
+    bgWs->EventPlayerClickedOnFlag(player, droppedFlag);
+    attemptNotBeforeMs = nowMs + urand(1200, 2200);
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP WSG return attempted: guid={} flag_guid={} next_attempt_ms={}.",
+        player->GetGUID().ToString(), droppedFlag->GetGUID().ToString(), attemptNotBeforeMs);
+    return true;
+}
+
 Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
 {
     if (!player || !player->InBattleground() || !player->GetMap())
@@ -666,6 +765,10 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player || !player->InBattleground())
         return false;
 
+    bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
+    if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
+        return true;
+
     if (EngageNearestEnemyPlayer(player, 80.0f))
         return true;
 
@@ -684,13 +787,26 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         context.flagCarrierDirective != FlagCarrierDirective::None)
     {
         if (Player* carrier = FindFlagCarrierForDirective(player, context.flagCarrierDirective))
+        {
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP objective support selected: guid={} directive={} target={}.",
+                player->GetGUID().ToString(), static_cast<uint8>(context.flagCarrierDirective), carrier->GetGUID().ToString());
             return MoveTowardUnit(player, carrier, 20.0f);
+        }
     }
 
     if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition)
     {
         if (Battleground* battleground = player->GetBattleground())
         {
+            if (teamHasHumans && battleground->GetTypeID(true) == BATTLEGROUND_WS)
+            {
+                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                    "Playerbot PvP FC movement blocked: guid={} reason=team-has-humans.",
+                    player->GetGUID().ToString());
+                return false;
+            }
+
             uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
             TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
             TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
@@ -760,6 +876,12 @@ bool BattlegroundTacticalActions::AttackEnemyFlagCarrierPrimitive(Player* player
         return false;
 
     Player* enemyCarrier = FindFlagCarrierForDirective(player, FlagCarrierDirective::AttackEnemyCarrier);
+    if (enemyCarrier)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP enemy-FC support selected: guid={} target={}.",
+            player->GetGUID().ToString(), enemyCarrier->GetGUID().ToString());
+    }
     return MoveTowardUnit(player, enemyCarrier, 15.0f);
 }
 
@@ -772,6 +894,12 @@ bool BattlegroundTacticalActions::ProtectFlagCarrierPrimitive(Player* player, Ba
         return false;
 
     Player* teamCarrier = FindFlagCarrierForDirective(player, FlagCarrierDirective::ProtectTeamCarrier);
+    if (teamCarrier)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP protect-FC support selected: guid={} target={}.",
+            player->GetGUID().ToString(), teamCarrier->GetGUID().ToString());
+    }
     return MoveTowardUnit(player, teamCarrier, 18.0f);
 }
 

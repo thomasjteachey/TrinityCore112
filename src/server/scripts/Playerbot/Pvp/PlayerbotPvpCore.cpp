@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpCore.h"
+#include "PlayerbotRandomBotParticipation.h"
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -23,6 +24,7 @@
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
 #include "Log.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellHistory.h"
@@ -491,7 +493,7 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
     // highest-priority emergency handling first, then raid/bg pressure, then sustain.
     std::array<TacticalRule, 9> const rules =
     {{
-        { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values), "bg move to objective", 90.0f },
+        { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values) && !values.battlegroundTeamHasHumans, "bg move to objective", 90.0f },
         { "enemy flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::EnemyFlagCarrierNear, values), "attack enemy flag carrier", 70.0f },
         { "team flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::TeamFlagCarrierNear, values), "bg protect fc", 65.0f },
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
@@ -519,6 +521,41 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
 
 namespace playerbot
 {
+uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
+{
+    if (!player || !player->InBattleground() || !player->GetMap())
+        return 0;
+
+    Battleground const* battleground = player->GetBattleground();
+    if (!battleground)
+        return 0;
+
+    uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    uint32 humanCount = 0;
+
+    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player const* teammate = itr->GetSource();
+        if (!teammate || teammate->GetBattlegroundId() != player->GetBattlegroundId())
+            continue;
+
+        uint32 const teammateBgTeam = teammate->GetBGTeam() ? teammate->GetBGTeam() : teammate->GetTeam();
+        if (teammateBgTeam != botBgTeam)
+            continue;
+
+        if (!IsManagedRandomBot(teammate))
+            ++humanCount;
+    }
+
+    return humanCount;
+}
+
+bool PvpCore::TeamHasHumanPlayers(Player const* player)
+{
+    return CountHumanPlayersOnBattlegroundTeam(player) > 0;
+}
+
 void PvpCore::LoadConfig()
 {
     g_PvpCoreConfig.moduleEnabled = sConfigMgr->GetBoolDefault("Playerbot.Enable", false);
@@ -564,6 +601,8 @@ PvpValues PvpCore::CollectValues(Player const* player)
         values.battlegroundTypeId = player->GetBattlegroundTypeId();
 
     PopulateObjectiveStateTriggers(player, values);
+    values.battlegroundTeamHumanCount = CountHumanPlayersOnBattlegroundTeam(player);
+    values.battlegroundTeamHasHumans = values.battlegroundTeamHumanCount > 0;
 
     return values;
 }
@@ -615,6 +654,11 @@ BattlegroundTacticalContext PvpCore::BuildBattlegroundTacticalContext(Player con
     context.objective = SelectObjectiveSkeleton(values);
     context.movement = SelectMovementPrimitiveSkeleton(values, context.objective);
     context.flagCarrierDirective = SelectFlagCarrierDirectiveSkeleton(values);
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP human-first context: guid={} human_count={} has_humans={} player_has_flag={} blocked_player_fc={} directive={} action={}.",
+        player->GetGUID().ToString(), values.battlegroundTeamHumanCount, values.battlegroundTeamHasHumans, values.playerHasFlag,
+        values.battlegroundTeamHasHumans && values.playerHasFlag, static_cast<uint8>(context.flagCarrierDirective),
+        context.actionName ? context.actionName : "none");
     return context;
 }
 
@@ -769,7 +813,8 @@ BattlegroundObjectiveSelection PvpCore::SelectObjectiveSkeleton(PvpValues const&
 
     if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
         objective.type = BattlegroundObjectiveType::AttackFlagCarrier;
-    else if (IsTriggerActive(PvpTrigger::PlayerHasFlag, values) || IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
+    else if ((!values.battlegroundTeamHasHumans && IsTriggerActive(PvpTrigger::PlayerHasFlag, values)) ||
+        IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
         objective.type = BattlegroundObjectiveType::ProtectFlagCarrier;
 
     return objective;
@@ -801,7 +846,8 @@ FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const
     if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
         return FlagCarrierDirective::AttackEnemyCarrier;
 
-    if (IsTriggerActive(PvpTrigger::PlayerHasFlag, values) || IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
+    if ((!values.battlegroundTeamHasHumans && IsTriggerActive(PvpTrigger::PlayerHasFlag, values)) ||
+        IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
         return FlagCarrierDirective::ProtectTeamCarrier;
 
     return FlagCarrierDirective::None;
