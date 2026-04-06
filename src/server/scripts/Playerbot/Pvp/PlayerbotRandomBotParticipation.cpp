@@ -884,24 +884,34 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         return;
     }
 
-    BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
-    ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
-    if (IsNoOp(battlegroundContext) && IsNoOp(arenaContext))
+    bool didExecuteBattleground = false;
+    bool didExecuteArena = false;
+
+    if (hooks.battlegroundParticipationHook)
+    {
+        BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
+        if (!IsNoOp(battlegroundContext))
+            didExecuteBattleground = BattlegroundLifecycleActions::Execute(player, battlegroundContext);
+    }
+
+    // Re-sample lifecycle values after battleground execution so arena decisions
+    // are based on current queue/invite state and do not operate on stale data.
+    PvpValues const postBattlegroundValues = PvpCore::CollectValues(player);
+    RandomBotParticipationHooks const postBattlegroundHooks = PvpCore::BuildRandomBotParticipationHooks(player, postBattlegroundValues);
+    if (postBattlegroundHooks.arenaParticipationHook)
+    {
+        ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, postBattlegroundValues);
+        if (!IsNoOp(arenaContext))
+            didExecuteArena = ArenaLifecycleActions::Execute(player, arenaContext);
+    }
+
+    if (!didExecuteBattleground && !didExecuteArena)
     {
         LogLifecycleBranchSummary(guid, "active-hooks-no-op-context");
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle dispatcher no-op with active hooks: guid={}, bgHook={}, arenaHook={}.",
             guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
-            guid.ToString(), didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
-        return;
     }
-
-    bool const didExecuteBattleground = hooks.battlegroundParticipationHook &&
-        BattlegroundLifecycleActions::Execute(player, battlegroundContext);
-    bool const didExecuteArena = hooks.arenaParticipationHook &&
-        ArenaLifecycleActions::Execute(player, arenaContext);
 
     if (didExecuteBattleground)
     {
