@@ -10,4 +10,11 @@ parameter to CMake during configuration - this increases the filesize,
 but includes all the needed information for a decent and efficient 
 crashreport.
 
+When you only have TrinityCore's `server.crash` log output (frames in the
+`module(+0xOFFSET)` format), use `symbolize_crashlog.py` to resolve those offsets:
+
+Usage: python3 symbolize_crashlog.py --binary /path/to/worldserver --log /path/to/Server.log
+
+By default repeated traces are deduplicated; pass `--show-all` to print every trace instance.
+
 -- Good luck, and happy crashhunting.
