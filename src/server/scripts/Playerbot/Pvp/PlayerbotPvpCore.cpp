@@ -554,21 +554,36 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return context;
 
     Unit const* target = player->GetVictim();
-    bool const hasValidVictim = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
-    bool const inMelee = hasValidVictim && player->IsWithinMeleeRange(target);
+    bool hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
+    if (!hasValidTarget)
+    {
+        ObjectGuid const selectedGuid = player->GetSelection();
+        if (!selectedGuid.IsEmpty())
+        {
+            if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid))
+            {
+                target = selectedTarget;
+                hasValidTarget = target->IsAlive() && target->GetGUID() != player->GetGUID();
+            }
+        }
+    }
+
+    bool const inMelee = hasValidTarget && player->IsWithinMeleeRange(target);
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
 
-    SpellDecision const decision = SelectClassicClassSpell(player, hasValidVictim ? target : nullptr, inMelee, profileSelection);
+    SpellDecision const decision = SelectClassicClassSpell(player, hasValidTarget ? target : nullptr, inMelee, profileSelection);
 
     context.actionName = decision.actionName;
     context.spellId = decision.spellId;
     context.selfCast = decision.selfCast;
+    context.targetGuid = hasValidTarget ? target->GetGUID() : ObjectGuid::Empty;
     context.shouldExecute = context.spellId != 0;
 
     TC_LOG_DEBUG("playerbots.pvp.class",
-        "Playerbot PvP Classic scaffold: class={} profile={} fallback={} unsupported={} wrath_path_replaced={} has_victim={} spell={} action={}.",
+        "Playerbot PvP Classic scaffold: class={} profile={} fallback={} unsupported={} wrath_path_replaced={} has_target={} target_guid={} spell={} action={}.",
         GetClassLabel(player->GetClass()), profileSelection.profileLabel, profileSelection.usedFallback,
-        profileSelection.unsupportedClass, true, hasValidVictim, context.spellId, context.actionName ? context.actionName : "none");
+        profileSelection.unsupportedClass, true, hasValidTarget, context.targetGuid.ToString(),
+        context.spellId, context.actionName ? context.actionName : "none");
     return context;
 }
 

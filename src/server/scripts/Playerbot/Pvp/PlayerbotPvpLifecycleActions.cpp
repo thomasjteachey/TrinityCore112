@@ -38,6 +38,7 @@
 #include "Util.h"
 
 #include <cstring>
+#include <cmath>
 #include <limits>
 #include <sstream>
 
@@ -265,6 +266,74 @@ bool IsTacticalAction(char const* actionName, char const* expected)
     return actionName && expected && std::strcmp(actionName, expected) == 0;
 }
 
+struct CombatPositioningProfile
+{
+    float preferredMinRange = 0.0f;
+    float preferredIdealRange = 0.0f;
+    float preferredMaxPressureRange = 0.0f;
+    bool primarilyRanged = false;
+    bool createDistanceWhenCrowded = false;
+    bool meleeFallbackAcceptable = true;
+    char const* label = "default";
+};
+
+CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
+{
+    if (!player)
+        return {};
+
+    switch (player->GetClass())
+    {
+        case CLASS_HUNTER: return { 8.0f, 28.0f, 38.0f, true, true, false, "hunter-ranged" };
+        case CLASS_MAGE: return { 12.0f, 27.0f, 36.0f, true, true, false, "mage-ranged" };
+        case CLASS_PRIEST: return { 10.0f, 25.0f, 34.0f, true, true, false, "priest-ranged" };
+        case CLASS_WARLOCK: return { 10.0f, 26.0f, 35.0f, true, true, false, "warlock-ranged" };
+        case CLASS_WARRIOR: return { 0.0f, 1.5f, 5.0f, false, false, true, "warrior-melee" };
+        case CLASS_ROGUE: return { 0.0f, 1.5f, 5.0f, false, false, true, "rogue-melee" };
+        case CLASS_PALADIN: return { 0.0f, 3.0f, 8.0f, false, false, true, "paladin-hybrid" };
+        case CLASS_SHAMAN: return { 5.0f, 20.0f, 30.0f, true, true, true, "shaman-hybrid" };
+        case CLASS_DRUID: return { 4.0f, 18.0f, 28.0f, true, true, true, "druid-hybrid" };
+        default: return { 0.0f, 3.0f, 8.0f, false, false, true, "default-melee" };
+    }
+}
+
+bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return false;
+
+    float const angleAway = target->GetAngle(player);
+    float const currentDistance = player->GetDistance(target);
+    float const moveDistance = std::max(4.0f, desiredDistance - currentDistance + 2.0f);
+
+    Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
+        player->GetPositionY() + std::sin(angleAway) * moveDistance,
+        player->GetPositionZ(), player->GetOrientation());
+    player->GetMotionMaster()->MovePoint(0, destination);
+    return true;
+}
+
+bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
+{
+    if (!player || !target || !target->IsAlive())
+        return false;
+
+    if (player->IsWithinLOSInMap(target))
+        return false;
+
+    float const orbitAngle = target->GetAngle(player) + frand(-0.85f, 0.85f);
+    float const orbitRange = std::max(profile.preferredMinRange + 2.0f, profile.preferredIdealRange);
+    Position reposition(target->GetPositionX() + std::cos(orbitAngle) * orbitRange,
+        target->GetPositionY() + std::sin(orbitAngle) * orbitRange,
+        target->GetPositionZ(), player->GetOrientation());
+    player->GetMotionMaster()->MovePoint(0, reposition);
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP LOS recovery: bot={} target={} profile={} reason={} orbitRange={}.",
+        player->GetGUID().ToString(), target->GetGUID().ToString(), profile.label, reason ? reason : "unknown", orbitRange);
+    return true;
+}
+
 Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)
 {
     if (!player || directive == playerbot::FlagCarrierDirective::None || !player->InBattleground())
@@ -315,8 +384,9 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     if (!player || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId())
         return false;
 
+    CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
-        return false;
+        return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
@@ -361,17 +431,100 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
     return nearestEnemy;
 }
 
-bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
+Unit* AcquireCombatTarget(Player* player, float scanDistance)
 {
-    Player* enemy = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
-    if (!enemy)
+    if (!player)
+        return nullptr;
+
+    Unit* target = player->GetVictim();
+    if (!target || !target->IsAlive())
+        target = ObjectAccessor::GetUnit(*player, player->GetSelection());
+    if ((!target || !target->IsAlive()) && player->InBattleground())
+        target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
+    if (!target || !target->IsAlive())
+        return nullptr;
+
+    player->SetSelection(target->GetGUID());
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP chosen combat target: bot={} target={} class={} distance={}.",
+        player->GetGUID().ToString(), target->GetGUID().ToString(), uint32(player->GetClass()), player->GetDistance(target));
+    return target;
+}
+
+bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfile const& profile)
+{
+    if (!player || !target || !target->IsAlive())
         return false;
 
-    player->SetSelection(enemy->GetGUID());
-    if (!player->GetVictim())
-        player->Attack(enemy, true);
+    float const distance = player->GetDistance(target);
+    bool const hasLos = player->IsWithinLOSInMap(target);
+    if (!hasLos)
+        return TryRecoverLineOfSight(player, target, profile, "drive-combat-positioning");
 
-    return MoveTowardUnit(player, enemy, 8.0f);
+    if (profile.primarilyRanged)
+    {
+        if (distance < profile.preferredMinRange && profile.createDistanceWhenCrowded)
+        {
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP distance band: bot={} profile={} decision=create-distance distance={} min={} ideal={} max={}.",
+                player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
+                profile.preferredMaxPressureRange);
+            return MoveAwayFromUnit(player, target, profile.preferredIdealRange);
+        }
+
+        if (distance > profile.preferredMaxPressureRange)
+        {
+            player->GetMotionMaster()->MoveFollow(target, profile.preferredIdealRange, player->GetFollowAngle());
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP distance band: bot={} profile={} decision=close-distance distance={} min={} ideal={} max={}.",
+                player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
+                profile.preferredMaxPressureRange);
+            return true;
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP distance band: bot={} profile={} decision=hold-band distance={} min={} ideal={} max={}.",
+            player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
+            profile.preferredMaxPressureRange);
+        return true;
+    }
+
+    if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
+    {
+        player->GetMotionMaster()->MoveChase(target);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={}.",
+            player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);
+        return true;
+    }
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP distance band: bot={} profile={} decision=melee-stick distance={} max={}.",
+        player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);
+    return true;
+}
+
+bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
+{
+    Unit* target = AcquireCombatTarget(player, scanDistance);
+    if (!target)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP movement skipped: bot={} reason=no-combat-target scanDistance={}.",
+            player ? player->GetGUID().ToString() : ObjectGuid::Empty.ToString(), scanDistance);
+        return false;
+    }
+
+    CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
+    bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
+    player->Attack(target, useMeleeAttack);
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP positioning profile: bot={} profile={} ranged={} createDistance={} meleeFallback={}.",
+        player->GetGUID().ToString(), profile.label, profile.primarilyRanged, profile.createDistanceWhenCrowded,
+        profile.meleeFallbackAcceptable);
+
+    return DriveCombatPositioning(player, target, profile);
 }
 }
 
@@ -520,6 +673,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         context.movement == BattlegroundMovementPrimitive::None &&
         context.flagCarrierDirective == FlagCarrierDirective::None)
     {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP movement skipped: bot={} reason=no-objective-and-no-directive.",
+            player->GetGUID().ToString());
         return false;
     }
 
@@ -557,7 +713,15 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         }
     }
 
-    return EngageNearestEnemyPlayer(player, 55.0f) || true;
+    bool const fallbackEngage = EngageNearestEnemyPlayer(player, 55.0f);
+    if (!fallbackEngage)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP movement skipped: bot={} reason=no-objective-movement-and-no-fallback-target.",
+            player->GetGUID().ToString());
+    }
+
+    return fallbackEngage;
 }
 
 bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)

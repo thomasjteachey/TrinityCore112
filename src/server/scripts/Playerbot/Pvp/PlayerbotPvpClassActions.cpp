@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpClassActions.h"
 
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -25,7 +26,7 @@
 
 namespace
 {
-bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast)
+bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast, ObjectGuid const& targetGuid)
 {
     if (!player || !spellId || !player->HasSpell(spellId))
         return false;
@@ -40,6 +41,12 @@ bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast)
         return false;
 
     Unit* target = selfCast ? static_cast<Unit*>(player) : player->GetVictim();
+    if (!selfCast && !targetGuid.IsEmpty())
+    {
+        if (Unit* explicitTarget = ObjectAccessor::GetUnit(*player, targetGuid))
+            target = explicitTarget;
+    }
+
     if (!target || !target->IsAlive())
         return false;
     if (selfCast && target != player)
@@ -83,6 +90,6 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
-    return CastDirectSpell(player, context.spellId, context.selfCast);
+    return CastDirectSpell(player, context.spellId, context.selfCast, context.targetGuid);
 }
 }
