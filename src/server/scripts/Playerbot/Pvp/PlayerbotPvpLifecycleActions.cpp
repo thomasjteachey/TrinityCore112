@@ -25,6 +25,7 @@
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "Log.h"
 #include "MotionMaster.h"
 #include "Opcodes.h"
@@ -35,6 +36,7 @@
 #include "WorldSession.h"
 
 #include <cstring>
+#include <sstream>
 
 namespace
 {
@@ -42,6 +44,22 @@ bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
+}
+
+void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
+{
+    if (!player || !phase)
+        return;
+
+    std::ostringstream oss;
+    oss << "[Playerbot PvP][" << phase << "] bot=" << player->GetName() << " guid=" << player->GetGUID().ToString()
+        << " map=" << player->GetMapId() << " detail=" << detail;
+    std::string const message = oss.str();
+
+    TC_LOG_WARN("playerbots.pvp.lifecycle", "{}", message);
+
+    if (WorldSession* session = player->GetSession())
+        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
@@ -73,11 +91,16 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
     if (!ginfo)
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-failed", "BattlegroundQueue::AddGroup returned null.");
         return false;
+    }
 
     player->AddBattlegroundQueueId(bgQueueTypeId);
     sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
         bracketEntry->GetBracketId());
+    EmitLifecycleDiagnostic(player, "queue-add-success",
+        "Queued for bgTypeId=" + std::to_string(uint32(bgTypeId)) + " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
     return true;
 }
 
@@ -163,7 +186,11 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
         GroupQueueInfo ginfo;
         if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+        {
+            EmitLifecycleDiagnostic(player, "invite-missing-group-info",
+                "No GroupQueueInfo for queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
             continue;
+        }
 
         BattlegroundTypeId packetBgTypeId = bgTypeId;
         if (arenaType != 0)
@@ -172,14 +199,21 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
             // than BATTLEGROUND_AA; resolve the invited instance type first.
             Battleground* invited = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, BATTLEGROUND_TYPE_NONE);
             if (!invited)
+            {
+                EmitLifecycleDiagnostic(player, "invite-arena-instance-missing",
+                    "No invited arena instance for guid=" + std::to_string(ginfo.IsInvitedToBGInstanceGUID));
                 continue;
+            }
 
             packetBgTypeId = invited->GetTypeID();
         }
 
         WorldSession* session = player->GetSession();
         if (!session)
+        {
+            EmitLifecycleDiagnostic(player, "invite-no-session", "WorldSession is null.");
             continue;
+        }
 
         // Execute invite acceptance directly. Managed random bots can run on
         // disconnected virtual sessions where queued outbound packets are not
@@ -187,6 +221,17 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
         packet << arenaType << uint8(0) << uint32(packetBgTypeId) << uint16(0x1F90) << uint8(1);
         session->HandleBattleFieldPortOpcode(packet);
+
+        if (!player->InBattleground() && !player->IsBeingTeleported())
+        {
+            EmitLifecycleDiagnostic(player, "invite-accept-no-transition",
+                "HandleBattleFieldPortOpcode did not transition to battleground/teleport.");
+        }
+        else
+        {
+            EmitLifecycleDiagnostic(player, "invite-accept-transition",
+                "Accepted invite for bgTypeId=" + std::to_string(uint32(packetBgTypeId)));
+        }
         return true;
     }
 
