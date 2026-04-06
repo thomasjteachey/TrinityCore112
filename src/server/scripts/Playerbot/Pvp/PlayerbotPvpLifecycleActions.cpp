@@ -25,13 +25,20 @@
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "Log.h"
+#include "Map.h"
 #include "MotionMaster.h"
+#include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "World.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include <cstring>
+#include <limits>
+#include <sstream>
 
 namespace
 {
@@ -39,6 +46,22 @@ bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
+}
+
+void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
+{
+    if (!player || !phase)
+        return;
+
+    std::ostringstream oss;
+    oss << "[Playerbot PvP][" << phase << "] bot=" << player->GetName() << " guid=" << player->GetGUID().ToString()
+        << " map=" << player->GetMapId() << " detail=" << detail;
+    std::string const message = oss.str();
+
+    TC_LOG_WARN("playerbots.pvp.lifecycle", "{}", message);
+
+    if (WorldSession* session = player->GetSession())
+        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
@@ -50,7 +73,10 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!bgTemplate)
         return false;
 
-    if (!player->CanJoinToBattleground(bgTemplate) || !player->HasFreeBattlegroundQueueId())
+    // Managed random bots can run on disconnected virtual sessions where RBAC
+    // battleground permissions are not always populated like live client sessions.
+    // Gate queue eligibility by battleground level + free queue slots instead.
+    if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
         return false;
 
     BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
@@ -67,9 +93,16 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
     if (!ginfo)
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-failed", "BattlegroundQueue::AddGroup returned null.");
         return false;
+    }
 
     player->AddBattlegroundQueueId(bgQueueTypeId);
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
+        bracketEntry->GetBracketId());
+    EmitLifecycleDiagnostic(player, "queue-add-success",
+        "Queued for bgTypeId=" + std::to_string(uint32(bgTypeId)) + " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
     return true;
 }
 
@@ -148,29 +181,66 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
             continue;
 
         BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
+        uint8 const arenaType = BattlegroundMgr::BGArenaType(bgQueueTypeId);
+        if ((arenaType != 0) != arenaInvite)
+            continue;
+
         BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
         GroupQueueInfo ginfo;
         if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
-            continue;
-
-        Battleground* battleground = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
-        if (!battleground)
-            continue;
-
-        if (!player->InBattleground())
-            player->SetBattlegroundEntryPoint();
-
-        if (!player->IsAlive())
         {
-            player->ResurrectPlayer(1.0f);
-            player->SpawnCorpseBones();
+            EmitLifecycleDiagnostic(player, "invite-missing-group-info",
+                "No GroupQueueInfo for queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
+            continue;
         }
 
-        player->FinishTaxiFlight();
-        bgQueue.RemovePlayer(player->GetGUID(), false);
-        player->SetBattlegroundId(battleground->GetInstanceID(), bgTypeId);
-        player->SetBGTeam(ginfo.Team);
-        sBattlegroundMgr->SendToBattleground(player, ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
+        BattlegroundTypeId packetBgTypeId = bgTypeId;
+        if (arenaType != 0)
+        {
+            // Arena invites can target dynamic map-specific arena templates rather
+            // than BATTLEGROUND_AA; resolve the invited instance type first.
+            Battleground* invited = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, BATTLEGROUND_TYPE_NONE);
+            if (!invited)
+            {
+                EmitLifecycleDiagnostic(player, "invite-arena-instance-missing",
+                    "No invited arena instance for guid=" + std::to_string(ginfo.IsInvitedToBGInstanceGUID));
+                continue;
+            }
+
+            packetBgTypeId = invited->GetTypeID();
+        }
+
+        WorldSession* session = player->GetSession();
+        if (!session)
+        {
+            EmitLifecycleDiagnostic(player, "invite-no-session", "WorldSession is null.");
+            continue;
+        }
+
+        // Execute invite acceptance directly. Managed random bots can run on
+        // disconnected virtual sessions where queued outbound packets are not
+        // guaranteed to be pumped like real client traffic.
+        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
+        packet << arenaType << uint8(0) << uint32(packetBgTypeId) << uint16(0x1F90) << uint8(1);
+        session->HandleBattleFieldPortOpcode(packet);
+
+        if (player->IsBeingTeleportedFar())
+        {
+            EmitLifecycleDiagnostic(player, "invite-accept-far-teleport-pending",
+                "Issuing server-side HandleMoveWorldportAck for bot teleport finalization.");
+            session->HandleMoveWorldportAck();
+        }
+
+        if (!player->InBattleground() && !player->IsBeingTeleported())
+        {
+            EmitLifecycleDiagnostic(player, "invite-accept-no-transition",
+                "HandleBattleFieldPortOpcode did not transition to battleground/teleport.");
+        }
+        else
+        {
+            EmitLifecycleDiagnostic(player, "invite-accept-transition",
+                "Accepted invite for bgTypeId=" + std::to_string(uint32(packetBgTypeId)));
+        }
         return true;
     }
 
@@ -251,6 +321,53 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
 
     return true;
+}
+
+Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
+{
+    if (!player || !player->InBattleground() || !player->GetMap())
+        return nullptr;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return nullptr;
+
+    float nearestDistance = std::numeric_limits<float>::max();
+    Player* nearestEnemy = nullptr;
+
+    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || candidate == player || !candidate->IsAlive())
+            continue;
+        if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
+            continue;
+        if (candidate->GetTeamId() == player->GetTeamId())
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance > maxDistance || distance >= nearestDistance)
+            continue;
+
+        nearestDistance = distance;
+        nearestEnemy = candidate;
+    }
+
+    return nearestEnemy;
+}
+
+bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
+{
+    Player* enemy = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
+    if (!enemy)
+        return false;
+
+    player->SetSelection(enemy->GetGUID());
+    if (!player->GetVictim())
+        player->Attack(enemy, true);
+
+    return MoveTowardUnit(player, enemy, 8.0f);
 }
 }
 
@@ -392,6 +509,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player || !player->InBattleground())
         return false;
 
+    if (EngageNearestEnemyPlayer(player, 80.0f))
+        return true;
+
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
         context.flagCarrierDirective == FlagCarrierDirective::None)
@@ -421,13 +541,16 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         }
     }
 
-    return true;
+    return EngageNearestEnemyPlayer(player, 55.0f) || true;
 }
 
 bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
         return false;
+
+    if (EngageNearestEnemyPlayer(player, 60.0f))
+        return true;
 
     return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
 }
@@ -512,6 +635,8 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
         default:
             break;
     }
+
+    didExecute = AcceptMatchingInvite(player, true) || didExecute;
 
     return didExecute;
 }
