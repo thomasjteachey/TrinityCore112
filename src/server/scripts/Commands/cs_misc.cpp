@@ -615,6 +615,10 @@ public:
             if (handler->HasLowerSecurity(target, ObjectGuid::Empty))
                 return false;
 
+            if (target->IsBeingTeleportedFar())
+                if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+                    targetSession->HandleMoveWorldportAck();
+
             if (target->IsBeingTeleported())
             {
                 handler->PSendSysMessage(LANG_IS_TELEPORTED, nameLink.c_str());
@@ -673,11 +677,11 @@ public:
             if (handler->needReportToTarget(target))
                 ChatHandler(target->GetSession()).PSendSysMessage(LANG_SUMMONED_BY, handler->playerLink(_player->GetName()).c_str());
 
-            // stop flight if need
-            if (_player->IsInFlight())
-                _player->FinishTaxiFlight();
+            // stop target flight if needed before teleporting the target
+            if (target->IsInFlight())
+                target->FinishTaxiFlight();
             else
-                _player->SaveRecallPosition(); // save only in non-flight case
+                target->SaveRecallPosition(); // save only in non-flight case
 
             // before GM
             float x, y, z;
