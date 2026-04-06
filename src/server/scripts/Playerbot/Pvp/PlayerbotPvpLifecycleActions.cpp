@@ -27,6 +27,7 @@
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Log.h"
+#include "Map.h"
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
@@ -36,6 +37,7 @@
 #include "WorldSession.h"
 
 #include <cstring>
+#include <limits>
 #include <sstream>
 
 namespace
@@ -320,6 +322,53 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 
     return true;
 }
+
+Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
+{
+    if (!player || !player->InBattleground() || !player->GetMap())
+        return nullptr;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return nullptr;
+
+    float nearestDistance = std::numeric_limits<float>::max();
+    Player* nearestEnemy = nullptr;
+
+    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || candidate == player || !candidate->IsAlive())
+            continue;
+        if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
+            continue;
+        if (candidate->GetTeamId() == player->GetTeamId())
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance > maxDistance || distance >= nearestDistance)
+            continue;
+
+        nearestDistance = distance;
+        nearestEnemy = candidate;
+    }
+
+    return nearestEnemy;
+}
+
+bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
+{
+    Player* enemy = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
+    if (!enemy)
+        return false;
+
+    player->SetSelection(enemy->GetGUID());
+    if (!player->GetVictim())
+        player->Attack(enemy, true);
+
+    return MoveTowardUnit(player, enemy, 8.0f);
+}
 }
 
 namespace playerbot
@@ -489,13 +538,16 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         }
     }
 
-    return true;
+    return EngageNearestEnemyPlayer(player, 55.0f) || true;
 }
 
 bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
         return false;
+
+    if (EngageNearestEnemyPlayer(player, 60.0f))
+        return true;
 
     return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
 }
