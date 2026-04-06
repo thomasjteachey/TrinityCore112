@@ -142,6 +142,7 @@ struct PvpClassSpellContext
     char const* actionName = nullptr;
     uint32 spellId = 0;
     bool selfCast = false;
+    ObjectGuid targetGuid = ObjectGuid::Empty;
 };
 
 struct BattlegroundLifecycleContext
