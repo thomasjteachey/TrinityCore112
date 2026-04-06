@@ -294,6 +294,22 @@ bool IsTacticalAction(char const* actionName, char const* expected)
     return actionName && expected && std::strcmp(actionName, expected) == 0;
 }
 
+bool CanIssueBotMovement(Player const* player)
+{
+    if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        return false;
+
+    if (player->HasUnitState(UNIT_STATE_ROOT) || player->HasUnitState(UNIT_STATE_STUNNED))
+        return false;
+
+    // Player MotionMaster movement splines can bypass expected snare feel for
+    // managed bots. When snared, do not inject synthetic movement commands.
+    if (player->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED))
+        return false;
+
+    return true;
+}
+
 struct CombatPositioningProfile
 {
     float preferredMinRange = 0.0f;
@@ -327,7 +343,7 @@ CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
 
 bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
 {
-    if (!player || !target)
+    if (!player || !target || !CanIssueBotMovement(player))
         return false;
 
     float const angleAway = target->GetAbsoluteAngle(player);
@@ -343,7 +359,7 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
 
 bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
 {
-    if (!player || !target || !target->IsAlive())
+    if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
         return false;
 
     if (player->IsWithinLOSInMap(target))
@@ -409,7 +425,7 @@ Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirect
 
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 {
-    if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId())
+    if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId() || !CanIssueBotMovement(player))
         return false;
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
@@ -472,6 +488,8 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
 bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 {
     if (!player || !player->InBattleground())
+        return false;
+    if (!CanIssueBotMovement(player))
         return false;
 
     BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(player->GetBattleground());
@@ -577,7 +595,7 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
 
 bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfile const& profile)
 {
-    if (!player || !target || !target->IsAlive())
+    if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
         return false;
 
     float const distance = player->GetDistance(target);
@@ -827,6 +845,8 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
 bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
+        return false;
+    if (!CanIssueBotMovement(player))
         return false;
 
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
