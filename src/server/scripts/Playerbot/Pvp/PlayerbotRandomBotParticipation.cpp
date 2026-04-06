@@ -502,7 +502,7 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
         return false;
     }
 
-    int32 const realmId = sWorld->GetRealm().Id.Realm;
+    int32 const realmId = static_cast<int32>(realm.Id.Realm);
     AccountTypes const security = static_cast<AccountTypes>(sAccountMgr->GetSecurity(candidate.account, realmId));
     uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
     WorldSession* session = new WorldSession(candidate.account, std::move(accountName), nullptr, security, expansion, 0, Minutes(0),
