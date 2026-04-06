@@ -22970,12 +22970,9 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
             {
                 //lets check if player was teleported from BG and schedule delayed Deserter spell cast
                 if (IsBeingTeleportedFar())
-                {
                     ScheduleDelayedOperation(DELAYED_SPELL_CAST_DESERTER);
-                    return;
-                }
-
-                CastSpell(this, 26013, true);               // Deserter
+                else
+                    CastSpell(this, 26013, true);               // Deserter
             }
         }
 
