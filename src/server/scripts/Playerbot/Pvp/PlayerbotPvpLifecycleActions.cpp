@@ -70,6 +70,8 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
         return false;
 
     player->AddBattlegroundQueueId(bgQueueTypeId);
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
+        bracketEntry->GetBracketId());
     return true;
 }
 
@@ -167,7 +169,14 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         }
 
         player->FinishTaxiFlight();
+        player->RemoveBattlegroundQueueId(bgQueueTypeId);
         bgQueue.RemovePlayer(player->GetGUID(), false);
+
+        // Keep parity with the normal battlefield-port flow so bots do not remain
+        // attached to stale battleground state when they accept a new invite.
+        if (Battleground* currentBattleground = player->GetBattleground())
+            currentBattleground->RemovePlayerAtLeave(player->GetGUID(), false, true);
+
         player->SetBattlegroundId(battleground->GetInstanceID(), bgTypeId);
         player->SetBGTeam(ginfo.Team);
         sBattlegroundMgr->SendToBattleground(player, ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
