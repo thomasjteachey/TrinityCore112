@@ -35,6 +35,7 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "Util.h"
 
 #include <cstring>
 #include <limits>
@@ -332,6 +333,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
     if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
         return nullptr;
 
+    uint32 const playerBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+
     float nearestDistance = std::numeric_limits<float>::max();
     Player* nearestEnemy = nullptr;
 
@@ -343,7 +346,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
             continue;
         if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
             continue;
-        if (candidate->GetTeamId() == player->GetTeamId())
+        uint32 const candidateBgTeam = candidate->GetBGTeam() ? candidate->GetBGTeam() : candidate->GetTeam();
+        if (candidateBgTeam == playerBgTeam)
             continue;
 
         float const distance = player->GetDistance(candidate);
@@ -531,6 +535,18 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     {
         if (Battleground* battleground = player->GetBattleground())
         {
+            uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+            TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+            TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+            if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+            {
+                Position destination(*enemyStart);
+                destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+                if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                    player->GetMotionMaster()->MovePoint(0, destination);
+                return true;
+            }
+
             if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
             {
                 Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
