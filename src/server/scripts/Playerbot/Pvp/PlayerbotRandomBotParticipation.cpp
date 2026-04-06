@@ -510,6 +510,7 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     WorldSession* session = new WorldSession(candidate.account, std::move(accountName), nullptr, security, expansion, 0, Minutes(0),
         LOCALE_enUS, 0, false);
     sWorld->AddSession(session);
+    session->AllowCharacterLogin(playerGuid);
 
     WorldPacket loginPacket(CMSG_PLAYER_LOGIN, 8);
     loginPacket << playerGuid;
