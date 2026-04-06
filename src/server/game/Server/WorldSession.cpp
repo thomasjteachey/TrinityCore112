@@ -283,13 +283,7 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     ///- Before we process anything:
     /// If necessary, kick the player because the client didn't send anything for too long
     /// (or they've been idling in character select)
-    if (!m_Socket)
-    {
-        TC_LOG_TRACE("network", "WorldSession::Update: account {} has no socket (player: {})", GetAccountId(), GetPlayerInfo());
-    }
-    else if (IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
-    {
-        TC_LOG_DEBUG("network", "WorldSession::Update: closing idle socket for account {} (player: {})", GetAccountId(), GetPlayerInfo());
+    if (m_Socket && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
         m_Socket->CloseSocket();
     }
 
