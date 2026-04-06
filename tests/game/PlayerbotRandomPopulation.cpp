@@ -26,6 +26,14 @@ TEST_CASE("Playerbot random population rebalance continues to issue login attemp
     CHECK(source.find("TryLoginBotCharacter") != std::string::npos);
 }
 
+
+TEST_CASE("Playerbot random population login orchestration support stays enabled", "[playerbot][population]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp");
+    CHECK(source.find("bool SupportsLoginOrchestration()") != std::string::npos);
+    CHECK(source.find("return true;") != std::string::npos);
+}
+
 TEST_CASE("Playerbot random population keeps real-player safety gating", "[playerbot][population]")
 {
     std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp");
