@@ -19,6 +19,7 @@
 #define TRINITY_PLAYERBOT_PVP_CORE_H
 
 #include "Common.h"
+#include "ObjectGuid.h"
 #include "SharedDefines.h"
 
 class Player;

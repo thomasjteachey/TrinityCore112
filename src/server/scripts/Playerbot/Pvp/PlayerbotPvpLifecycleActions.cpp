@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotRandomBotParticipation.h"
 
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
@@ -305,7 +306,7 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
     if (!player || !target)
         return false;
 
-    float const angleAway = target->GetAngle(player);
+    float const angleAway = target->GetAbsoluteAngle(player);
     float const currentDistance = player->GetDistance(target);
     float const moveDistance = std::max(4.0f, desiredDistance - currentDistance + 2.0f);
 
@@ -324,7 +325,7 @@ bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfil
     if (player->IsWithinLOSInMap(target))
         return false;
 
-    float const orbitAngle = target->GetAngle(player) + frand(-0.85f, 0.85f);
+    float const orbitAngle = target->GetAbsoluteAngle(player) + frand(-0.85f, 0.85f);
     float const orbitRange = std::max(profile.preferredMinRange + 2.0f, profile.preferredIdealRange);
     Position reposition(target->GetPositionX() + std::cos(orbitAngle) * orbitRange,
         target->GetPositionY() + std::sin(orbitAngle) * orbitRange,
@@ -537,7 +538,7 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
 
     Unit* target = player->GetVictim();
     if (!target || !target->IsAlive())
-        target = ObjectAccessor::GetUnit(*player, player->GetSelection());
+        target = player->GetSelectedUnit();
     if ((!target || !target->IsAlive()) && player->InBattleground())
         target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
     if (!target || !target->IsAlive())
