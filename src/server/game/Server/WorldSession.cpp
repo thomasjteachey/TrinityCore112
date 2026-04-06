@@ -118,6 +118,7 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     m_virtualSession(!m_Socket),
     _security(sec),
     _accountId(id),
+    m_sessionMapKey(id),
     _accountName(std::move(name)),
     m_expansion(expansion),
     _logoutTime(0),

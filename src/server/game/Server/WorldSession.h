@@ -443,6 +443,8 @@ class TC_GAME_API WorldSession
         bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
         bool PlayerDisconnected() const { return !m_Socket; }
         bool IsVirtualSession() const { return m_virtualSession; }
+        uint32 GetSessionMapKey() const { return m_sessionMapKey; }
+        void SetSessionMapKey(uint32 key) { m_sessionMapKey = key; }
 
         void ReadAddonsInfo(ByteBuffer& data);
         void SendAddonsInfo();
@@ -1230,6 +1232,7 @@ class TC_GAME_API WorldSession
 
         AccountTypes _security;
         uint32 _accountId;
+        uint32 m_sessionMapKey;
         std::string _accountName;
         uint8 m_expansion;
 

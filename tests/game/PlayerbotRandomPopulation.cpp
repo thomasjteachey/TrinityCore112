@@ -42,6 +42,24 @@ TEST_CASE("Playerbot random population keeps real-player safety gating", "[playe
 }
 
 
+
+
+TEST_CASE("Playerbot random population assigns per-character virtual session keys", "[playerbot][population]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp");
+    CHECK(source.find("virtualSessionKey") != std::string::npos);
+    CHECK(source.find("SetSessionMapKey") != std::string::npos);
+}
+
+
+
+TEST_CASE("Virtual sessions bypass account singleton replacement", "[playerbot][population]")
+{
+    std::string const source = ReadFile("src/server/game/World/World.cpp");
+    CHECK(source.find("if (!s->IsVirtualSession())") != std::string::npos);
+    CHECK(source.find("m_sessions[sessionMapKey] = s;") != std::string::npos);
+}
+
 TEST_CASE("Socketless sessions are retained for managed bot orchestration", "[playerbot][population]")
 {
     std::string const source = ReadFile("src/server/game/Server/WorldSession.cpp");
