@@ -27,9 +27,12 @@
 #include "CharacterCache.h"
 #include "Log.h"
 #include "MotionMaster.h"
+#include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "World.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include <cstring>
 
@@ -150,36 +153,19 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
             continue;
 
         BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
-        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
-        GroupQueueInfo ginfo;
-        if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+        uint8 const arenaType = BattlegroundMgr::BGArenaType(bgQueueTypeId);
+        if ((arenaType != 0) != arenaInvite)
             continue;
 
-        Battleground* battleground = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
-        if (!battleground)
+        WorldSession* session = player->GetSession();
+        if (!session)
             continue;
 
-        if (!player->InBattleground())
-            player->SetBattlegroundEntryPoint();
-
-        if (!player->IsAlive())
-        {
-            player->ResurrectPlayer(1.0f);
-            player->SpawnCorpseBones();
-        }
-
-        player->FinishTaxiFlight();
-        player->RemoveBattlegroundQueueId(bgQueueTypeId);
-        bgQueue.RemovePlayer(player->GetGUID(), false);
-
-        // Keep parity with the normal battlefield-port flow so bots do not remain
-        // attached to stale battleground state when they accept a new invite.
-        if (Battleground* currentBattleground = player->GetBattleground())
-            currentBattleground->RemovePlayerAtLeave(player->GetGUID(), false, true);
-
-        player->SetBattlegroundId(battleground->GetInstanceID(), bgTypeId);
-        player->SetBGTeam(ginfo.Team);
-        sBattlegroundMgr->SendToBattleground(player, ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
+        // Route invite acceptance through the core opcode handler so playerbots
+        // execute the same battlefield-port flow as real players.
+        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 9);
+        packet << arenaType << uint8(0) << uint32(bgTypeId) << uint16(0) << uint8(1);
+        session->HandleBattleFieldPortOpcode(packet);
         return true;
     }
 
@@ -521,6 +507,8 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
         default:
             break;
     }
+
+    didExecute = AcceptMatchingInvite(player, true) || didExecute;
 
     return didExecute;
 }
