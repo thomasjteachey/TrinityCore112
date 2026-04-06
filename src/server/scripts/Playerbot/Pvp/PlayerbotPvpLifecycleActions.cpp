@@ -280,22 +280,6 @@ bool HandleBattlegroundDeathState(Player* player)
         return true;
     }
 
-    if (Battleground* battleground = player->GetBattleground())
-    {
-        if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
-        {
-            Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
-            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 8.0f))
-            {
-                player->GetMotionMaster()->MovePoint(0, destination);
-                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP death handling: guid={} action=move-ghost-to-graveyard graveyard={}",
-                    player->GetGUID().ToString(), graveyard->ID);
-                return true;
-            }
-        }
-    }
-
     return true;
 }
 
@@ -308,6 +292,22 @@ bool HasConflictingArenaLifecycleContext(playerbot::ArenaLifecycleContext const&
 bool IsTacticalAction(char const* actionName, char const* expected)
 {
     return actionName && expected && std::strcmp(actionName, expected) == 0;
+}
+
+bool CanIssueBotMovement(Player const* player)
+{
+    if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        return false;
+
+    if (player->HasUnitState(UNIT_STATE_ROOT) || player->HasUnitState(UNIT_STATE_STUNNED))
+        return false;
+
+    // Player MotionMaster movement splines can bypass expected snare feel for
+    // managed bots. When snared, do not inject synthetic movement commands.
+    if (player->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED))
+        return false;
+
+    return true;
 }
 
 struct CombatPositioningProfile
@@ -343,7 +343,7 @@ CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
 
 bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
 {
-    if (!player || !target)
+    if (!player || !target || !CanIssueBotMovement(player))
         return false;
 
     float const angleAway = target->GetAbsoluteAngle(player);
@@ -359,7 +359,7 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
 
 bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
 {
-    if (!player || !target || !target->IsAlive())
+    if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
         return false;
 
     if (player->IsWithinLOSInMap(target))
@@ -425,7 +425,7 @@ Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirect
 
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 {
-    if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId())
+    if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId() || !CanIssueBotMovement(player))
         return false;
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
@@ -488,6 +488,8 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
 bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 {
     if (!player || !player->InBattleground())
+        return false;
+    if (!CanIssueBotMovement(player))
         return false;
 
     BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(player->GetBattleground());
@@ -593,7 +595,7 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
 
 bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfile const& profile)
 {
-    if (!player || !target || !target->IsAlive())
+    if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
         return false;
 
     float const distance = player->GetDistance(target);
@@ -668,6 +670,36 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
         profile.meleeFallbackAcceptable);
 
     return DriveCombatPositioning(player, target, profile);
+}
+
+bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination)
+{
+    if (!battleground || !player)
+        return false;
+
+    Position const* allianceStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_ALLIANCE));
+    Position const* hordeStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_HORDE));
+
+    if (allianceStart && hordeStart)
+    {
+        float const distanceToAllianceStart = player->GetDistance(allianceStart->GetPositionX(), allianceStart->GetPositionY(), allianceStart->GetPositionZ());
+        float const distanceToHordeStart = player->GetDistance(hordeStart->GetPositionX(), hordeStart->GetPositionY(), hordeStart->GetPositionZ());
+        destination = (distanceToAllianceStart > distanceToHordeStart) ? Position(*allianceStart) : Position(*hordeStart);
+        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        return true;
+    }
+
+    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+    TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+    if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+    {
+        destination = Position(*enemyStart);
+        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        return true;
+    }
+
+    return false;
 }
 }
 
@@ -814,6 +846,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 {
     if (!player || !player->InBattleground())
         return false;
+    if (!CanIssueBotMovement(player))
+        return false;
 
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
@@ -849,13 +883,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     {
         if (Battleground* battleground = player->GetBattleground())
         {
-            uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
-            TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
-            TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
-            if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+            Position destination;
+            if (TryGetObjectivePosition(battleground, player, destination))
             {
-                Position destination(*enemyStart);
-                destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
                     player->GetMotionMaster()->MovePoint(0, destination);
                 return true;
