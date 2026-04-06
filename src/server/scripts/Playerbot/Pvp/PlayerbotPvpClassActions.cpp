@@ -18,6 +18,7 @@
 #include "PlayerbotPvpClassActions.h"
 
 #include "ObjectAccessor.h"
+#include "Log.h"
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
@@ -26,42 +27,71 @@
 
 namespace
 {
-bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast, ObjectGuid const& targetGuid)
+char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
 {
-    if (!player || !spellId || !player->HasSpell(spellId))
+    switch (mode)
+    {
+        case playerbot::PvpClassSpellContext::TargetMode::Enemy: return "enemy";
+        case playerbot::PvpClassSpellContext::TargetMode::Self: return "self";
+        case playerbot::PvpClassSpellContext::TargetMode::Ally: return "ally";
+        case playerbot::PvpClassSpellContext::TargetMode::None:
+        default: return "none";
+    }
+}
+
+Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& context)
+{
+    if (!player)
+        return nullptr;
+
+    switch (context.targetMode)
+    {
+        case playerbot::PvpClassSpellContext::TargetMode::Self:
+            return player;
+        case playerbot::PvpClassSpellContext::TargetMode::Ally:
+        case playerbot::PvpClassSpellContext::TargetMode::Enemy:
+            if (!context.targetGuid.IsEmpty())
+                return ObjectAccessor::GetUnit(*player, context.targetGuid);
+            return (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy) ? player->GetVictim() : nullptr;
+        case playerbot::PvpClassSpellContext::TargetMode::None:
+        default:
+            return nullptr;
+    }
+}
+
+bool CastDirectSpell(Player* player, PvpClassSpellContext const& context)
+{
+    if (!player || !context.spellId || !player->HasSpell(context.spellId))
         return false;
 
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(context.spellId);
     if (!spellInfo)
         return false;
 
-    if (player->GetSpellHistory()->HasCooldown(spellId) ||
+    if (player->GetSpellHistory()->HasCooldown(context.spellId) ||
         player->GetSpellHistory()->HasGlobalCooldown(spellInfo) ||
         player->IsNonMeleeSpellCast(false, false, true))
         return false;
 
-    Unit* target = selfCast ? static_cast<Unit*>(player) : player->GetVictim();
-    if (!selfCast && !targetGuid.IsEmpty())
-    {
-        if (Unit* explicitTarget = ObjectAccessor::GetUnit(*player, targetGuid))
-            target = explicitTarget;
-    }
+    Unit* target = ResolveTarget(player, context);
 
     if (!target || !target->IsAlive())
         return false;
-    if (selfCast && target != player)
+    if (context.targetMode == PvpClassSpellContext::TargetMode::Self && target != player)
         return false;
 
-    if (!selfCast)
+    if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy)
     {
-        if (spellInfo->IsPositive())
-        {
-            if (!player->IsValidAssistTarget(target, spellInfo))
-                return false;
-        }
-        else if (!player->IsValidAttackTarget(target, spellInfo))
+        if (!player->IsValidAttackTarget(target, spellInfo))
             return false;
     }
+    else if (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+    {
+        if (!player->IsValidAssistTarget(target, spellInfo))
+            return false;
+    }
+    else if (context.targetMode == PvpClassSpellContext::TargetMode::None)
+        return false;
 
     if (!player->IsWithinLOSInMap(target))
         return false;
@@ -78,7 +108,7 @@ bool CastDirectSpell(Player* player, uint32 spellId, bool selfCast, ObjectGuid c
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
             return false;
 
-    player->CastSpell(target, spellId, false);
+    player->CastSpell(target, context.spellId, false);
     return true;
 }
 }
@@ -90,6 +120,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
-    return CastDirectSpell(player, context.spellId, context.selfCast, context.targetGuid);
+    bool const casted = CastDirectSpell(player, context);
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP class execution: action={} spell={} target_mode={} target_guid={} success={} reason={}.",
+        context.actionName ? context.actionName : "none",
+        context.spellId,
+        GetTargetModeLabel(context.targetMode),
+        context.targetGuid.ToString(),
+        casted,
+        context.reason ? context.reason : "none");
+    return casted;
 }
 }
