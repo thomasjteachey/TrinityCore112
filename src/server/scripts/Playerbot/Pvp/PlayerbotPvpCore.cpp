@@ -23,10 +23,12 @@
 #include "BattlegroundEY.h"
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
+#include "Item.h"
 #include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "SpellAura.h"
 #include "SpellHistory.h"
 #include "Unit.h"
 
