@@ -30,6 +30,7 @@
 #include "Log.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "Realm.h"
 #include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
