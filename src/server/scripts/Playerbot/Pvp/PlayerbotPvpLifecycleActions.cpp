@@ -27,9 +27,12 @@
 #include "CharacterCache.h"
 #include "Log.h"
 #include "MotionMaster.h"
+#include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "World.h"
+#include "WorldPacket.h"
+#include "WorldSession.h"
 
 #include <cstring>
 
@@ -50,7 +53,10 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!bgTemplate)
         return false;
 
-    if (!player->CanJoinToBattleground(bgTemplate) || !player->HasFreeBattlegroundQueueId())
+    // Managed random bots can run on disconnected virtual sessions where RBAC
+    // battleground permissions are not always populated like live client sessions.
+    // Gate queue eligibility by battleground level + free queue slots instead.
+    if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
         return false;
 
     BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
@@ -70,6 +76,8 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
         return false;
 
     player->AddBattlegroundQueueId(bgQueueTypeId);
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
+        bracketEntry->GetBracketId());
     return true;
 }
 
@@ -148,29 +156,19 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
             continue;
 
         BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
-        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
-        GroupQueueInfo ginfo;
-        if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+        uint8 const arenaType = BattlegroundMgr::BGArenaType(bgQueueTypeId);
+        if ((arenaType != 0) != arenaInvite)
             continue;
 
-        Battleground* battleground = sBattlegroundMgr->GetBattleground(ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
-        if (!battleground)
+        WorldSession* session = player->GetSession();
+        if (!session)
             continue;
 
-        if (!player->InBattleground())
-            player->SetBattlegroundEntryPoint();
-
-        if (!player->IsAlive())
-        {
-            player->ResurrectPlayer(1.0f);
-            player->SpawnCorpseBones();
-        }
-
-        player->FinishTaxiFlight();
-        bgQueue.RemovePlayer(player->GetGUID(), false);
-        player->SetBattlegroundId(battleground->GetInstanceID(), bgTypeId);
-        player->SetBGTeam(ginfo.Team);
-        sBattlegroundMgr->SendToBattleground(player, ginfo.IsInvitedToBGInstanceGUID, bgTypeId);
+        // Route invite acceptance through the core opcode handler so playerbots
+        // execute the same battlefield-port flow as real players.
+        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 9);
+        packet << arenaType << uint8(0) << uint32(bgTypeId) << uint16(0) << uint8(1);
+        session->HandleBattleFieldPortOpcode(packet);
         return true;
     }
 
@@ -512,6 +510,8 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
         default:
             break;
     }
+
+    didExecute = AcceptMatchingInvite(player, true) || didExecute;
 
     return didExecute;
 }
