@@ -164,6 +164,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             failureReason = "invalid_enemy_target";
             return false;
+        }
 
         // Keep explicit enemy selection/victim linkage for virtual sessions so
         // cast checks and AI follow-up consistently reference the same hostile.
@@ -222,14 +223,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // attempting non-instant casts.
     if (spellInfo->CalcCastTime() > 0)
         player->StopMoving();
-
-    // Cast-time spells like Frostbolt fail while moving. Since playerbots do
-    // not have client-side stop-cast behavior, explicitly stop movement before
-    // attempting non-instant casts.
-    if (spellInfo->CalcCastTime() > 0)
-        player->StopMoving();
-
-    SpellCastResult castResult = SPELL_FAILED_ERROR;
 
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
