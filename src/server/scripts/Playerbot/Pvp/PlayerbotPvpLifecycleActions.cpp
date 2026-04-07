@@ -34,6 +34,7 @@
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
+#include "PathGenerator.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Player.h"
@@ -226,6 +227,44 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                 player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
                 player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
                 player->GetOrientation());
+        }
+
+        // Keep WSG movement path-safe for managed virtual bots: if the local step
+        // still resolves to unsafe navmesh modes, iteratively shorten the step.
+        auto isUnsafePath = [player](Position const& candidate) -> bool
+        {
+            PathGenerator path(player);
+            if (!path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false))
+                return true;
+
+            PathType const pathType = path.GetPathType();
+            if (pathType & PATHFIND_NOPATH)
+                return true;
+
+            return pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
+        };
+
+        if (isUnsafePath(issuedDestination))
+        {
+            constexpr float fallbackSteps[] = { 32.0f, 24.0f, 16.0f, 10.0f };
+            for (float stepDistance : fallbackSteps)
+            {
+                if (directDistance <= stepDistance)
+                    continue;
+
+                float const ratio = stepDistance / directDistance;
+                Position candidate(
+                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                    player->GetOrientation());
+
+                if (!isUnsafePath(candidate))
+                {
+                    issuedDestination = candidate;
+                    break;
+                }
+            }
         }
     }
 
