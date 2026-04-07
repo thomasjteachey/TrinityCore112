@@ -331,14 +331,30 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
 
     playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
     playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
-    playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+    bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
 
     playerbot::BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
     inProgressContext.queueOperation = playerbot::QueueOperationType::None;
     inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
     inProgressContext.shouldHandleInProgressStatus = true;
-    playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+
+    if (!didExecuteTactical && !didExecuteLifecycle)
+    {
+        uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+        TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+        TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+
+        if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+        {
+            if (!player->IsWithinDist3d(enemyStart->GetPositionX(), enemyStart->GetPositionY(), enemyStart->GetPositionZ(), 10.0f))
+            {
+                player->GetMotionMaster()->MovePoint(0, *enemyStart, false);
+                EmitLifecycleGmDebug(player, "bg-fasttick-fallback=enemy-start-movepoint");
+            }
+        }
+    }
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
