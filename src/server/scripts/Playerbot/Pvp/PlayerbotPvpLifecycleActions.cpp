@@ -903,6 +903,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 return true;
             }
 
+            // WSG can enter sparse states where objective anchors are unavailable.
+            // In those windows, force a large-radius enemy scan before falling
+            // back to local graveyard movement so bots keep crossing the map.
+            if (EngageNearestEnemyPlayer(player, 500.0f))
+                return true;
+
             if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
             {
                 Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());

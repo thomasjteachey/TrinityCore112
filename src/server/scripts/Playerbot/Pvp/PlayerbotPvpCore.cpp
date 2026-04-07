@@ -29,6 +29,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "SpellAuras.h"
+#include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
 
@@ -234,7 +235,24 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
 
 bool IsSpellReady(Player const* player, uint32 spellId)
 {
-    return player && spellId && player->HasSpell(spellId) && !player->GetSpellHistory()->HasCooldown(spellId);
+    if (!player || !spellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!baseSpellInfo)
+        return false;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+    {
+        if (player->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+    }
+
+    if (!resolvedSpellId)
+        return false;
+
+    return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
 bool HasHostileTarget(Player const* player, Unit const* target)
@@ -1744,6 +1762,21 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.actionName = decision.actionName;
     context.reason = decision.reason;
     context.spellId = decision.spellId;
+    if (context.spellId)
+    {
+        if (SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(context.spellId))
+        {
+            uint32 resolvedSpellId = 0;
+            for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+            {
+                if (player->HasSpell(chainSpellId))
+                    resolvedSpellId = chainSpellId;
+            }
+
+            if (resolvedSpellId)
+                context.spellId = resolvedSpellId;
+        }
+    }
     context.targetMode = decision.targetMode;
     context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
     context.itemEntry = decision.itemEntry;
