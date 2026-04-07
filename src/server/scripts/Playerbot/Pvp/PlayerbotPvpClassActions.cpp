@@ -203,16 +203,21 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Use MotionMaster jump (not Unit::JumpTo knockback) so movement looks like a
-    // regular player jump arc while preserving retreat momentum.
+    // Use MotionMaster jump spline (not Unit::JumpTo knockback) so movement
+    // keeps a regular jump arc while preserving retreat momentum.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
     float constexpr backwardAngle = 3.14159265f;
-    player->GetMotionMaster()->MoveJumpTo(backwardAngle, jumpSpeedXY, 4.5f);
+    Position const jumpDest = player->GetFirstCollisionPosition(4.0f, player->GetOrientation() + backwardAngle);
+    player->GetMotionMaster()->MoveJump(jumpDest.GetPositionX(), jumpDest.GetPositionY(), jumpDest.GetPositionZ(),
+        player->GetOrientation(), jumpSpeedXY, 4.5f);
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
         Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+            return;
+
+        if (caster->IsNonMeleeSpellCast(false, false, true))
             return;
 
         caster->SetFacingTo(resumeOrientation);
@@ -378,7 +383,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (castResult != SPELL_CAST_OK)
         return false;
 
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
         JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
