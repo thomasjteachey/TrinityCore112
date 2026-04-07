@@ -203,12 +203,16 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Simulate a quick jump-180 instant cast while preserving retreat momentum:
-    // face target, perform a backward jump (relative to that facing), then
-    // restore original run orientation.
+    // Use MotionMaster jump spline (not Unit::JumpTo knockback) so movement
+    // keeps a regular jump arc while preserving retreat momentum.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
-    float constexpr normalJumpSpeedZ = 8.2f;
-    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
+    float constexpr normalJumpSpeedZ = 7.95555f;
+    float constexpr gravity = 19.291105f;
+    float const jumpDistance = (2.0f * normalJumpSpeedZ / gravity) * jumpSpeedXY;
+    float constexpr backwardAngle = 3.14159265f;
+    Position const jumpDest = player->GetFirstCollisionPosition(jumpDistance, player->GetOrientation() + backwardAngle);
+    player->GetMotionMaster()->MoveJump(jumpDest.GetPositionX(), jumpDest.GetPositionY(), jumpDest.GetPositionZ(),
+        player->GetOrientation(), jumpSpeedXY, normalJumpSpeedZ);
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
@@ -216,7 +220,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
-        if (caster->GetCurrentSpell(CURRENT_GENERIC_SPELL) || caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        if (caster->IsNonMeleeSpellCast(false, false, true))
             return;
 
         caster->SetFacingTo(resumeOrientation);
