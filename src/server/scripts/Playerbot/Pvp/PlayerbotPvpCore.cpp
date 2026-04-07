@@ -114,6 +114,8 @@ struct SpellDecision
     char const* reason = nullptr;
     uint32 spellId = 0;
     playerbot::PvpClassSpellContext::TargetMode targetMode = playerbot::PvpClassSpellContext::TargetMode::None;
+    ObjectGuid targetGuid = ObjectGuid::Empty;
+    uint32 itemEntry = 0;
 };
 
 struct TacticalDecision
@@ -341,6 +343,43 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
     return best;
 }
 
+Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        return HasHostileTarget(player, candidate) &&
+            !IsTargetInvalidByImmunity(player, candidate) &&
+            candidate->HasUnitState(UNIT_STATE_CASTING) &&
+            player->IsWithinLOSInMap(candidate) &&
+            player->IsWithinDistInMap(candidate, maxDistance);
+    };
+
+    if (isCandidateUsable(preferredTarget))
+        return preferredTarget;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 Unit const* SelectCombatTarget(Player const* player)
 {
     if (!player)
@@ -438,9 +477,14 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         return decision;
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
+    float const manaPct = player->GetPowerPct(POWER_MANA);
 
     if (player->HealthBelowPct(20) && IsSpellReady(player, 11958))
         return { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (manaPct < 25.0f && IsSpellReady(player, 12051))
+        return { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (manaPct < 50.0f && player->HasItemCount(8008))
+        return { "use mana ruby", "consume mana ruby below 50 percent mana", 22044, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 8008 };
     if (player->HasUnitState(UNIT_STATE_STUNNED) && IsSpellReady(player, 1953))
         return { "mage blink", "break stun pressure when possible", 1953, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!IsSpellReady(player, 11958) && IsSpellReady(player, 12472))
@@ -451,8 +495,9 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         return { "mage cone of cold", "defensive snare versus nearby melee", 120, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (closePressure && IsSpellReady(player, 1953))
         return { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 2139))
-        return { "mage counterspell", "interrupt enemy cast at range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 2139))
+        if (Unit const* castingTarget = SelectEnemyCastingTarget(player, 30.0f, target))
+            return { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget->GetGUID() };
     if (!player->HasAura(11426) && IsSpellReady(player, 11426))
         return { "mage ice barrier", "maintain defensive absorb shield", 11426, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->HealthBelowPct(10) && IsSpellReady(player, 2136))
@@ -466,7 +511,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         return { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220))
         return { "arcane intellect", "arcane intellect", 10220, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008))
+    if (IsSpellReady(player, 10054) && !player->HasItemCount(8008))
         return { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
@@ -939,8 +984,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.spellId = decision.spellId;
     context.targetMode = decision.targetMode;
     context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
+    context.itemEntry = decision.itemEntry;
     context.targetGuid = hasValidTarget ? target->GetGUID() : ObjectGuid::Empty;
     context.allyTargetGuid = allyTarget ? allyTarget->GetGUID() : ObjectGuid::Empty;
+    if (!decision.targetGuid.IsEmpty())
+        context.targetGuid = decision.targetGuid;
     if (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
         context.targetGuid = context.allyTargetGuid;
     else if (context.targetMode == PvpClassSpellContext::TargetMode::Self)

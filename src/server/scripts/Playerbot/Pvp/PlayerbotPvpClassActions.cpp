@@ -22,6 +22,7 @@
 #include "Log.h"
 #include "Player.h"
 #include "Protocol/Opcodes.h"
+#include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
@@ -289,6 +290,34 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     return true;
 }
+
+bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
+{
+    failureReason.clear();
+    if (!player || !context.itemEntry)
+    {
+        failureReason = "missing_item_entry";
+        return false;
+    }
+
+    Item* item = player->GetItemByEntry(context.itemEntry);
+    if (!item)
+    {
+        failureReason = "item_missing";
+        return false;
+    }
+
+    if (player->CanUseItem(item) != EQUIP_ERR_OK)
+    {
+        failureReason = "item_unusable";
+        return false;
+    }
+
+    SpellCastTargets targets;
+    targets.SetUnitTarget(player);
+    player->CastItemUseSpell(item, targets, 1, 0);
+    return true;
+}
 }
 
 namespace playerbot
@@ -299,7 +328,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         return false;
 
     std::string failureReason;
-    bool const casted = CastDirectSpell(player, context, failureReason);
+    bool casted = false;
+    if (context.itemEntry)
+        casted = UseDirectItem(player, context, failureReason);
+    else
+        casted = CastDirectSpell(player, context, failureReason);
     NotifyDuelDecision(player, context, casted, failureReason);
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP class execution: action={} spell={} target_mode={} target_guid={} success={} reason={}.",
