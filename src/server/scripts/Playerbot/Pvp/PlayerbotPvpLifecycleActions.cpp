@@ -70,6 +70,69 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
         ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
+void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
+{
+    if (!bot || !bot->InBattleground())
+        return;
+
+    static std::unordered_map<uint64, uint32> nextEmitTimeByBotGuid;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint64 const botGuid = bot->GetGUID().GetRawValue();
+    uint32& nextEmitMs = nextEmitTimeByBotGuid[botGuid];
+    if (nowMs < nextEmitMs)
+        return;
+
+    nextEmitMs = nowMs + throttleMs;
+
+    Map* map = bot->GetMap();
+    if (!map)
+        return;
+
+    std::ostringstream whisper;
+    whisper << "[PBDBG] bot=" << bot->GetName() << " guid=" << bot->GetGUID().ToString()
+            << " map=" << bot->GetMapId() << " detail=" << detail;
+    std::string const message = whisper.str();
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
+            continue;
+
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
+}
+
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 1200)
+{
+    if (!player)
+        return false;
+
+    struct MoveOrderState
+    {
+        Position lastDestination;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, MoveOrderState> stateByGuid;
+    MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    bool const destinationChanged = state.lastIssueMs == 0 ||
+        state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
+    bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
+    if (!destinationChanged && !canReissueByTime)
+        return false;
+
+    player->GetMotionMaster()->MovePoint(0, destination);
+    state.lastDestination = destination;
+    state.lastIssueMs = nowMs;
+    return true;
+}
+
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
     if (!player || player->InBattleground())
@@ -833,6 +896,42 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (HandleBattlegroundDeathState(player))
         return true;
 
+    if (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
+    {
+        player->RemoveAurasDueToSpell(SPELL_PREPARATION);
+        player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
+        player->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
+    }
+
+    // Keep managed bots moving even when tactical decision hooks are disabled
+    // or when another behavior tree branch (e.g. buffing) wins the current tick.
+    // This prevents "stand still at gate-open" stalls in active battlegrounds.
+    if (!CanIssueBotMovement(player))
+    {
+        std::ostringstream blockedReason;
+        blockedReason << "movement-blocked alive=" << (player->IsAlive() ? 1 : 0)
+                      << " ghost=" << (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST) ? 1 : 0)
+                      << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
+                      << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0);
+        EmitBattlegroundGmDebug(player, blockedReason.str());
+        return true;
+    }
+
+    if (EngageNearestEnemyPlayer(player, 65.0f))
+        return true;
+
+    if (Battleground* battleground = player->GetBattleground())
+    {
+        Position destination;
+        if (TryGetObjectivePosition(battleground, player, destination))
+        {
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                IssueMovePointThrottled(player, destination);
+            return true;
+        }
+    }
+
+    EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
     return true;
 }
 
@@ -918,7 +1017,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             if (TryGetObjectivePosition(battleground, player, destination))
             {
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    player->GetMotionMaster()->MovePoint(0, destination);
+                    IssueMovePointThrottled(player, destination);
                 return true;
             }
 
@@ -932,7 +1031,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             {
                 Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    player->GetMotionMaster()->MovePoint(0, destination);
+                    IssueMovePointThrottled(player, destination);
                 return true;
             }
         }
