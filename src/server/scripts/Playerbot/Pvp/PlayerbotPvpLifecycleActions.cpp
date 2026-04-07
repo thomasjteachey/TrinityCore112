@@ -50,6 +50,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <array>
+#include <algorithm>
 
 namespace
 {
@@ -216,7 +217,107 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         motionMaster->Clear();
     }
 
-    bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+
+    Position issuedDestination = destination;
+    if (IsWarsongGulch(player))
+    {
+        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        constexpr float maxStepDistance = 45.0f;
+        if (directDistance > maxStepDistance)
+        {
+            float const ratio = maxStepDistance / directDistance;
+            issuedDestination.Relocate(
+                player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                player->GetOrientation());
+        }
+
+        // Keep WSG movement path-safe for managed virtual bots: if the local step
+        // still resolves to unsafe navmesh modes, iteratively shorten the step.
+        auto evaluatePath = [player](Position const& candidate, PathType& pathTypeOut, bool& calculateOkOut) -> bool
+        {
+            PathGenerator path(player);
+            calculateOkOut = path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false);
+            if (!calculateOkOut)
+            {
+                pathTypeOut = PATHFIND_NOPATH;
+                return true;
+            }
+
+            pathTypeOut = path.GetPathType();
+            if (pathTypeOut & PATHFIND_NOPATH)
+                return true;
+
+            return pathTypeOut & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
+        };
+
+        PathType issuedPathType = PATHFIND_BLANK;
+        bool issuedCalculated = false;
+        bool unsafeIssuedPath = evaluatePath(issuedDestination, issuedPathType, issuedCalculated);
+        if (unsafeIssuedPath)
+        {
+            constexpr float fallbackSteps[] = { 32.0f, 24.0f, 16.0f, 10.0f };
+            bool foundSafeCandidate = false;
+            for (float stepDistance : fallbackSteps)
+            {
+                if (directDistance <= stepDistance)
+                    continue;
+
+                float const ratio = stepDistance / directDistance;
+                Position candidate(
+                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                    player->GetOrientation());
+
+                PathType candidatePathType = PATHFIND_BLANK;
+                bool candidateCalculated = false;
+                if (!evaluatePath(candidate, candidatePathType, candidateCalculated))
+                {
+                    issuedDestination = candidate;
+                    foundSafeCandidate = true;
+                    std::ostringstream safeStepDetail;
+                    safeStepDetail << "wsg-step-selected step=" << int32(stepDistance)
+                                   << " pathType=" << uint32(candidatePathType)
+                                   << " calc=" << (candidateCalculated ? 1 : 0);
+                    EmitBattlegroundGmDebug(player, safeStepDetail.str(), 1500);
+                    break;
+                }
+            }
+
+            if (!foundSafeCandidate)
+            {
+                std::ostringstream unsafeDetail;
+                unsafeDetail << "wsg-step-unsafe-all-candidates"
+                             << " directDist=" << int32(directDistance)
+                             << " issuedPathType=" << uint32(issuedPathType)
+                             << " calc=" << (issuedCalculated ? 1 : 0);
+                EmitBattlegroundGmDebug(player, unsafeDetail.str(), 1500);
+
+                // Final troubleshooting fallback: take a tiny direct-Los step so
+                // bots don't deadlock when navmesh flags all short probes unsafe.
+                float const emergencyStepDistance = std::min(8.0f, directDistance);
+                if (emergencyStepDistance > 0.0f)
+                {
+                    float const ratio = emergencyStepDistance / directDistance;
+                    Position emergencyDestination(
+                        player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                        player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                        player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                        player->GetOrientation());
+
+                    if (player->IsWithinLOS(emergencyDestination.GetPositionX(), emergencyDestination.GetPositionY(), emergencyDestination.GetPositionZ()))
+                    {
+                        issuedDestination = emergencyDestination;
+                        generatePath = false;
+                        EmitBattlegroundGmDebug(player, "wsg-step-direct-los-fallback enabled", 1500);
+                    }
+                }
+            }
+        }
+    }
 
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
