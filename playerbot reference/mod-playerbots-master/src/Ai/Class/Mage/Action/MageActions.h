@@ -136,6 +136,7 @@ class CastBlinkBackAction : public CastSpellAction
 {
 public:
     CastBlinkBackAction(PlayerbotAI* botAI) : CastSpellAction(botAI, "blink") {}
+    std::string const GetTargetName() override { return "self target"; }
     bool Execute(Event event) override;
 };
 
