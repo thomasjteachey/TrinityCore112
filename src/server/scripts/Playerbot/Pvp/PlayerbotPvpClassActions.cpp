@@ -20,10 +20,12 @@
 #include "ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
+#include "Protocol/Opcodes.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
+#include "WorldSession.h"
 
 namespace
 {
@@ -109,6 +111,34 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
 
     player->CastSpell(target, context.spellId, false);
+
+    bool hasTeleportEffect = false;
+    for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
+    {
+        if (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect == SPELL_EFFECT_TELEPORT_UNITS)
+        {
+            hasTeleportEffect = true;
+            break;
+        }
+    }
+
+    // Bot players do not own a real game client to naturally ACK near teleports
+    // (for example Blink). If a teleport is still pending after cast, synthesize
+    // the teleport ACK immediately so other combat actions (like Charge) resolve
+    // against the post-Blink location.
+    if (hasTeleportEffect && player->IsBeingTeleportedNear())
+    {
+        WorldSession* session = player->GetSession();
+        if (session && session->IsVirtualSession())
+        {
+            WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+            teleportAck << player->GetPackGUID();
+            teleportAck << uint32(0);
+            teleportAck << uint32(0);
+            session->HandleMoveTeleportAck(teleportAck);
+        }
+    }
+
     return true;
 }
 }
