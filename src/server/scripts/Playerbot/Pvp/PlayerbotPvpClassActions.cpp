@@ -28,9 +28,6 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
-#include <sstream>
-#include <unordered_map>
-
 namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
@@ -148,7 +145,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool hasTeleportEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
-        if (spellInfo->Effects[effectIndex].Effect == SPELL_EFFECT_TELEPORT_UNITS)
+        if (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect == SPELL_EFFECT_TELEPORT_UNITS)
         {
             hasTeleportEffect = true;
             break;
@@ -162,7 +159,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (hasTeleportEffect && player->IsBeingTeleportedNear())
     {
         WorldSession* session = player->GetSession();
-        if (session && session->IsBot())
+        if (session && session->IsVirtualSession())
         {
             WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
             teleportAck << player->GetPackGUID();
