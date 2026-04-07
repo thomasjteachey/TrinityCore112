@@ -206,21 +206,11 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Use MotionMaster jump spline (not Unit::JumpTo knockback) so movement
-    // keeps a regular jump arc while preserving retreat momentum.
+    // Managed playerbots run as virtual sessions: use JumpTo directly for a
+    // short backward jump while temporarily facing the cast target.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
     float constexpr normalJumpSpeedZ = 7.95555f;
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-        player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
-    else
-    {
-        float constexpr gravity = 19.291105f;
-        float const jumpDistance = (2.0f * normalJumpSpeedZ / gravity) * jumpSpeedXY;
-        float constexpr backwardAngle = 3.14159265f;
-        Position const jumpDest = player->GetFirstCollisionPosition(jumpDistance, player->GetOrientation() + backwardAngle);
-        player->GetMotionMaster()->MoveJump(jumpDest.GetPositionX(), jumpDest.GetPositionY(), jumpDest.GetPositionZ(),
-            player->GetOrientation(), jumpSpeedXY, normalJumpSpeedZ);
-    }
+    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
@@ -404,6 +394,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = reasonText.Title;
         return false;
     }
+
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
