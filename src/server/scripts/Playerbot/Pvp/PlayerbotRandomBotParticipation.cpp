@@ -234,6 +234,36 @@ bool CanProcessPlayerLifecycle(Player const* player)
     return true;
 }
 
+void TryFinalizePendingVirtualBotTeleport(Player* player)
+{
+    if (!player || !playerbot::IsManagedRandomBot(player))
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session || !session->IsVirtualSession())
+        return;
+
+    if (player->IsBeingTeleportedFar())
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot lifecycle pre-check teleport finalization: guid={} type=far.",
+            player->GetGUID().ToString());
+        session->HandleMoveWorldportAck();
+    }
+
+    if (player->IsBeingTeleportedNear())
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot lifecycle pre-check teleport finalization: guid={} type=near.",
+            player->GetGUID().ToString());
+        WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+        teleportAck << player->GetPackGUID();
+        teleportAck << uint32(0);
+        teleportAck << uint32(0);
+        session->HandleMoveTeleportAck(teleportAck);
+    }
+}
+
 void TryReviveManagedBotAfterStartup(Player* player)
 {
     if (!player || !playerbot::IsManagedRandomBot(player))
@@ -804,6 +834,7 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
+    TryFinalizePendingVirtualBotTeleport(player);
 
     if (!CanProcessPlayerLifecycle(player))
         return;
