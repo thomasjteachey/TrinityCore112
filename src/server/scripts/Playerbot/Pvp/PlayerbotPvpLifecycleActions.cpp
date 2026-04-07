@@ -39,12 +39,14 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "Util.h"
+#include "Containers.h"
 
 #include <cstring>
 #include <cmath>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
+#include <array>
 
 namespace
 {
@@ -52,6 +54,22 @@ bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
+}
+
+std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
+{
+    std::array<BattlegroundTypeId, 6> battlegroundTypes =
+    {
+        BATTLEGROUND_AV,
+        BATTLEGROUND_EY,
+        BATTLEGROUND_AB,
+        BATTLEGROUND_WS,
+        BATTLEGROUND_SA,
+        BATTLEGROUND_IC
+    };
+
+    Trinity::Containers::RandomShuffle(battlegroundTypes);
+    return battlegroundTypes;
 }
 
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
@@ -793,7 +811,13 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return QueuePlayer(player, BattlegroundLifecycleActions::ManagedRandomBotQueueTarget(), 0);
+    for (BattlegroundTypeId bgTypeId : BuildRandomBattlegroundOrder())
+    {
+        if (QueuePlayer(player, bgTypeId, 0))
+            return true;
+    }
+
+    return false;
 }
 
 bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
@@ -1067,7 +1091,15 @@ bool ArenaLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return QueuePlayer(player, BATTLEGROUND_AA, ARENA_TYPE_2v2);
+    std::array<uint8, 3> arenaTypes = { ARENA_TYPE_2v2, ARENA_TYPE_3v3, ARENA_TYPE_5v5 };
+    Trinity::Containers::RandomShuffle(arenaTypes);
+    for (uint8 arenaType : arenaTypes)
+    {
+        if (QueuePlayer(player, BATTLEGROUND_AA, arenaType))
+            return true;
+    }
+
+    return false;
 }
 
 bool ArenaLifecycleActions::LeaveQueuePrimitive(Player* player)
