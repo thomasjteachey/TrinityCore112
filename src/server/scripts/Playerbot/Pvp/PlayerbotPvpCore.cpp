@@ -1063,6 +1063,10 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!HasHostileTarget(player, activeTarget))
         return decision;
 
+    Pet const* pet = player->GetPet();
+    bool const hasLivingPet = pet && pet->IsAlive();
+    bool const hasDeadPet = pet && !pet->IsAlive();
+
     Unit const* enemyOnTopTarget = SelectNearbyEnemyTarget(player, activeTarget, 5.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 20.0f, activeTarget);
     Unit const* closeMeleeThreat = SelectNearbyMeleeTarget(player, enemyOnTopTarget, 5.0f);
@@ -1105,7 +1109,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         return { "hunter viper sting", "drain mana on mana users", 3034, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget->GetGUID() };
     if (!player->HasAura(19506) && IsSpellReady(player, 19506))
         return { "hunter trueshot aura", "maintain personal buff aura", 19506, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->IsInCombat() && IsSpellReady(player, 982))
+    if (!hasLivingPet && !hasDeadPet && IsSpellReady(player, 883))
+        return { "hunter call pet", "summon active stable pet when no pet is present", 883, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (hasDeadPet && !player->IsInCombat() && IsSpellReady(player, 982))
         return { "hunter revive pet", "recover pet out of combat", 982, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
@@ -1309,10 +1315,13 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     if (!HasHostileTarget(player, target))
         return decision;
 
+    Pet const* pet = player->GetPet();
+    bool const needsPetSummon = !pet || !pet->IsAlive();
+
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
-    if (!player->IsInCombat() && IsSpellReady(player, 697))
+    if (!player->IsInCombat() && needsPetSummon && IsSpellReady(player, 697))
         return { "warlock summon voidwalker", "maintain voidwalker pet while out of combat", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (player->IsInCombat() && IsSpellReady(player, 697))
+    if (player->IsInCombat() && needsPetSummon && IsSpellReady(player, 697))
         return { "warlock summon voidwalker", "recover voidwalker in combat when absent", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->HealthBelowPct(45) && IsSpellReady(player, 7812))
         return { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self };
