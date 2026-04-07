@@ -275,14 +275,12 @@ bool CanProcessPlayerLifecycle(Player const* player)
         if (hasPendingTeleportAck || !player->InBattleground())
         {
             ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
-            EmitLifecycleGmDebug(player, "can-process=no teleport-pending-or-not-in-bg");
             return false;
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot lifecycle pre-check tolerated stale teleport flag: guid={} battlegroundId={}.",
             guid.ToString(), player->GetBattlegroundId());
-        EmitLifecycleGmDebug(player, "can-process=yes stale-teleport-flag-tolerated");
     }
 
     uint64 const playerGuid = guid.GetRawValue();
