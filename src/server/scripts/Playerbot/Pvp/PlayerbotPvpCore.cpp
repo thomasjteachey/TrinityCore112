@@ -1373,7 +1373,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     if (target->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(target, 1714) &&
         !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) &&
+    if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) && !HasAuraFromSpellChain(target, 1714) &&
         !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713))
         return { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!target->HasAura(25311) && IsSpellReady(player, 25311))
