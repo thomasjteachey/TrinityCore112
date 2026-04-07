@@ -145,7 +145,17 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     if (!destinationChanged && !canReissueByTime)
         return false;
 
-    player->GetMotionMaster()->MovePoint(0, destination);
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == IDLE_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+    {
+        std::ostringstream overrideDetail;
+        overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
+        EmitBattlegroundGmDebug(player, overrideDetail.str(), 5000);
+        motionMaster->Clear(false);
+    }
+
+    motionMaster->MovePoint(0, destination);
     state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
