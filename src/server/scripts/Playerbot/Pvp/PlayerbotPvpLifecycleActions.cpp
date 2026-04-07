@@ -213,17 +213,33 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
 
+    Position issuedDestination = destination;
+    if (IsWarsongGulch(player))
+    {
+        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        constexpr float maxStepDistance = 45.0f;
+        if (directDistance > maxStepDistance)
+        {
+            float const ratio = maxStepDistance / directDistance;
+            issuedDestination.Relocate(
+                player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                player->GetOrientation());
+        }
+    }
+
     std::ostringstream moveDetail;
     moveDetail << "movepoint-issue"
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
-               << " to=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
+               << " to=(" << int32(issuedDestination.GetPositionX()) << "," << int32(issuedDestination.GetPositionY()) << "," << int32(issuedDestination.GetPositionZ()) << ")"
                << " movementType=" << static_cast<uint32>(currentMovement)
                << " generatePath=" << (generatePath ? 1 : 0);
     EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
 
     // Reference-module parity: issue MovePoint directly and let MotionMaster handle path generation.
-    motionMaster->MovePoint(0, destination, generatePath);
-    state.lastDestination = destination;
+    motionMaster->MovePoint(0, issuedDestination, generatePath);
+    state.lastDestination = issuedDestination;
     state.lastIssueMs = nowMs;
     return true;
 }
