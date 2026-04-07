@@ -1387,7 +1387,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         return { "warrior intercept", "close gap to target while in combat", 20252, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
     if (activeTarget->HealthBelowPct(20) && IsSpellReady(player, 5308))
         return { "warrior execute", "finisher at low enemy health", 5308, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
-    if (!player->HasAura(6673) && IsSpellReady(player, 6673))
+    if (!player->HasAura(25289) && IsSpellReady(player, 6673))
         return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->IsWithinMeleeRange(activeTarget))
     {
