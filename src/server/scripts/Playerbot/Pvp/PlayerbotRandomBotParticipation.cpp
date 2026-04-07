@@ -64,7 +64,6 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
-constexpr std::chrono::milliseconds BattlegroundActiveCadenceInterval(250);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
@@ -293,8 +292,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
     bool const inActiveBattleground = player->InBattleground() &&
         player->GetBattleground() &&
         player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
-    std::chrono::milliseconds const cadenceInterval = inActiveBattleground ?
-        BattlegroundActiveCadenceInterval : RandomBotLifecycleCadenceInterval;
+    std::chrono::milliseconds const cadenceInterval = RandomBotLifecycleCadenceInterval;
 
     if (nextProcessTime > now)
     {
@@ -304,7 +302,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
         cadenceDetail << "can-process=no cadence-throttled wait_ms=" << waitRemainingMs
                       << " cadence_ms=" << cadenceInterval.count()
                       << " bg_active=" << (inActiveBattleground ? 1 : 0)
-                      << " model=bg-fasttick-v2";
+                      << " model=bg-fasttick-v3";
         EmitLifecycleGmDebug(player, cadenceDetail.str());
         return false;
     }

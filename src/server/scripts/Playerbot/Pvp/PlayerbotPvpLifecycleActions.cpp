@@ -78,6 +78,54 @@ bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
     return true;
 }
 
+bool TryGetWarsongLaneWaypoint(Player* player, Position& waypointOut)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    bool const allianceToHorde = (bgTeam == ALLIANCE);
+
+    static std::array<Position, 5> const kAllianceToHorde =
+    {
+        Position(1450.0f, 1470.0f, 350.0f, 0.0f),
+        Position(1320.0f, 1460.0f, 345.0f, 0.0f),
+        Position(1180.0f, 1450.0f, 340.0f, 0.0f),
+        Position(1040.0f, 1440.0f, 338.0f, 0.0f),
+        Position(950.0f, 1438.0f, 344.0f, 0.0f)
+    };
+
+    static std::array<Position, 5> const kHordeToAlliance =
+    {
+        Position(1000.0f, 1438.0f, 344.0f, 0.0f),
+        Position(1120.0f, 1444.0f, 339.0f, 0.0f),
+        Position(1260.0f, 1453.0f, 341.0f, 0.0f),
+        Position(1390.0f, 1466.0f, 346.0f, 0.0f),
+        Position(1510.0f, 1478.0f, 351.0f, 0.0f)
+    };
+
+    std::array<Position, 5> const& lane = allianceToHorde ? kAllianceToHorde : kHordeToAlliance;
+
+    int closestIndex = -1;
+    float closestDistance = std::numeric_limits<float>::max();
+    for (uint32 i = 0; i < lane.size(); ++i)
+    {
+        float const dist = player->GetDistance(lane[i].GetPositionX(), lane[i].GetPositionY(), lane[i].GetPositionZ());
+        if (dist < closestDistance)
+        {
+            closestDistance = dist;
+            closestIndex = int(i);
+        }
+    }
+
+    if (closestIndex < 0)
+        return false;
+
+    uint32 const nextIndex = std::min<uint32>(closestIndex + 1, lane.size() - 1);
+    waypointOut = lane[nextIndex];
+    return true;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
@@ -308,8 +356,18 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     if (usedDirectLosFallback &&
         !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
     {
-        EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
-        return false;
+        Position laneWaypoint;
+        if (TryGetWarsongLaneWaypoint(player, laneWaypoint))
+        {
+            issuedDestination = laneWaypoint;
+            generatePath = false;
+            EmitBattlegroundGmDebug(player, "movepoint-lane-fallback reason=no-los-to-issued-destination", 1500);
+        }
+        else
+        {
+            EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
+            return false;
+        }
     }
 
     moveDetail << "movepoint-issue"
