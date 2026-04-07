@@ -424,6 +424,29 @@ bool CanIssueBotMovement(Player const* player)
     return true;
 }
 
+bool IsMeleePressureTarget(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    switch (player->GetClass())
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+            return true;
+        case CLASS_SHAMAN:
+        case CLASS_PALADIN:
+        {
+            Item const* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+            ItemTemplate const* mainHandTemplate = mainHand ? mainHand->GetTemplate() : nullptr;
+            return mainHandTemplate && mainHandTemplate->InventoryType == INVTYPE_2HWEAPON;
+        }
+        default:
+            return false;
+    }
+}
+
 struct CombatPositioningProfile
 {
     float preferredMinRange = 0.0f;
@@ -725,6 +748,15 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
     if (profile.primarilyRanged)
     {
+        if (profile.createDistanceWhenCrowded && IsMeleePressureTarget(target) && distance < profile.preferredIdealRange)
+        {
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP distance band: bot={} profile={} decision=create-distance-vs-melee-pressure distance={} min={} ideal={} max={}.",
+                player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
+                profile.preferredMaxPressureRange);
+            return MoveAwayFromUnit(player, target, profile.preferredIdealRange);
+        }
+
         if (distance < profile.preferredMinRange && profile.createDistanceWhenCrowded)
         {
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
