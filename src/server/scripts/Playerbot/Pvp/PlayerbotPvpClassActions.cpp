@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpClassActions.h"
 
+#include "GameTime.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
@@ -209,6 +210,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         return false;
 
     bool const casted = CastDirectSpell(player, context);
+    NotifyDuelDecision(player, context, casted);
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP class execution: action={} spell={} target_mode={} target_guid={} success={} reason={}.",
         context.actionName ? context.actionName : "none",
