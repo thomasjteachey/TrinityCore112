@@ -140,6 +140,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    // Druids can intentionally swap into Bear Form under melee pressure, but
+    // many follow-up heals/utility spells are not castable in Bear/Cat forms.
+    // The random bot cadence evaluates roughly every 2 seconds, so waiting for
+    // the next tick to leave form makes bots appear locked out. If the selected
+    // spell is blocked only by current shapeshift state, immediately cancel the
+    // form and continue with the same cast attempt in this tick.
+    if (player->GetClass() == CLASS_DRUID && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+        if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
+            player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+
     if (player->GetSpellHistory()->HasCooldown(context.spellId) ||
         player->GetSpellHistory()->HasGlobalCooldown(spellInfo) ||
         player->IsNonMeleeSpellCast(false, false, true))
