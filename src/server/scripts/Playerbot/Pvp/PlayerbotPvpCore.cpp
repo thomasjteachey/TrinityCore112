@@ -1230,8 +1230,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             if (Unit const* casterAlly = SelectFriendlyHealthTarget(player, 40.0f, 100.0f))
                 if (casterAlly->GetPowerType() == POWER_MANA)
                     return { "priest power infusion", "boost nearby caster throughput in combat", 10060, casterAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, casterAlly->GetGUID() };
-        if (!player->IsInCombat() && !player->HasAura(1243) && IsSpellReady(player, 1243))
-            return { "priest power word fortitude", "maintain fortitude out of combat", 1243, playerbot::PvpClassSpellContext::TargetMode::Self };
+        if (!player->IsInCombat() && !player->HasAura(10938) && IsSpellReady(player, 10938))
+            return { "priest power word fortitude", "maintain fortitude out of combat", 10938, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !player->HasAura(976) && IsSpellReady(player, 976))
             return { "priest shadow protection", "maintain shadow protection out of combat", 976, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !player->HasAura(588) && IsSpellReady(player, 588))
@@ -1373,7 +1373,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     if (target->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(target, 1714) &&
         !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) &&
+    if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) && !HasAuraFromSpellChain(target, 1714) &&
         !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713))
         return { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!target->HasAura(25311) && IsSpellReady(player, 25311))

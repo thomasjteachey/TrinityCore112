@@ -1021,7 +1021,9 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     bool const didExecuteDuelTactical = DuelTacticalActions::Execute(player);
     PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
-    if (didExecuteClassSpell && classSpellContext.spellId == 16166) // Elemental Mastery (off-GCD)
+    if (didExecuteClassSpell &&
+        (classSpellContext.spellId == 16166 || // Elemental Mastery (off-GCD)
+         classSpellContext.spellId == 17116)) // Nature's Swiftness (off-GCD)
     {
         std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
         g_NextRandomBotLifecycleProcessTimeByGuid[guid.GetRawValue()] = LifecycleCadenceClock::now();
