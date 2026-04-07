@@ -63,6 +63,7 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
+constexpr std::chrono::milliseconds BattlegroundActiveCadenceInterval(250);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
@@ -287,6 +288,16 @@ bool CanProcessPlayerLifecycle(Player const* player)
     LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[playerGuid];
+
+    bool const inActiveBattleground = player->InBattleground() &&
+        player->GetBattleground() &&
+        player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
+    if (inActiveBattleground)
+    {
+        nextProcessTime = now + BattlegroundActiveCadenceInterval;
+        return true;
+    }
+
     if (nextProcessTime > now)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
