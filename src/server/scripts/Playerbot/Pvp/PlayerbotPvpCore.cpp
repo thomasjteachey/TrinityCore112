@@ -499,6 +499,58 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
     return best;
 }
 
+Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto isPriorityBlindTarget = [&](Unit const* candidate)
+    {
+        if (!HasHostileTarget(player, candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return false;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            return false;
+        if (!(candidate->GetClass() == CLASS_DRUID || candidate->GetClass() == CLASS_SHAMAN || candidate->GetClass() == CLASS_PALADIN))
+            return false;
+        if (HasAnyAura(candidate, { 2893 })) // Abolish Poison
+            return false;
+        return true;
+    };
+
+    Unit const* bestSecondary = nullptr;
+    float bestSecondaryDistance = std::numeric_limits<float>::max();
+    Unit const* fallbackPrimary = nullptr;
+    float fallbackPrimaryDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isPriorityBlindTarget(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (primaryTarget && candidate->GetGUID() == primaryTarget->GetGUID())
+        {
+            if (distance < fallbackPrimaryDistance)
+            {
+                fallbackPrimary = candidate;
+                fallbackPrimaryDistance = distance;
+            }
+            continue;
+        }
+
+        if (distance < bestSecondaryDistance)
+        {
+            bestSecondary = candidate;
+            bestSecondaryDistance = distance;
+        }
+    }
+
+    return bestSecondary ? bestSecondary : fallbackPrimary;
+}
+
 Unit const* SelectCombatTarget(Player const* player)
 {
     if (!player)
@@ -755,12 +807,13 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
         return { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f) && IsSpellReady(player, 2983))
         return { "rogue sprint", "close gap for melee pressure", 2983, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsSpellReady(player, 2094))
+        if (Unit const* blindTarget = SelectRogueBlindTarget(player, target, 15.0f))
+            return { "rogue blind", "prioritize druid/shaman/paladin secondary targets without abolish poison", 2094, playerbot::PvpClassSpellContext::TargetMode::Enemy, blindTarget->GetGUID() };
     if (player->GetComboPoints() >= 5 && IsSpellReady(player, 408))
         return { "rogue kidney shot", "primary stun finisher at full combo points", 408, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (player->GetComboPoints() >= 5 && IsSpellReady(player, 2098))
         return { "rogue eviscerate", "combo finisher pressure", 2098, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (target->GetClass() != CLASS_DRUID && (target->GetClass() == CLASS_PALADIN || target->GetClass() == CLASS_SHAMAN) && IsSpellReady(player, 2094))
-        return { "rogue blind", "cross-cc secondary healer/support target", 2094, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554))
         return { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 16511))
