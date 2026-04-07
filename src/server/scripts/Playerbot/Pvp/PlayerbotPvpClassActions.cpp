@@ -120,14 +120,17 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         message += casted ? "yes" : "no";
         message += " | reason=";
         message += context.reason ? context.reason : "none";
+        message += " | fail_reason=";
+        message += failureReason.empty() ? "none" : failureReason;
 
         player->Whisper(message, LANG_UNIVERSAL, opponent);
     }
 
     TC_LOG_DEBUG("playerbots.pvp.class",
-        "[PvP duel] {} decision={} spell={} target={} success={} reason={}",
+        "[PvP duel] {} decision={} spell={} target={} success={} reason={} fail_reason={}",
         player->GetName(), context.actionName ? context.actionName : "none", context.spellId,
-        GetTargetModeLabel(context.targetMode), casted ? "yes" : "no", context.reason ? context.reason : "none");
+        GetTargetModeLabel(context.targetMode), casted ? "yes" : "no", context.reason ? context.reason : "none",
+        failureReason.empty() ? "none" : failureReason);
 }
 
 void FinalizeVirtualNearTeleport(Player* player)
