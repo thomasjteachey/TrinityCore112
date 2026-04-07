@@ -120,8 +120,7 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
         if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
             continue;
 
-        if (WorldSession* observerSession = observer->GetSession())
-            ChatHandler(observerSession).PSendSysMessage("%s", message.c_str());
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
     }
 }
 
