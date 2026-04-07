@@ -1437,6 +1437,8 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
         return { "rogue eviscerate", "combo finisher pressure", 2098, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554))
         return { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 1833) && player->HasStealthAura())
+        return { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 16511))
         return { "rogue hemorrhage", "default subtlety combo point builder", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
