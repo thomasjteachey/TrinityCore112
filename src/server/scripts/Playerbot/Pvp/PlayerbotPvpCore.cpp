@@ -1410,6 +1410,16 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
     if (!HasHostileTarget(player, target))
         return decision;
 
+    if (!player->IsInCombat() && IsSpellReady(player, 11202))
+    {
+        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+        bool const mainHandMissingPoison = mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        bool const offHandMissingPoison = offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        if (mainHandMissingPoison || offHandMissingPoison)
+            return { "rogue crippling poison", "apply crippling poison to unpoisoned weapons out of combat", 11202, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
+
     if (!player->IsInCombat() && !player->HasAura(1784) && IsSpellReady(player, 1784))
         return { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 1766))

@@ -180,9 +180,29 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    Item* itemTarget = nullptr;
+    if (context.spellId == 11202 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        if (mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            itemTarget = mainHand;
+        else
+        {
+            Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+            if (offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+                itemTarget = offHand;
+        }
+
+        if (!itemTarget)
+        {
+            failureReason = "weapon_already_poisoned";
+            return false;
+        }
+    }
+
     Unit* target = ResolveTarget(player, context);
 
-    if (!target || !target->IsAlive())
+    if ((!target || !target->IsAlive()) && !itemTarget)
     {
         failureReason = "target_invalid_or_dead";
         return false;
@@ -228,21 +248,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    if (!player->IsWithinLOSInMap(target))
+    if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
         failureReason = "no_los";
         return false;
     }
 
     float const maxRange = spellInfo->GetMaxRange(false);
-    if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
+    if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
         failureReason = "out_of_range";
         return false;
     }
 
     float const minRange = spellInfo->GetMinRange(false);
-    if (minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
+    if (!itemTarget && minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
     {
         failureReason = "too_close";
         return false;
@@ -271,6 +291,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
         castResult = player->CastSpell(CastSpellTargetArg(dest), context.spellId);
     }
+    else if (itemTarget)
+        castResult = player->CastSpell(CastSpellTargetArg(itemTarget), context.spellId);
     else
         castResult = player->CastSpell(target, context.spellId, false);
 
