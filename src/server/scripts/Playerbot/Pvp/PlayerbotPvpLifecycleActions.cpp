@@ -171,6 +171,10 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
 
         bot->Whisper(message, LANG_UNIVERSAL, observer);
     }
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "PBDBG bot={} guid={} map={} detail={}",
+        bot->GetName(), bot->GetGUID().ToString(), bot->GetMapId(), detail);
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
@@ -231,22 +235,30 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
         // Keep WSG movement path-safe for managed virtual bots: if the local step
         // still resolves to unsafe navmesh modes, iteratively shorten the step.
-        auto isUnsafePath = [player](Position const& candidate) -> bool
+        auto evaluatePath = [player](Position const& candidate, PathType& pathTypeOut, bool& calculateOkOut) -> bool
         {
             PathGenerator path(player);
-            if (!path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false))
+            calculateOkOut = path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false);
+            if (!calculateOkOut)
+            {
+                pathTypeOut = PATHFIND_NOPATH;
+                return true;
+            }
+
+            pathTypeOut = path.GetPathType();
+            if (pathTypeOut & PATHFIND_NOPATH)
                 return true;
 
-            PathType const pathType = path.GetPathType();
-            if (pathType & PATHFIND_NOPATH)
-                return true;
-
-            return pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
+            return pathTypeOut & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
         };
 
-        if (isUnsafePath(issuedDestination))
+        PathType issuedPathType = PATHFIND_BLANK;
+        bool issuedCalculated = false;
+        bool unsafeIssuedPath = evaluatePath(issuedDestination, issuedPathType, issuedCalculated);
+        if (unsafeIssuedPath)
         {
             constexpr float fallbackSteps[] = { 32.0f, 24.0f, 16.0f, 10.0f };
+            bool foundSafeCandidate = false;
             for (float stepDistance : fallbackSteps)
             {
                 if (directDistance <= stepDistance)
@@ -259,11 +271,29 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                     player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
                     player->GetOrientation());
 
-                if (!isUnsafePath(candidate))
+                PathType candidatePathType = PATHFIND_BLANK;
+                bool candidateCalculated = false;
+                if (!evaluatePath(candidate, candidatePathType, candidateCalculated))
                 {
                     issuedDestination = candidate;
+                    foundSafeCandidate = true;
+                    std::ostringstream safeStepDetail;
+                    safeStepDetail << "wsg-step-selected step=" << int32(stepDistance)
+                                   << " pathType=" << uint32(candidatePathType)
+                                   << " calc=" << (candidateCalculated ? 1 : 0);
+                    EmitBattlegroundGmDebug(player, safeStepDetail.str(), 1500);
                     break;
                 }
+            }
+
+            if (!foundSafeCandidate)
+            {
+                std::ostringstream unsafeDetail;
+                unsafeDetail << "wsg-step-unsafe-all-candidates"
+                             << " directDist=" << int32(directDistance)
+                             << " issuedPathType=" << uint32(issuedPathType)
+                             << " calc=" << (issuedCalculated ? 1 : 0);
+                EmitBattlegroundGmDebug(player, unsafeDetail.str(), 1500);
             }
         }
     }
