@@ -1335,8 +1335,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
             return { "warlock fear", "prioritize fear control on paladin/priest targets in range", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget->GetGUID() };
     if (target->GetPowerType() == POWER_MANA && !target->HasAura(1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(172) && IsSpellReady(player, 172))
-        return { "warlock corruption", "maintain corruption dot", 172, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!target->HasAura(25311) && IsSpellReady(player, 25311))
+        return { "warlock corruption", "maintain corruption dot", 25311, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if ((target->HealthBelowPct(20) || (closePressure && IsMeleeClass(target))) && IsSpellReady(player, 6789))
         return { "warlock death coil", "peel melee or finish low enemy target", 6789, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19647))
