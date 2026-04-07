@@ -147,7 +147,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == IDLE_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
         std::ostringstream overrideDetail;
         overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
