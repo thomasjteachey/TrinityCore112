@@ -163,16 +163,18 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         motionMaster->Clear();
     }
 
+    bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+
     std::ostringstream moveDetail;
     moveDetail << "movepoint-issue"
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
                << " to=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
                << " movementType=" << static_cast<uint32>(currentMovement)
-               << " generatePath=1";
+               << " generatePath=" << (generatePath ? 1 : 0);
     EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
 
-    // Use pathfinding for battleground objective travel to avoid wall clipping.
-    motionMaster->MovePoint(0, destination, true);
+    // Reference-module parity: issue MovePoint directly and let MotionMaster handle path generation.
+    motionMaster->MovePoint(0, destination, generatePath);
     state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
