@@ -615,9 +615,20 @@ public:
             if (handler->HasLowerSecurity(target, ObjectGuid::Empty))
                 return false;
 
-            if (target->IsBeingTeleportedFar())
-                if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+            if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+            {
+                if (target->IsBeingTeleportedFar())
                     targetSession->HandleMoveWorldportAck();
+
+                if (target->IsBeingTeleportedNear())
+                {
+                    WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+                    teleportAck << target->GetPackGUID();
+                    teleportAck << uint32(0);
+                    teleportAck << uint32(0);
+                    targetSession->HandleMoveTeleportAck(teleportAck);
+                }
+            }
 
             if (target->IsBeingTeleported())
             {
@@ -945,6 +956,21 @@ public:
         // check online security
         if (handler->HasLowerSecurity(target, ObjectGuid::Empty))
             return false;
+
+        if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+        {
+            if (target->IsBeingTeleportedFar())
+                targetSession->HandleMoveWorldportAck();
+
+            if (target->IsBeingTeleportedNear())
+            {
+                WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+                teleportAck << target->GetPackGUID();
+                teleportAck << uint32(0);
+                teleportAck << uint32(0);
+                targetSession->HandleMoveTeleportAck(teleportAck);
+            }
+        }
 
         if (target->IsBeingTeleported())
         {
