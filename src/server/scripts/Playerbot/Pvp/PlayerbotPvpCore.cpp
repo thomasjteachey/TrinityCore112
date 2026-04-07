@@ -781,7 +781,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         return { "hunter wing clip", "close-range fallback snare", 2974, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (enemyOnTop && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
         return { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 1499)) && IsSpellReady(player, 19503))
+    if (enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 1499)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(target))
         return { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (enemyOnTop && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503))
         return { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy };
