@@ -175,6 +175,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
         // instantly, so facing-sensitive spells pass UNIT_NOT_INFRONT checks.
+        player->SetFacingToObject(target);
         player->SetInFront(target);
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
