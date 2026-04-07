@@ -39,12 +39,14 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "Util.h"
+#include "Containers.h"
 
 #include <cstring>
 #include <cmath>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
+#include <array>
 
 namespace
 {
@@ -52,6 +54,22 @@ bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
+}
+
+std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
+{
+    std::array<BattlegroundTypeId, 6> battlegroundTypes =
+    {
+        BATTLEGROUND_AV,
+        BATTLEGROUND_EY,
+        BATTLEGROUND_AB,
+        BATTLEGROUND_WS,
+        BATTLEGROUND_SA,
+        BATTLEGROUND_IC
+    };
+
+    Trinity::Containers::RandomShuffle(battlegroundTypes);
+    return battlegroundTypes;
 }
 
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
@@ -68,6 +86,69 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
 
     if (WorldSession* session = player->GetSession())
         ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
+}
+
+void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
+{
+    if (!bot || !bot->InBattleground())
+        return;
+
+    static std::unordered_map<uint64, uint32> nextEmitTimeByBotGuid;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint64 const botGuid = bot->GetGUID().GetRawValue();
+    uint32& nextEmitMs = nextEmitTimeByBotGuid[botGuid];
+    if (nowMs < nextEmitMs)
+        return;
+
+    nextEmitMs = nowMs + throttleMs;
+
+    Map* map = bot->GetMap();
+    if (!map)
+        return;
+
+    std::ostringstream whisper;
+    whisper << "[PBDBG] bot=" << bot->GetName() << " guid=" << bot->GetGUID().ToString()
+            << " map=" << bot->GetMapId() << " detail=" << detail;
+    std::string const message = whisper.str();
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
+            continue;
+
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
+}
+
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 1200)
+{
+    if (!player)
+        return false;
+
+    struct MoveOrderState
+    {
+        Position lastDestination;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, MoveOrderState> stateByGuid;
+    MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    bool const destinationChanged = state.lastIssueMs == 0 ||
+        state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
+    bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
+    if (!destinationChanged && !canReissueByTime)
+        return false;
+
+    player->GetMotionMaster()->MovePoint(0, destination);
+    state.lastDestination = destination;
+    state.lastIssueMs = nowMs;
+    return true;
 }
 
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
@@ -674,7 +755,11 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
-    player->Attack(target, useMeleeAttack);
+    bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
+    if (isStealthedRogue)
+        player->AttackStop();
+    else
+        player->Attack(target, useMeleeAttack);
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP positioning profile: bot={} profile={} ranged={} createDistance={} meleeFallback={}.",
@@ -707,6 +792,25 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
     {
         destination = Position(*enemyStart);
+        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        return true;
+    }
+
+    // Fallback for sparse/invalid start-anchor states:
+    // WSG bots can otherwise idle in their own base graveyard when no objective
+    // anchor is resolved from battleground starts.
+    if (battleground->GetMapId() == 489) // Warsong Gulch
+    {
+        Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+        Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+
+        if (botTeam == TEAM_ALLIANCE)
+            destination = hordeFlagStand;
+        else if (botTeam == TEAM_HORDE)
+            destination = allianceFlagStand;
+        else
+            destination = hordeFlagStand;
+
         destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
         return true;
     }
@@ -770,7 +874,13 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return QueuePlayer(player, BattlegroundLifecycleActions::ManagedRandomBotQueueTarget(), 0);
+    for (BattlegroundTypeId bgTypeId : BuildRandomBattlegroundOrder())
+    {
+        if (QueuePlayer(player, bgTypeId, 0))
+            return true;
+    }
+
+    return false;
 }
 
 bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
@@ -814,6 +924,42 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (HandleBattlegroundDeathState(player))
         return true;
 
+    if (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
+    {
+        player->RemoveAurasDueToSpell(SPELL_PREPARATION);
+        player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
+        player->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
+    }
+
+    // Keep managed bots moving even when tactical decision hooks are disabled
+    // or when another behavior tree branch (e.g. buffing) wins the current tick.
+    // This prevents "stand still at gate-open" stalls in active battlegrounds.
+    if (!CanIssueBotMovement(player))
+    {
+        std::ostringstream blockedReason;
+        blockedReason << "movement-blocked alive=" << (player->IsAlive() ? 1 : 0)
+                      << " ghost=" << (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST) ? 1 : 0)
+                      << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
+                      << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0);
+        EmitBattlegroundGmDebug(player, blockedReason.str());
+        return true;
+    }
+
+    if (EngageNearestEnemyPlayer(player, 65.0f))
+        return true;
+
+    if (Battleground* battleground = player->GetBattleground())
+    {
+        Position destination;
+        if (TryGetObjectivePosition(battleground, player, destination))
+        {
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                IssueMovePointThrottled(player, destination);
+            return true;
+        }
+    }
+
+    EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
     return true;
 }
 
@@ -899,15 +1045,21 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             if (TryGetObjectivePosition(battleground, player, destination))
             {
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    player->GetMotionMaster()->MovePoint(0, destination);
+                    IssueMovePointThrottled(player, destination);
                 return true;
             }
+
+            // WSG can enter sparse states where objective anchors are unavailable.
+            // In those windows, force a large-radius enemy scan before falling
+            // back to local graveyard movement so bots keep crossing the map.
+            if (EngageNearestEnemyPlayer(player, 500.0f))
+                return true;
 
             if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
             {
                 Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    player->GetMotionMaster()->MovePoint(0, destination);
+                    IssueMovePointThrottled(player, destination);
                 return true;
             }
         }
@@ -1038,7 +1190,15 @@ bool ArenaLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    return QueuePlayer(player, BATTLEGROUND_AA, ARENA_TYPE_2v2);
+    std::array<uint8, 3> arenaTypes = { ARENA_TYPE_2v2, ARENA_TYPE_3v3, ARENA_TYPE_5v5 };
+    Trinity::Containers::RandomShuffle(arenaTypes);
+    for (uint8 arenaType : arenaTypes)
+    {
+        if (QueuePlayer(player, BATTLEGROUND_AA, arenaType))
+            return true;
+    }
+
+    return false;
 }
 
 bool ArenaLifecycleActions::LeaveQueuePrimitive(Player* player)

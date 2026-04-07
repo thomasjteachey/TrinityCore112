@@ -27,8 +27,6 @@ namespace playerbot
 class BattlegroundLifecycleActions
 {
 public:
-    static constexpr BattlegroundTypeId ManagedRandomBotQueueTarget() { return BATTLEGROUND_WS; }
-
     static bool Execute(Player* player, BattlegroundLifecycleContext const& context);
 
     static bool JoinQueuePrimitive(Player* player);
