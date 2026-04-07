@@ -21,6 +21,7 @@
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
+#include "MotionMaster.h"
 #include "Player.h"
 #include "Pet.h"
 #include "Protocol/Opcodes.h"
@@ -31,6 +32,8 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
+#include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <unordered_map>
 
@@ -189,6 +192,54 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
+void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
+{
+    if (!player || !target || !spellInfo)
+        return;
+
+    if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
+        return;
+
+    ObjectGuid const casterGuid = player->GetGUID();
+    player->SetFacingToObject(target);
+    player->SetInFront(target);
+
+    // Emit a normal jump movement opcode so observers see the same jump flow as
+    // a player-generated jump packet instead of knockback/spline movement.
+    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
+    float constexpr normalJumpSpeedZ = 8.2f;
+    float constexpr backwardAngle = 3.14159265f;
+    float const jumpDirection = player->GetOrientation() + backwardAngle;
+
+    MovementInfo movementInfo;
+    movementInfo.guid = player->GetGUID();
+    movementInfo.flags = player->GetUnitMovementFlags() | MOVEMENTFLAG_FALLING;
+    movementInfo.flags2 = static_cast<uint16>(player->GetExtraUnitMovementFlags());
+    movementInfo.pos.Relocate(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+    movementInfo.time = GameTime::GetGameTimeMS();
+    movementInfo.fallTime = 0;
+    movementInfo.jump.sinAngle = std::sin(jumpDirection);
+    movementInfo.jump.cosAngle = std::cos(jumpDirection);
+    movementInfo.jump.xyspeed = jumpSpeedXY;
+    movementInfo.jump.zspeed = normalJumpSpeedZ;
+
+    WorldPacket jumpPacket(MSG_MOVE_JUMP, 66);
+    WorldSession::WriteMovementInfo(&jumpPacket, &movementInfo);
+    player->SendMessageToSet(&jumpPacket, false);
+
+    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
+    {
+        Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
+        if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+            return;
+
+        if (caster->GetCurrentSpell(CURRENT_GENERIC_SPELL) || caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+            return;
+
+        caster->SetFacingTo(resumeOrientation);
+    }, 250ms);
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -257,6 +308,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    float preCastOrientation = player->GetOrientation();
+
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
@@ -268,7 +321,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Keep explicit enemy selection/victim linkage for virtual sessions so
         // cast checks and AI follow-up consistently reference the same hostile.
         player->SetSelection(target->GetGUID());
-        if (player->GetVictim() != target)
+        bool const preserveStealthForOpener = player->HasStealthAura();
+        if (preserveStealthForOpener)
+            player->AttackStop();
+        else if (player->GetVictim() != target)
             player->Attack(target, false);
         CommandPetAttackTarget(player, target);
 
@@ -323,7 +379,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
     if (spellInfo->CalcCastTime() > 0)
+    {
         player->StopMoving();
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        {
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+        }
+    }
 
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
@@ -343,22 +406,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (castResult != SPELL_CAST_OK)
         return false;
 
-    // Fel Domination is off the global cooldown. When used mid-fight to recover
-    // a missing warlock pet, immediately follow with Summon Voidwalker so the
-    // bot does not wait for the next class-decision cadence tick.
-    if (context.spellId == 18708 && player->GetClass() == CLASS_WARLOCK && player->HasSpell(697))
-    {
-        Pet* pet = player->GetPet();
-        if (!pet || !pet->IsAlive())
-        {
-            SpellInfo const* summonVoidwalkerInfo = sSpellMgr->GetSpellInfo(697);
-            if (summonVoidwalkerInfo &&
-                !player->GetSpellHistory()->HasCooldown(697) &&
-                !player->GetSpellHistory()->HasGlobalCooldown(summonVoidwalkerInfo) &&
-                !player->IsNonMeleeSpellCast(false, false, true))
-                player->CastSpell(player, 697, false);
-        }
-    }
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
