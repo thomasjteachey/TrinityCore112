@@ -242,6 +242,33 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (castResult != SPELL_CAST_OK)
         return false;
 
+    // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
+    // threat, immediately attempt Freezing Trap in the same lifecycle tick
+    // rather than waiting for the next cadence pass.
+    if (context.spellId == 5384)
+    {
+        Unit* pressureTarget = nullptr;
+        if (!context.targetGuid.IsEmpty())
+            pressureTarget = ObjectAccessor::GetUnit(*player, context.targetGuid);
+        if (!pressureTarget)
+            pressureTarget = player->GetVictim();
+
+        bool const closeMeleePressure = pressureTarget && pressureTarget->IsAlive() && player->IsWithinDistInMap(pressureTarget, 5.0f);
+        if (closeMeleePressure && player->HasSpell(1499))
+        {
+            SpellInfo const* freezingTrapInfo = sSpellMgr->GetSpellInfo(1499);
+            if (freezingTrapInfo &&
+                !player->GetSpellHistory()->HasCooldown(1499) &&
+                !player->GetSpellHistory()->HasGlobalCooldown(freezingTrapInfo) &&
+                !player->IsNonMeleeSpellCast(false, false, true))
+            {
+                SpellCastResult const trapCastResult = player->CastSpell(player, 1499, false);
+                if (trapCastResult != SPELL_CAST_OK)
+                    TC_LOG_DEBUG("playerbots.pvp.class", "Hunter trap follow-up failed after feign death: guid={}, result={}.", player->GetGUID().ToString(), uint32(trapCastResult));
+            }
+        }
+    }
+
     bool hasTeleportEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
