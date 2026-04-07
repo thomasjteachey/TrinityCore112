@@ -35,6 +35,27 @@ namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 
+void CommandPetAttackTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    Pet* pet = player->GetPet();
+    if (!pet || !pet->IsAlive() || !pet->IsValidAttackTarget(target))
+        return;
+
+    if (pet->GetVictim() != target)
+        pet->Attack(target, true);
+
+    if (CharmInfo* charmInfo = pet->GetCharmInfo())
+    {
+        charmInfo->SetIsCommandAttack(true);
+        charmInfo->SetIsAtStay(false);
+        charmInfo->SetIsCommandFollow(false);
+        charmInfo->SetCommandState(COMMAND_ATTACK);
+    }
+}
+
 void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted, std::string const& failureReason)
 {
     if (!player || !player->duel)
@@ -184,6 +205,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->SetSelection(target->GetGUID());
         if (player->GetVictim() != target)
             player->Attack(target, false);
+        CommandPetAttackTarget(player, target);
 
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
