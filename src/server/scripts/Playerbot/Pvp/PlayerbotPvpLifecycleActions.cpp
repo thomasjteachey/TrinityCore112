@@ -52,6 +52,37 @@
 
 namespace
 {
+bool IsWarsongGulch(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Battleground const* battleground = player->GetBattleground();
+    return battleground && battleground->GetMapId() == 489;
+}
+
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
+
+bool MoveToClosestBattlegroundGraveyard(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
+    {
+        Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
+        if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+            IssueMovePointThrottled(player, destination);
+        return true;
+    }
+
+    return false;
+}
+
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -1021,6 +1052,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         return true;
     }
 
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
+
     if (EngageNearestEnemyPlayer(player, 65.0f))
         return true;
 
@@ -1086,6 +1120,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!CanIssueBotMovement(player))
         return false;
 
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
+
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
         return true;
@@ -1134,7 +1171,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             // WSG can enter sparse states where objective anchors are unavailable.
             // In those windows, force a large-radius enemy scan before falling
             // back to local graveyard movement so bots keep crossing the map.
-            if (EngageNearestEnemyPlayer(player, 500.0f))
+            if (EngageNearestEnemyPlayer(player, 2000.0f))
                 return true;
 
             if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
@@ -1162,6 +1199,9 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
 {
     if (!player || !player->InBattleground())
         return false;
+
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
 
     if (EngageNearestEnemyPlayer(player, 60.0f))
         return true;
