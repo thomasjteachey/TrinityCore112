@@ -29,6 +29,7 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <chrono>
 
 namespace
@@ -123,7 +124,7 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
-void HoldInstantCastFacingForVisual(Player* player, Unit* target, SpellInfo const* spellInfo)
+void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
 {
     if (!player || !target || !spellInfo)
         return;
@@ -132,39 +133,22 @@ void HoldInstantCastFacingForVisual(Player* player, Unit* target, SpellInfo cons
         return;
 
     ObjectGuid const casterGuid = player->GetGUID();
-    ObjectGuid const targetGuid = target->GetGUID();
-    float const restoreOrientation = player->GetOrientation();
+    player->SetFacingToObject(target);
+    player->SetInFront(target);
 
-    auto scheduleFacingRefresh = [player, casterGuid, targetGuid](std::chrono::milliseconds offset)
-    {
-        player->m_Events.AddEventAtOffset([casterGuid, targetGuid]()
-        {
-            Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
-            if (!caster || !caster->IsInWorld() || !caster->IsAlive())
-                return;
+    // Use a short backward jump (relative to temporary "face target" orientation)
+    // so the bot keeps retreat momentum while visibly turning to land an instant.
+    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
+    player->JumpTo(jumpSpeedXY, 4.5f, false);
 
-            Unit* facingTarget = ObjectAccessor::GetUnit(*caster, targetGuid);
-            if (!facingTarget || !facingTarget->IsInWorld() || !facingTarget->IsAlive())
-                return;
-
-            caster->SetFacingToObject(facingTarget);
-            caster->SetInFront(facingTarget);
-        }, offset);
-    };
-
-    scheduleFacingRefresh(100ms);
-    scheduleFacingRefresh(200ms);
-    scheduleFacingRefresh(300ms);
-    scheduleFacingRefresh(400ms);
-
-    player->m_Events.AddEventAtOffset([casterGuid, restoreOrientation]()
+    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
         Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
-        caster->SetFacingTo(restoreOrientation);
-    }, 500ms);
+        caster->SetFacingTo(resumeOrientation);
+    }, 250ms);
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -214,6 +198,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "self_target_mismatch";
         return false;
     }
+
+    float preCastOrientation = player->GetOrientation();
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
@@ -299,7 +285,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
-        HoldInstantCastFacingForVisual(player, target, spellInfo);
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
