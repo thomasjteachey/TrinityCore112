@@ -323,6 +323,17 @@ bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
     return false;
 }
 
+bool HasTemporaryWeaponImbue(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+    Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+    return (mainHand && mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)) ||
+        (offHand && offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));
+}
+
 bool IsCasterClass(Unit const* unit)
 {
     Player const* player = unit ? unit->ToPlayer() : nullptr;
@@ -1494,7 +1505,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
 
     if (!player->IsInCombat())
     {
-        if (!HasAuraFromSpellChain(player, 8232) && IsSpellReady(player, 8232))
+        if (!HasTemporaryWeaponImbue(player) && IsSpellReady(player, 8232))
             return { "shaman windfury weapon", "maintain weapon imbue out of combat", 8232, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432))
             return { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self };
