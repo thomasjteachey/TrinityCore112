@@ -615,9 +615,45 @@ public:
             if (handler->HasLowerSecurity(target, ObjectGuid::Empty))
                 return false;
 
-            if (target->IsBeingTeleportedFar())
-                if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+            if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+            {
+                if (target->IsBeingTeleportedFar())
                     targetSession->HandleMoveWorldportAck();
+
+                if (target->IsBeingTeleportedNear())
+                {
+                    WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+                    teleportAck << target->GetPackGUID();
+                    teleportAck << uint32(0);
+                    teleportAck << uint32(0);
+                    targetSession->HandleMoveTeleportAck(teleportAck);
+
+                    if (target->IsBeingTeleportedNear())
+                    {
+                        uint32 const oldZone = target->GetZoneId();
+                        WorldLocation const& dest = target->GetTeleportDest();
+                        target->SetSemaphoreTeleportNear(false);
+                        target->UpdatePosition(dest, true);
+                        target->SetFallInformation(0, target->GetPositionZ());
+
+                        uint32 newZone = 0;
+                        uint32 newArea = 0;
+                        target->GetZoneAndAreaId(newZone, newArea);
+                        target->UpdateZone(newZone, newArea);
+
+                        if (oldZone != newZone)
+                        {
+                            if (target->pvpInfo.IsHostile)
+                                target->CastSpell(target, 2479, true);
+                            else if (target->IsPvP() && !target->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+                                target->UpdatePvP(false, false);
+                        }
+
+                        target->ResummonPetTemporaryUnSummonedIfAny();
+                        target->ProcessDelayedOperations();
+                    }
+                }
+            }
 
             if (target->IsBeingTeleported())
             {
@@ -945,6 +981,46 @@ public:
         // check online security
         if (handler->HasLowerSecurity(target, ObjectGuid::Empty))
             return false;
+
+        if (WorldSession* targetSession = target->GetSession(); targetSession && targetSession->IsVirtualSession())
+        {
+            if (target->IsBeingTeleportedFar())
+                targetSession->HandleMoveWorldportAck();
+
+            if (target->IsBeingTeleportedNear())
+            {
+                WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+                teleportAck << target->GetPackGUID();
+                teleportAck << uint32(0);
+                teleportAck << uint32(0);
+                targetSession->HandleMoveTeleportAck(teleportAck);
+
+                if (target->IsBeingTeleportedNear())
+                {
+                    uint32 const oldZone = target->GetZoneId();
+                    WorldLocation const& dest = target->GetTeleportDest();
+                    target->SetSemaphoreTeleportNear(false);
+                    target->UpdatePosition(dest, true);
+                    target->SetFallInformation(0, target->GetPositionZ());
+
+                    uint32 newZone = 0;
+                    uint32 newArea = 0;
+                    target->GetZoneAndAreaId(newZone, newArea);
+                    target->UpdateZone(newZone, newArea);
+
+                    if (oldZone != newZone)
+                    {
+                        if (target->pvpInfo.IsHostile)
+                            target->CastSpell(target, 2479, true);
+                        else if (target->IsPvP() && !target->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+                            target->UpdatePvP(false, false);
+                    }
+
+                    target->ResummonPetTemporaryUnSummonedIfAny();
+                    target->ProcessDelayedOperations();
+                }
+            }
+        }
 
         if (target->IsBeingTeleported())
         {
