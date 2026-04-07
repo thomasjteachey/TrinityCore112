@@ -32,10 +32,28 @@ namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 
-void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted)
+void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted, std::string const& failureReason)
 {
     if (!player || !player->duel)
         return;
+
+    Player* opponent = player->duel->Opponent;
+    if (opponent)
+    {
+        std::string message = "Decision: ";
+        message += context.actionName ? context.actionName : "none";
+        message += " | spell=" + std::to_string(context.spellId);
+        message += " | target=";
+        message += GetTargetModeLabel(context.targetMode);
+        message += " | success=";
+        message += casted ? "yes" : "no";
+        message += " | decision_reason=";
+        message += context.reason ? context.reason : "none";
+        if (!casted && !failureReason.empty())
+            message += " | fail_reason=" + failureReason;
+
+        player->Whisper(message, LANG_UNIVERSAL, opponent);
+    }
 
     TC_LOG_DEBUG("playerbots.pvp.class",
         "[PvP duel] {} decision={} spell={} target={} success={} reason={}",
@@ -104,66 +122,129 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
-bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context)
+bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
+    failureReason.clear();
+
     if (!player || !context.spellId || !player->HasSpell(context.spellId))
+    {
+        failureReason = "missing_spell";
         return false;
+    }
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(context.spellId);
     if (!spellInfo)
+    {
+        failureReason = "spell_info_missing";
         return false;
+    }
 
     if (player->GetSpellHistory()->HasCooldown(context.spellId) ||
         player->GetSpellHistory()->HasGlobalCooldown(spellInfo) ||
         player->IsNonMeleeSpellCast(false, false, true))
+    {
+        failureReason = "cooldown_or_casting";
         return false;
+    }
 
     Unit* target = ResolveTarget(player, context);
 
     if (!target || !target->IsAlive())
+    {
+        failureReason = "target_invalid_or_dead";
         return false;
+    }
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self && target != player)
+    {
+        failureReason = "self_target_mismatch";
         return false;
+    }
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
+        {
+            failureReason = "invalid_enemy_target";
             return false;
+        }
+
+        // Keep explicit enemy selection/victim linkage for virtual sessions so
+        // cast checks and AI follow-up consistently reference the same hostile.
+        player->SetSelection(target->GetGUID());
+        if (player->GetVictim() != target)
+            player->Attack(target, false);
+
+        // Virtual playerbot sessions do not naturally rotate their character the
+        // same way a real client does while selecting/casting. Make sure the bot
+        // is facing its hostile target before casting so facing-sensitive spells
+        // do not fail in duels and other PvP contexts.
+        player->SetFacingToObject(target);
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
         if (!player->IsValidAssistTarget(target, spellInfo))
+        {
+            failureReason = "invalid_ally_target";
             return false;
+        }
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::None)
+    {
+        failureReason = "target_mode_none";
         return false;
+    }
 
     if (!player->IsWithinLOSInMap(target))
+    {
+        failureReason = "no_los";
         return false;
+    }
 
     float const maxRange = spellInfo->GetMaxRange(false);
     if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
+    {
+        failureReason = "out_of_range";
         return false;
+    }
 
     float const minRange = spellInfo->GetMinRange(false);
     if (minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
+    {
+        failureReason = "too_close";
         return false;
+    }
 
     if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
+        {
+            failureReason = "insufficient_power";
             return false;
+        }
+
+    // Cast-time spells like Frostbolt fail while moving. Since playerbots do
+    // not have client-side stop-cast behavior, explicitly stop movement before
+    // attempting non-instant casts.
+    if (spellInfo->CalcCastTime() > 0)
+        player->StopMoving();
 
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
     // front destination to mirror client cast payload semantics.
+    SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (context.spellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
-        player->CastSpell(CastSpellTargetArg(dest), context.spellId);
+        castResult = player->CastSpell(CastSpellTargetArg(dest), context.spellId);
     }
     else
-        player->CastSpell(target, context.spellId, false);
+        castResult = player->CastSpell(target, context.spellId, false);
+
+    if (castResult != SPELL_CAST_OK)
+    {
+        failureReason = "cast_result_" + std::to_string(static_cast<uint32>(castResult));
+        return false;
+    }
 
     bool hasTeleportEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
@@ -222,8 +303,9 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
-    bool const casted = CastDirectSpell(player, context);
-    NotifyDuelDecision(player, context, casted);
+    std::string failureReason;
+    bool const casted = CastDirectSpell(player, context, failureReason);
+    NotifyDuelDecision(player, context, casted, failureReason);
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP class execution: action={} spell={} target_mode={} target_guid={} success={} reason={}.",
         context.actionName ? context.actionName : "none",
