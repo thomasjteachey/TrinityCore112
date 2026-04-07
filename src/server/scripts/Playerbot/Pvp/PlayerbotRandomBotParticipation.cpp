@@ -261,6 +261,31 @@ void TryFinalizePendingVirtualBotTeleport(Player* player)
         teleportAck << uint32(0);
         teleportAck << uint32(0);
         session->HandleMoveTeleportAck(teleportAck);
+
+        if (player->IsBeingTeleportedNear())
+        {
+            uint32 const oldZone = player->GetZoneId();
+            WorldLocation const& dest = player->GetTeleportDest();
+            player->SetSemaphoreTeleportNear(false);
+            player->UpdatePosition(dest, true);
+            player->SetFallInformation(0, player->GetPositionZ());
+
+            uint32 newZone = 0;
+            uint32 newArea = 0;
+            player->GetZoneAndAreaId(newZone, newArea);
+            player->UpdateZone(newZone, newArea);
+
+            if (oldZone != newZone)
+            {
+                if (player->pvpInfo.IsHostile)
+                    player->CastSpell(player, 2479, true);
+                else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+                    player->UpdatePvP(false, false);
+            }
+
+            player->ResummonPetTemporaryUnSummonedIfAny();
+            player->ProcessDelayedOperations();
+        }
     }
 }
 

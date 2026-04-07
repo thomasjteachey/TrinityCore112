@@ -30,33 +30,33 @@
 
 namespace
 {
-char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
-
-void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted)
+void FinalizeVirtualNearTeleport(Player* player)
 {
-    if (!player || !player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS || !player->duel->Opponent)
+    if (!player || !player->IsBeingTeleportedNear())
         return;
 
-    Player* opponent = player->duel->Opponent;
-    if (!opponent || !opponent->GetSession())
-        return;
+    uint32 const oldZone = player->GetZoneId();
+    WorldLocation const& dest = player->GetTeleportDest();
 
-    static std::unordered_map<uint64, uint32> s_LastDecisionWhisperByBot;
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    uint32& lastWhisperMs = s_LastDecisionWhisperByBot[player->GetGUID().GetRawValue()];
-    if ((nowMs - lastWhisperMs) < 700)
-        return;
+    player->SetSemaphoreTeleportNear(false);
+    player->UpdatePosition(dest, true);
+    player->SetFallInformation(0, player->GetPositionZ());
 
-    std::ostringstream message;
-    message << "[PvP duel] " << player->GetName() << " decision="
-        << (context.actionName ? context.actionName : "none")
-        << " spell=" << context.spellId
-        << " target=" << GetTargetModeLabel(context.targetMode)
-        << " success=" << (casted ? "yes" : "no")
-        << " reason=" << (context.reason ? context.reason : "none");
+    uint32 newZone = 0;
+    uint32 newArea = 0;
+    player->GetZoneAndAreaId(newZone, newArea);
+    player->UpdateZone(newZone, newArea);
 
-    player->Whisper(message.str(), LANG_UNIVERSAL, opponent);
-    lastWhisperMs = nowMs;
+    if (oldZone != newZone)
+    {
+        if (player->pvpInfo.IsHostile)
+            player->CastSpell(player, 2479, true);
+        else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+            player->UpdatePvP(false, false);
+    }
+
+    player->ResummonPetTemporaryUnSummonedIfAny();
+    player->ProcessDelayedOperations();
 }
 
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
@@ -192,6 +192,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             teleportAck << uint32(0);
             teleportAck << uint32(0);
             session->HandleMoveTeleportAck(teleportAck);
+
+            if (player->IsBeingTeleportedNear())
+                FinalizeVirtualNearTeleport(player);
         }
     }
 
