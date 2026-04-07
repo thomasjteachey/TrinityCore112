@@ -20,6 +20,7 @@
 #include "GameTime.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
+#include "MotionMaster.h"
 #include "Player.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
@@ -29,6 +30,7 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <chrono>
 
 namespace
@@ -123,6 +125,42 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
+void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
+{
+    if (!player || !target || !spellInfo)
+        return;
+
+    if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
+        return;
+
+    ObjectGuid const casterGuid = player->GetGUID();
+    player->SetFacingToObject(target);
+    player->SetInFront(target);
+
+    // Use MotionMaster jump spline (not Unit::JumpTo knockback) so movement
+    // keeps a regular jump arc while preserving retreat momentum.
+    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
+    float constexpr normalJumpSpeedZ = 7.95555f;
+    float constexpr gravity = 19.291105f;
+    float const jumpDistance = (2.0f * normalJumpSpeedZ / gravity) * jumpSpeedXY;
+    float constexpr backwardAngle = 3.14159265f;
+    Position const jumpDest = player->GetFirstCollisionPosition(jumpDistance, player->GetOrientation() + backwardAngle);
+    player->GetMotionMaster()->MoveJump(jumpDest.GetPositionX(), jumpDest.GetPositionY(), jumpDest.GetPositionZ(),
+        player->GetOrientation(), jumpSpeedXY, normalJumpSpeedZ);
+
+    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
+    {
+        Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
+        if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+            return;
+
+        if (caster->IsNonMeleeSpellCast(false, false, true))
+            return;
+
+        caster->SetFacingTo(resumeOrientation);
+    }, 250ms);
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -170,6 +208,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "self_target_mismatch";
         return false;
     }
+
+    float preCastOrientation = player->GetOrientation();
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
@@ -253,6 +293,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
         return false;
+
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
