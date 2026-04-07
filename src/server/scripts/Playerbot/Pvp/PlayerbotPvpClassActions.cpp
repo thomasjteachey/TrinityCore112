@@ -37,6 +37,22 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
     if (!player || !player->duel)
         return;
 
+    Player* opponent = player->duel->Opponent;
+    if (opponent)
+    {
+        std::string message = "Decision: ";
+        message += context.actionName ? context.actionName : "none";
+        message += " | spell=" + std::to_string(context.spellId);
+        message += " | target=";
+        message += GetTargetModeLabel(context.targetMode);
+        message += " | success=";
+        message += casted ? "yes" : "no";
+        message += " | reason=";
+        message += context.reason ? context.reason : "none";
+
+        player->Whisper(message, LANG_UNIVERSAL, opponent);
+    }
+
     TC_LOG_DEBUG("playerbots.pvp.class",
         "[PvP duel] {} decision={} spell={} target={} success={} reason={}",
         player->GetName(), context.actionName ? context.actionName : "none", context.spellId,
