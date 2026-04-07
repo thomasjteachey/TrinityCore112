@@ -394,7 +394,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         castResult = player->CastSpell(target, context.spellId, false);
 
     if (castResult != SPELL_CAST_OK)
+    {
+        EnumText const reasonText = EnumUtils::ToString(castResult);
+        failureReason = reasonText.Title;
         return false;
+    }
 
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
