@@ -120,14 +120,17 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         message += casted ? "yes" : "no";
         message += " | reason=";
         message += context.reason ? context.reason : "none";
+        message += " | fail_reason=";
+        message += failureReason.empty() ? "none" : failureReason;
 
         player->Whisper(message, LANG_UNIVERSAL, opponent);
     }
 
     TC_LOG_DEBUG("playerbots.pvp.class",
-        "[PvP duel] {} decision={} spell={} target={} success={} reason={}",
+        "[PvP duel] {} decision={} spell={} target={} success={} reason={} fail_reason={}",
         player->GetName(), context.actionName ? context.actionName : "none", context.spellId,
-        GetTargetModeLabel(context.targetMode), casted ? "yes" : "no", context.reason ? context.reason : "none");
+        GetTargetModeLabel(context.targetMode), casted ? "yes" : "no", context.reason ? context.reason : "none",
+        failureReason.empty() ? "none" : failureReason);
 }
 
 void FinalizeVirtualNearTeleport(Player* player)
@@ -203,11 +206,10 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Simulate a quick jump-180 instant cast while preserving retreat momentum:
-    // face target, perform a backward jump (relative to that facing), then
-    // restore original run orientation.
+    // Managed playerbots run as virtual sessions: use JumpTo directly for a
+    // short backward jump while temporarily facing the cast target.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
-    float constexpr normalJumpSpeedZ = 8.2f;
+    float constexpr normalJumpSpeedZ = 7.95555f;
     player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
@@ -216,7 +218,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
-        if (caster->GetCurrentSpell(CURRENT_GENERIC_SPELL) || caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+        if (caster->IsNonMeleeSpellCast(false, false, true))
             return;
 
         caster->SetFacingTo(resumeOrientation);
@@ -258,6 +260,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    bool const isTemporaryWeaponImbue = [&spellInfo]()
+    {
+        for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
+            if (effectInfo.Effect == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY)
+                return true;
+
+        return false;
+    }();
+
     Item* itemTarget = nullptr;
     if (context.spellId == 11202 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
@@ -274,6 +285,24 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (!itemTarget)
         {
             failureReason = "weapon_already_poisoned";
+            return false;
+        }
+    }
+    else if (isTemporaryWeaponImbue && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        if (mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            itemTarget = mainHand;
+        else
+        {
+            Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+            if (offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+                itemTarget = offHand;
+        }
+
+        if (!itemTarget)
+        {
+            failureReason = "weapon_already_imbued";
             return false;
         }
     }
@@ -364,10 +393,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (spellInfo->CalcCastTime() > 0)
     {
         player->StopMoving();
-        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
         {
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
+            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            player->SendMovementFlagUpdate();
         }
     }
 
@@ -387,7 +416,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         castResult = player->CastSpell(target, context.spellId, false);
 
     if (castResult != SPELL_CAST_OK)
+    {
+        EnumText const reasonText = EnumUtils::ToString(castResult);
+        failureReason = reasonText.Title;
         return false;
+    }
 
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
