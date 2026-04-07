@@ -1391,8 +1391,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->IsWithinMeleeRange(activeTarget))
     {
-        if ((!activeTarget->HasAura(1715) || (activeTarget->GetAura(1715) && activeTarget->GetAura(1715)->GetDuration() < 2000)) && IsSpellReady(player, 1715))
-            return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+        if ((!activeTarget->HasAura(7373) || (activeTarget->GetAura(7373) && activeTarget->GetAura(7373)->GetDuration() < 2000)) && IsSpellReady(player, 7373))
+            return { "warrior hamstring", "maintain stickiness snare", 7373, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
         if (profileSelection.profile == ClassicClassProfile::PrimaryClassic && !activeTarget->HasAura(12294) && IsSpellReady(player, 12294))
             return { "warrior mortal strike", "arms-like burst pressure", 12294, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
         if (activeTarget->GetClass() == CLASS_ROGUE && !activeTarget->HasAura(772) && IsSpellReady(player, 772))
