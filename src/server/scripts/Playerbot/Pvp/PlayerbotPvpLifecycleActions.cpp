@@ -1093,6 +1093,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         }
     }
 
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
+
     EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
     return true;
 }
@@ -1206,6 +1209,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     bool const fallbackEngage = EngageNearestEnemyPlayer(player, 55.0f);
     if (!fallbackEngage)
     {
+        if (IsWarsongGulch(player))
+            return MoveToClosestBattlegroundGraveyard(player);
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP movement skipped: bot={} reason=no-objective-movement-and-no-fallback-target.",
             player->GetGUID().ToString());
@@ -1222,6 +1228,9 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 60.0f;
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
+
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
 
     return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
 }
