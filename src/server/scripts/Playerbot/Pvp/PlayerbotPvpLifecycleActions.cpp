@@ -76,7 +76,7 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     {
         Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
         if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-            IssueMovePointThrottled(player, destination);
+            IssueMovePointThrottled(player, destination, 6.0f, 2000);
         return true;
     }
 
