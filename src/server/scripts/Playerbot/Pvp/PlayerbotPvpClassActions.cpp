@@ -61,7 +61,7 @@ struct WarlockCurseCooldownKeyHash
     }
 };
 
-std::unordered_map<WarlockCurseCooldownKey, GameTime::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
+std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
 
 uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
 {
