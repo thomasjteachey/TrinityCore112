@@ -16,6 +16,7 @@
  */
 
 #include "Chat.h"
+#include "Configuration/Config.h"
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
@@ -72,6 +73,15 @@ char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is 
 
 void ClearChestDeathLockouts();
 
+uint32 GetGuaranteedChestHourServerTime()
+{
+    int32 const configuredHour = sConfigMgr->GetIntDefault("GurubashiArena.GuaranteedChestHour", 21);
+    if (configuredHour < 0 || configuredHour > 23)
+        return 21u;
+
+    return static_cast<uint32>(configuredHour);
+}
+
 uint32 GetChestMarkRewardCount()
 {
     time_t const now = GameTime::GetGameTime();
@@ -81,7 +91,7 @@ uint32 GetChestMarkRewardCount()
 #else
     localtime_r(&now, &localTime);
 #endif
-    return localTime.tm_hour == 20 ? 3u : 1u;
+    return localTime.tm_hour == static_cast<int32>(GetGuaranteedChestHourServerTime()) ? 3u : 1u;
 }
 
 bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
@@ -493,7 +503,7 @@ private:
         return std::chrono::milliseconds(secondsUntilNextHour * IN_MILLISECONDS);
     }
 
-    static bool IsEightPmServerTime()
+    static bool IsGuaranteedChestHourServerTime()
     {
         time_t const now = GameTime::GetGameTime();
         tm localTime {};
@@ -502,7 +512,7 @@ private:
 #else
         localtime_r(&now, &localTime);
 #endif
-        return localTime.tm_hour == 20;
+        return localTime.tm_hour == static_cast<int32>(GetGuaranteedChestHourServerTime());
     }
 
     void ScheduleNextCheck(std::chrono::milliseconds delay)
@@ -521,7 +531,7 @@ private:
         uint32 const playerCount = CountEligiblePlayers(&summonerGuid);
         _lastEligibleCount = playerCount;
 
-        bool const bypassPlayerRequirement = !force && IsEightPmServerTime();
+        bool const bypassPlayerRequirement = !force && IsGuaranteedChestHourServerTime();
         if (!force && !bypassPlayerRequirement && playerCount < REQUIRED_PLAYER_COUNT)
             return SpawnResult::NotEnoughPlayers;
 

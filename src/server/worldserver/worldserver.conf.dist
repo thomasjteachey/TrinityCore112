@@ -3204,6 +3204,13 @@ DireMaulBeads.AreaIds = 495,496,498,2557,3217
 DireMaulBeads.ChestGameObjectId = 0
 DireMaulBeads.ChestDespawnSeconds = 300
 
+#    GurubashiArena.GuaranteedChestHour
+#        Description: Server local hour (0-23) when the Gurubashi chest spawn ignores the minimum player requirement
+#                     and grants the bonus mark payout when looted.
+#        Default:     21 - (9 PM server time)
+
+GurubashiArena.GuaranteedChestHour = 21
+
 #    StockadesPvPvE.ChestGameObjectId
 #        Description: GameObject entry to summon when a Stockades PvPvE run finishes.
 #                     Set to 0 to disable automatic chest spawning.
