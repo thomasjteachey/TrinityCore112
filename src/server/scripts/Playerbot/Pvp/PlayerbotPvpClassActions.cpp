@@ -33,7 +33,6 @@
 #include "WorldSession.h"
 
 #include <algorithm>
-#include <cmath>
 #include <chrono>
 #include <unordered_map>
 
@@ -204,28 +203,12 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Emit a normal jump movement opcode so observers see the same jump flow as
-    // a player-generated jump packet instead of knockback/spline movement.
+    // Simulate a quick jump-180 instant cast while preserving retreat momentum:
+    // face target, perform a backward jump (relative to that facing), then
+    // restore original run orientation.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
     float constexpr normalJumpSpeedZ = 8.2f;
-    float constexpr backwardAngle = 3.14159265f;
-    float const jumpDirection = player->GetOrientation() + backwardAngle;
-
-    MovementInfo movementInfo;
-    movementInfo.guid = player->GetGUID();
-    movementInfo.flags = player->GetUnitMovementFlags() | MOVEMENTFLAG_FALLING;
-    movementInfo.flags2 = static_cast<uint16>(player->GetExtraUnitMovementFlags());
-    movementInfo.pos.Relocate(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
-    movementInfo.time = GameTime::GetGameTimeMS();
-    movementInfo.fallTime = 0;
-    movementInfo.jump.sinAngle = std::sin(jumpDirection);
-    movementInfo.jump.cosAngle = std::cos(jumpDirection);
-    movementInfo.jump.xyspeed = jumpSpeedXY;
-    movementInfo.jump.zspeed = normalJumpSpeedZ;
-
-    WorldPacket jumpPacket(MSG_MOVE_JUMP, 66);
-    WorldSession::WriteMovementInfo(&jumpPacket, &movementInfo);
-    player->SendMessageToSet(&jumpPacket, false);
+    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
