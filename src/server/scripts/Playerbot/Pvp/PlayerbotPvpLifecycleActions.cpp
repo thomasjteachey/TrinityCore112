@@ -34,6 +34,7 @@
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
+#include "PathGenerator.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Player.h"
@@ -49,6 +50,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <array>
+#include <algorithm>
 
 namespace
 {
@@ -59,6 +61,21 @@ bool IsWarsongGulch(Player const* player)
 
     Battleground const* battleground = player->GetBattleground();
     return battleground && battleground->GetMapId() == 489;
+}
+
+bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+
+    Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+    Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+
+    destination = (botTeam == TEAM_ALLIANCE) ? hordeFlagStand : allianceFlagStand;
+    return true;
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
@@ -155,6 +172,10 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
 
         bot->Whisper(message, LANG_UNIVERSAL, observer);
     }
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "PBDBG bot={} guid={} map={} detail={}",
+        bot->GetName(), bot->GetGUID().ToString(), bot->GetMapId(), detail);
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
@@ -196,19 +217,128 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         motionMaster->Clear();
     }
 
-    bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    if (IsWarsongGulch(player))
+        generatePath = false;
+
+    Position issuedDestination = destination;
+    if (IsWarsongGulch(player))
+    {
+        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        constexpr float maxStepDistance = 45.0f;
+        if (directDistance > maxStepDistance)
+        {
+            float const ratio = maxStepDistance / directDistance;
+            issuedDestination.Relocate(
+                player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                player->GetOrientation());
+        }
+
+        // Keep WSG movement path-safe for managed virtual bots: if the local step
+        // still resolves to unsafe navmesh modes, iteratively shorten the step.
+        auto evaluatePath = [player](Position const& candidate, PathType& pathTypeOut, bool& calculateOkOut) -> bool
+        {
+            PathGenerator path(player);
+            calculateOkOut = path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false);
+            if (!calculateOkOut)
+            {
+                pathTypeOut = PATHFIND_NOPATH;
+                return true;
+            }
+
+            pathTypeOut = path.GetPathType();
+            if (pathTypeOut & PATHFIND_NOPATH)
+                return true;
+
+            return pathTypeOut & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
+        };
+
+        PathType issuedPathType = PATHFIND_BLANK;
+        bool issuedCalculated = false;
+        bool unsafeIssuedPath = evaluatePath(issuedDestination, issuedPathType, issuedCalculated);
+        if (unsafeIssuedPath)
+        {
+            constexpr float fallbackSteps[] = { 32.0f, 24.0f, 16.0f, 10.0f };
+            bool foundSafeCandidate = false;
+            for (float stepDistance : fallbackSteps)
+            {
+                if (directDistance <= stepDistance)
+                    continue;
+
+                float const ratio = stepDistance / directDistance;
+                Position candidate(
+                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                    player->GetOrientation());
+
+                PathType candidatePathType = PATHFIND_BLANK;
+                bool candidateCalculated = false;
+                if (!evaluatePath(candidate, candidatePathType, candidateCalculated))
+                {
+                    issuedDestination = candidate;
+                    foundSafeCandidate = true;
+                    std::ostringstream safeStepDetail;
+                    safeStepDetail << "wsg-step-selected step=" << int32(stepDistance)
+                                   << " pathType=" << uint32(candidatePathType)
+                                   << " calc=" << (candidateCalculated ? 1 : 0);
+                    EmitBattlegroundGmDebug(player, safeStepDetail.str(), 1500);
+                    break;
+                }
+            }
+
+            if (!foundSafeCandidate)
+            {
+                std::ostringstream unsafeDetail;
+                unsafeDetail << "wsg-step-unsafe-all-candidates"
+                             << " directDist=" << int32(directDistance)
+                             << " issuedPathType=" << uint32(issuedPathType)
+                             << " calc=" << (issuedCalculated ? 1 : 0);
+                EmitBattlegroundGmDebug(player, unsafeDetail.str(), 1500);
+
+                // Final troubleshooting fallback: take a tiny direct-Los step so
+                // bots don't deadlock when navmesh flags all short probes unsafe.
+                float const emergencyStepDistance = std::min(8.0f, directDistance);
+                if (emergencyStepDistance > 0.0f)
+                {
+                    float const ratio = emergencyStepDistance / directDistance;
+                    Position emergencyDestination(
+                        player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                        player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                        player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                        player->GetOrientation());
+
+                    if (player->IsWithinLOS(emergencyDestination.GetPositionX(), emergencyDestination.GetPositionY(), emergencyDestination.GetPositionZ()))
+                    {
+                        issuedDestination = emergencyDestination;
+                        generatePath = false;
+                        EmitBattlegroundGmDebug(player, "wsg-step-direct-los-fallback enabled", 1500);
+                    }
+                }
+            }
+        }
+    }
 
     std::ostringstream moveDetail;
+    if (IsWarsongGulch(player) &&
+        !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
+    {
+        EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
+        return false;
+    }
+
     moveDetail << "movepoint-issue"
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
-               << " to=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
+               << " to=(" << int32(issuedDestination.GetPositionX()) << "," << int32(issuedDestination.GetPositionY()) << "," << int32(issuedDestination.GetPositionZ()) << ")"
                << " movementType=" << static_cast<uint32>(currentMovement)
                << " generatePath=" << (generatePath ? 1 : 0);
     EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
 
     // Reference-module parity: issue MovePoint directly and let MotionMaster handle path generation.
-    motionMaster->MovePoint(0, destination, generatePath);
-    state.lastDestination = destination;
+    motionMaster->MovePoint(0, issuedDestination, generatePath);
+    state.lastDestination = issuedDestination;
     state.lastIssueMs = nowMs;
     return true;
 }
@@ -881,6 +1011,14 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (!battleground || !player)
         return false;
 
+    // WSG needs deterministic cross-map intent; base anchors can be missing or
+    // locally-biased in sparse managed-bot matches, which leaves bots stalling.
+    if (TryGetWarsongEnemyBasePosition(player, destination))
+    {
+        ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        return true;
+    }
+
     Position const* allianceStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_ALLIANCE));
     Position const* hordeStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_HORDE));
 
@@ -1052,10 +1190,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         return true;
     }
 
-    if (IsWarsongGulch(player))
-        return MoveToClosestBattlegroundGraveyard(player);
-
-    if (EngageNearestEnemyPlayer(player, 65.0f))
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 65.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
     if (Battleground* battleground = player->GetBattleground())
@@ -1071,6 +1207,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return true;
         }
     }
+
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
 
     EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
     return true;
@@ -1120,14 +1259,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!CanIssueBotMovement(player))
         return false;
 
-    if (IsWarsongGulch(player))
-        return MoveToClosestBattlegroundGraveyard(player);
-
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
         return true;
 
-    if (EngageNearestEnemyPlayer(player, 80.0f))
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 80.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
@@ -1187,6 +1324,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     bool const fallbackEngage = EngageNearestEnemyPlayer(player, 55.0f);
     if (!fallbackEngage)
     {
+        if (IsWarsongGulch(player))
+            return MoveToClosestBattlegroundGraveyard(player);
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP movement skipped: bot={} reason=no-objective-movement-and-no-fallback-target.",
             player->GetGUID().ToString());
@@ -1200,11 +1340,12 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 60.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
+        return true;
+
     if (IsWarsongGulch(player))
         return MoveToClosestBattlegroundGraveyard(player);
-
-    if (EngageNearestEnemyPlayer(player, 60.0f))
-        return true;
 
     return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
 }
