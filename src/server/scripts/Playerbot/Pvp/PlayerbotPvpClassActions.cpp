@@ -29,6 +29,8 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
+#include <chrono>
+
 namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
@@ -243,8 +245,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
-    // threat, immediately attempt Freezing Trap in the same lifecycle tick
-    // rather than waiting for the next cadence pass.
+    // threat, pause movement, clear explicit target selection for visual parity,
+    // then cast Freezing Trap exactly 500ms later before resuming chase.
     if (context.spellId == 5384)
     {
         Unit* pressureTarget = nullptr;
@@ -256,16 +258,33 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         bool const closeMeleePressure = pressureTarget && pressureTarget->IsAlive() && player->IsWithinDistInMap(pressureTarget, 5.0f);
         if (closeMeleePressure && player->HasSpell(1499))
         {
-            SpellInfo const* freezingTrapInfo = sSpellMgr->GetSpellInfo(1499);
-            if (freezingTrapInfo &&
-                !player->GetSpellHistory()->HasCooldown(1499) &&
-                !player->GetSpellHistory()->HasGlobalCooldown(freezingTrapInfo) &&
-                !player->IsNonMeleeSpellCast(false, false, true))
+            ObjectGuid const hunterGuid = player->GetGUID();
+            ObjectGuid const pressureTargetGuid = pressureTarget->GetGUID();
+
+            player->StopMoving();
+            player->SetSelection(ObjectGuid::Empty);
+
+            player->m_Events.AddEventAtOffset([hunterGuid, pressureTargetGuid]()
             {
-                SpellCastResult const trapCastResult = player->CastSpell(player, 1499, false);
-                if (trapCastResult != SPELL_CAST_OK)
-                    TC_LOG_DEBUG("playerbots.pvp.class", "Hunter trap follow-up failed after feign death: guid={}, result={}.", player->GetGUID().ToString(), uint32(trapCastResult));
-            }
+                Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
+                if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
+                    return;
+
+                SpellInfo const* freezingTrapInfo = sSpellMgr->GetSpellInfo(1499);
+                if (freezingTrapInfo &&
+                    !hunter->GetSpellHistory()->HasCooldown(1499) &&
+                    !hunter->GetSpellHistory()->HasGlobalCooldown(freezingTrapInfo) &&
+                    !hunter->IsNonMeleeSpellCast(false, false, true))
+                {
+                    SpellCastResult const trapCastResult = hunter->CastSpell(hunter, 1499, false);
+                    if (trapCastResult != SPELL_CAST_OK)
+                        TC_LOG_DEBUG("playerbots.pvp.class", "Hunter trap follow-up failed after feign death delay: guid={}, result={}.", hunter->GetGUID().ToString(), uint32(trapCastResult));
+                }
+
+                if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, pressureTargetGuid))
+                    if (resumedTarget->IsAlive())
+                        hunter->Attack(resumedTarget, false);
+            }, std::chrono::milliseconds(500));
         }
     }
 
