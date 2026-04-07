@@ -22,6 +22,7 @@
 #include "PlayerbotPvpLifecycleActions.h"
 
 #include "AccountMgr.h"
+#include "Battleground.h"
 #include "Configuration/Config.h"
 #include "CharacterCache.h"
 #include "Chat.h"
