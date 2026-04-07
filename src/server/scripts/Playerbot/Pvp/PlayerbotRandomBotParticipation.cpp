@@ -331,16 +331,16 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
         return;
 
-    PvpValues const values = PvpCore::CollectValues(player);
-    BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
-    BattlegroundTacticalActions::Execute(player, tacticalContext);
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
+    playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
+    playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
 
-    BattlegroundLifecycleContext inProgressContext;
+    playerbot::BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
-    inProgressContext.queueOperation = QueueOperationType::None;
-    inProgressContext.invitationResponse = InvitationResponseType::None;
+    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
+    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
     inProgressContext.shouldHandleInProgressStatus = true;
-    BattlegroundLifecycleActions::Execute(player, inProgressContext);
+    playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
