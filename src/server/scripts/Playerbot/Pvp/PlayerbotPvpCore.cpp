@@ -1087,9 +1087,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!targetClose && IsSpellReady(player, 5116))
         return { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
-    if (enemyOnTop && IsSpellReady(player, 2974) && !enemyOnTopTarget->HasAura(2974))
-        return { "hunter wing clip", "close-range fallback snare", 2974, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget->GetGUID() };
-    if (enemyOnTop && enemyOnTopTarget->HasAura(2974) && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
+    if (enemyOnTop && IsSpellReady(player, 14268) && !enemyOnTopTarget->HasAura(14268))
+        return { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget->GetGUID() };
+    if (enemyOnTop && enemyOnTopTarget->HasAura(14268) && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
         return { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, enemyOnTopTarget->GetGUID() };
     if (enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503))
         return { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget->GetGUID() };
