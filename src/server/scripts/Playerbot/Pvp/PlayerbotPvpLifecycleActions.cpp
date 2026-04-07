@@ -34,6 +34,8 @@
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "Player.h"
 #include "World.h"
 #include "WorldPacket.h"
