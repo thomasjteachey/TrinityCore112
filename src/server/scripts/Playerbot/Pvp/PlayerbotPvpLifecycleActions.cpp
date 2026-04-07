@@ -674,7 +674,11 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
-    player->Attack(target, useMeleeAttack);
+    bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
+    if (isStealthedRogue)
+        player->AttackStop();
+    else
+        player->Attack(target, useMeleeAttack);
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP positioning profile: bot={} profile={} ranged={} createDistance={} meleeFallback={}.",

@@ -268,7 +268,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Keep explicit enemy selection/victim linkage for virtual sessions so
         // cast checks and AI follow-up consistently reference the same hostile.
         player->SetSelection(target->GetGUID());
-        if (player->GetVictim() != target)
+        bool const preserveStealthForOpener = player->HasStealthAura();
+        if (preserveStealthForOpener)
+            player->AttackStop();
+        else if (player->GetVictim() != target)
             player->Attack(target, false);
         CommandPetAttackTarget(player, target);
 
