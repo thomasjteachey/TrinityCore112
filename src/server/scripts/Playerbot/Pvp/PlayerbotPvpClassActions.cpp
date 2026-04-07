@@ -334,10 +334,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
     }
 
-    // Avoid immediate re-polymorph loops after quick dispels by imposing a
-    // short tactical cooldown on the playerbot's polymorph decision path.
+    // Avoid immediate reapplication loops after quick dispels by imposing
+    // short tactical cooldowns on selected PvP debuffs.
     if (context.spellId == 112826)
         player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(15));
+    if (context.spellId == 3034 || context.spellId == 1714)
+        player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(12));
 
     return true;
 }
