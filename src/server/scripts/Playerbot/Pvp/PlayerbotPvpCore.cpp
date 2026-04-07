@@ -1328,7 +1328,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         return { "warlock summon voidwalker", "recover voidwalker in combat when absent", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->HealthBelowPct(45) && IsSpellReady(player, 7812))
         return { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->HasAura(19028) && IsSpellReady(player, 19028))
+    if (!player->HasAura(25228) && IsSpellReady(player, 19028))
         return { "warlock soul link", "maintain soul link when pet is available", 19028, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (IsSpellReady(player, 5782))
         if (Unit const* fearTarget = SelectWarlockFearTarget(player, 20.0f))
