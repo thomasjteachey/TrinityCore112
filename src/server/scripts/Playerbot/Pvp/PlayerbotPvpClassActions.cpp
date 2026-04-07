@@ -210,12 +210,17 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     // keeps a regular jump arc while preserving retreat momentum.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
     float constexpr normalJumpSpeedZ = 7.95555f;
-    float constexpr gravity = 19.291105f;
-    float const jumpDistance = (2.0f * normalJumpSpeedZ / gravity) * jumpSpeedXY;
-    float constexpr backwardAngle = 3.14159265f;
-    Position const jumpDest = player->GetFirstCollisionPosition(jumpDistance, player->GetOrientation() + backwardAngle);
-    player->GetMotionMaster()->MoveJump(jumpDest.GetPositionX(), jumpDest.GetPositionY(), jumpDest.GetPositionZ(),
-        player->GetOrientation(), jumpSpeedXY, normalJumpSpeedZ);
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
+    else
+    {
+        float constexpr gravity = 19.291105f;
+        float const jumpDistance = (2.0f * normalJumpSpeedZ / gravity) * jumpSpeedXY;
+        float constexpr backwardAngle = 3.14159265f;
+        Position const jumpDest = player->GetFirstCollisionPosition(jumpDistance, player->GetOrientation() + backwardAngle);
+        player->GetMotionMaster()->MoveJump(jumpDest.GetPositionX(), jumpDest.GetPositionY(), jumpDest.GetPositionZ(),
+            player->GetOrientation(), jumpSpeedXY, normalJumpSpeedZ);
+    }
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
@@ -371,10 +376,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (spellInfo->CalcCastTime() > 0)
     {
         player->StopMoving();
-        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
         {
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
+            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            player->SendMovementFlagUpdate();
         }
     }
 
@@ -399,6 +404,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = reasonText.Title;
         return false;
     }
+
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
