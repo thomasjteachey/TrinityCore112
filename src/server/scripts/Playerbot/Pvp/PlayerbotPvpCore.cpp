@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpCore.h"
+#include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 
 #include "Battleground.h"
@@ -301,6 +302,42 @@ bool IsMeleeClass(Unit const* unit)
         case CLASS_SHAMAN:
         case CLASS_PALADIN:
             return IsUsingTwoHander(player);
+        default:
+            return false;
+    }
+}
+
+bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
+{
+    if (!unit || !baseSpellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return false;
+
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (unit->HasAura(chainSpellId))
+            return true;
+
+    return false;
+}
+
+bool IsCasterClass(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    switch (player->GetClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+        case CLASS_DRUID:
+        case CLASS_SHAMAN:
+        case CLASS_PALADIN:
+            return true;
         default:
             return false;
     }
@@ -1333,8 +1370,12 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     if (IsSpellReady(player, 5782))
         if (Unit const* fearTarget = SelectWarlockFearTarget(player, 20.0f))
             return { "warlock fear", "prioritize fear control on paladin/priest targets in range", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget->GetGUID() };
-    if (target->GetPowerType() == POWER_MANA && !target->HasAura(1714) && IsSpellReady(player, 1714))
+    if (target->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(target, 1714) &&
+        !PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) &&
+        !PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713))
+        return { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!target->HasAura(25311) && IsSpellReady(player, 25311))
         return { "warlock corruption", "maintain corruption dot", 25311, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if ((target->HealthBelowPct(20) || (closePressure && IsMeleeClass(target))) && IsSpellReady(player, 6789))
