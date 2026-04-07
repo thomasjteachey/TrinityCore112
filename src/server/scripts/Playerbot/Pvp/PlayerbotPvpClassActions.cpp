@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpClassActions.h"
 
+#include "GameTime.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
