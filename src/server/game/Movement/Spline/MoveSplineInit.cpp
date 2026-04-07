@@ -20,10 +20,12 @@
 #include "MoveSpline.h"
 #include "MovementPacketBuilder.h"
 #include "Unit.h"
+#include "Player.h"
 #include "PathGenerator.h"
 #include "Transport.h"
 #include "Opcodes.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 
 namespace Movement
 {
@@ -257,11 +259,15 @@ namespace Movement
             {
                 PathType const pathType = path.GetPathType();
                 bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+                bool virtualSessionControlled = false;
+                if (Player const* moverPlayer = unit->ToPlayer())
+                    if (WorldSession const* session = moverPlayer->GetSession())
+                        virtualSessionControlled = session->IsVirtualSession();
                 bool const navmeshAvailable = path.HasNavigationData();
 
                 if (!(pathType & PATHFIND_NOPATH))
                 {
-                    if (!(playerControlled && ((pathType & PATHFIND_INCOMPLETE) ||
+                    if (!((playerControlled && !virtualSessionControlled) && ((pathType & PATHFIND_INCOMPLETE) ||
                         (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))))
                     {
                         MovebyPath(path.GetPath());
@@ -269,7 +275,7 @@ namespace Movement
                     }
                 }
 
-                if (playerControlled && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
+                if ((playerControlled && !virtualSessionControlled) && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
                     (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT)))))
                 {
                     args.path_Idx_offset = 0;
