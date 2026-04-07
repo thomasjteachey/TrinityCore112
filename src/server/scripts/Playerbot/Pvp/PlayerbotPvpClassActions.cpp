@@ -219,9 +219,6 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
-        if (caster->IsNonMeleeSpellCast(false, false, true))
-            return;
-
         caster->SetFacingTo(resumeOrientation);
 
         // JumpTo can leave virtual-session bots briefly idle after landing.
@@ -234,7 +231,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         if (!resolvedTarget || !resolvedTarget->IsAlive())
             return;
 
-        float const stepDistance = std::max(4.0f, caster->GetSpeed(MOVE_RUN) * 0.65f);
+        float const stepDistance = std::max(8.0f, caster->GetSpeed(MOVE_RUN) * 1.35f);
         Position destination(caster->GetPositionX() + std::cos(resumeOrientation) * stepDistance,
             caster->GetPositionY() + std::sin(resumeOrientation) * stepDistance,
             caster->GetPositionZ(), resumeOrientation);
