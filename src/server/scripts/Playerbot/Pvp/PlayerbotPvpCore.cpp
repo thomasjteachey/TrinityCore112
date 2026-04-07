@@ -439,7 +439,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
 
-    if (player->HealthBelowPct(10) && IsSpellReady(player, 11958))
+    if (player->HealthBelowPct(20) && IsSpellReady(player, 11958))
         return { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->HasUnitState(UNIT_STATE_STUNNED) && IsSpellReady(player, 1953))
         return { "mage blink", "break stun pressure when possible", 1953, playerbot::PvpClassSpellContext::TargetMode::Self };
@@ -461,6 +461,13 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         return { "mage polymorph", "safe ranged crowd control", 112826, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 25304))
         return { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+
+    if (!player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157))
+        return { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220))
+        return { "arcane intellect", "arcane intellect", 10220, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008))
+        return { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
 }
