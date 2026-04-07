@@ -763,24 +763,24 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     if (!HasHostileTarget(player, target))
         return decision;
 
-    if (!player->HasAura(6673) && IsSpellReady(player, 6673))
-        return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if ((player->HasAuraWithMechanic(1 << MECHANIC_FEAR) || player->HasAuraWithMechanic(1 << MECHANIC_SAPPED)) && player->HasAura(2458) && IsSpellReady(player, 18499))
+        return { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if ((!target->HasAura(1715) || (target->GetAura(1715) && target->GetAura(1715)->GetDuration() < 2000)) && IsSpellReady(player, 1715))
+        return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->IsWithinMeleeRange(target) && !player->IsInCombat() && IsSpellReady(player, 100))
         return { "warrior charge", "close gap to target from out of combat", 100, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->IsWithinMeleeRange(target) && player->IsInCombat() && IsSpellReady(player, 20252))
         return { "warrior intercept", "close gap to target while in combat", 20252, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if ((!target->HasAura(1715) || (target->GetAura(1715) && target->GetAura(1715)->GetDuration() < 3000)) && IsSpellReady(player, 1715))
-        return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 6552))
-        return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsMeleeClass(target) && IsSpellReady(player, 71))
-        return { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (IsMeleeClass(target) && IsSpellReady(player, 676))
-        return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if ((player->HasAuraWithMechanic(1 << MECHANIC_FEAR) || player->HasAuraWithMechanic(1 << MECHANIC_SAPPED)) && player->HasAura(2458) && IsSpellReady(player, 18499))
-        return { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->HealthBelowPct(20) && IsSpellReady(player, 5308))
         return { "warrior execute", "finisher at low enemy health", 5308, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 6552))
+        return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsMeleeClass(target) && IsSpellReady(player, 676))
+        return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsMeleeClass(target) && IsSpellReady(player, 71))
+        return { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->HasAura(6673) && IsSpellReady(player, 6673))
+        return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->GetClass() == CLASS_ROGUE && !target->HasAura(772) && IsSpellReady(player, 772))
         return { "warrior rend", "apply anti-stealth bleed pressure on rogues", 772, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (profileSelection.profile == ClassicClassProfile::PrimaryClassic && IsSpellReady(player, 12294))
