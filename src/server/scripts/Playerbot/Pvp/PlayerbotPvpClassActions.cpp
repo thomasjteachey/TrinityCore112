@@ -461,7 +461,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     if ((context.spellId == 1714 || context.spellId == 11713) && target)
-        PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
+        playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
 
     return true;
 }
@@ -507,7 +507,7 @@ bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, U
     if (itr == g_WarlockCurseTargetCooldowns.end())
         return false;
 
-    if (GameTime::GetGameTimeSteadyPoint() >= itr->second)
+    if (GameTime::Now() >= itr->second)
     {
         g_WarlockCurseTargetCooldowns.erase(itr);
         return false;
@@ -521,7 +521,7 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
     if (!player || !target || !spellId || cooldown <= std::chrono::seconds::zero())
         return;
 
-    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::GetGameTimeSteadyPoint() + cooldown;
+    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
 }
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
