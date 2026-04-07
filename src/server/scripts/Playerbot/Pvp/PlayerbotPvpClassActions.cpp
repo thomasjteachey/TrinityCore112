@@ -399,14 +399,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
         JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
-    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
-        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
-
-    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
-        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
-
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
     // then cast Freezing Trap exactly 500ms later before resuming chase.
