@@ -140,16 +140,39 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
             return false;
 
-    player->CastSpell(target, context.spellId, false);
+    // Blink (1953) is a leap-forward spell with a destination target
+    // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
+    // on a unit target can leave relocation unresolved; provide an explicit
+    // front destination to mirror client cast payload semantics.
+    if (context.spellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
+        player->CastSpell(CastSpellTargetArg(dest), context.spellId);
+    }
+    else
+        player->CastSpell(target, context.spellId, false);
 
     bool hasTeleportEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
-        if (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect == SPELL_EFFECT_TELEPORT_UNITS)
+        switch (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect)
         {
-            hasTeleportEffect = true;
-            break;
+            case SPELL_EFFECT_TELEPORT_UNITS:
+            case SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER:
+            case SPELL_EFFECT_LEAP:
+            case SPELL_EFFECT_JUMP:
+            case SPELL_EFFECT_JUMP_DEST:
+            case SPELL_EFFECT_LEAP_BACK:
+            case SPELL_EFFECT_CHARGE:
+            case SPELL_EFFECT_CHARGE_DEST:
+                hasTeleportEffect = true;
+                break;
+            default:
+                break;
         }
+
+        if (hasTeleportEffect)
+            break;
     }
 
     // Bot players do not own a real game client to naturally ACK near teleports
@@ -161,6 +184,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         WorldSession* session = player->GetSession();
         if (session && session->IsVirtualSession())
         {
+            TC_LOG_DEBUG("playerbots.pvp.class",
+                "Playerbot PvP teleport ACK synthesized: guid={} spell={} map={} x={} y={} z={}.",
+                player->GetGUID().ToString(), context.spellId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
             WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
             teleportAck << player->GetPackGUID();
             teleportAck << uint32(0);
