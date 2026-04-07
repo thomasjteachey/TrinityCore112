@@ -168,11 +168,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
                << " to=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
                << " movementType=" << static_cast<uint32>(currentMovement)
-               << " forceDirect=1";
+               << " generatePath=1";
     EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
 
-    // Use direct point movement for battleground objective travel diagnostics.
-    motionMaster->MovePoint(0, destination, false);
+    // Use pathfinding for battleground objective travel to avoid wall clipping.
+    motionMaster->MovePoint(0, destination, true);
     state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
