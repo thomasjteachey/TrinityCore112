@@ -218,6 +218,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    if (IsWarsongGulch(player))
+        generatePath = false;
 
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
@@ -320,6 +322,13 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     std::ostringstream moveDetail;
+    if (IsWarsongGulch(player) &&
+        !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
+    {
+        EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
+        return false;
+    }
+
     moveDetail << "movepoint-issue"
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
                << " to=(" << int32(issuedDestination.GetPositionX()) << "," << int32(issuedDestination.GetPositionY()) << "," << int32(issuedDestination.GetPositionZ()) << ")"
