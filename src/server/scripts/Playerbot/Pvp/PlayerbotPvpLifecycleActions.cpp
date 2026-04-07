@@ -587,6 +587,12 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
     Unit* target = player->GetVictim();
     if (!target || !target->IsAlive())
         target = player->GetSelectedUnit();
+    if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
+    {
+        Unit* duelOpponent = player->duel->Opponent;
+        if (duelOpponent && duelOpponent->IsAlive() && duelOpponent->GetMapId() == player->GetMapId())
+            target = duelOpponent;
+    }
     if ((!target || !target->IsAlive()) && player->InBattleground())
         target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
     if (!target || !target->IsAlive())
@@ -1076,5 +1082,16 @@ bool ArenaLifecycleActions::DeclineTeamInvitePrimitive(Player* player)
 
     player->SetArenaTeamIdInvited(0);
     return true;
+}
+
+bool DuelTacticalActions::Execute(Player* player)
+{
+    if (!player || !player->IsAlive() || !CanIssueBotMovement(player))
+        return false;
+
+    if (!player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
+        return false;
+
+    return EngageNearestEnemyPlayer(player, 65.0f);
 }
 }

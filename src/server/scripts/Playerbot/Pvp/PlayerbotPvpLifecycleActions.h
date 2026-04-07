@@ -62,6 +62,12 @@ public:
     static bool AcceptTeamInvitePrimitive(Player* player);
     static bool DeclineTeamInvitePrimitive(Player* player);
 };
+
+class DuelTacticalActions
+{
+public:
+    static bool Execute(Player* player);
+};
 }
 
 #endif

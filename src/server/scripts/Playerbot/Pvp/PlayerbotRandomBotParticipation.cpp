@@ -952,6 +952,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     PvpValues const values = PvpCore::CollectValues(player);
     BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
     bool const didExecuteTactical = BattlegroundTacticalActions::Execute(player, tacticalContext);
+    bool const didExecuteDuelTactical = DuelTacticalActions::Execute(player);
     PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
 
@@ -962,7 +963,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
-            guid.ToString(), didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+            guid.ToString(), (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0, didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -972,7 +973,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
-            guid.ToString(), didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+            guid.ToString(), (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0, didExecuteClassSpell ? 1 : 0);
         return;
     }
 
@@ -1019,7 +1020,8 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}, didExecuteTactical={}, didExecuteClassSpell={}.",
-        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0, didExecuteTactical ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0,
+        (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0, didExecuteClassSpell ? 1 : 0);
 }
 
 bool RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,
