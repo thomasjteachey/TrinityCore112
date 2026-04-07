@@ -214,10 +214,29 @@ bool CanProcessPlayerLifecycle(Player const* player)
         return false;
     }
 
-    if (!player->IsInWorld() || player->IsBeingTeleported())
+    if (!player->IsInWorld())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
         return false;
+    }
+
+    if (player->IsBeingTeleported())
+    {
+        // Managed random bots can occasionally retain the generic teleport flag
+        // after a battleground transition (especially when start countdowns are
+        // skipped). If near/far teleport semaphores are clear and the bot is
+        // already placed in a battleground map, continue lifecycle processing so
+        // tactical movement does not deadlock at match start.
+        bool const hasPendingTeleportAck = player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear();
+        if (hasPendingTeleportAck || !player->InBattleground())
+        {
+            ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
+            return false;
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot lifecycle pre-check tolerated stale teleport flag: guid={} battlegroundId={}.",
+            guid.ToString(), player->GetBattlegroundId());
     }
 
     uint64 const playerGuid = guid.GetRawValue();
