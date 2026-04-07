@@ -24,10 +24,12 @@
 #include "AccountMgr.h"
 #include "Configuration/Config.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
+#include "Map.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
@@ -44,6 +46,7 @@
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -60,12 +63,51 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
+constexpr std::chrono::milliseconds BattlegroundActiveCadenceInterval(250);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
+
+void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
+{
+    if (!player || !player->InBattleground())
+        return;
+
+    static std::unordered_map<uint64, uint32> nextEmitMsByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& nextEmitMs = nextEmitMsByGuid[botGuid];
+    if (nowMs < nextEmitMs)
+        return;
+
+    nextEmitMs = nowMs + throttleMs;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return;
+
+    std::ostringstream os;
+    os << "[PBDBG lifecycle] bot=" << player->GetName()
+       << " guid=" << player->GetGUID().ToString()
+       << " bgId=" << player->GetBattlegroundId()
+       << " detail=" << detail;
+    std::string const message = os.str();
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (observer->GetBattlegroundId() != player->GetBattlegroundId())
+            continue;
+
+        const_cast<Player*>(player)->Whisper(message, LANG_UNIVERSAL, observer);
+    }
+}
 
 enum class LifecycleObservationReason : uint8
 {
@@ -205,28 +247,61 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!IsLifecycleGateEnabled())
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        EmitLifecycleGmDebug(player, "can-process=no gate-disabled");
         return false;
     }
 
     if (!playerbot::IsManagedRandomBot(player))
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        EmitLifecycleGmDebug(player, "can-process=no unmanaged-bot");
         return false;
     }
 
-    if (!player->IsInWorld() || player->IsBeingTeleported())
+    if (!player->IsInWorld())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
+        EmitLifecycleGmDebug(player, "can-process=no not-in-world");
         return false;
+    }
+
+    if (player->IsBeingTeleported())
+    {
+        // Managed random bots can occasionally retain the generic teleport flag
+        // after a battleground transition (especially when start countdowns are
+        // skipped). If near/far teleport semaphores are clear and the bot is
+        // already placed in a battleground map, continue lifecycle processing so
+        // tactical movement does not deadlock at match start.
+        bool const hasPendingTeleportAck = player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear();
+        if (hasPendingTeleportAck || !player->InBattleground())
+        {
+            ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
+            return false;
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot lifecycle pre-check tolerated stale teleport flag: guid={} battlegroundId={}.",
+            guid.ToString(), player->GetBattlegroundId());
     }
 
     uint64 const playerGuid = guid.GetRawValue();
     LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[playerGuid];
+
+    bool const inActiveBattleground = player->InBattleground() &&
+        player->GetBattleground() &&
+        player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
+    if (inActiveBattleground)
+    {
+        nextProcessTime = now + BattlegroundActiveCadenceInterval;
+        return true;
+    }
+
     if (nextProcessTime > now)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
+        EmitLifecycleGmDebug(player, "can-process=no cadence-throttled");
         return false;
     }
 
@@ -955,6 +1030,16 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     bool const didExecuteDuelTactical = DuelTacticalActions::Execute(player);
     PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
+    if (didExecuteClassSpell &&
+        (classSpellContext.spellId == 16166 || // Elemental Mastery (off-GCD)
+         classSpellContext.spellId == 17116)) // Nature's Swiftness (off-GCD)
+    {
+        std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+        g_NextRandomBotLifecycleProcessTimeByGuid[guid.GetRawValue()] = LifecycleCadenceClock::now();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP cadence bypass applied: guid={} spell={} reason=off-gcd-burst-window.",
+            guid.ToString(), classSpellContext.spellId);
+    }
 
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
     if (!hooks.lifecycleEnabled)
