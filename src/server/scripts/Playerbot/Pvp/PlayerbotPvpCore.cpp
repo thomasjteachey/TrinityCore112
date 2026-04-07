@@ -402,9 +402,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!targetClose && IsSpellReady(player, 5116))
         return { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
-    if (enemyOnTop && IsSpellReady(player, 2974))
+    if (enemyOnTop && IsSpellReady(player, 2974) && !target->HasAura(2974))
         return { "hunter wing clip", "close-range fallback snare", 2974, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (enemyOnTop && target->HasAura(2974) && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
+    if (enemyOnTop && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
         return { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 1499)) && IsSpellReady(player, 19503))
         return { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy };
@@ -421,8 +421,6 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         return { "hunter multi-shot", "ranged burst pressure", 2643, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!targetClose && target->GetPowerType() == POWER_MANA && !target->HasAura(3034) && IsSpellReady(player, 3034))
         return { "hunter viper sting", "drain mana on mana users", 3034, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!inMelee && IsSpellReady(player, 3044))
-        return { "hunter arcane shot", "ranged instant pressure", 3044, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->HasAura(19506) && IsSpellReady(player, 19506))
         return { "hunter trueshot aura", "maintain personal buff aura", 19506, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->IsInCombat() && IsSpellReady(player, 982))
@@ -465,7 +463,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     if (!player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157))
         return { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220))
-        return { "arcane intellect", "arcane intellect", 10220, playerbot::PvpClassSpellContext::TargetMode::Self };
+        return { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008))
         return { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self };
 
