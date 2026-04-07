@@ -124,6 +124,33 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     }
 }
 
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 1200)
+{
+    if (!player)
+        return false;
+
+    struct MoveOrderState
+    {
+        Position lastDestination;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, MoveOrderState> stateByGuid;
+    MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    bool const destinationChanged = state.lastIssueMs == 0 ||
+        state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
+    bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
+    if (!destinationChanged && !canReissueByTime)
+        return false;
+
+    player->GetMotionMaster()->MovePoint(0, destination);
+    state.lastDestination = destination;
+    state.lastIssueMs = nowMs;
+    return true;
+}
+
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
     if (!player || player->InBattleground())
@@ -927,7 +954,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         if (TryGetObjectivePosition(battleground, player, destination))
         {
             if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                player->GetMotionMaster()->MovePoint(0, destination);
+                IssueMovePointThrottled(player, destination);
             return true;
         }
     }
@@ -1018,7 +1045,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             if (TryGetObjectivePosition(battleground, player, destination))
             {
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    player->GetMotionMaster()->MovePoint(0, destination);
+                    IssueMovePointThrottled(player, destination);
                 return true;
             }
 
@@ -1032,7 +1059,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             {
                 Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
                 if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    player->GetMotionMaster()->MovePoint(0, destination);
+                    IssueMovePointThrottled(player, destination);
                 return true;
             }
         }
