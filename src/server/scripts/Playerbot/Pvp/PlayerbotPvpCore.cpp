@@ -1230,8 +1230,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             if (Unit const* casterAlly = SelectFriendlyHealthTarget(player, 40.0f, 100.0f))
                 if (casterAlly->GetPowerType() == POWER_MANA)
                     return { "priest power infusion", "boost nearby caster throughput in combat", 10060, casterAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, casterAlly->GetGUID() };
-        if (!player->IsInCombat() && !player->HasAura(1243) && IsSpellReady(player, 1243))
-            return { "priest power word fortitude", "maintain fortitude out of combat", 1243, playerbot::PvpClassSpellContext::TargetMode::Self };
+        if (!player->IsInCombat() && !player->HasAura(10938) && IsSpellReady(player, 10938))
+            return { "priest power word fortitude", "maintain fortitude out of combat", 10938, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !player->HasAura(976) && IsSpellReady(player, 976))
             return { "priest shadow protection", "maintain shadow protection out of combat", 976, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !player->HasAura(588) && IsSpellReady(player, 588))
