@@ -1371,10 +1371,10 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         if (Unit const* fearTarget = SelectWarlockFearTarget(player, 20.0f))
             return { "warlock fear", "prioritize fear control on paladin/priest targets in range", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget->GetGUID() };
     if (target->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(target, 1714) &&
-        !PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 1714) && IsSpellReady(player, 1714))
+        !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) &&
-        !PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713))
+        !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713))
         return { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!target->HasAura(25311) && IsSpellReady(player, 25311))
         return { "warlock corruption", "maintain corruption dot", 25311, playerbot::PvpClassSpellContext::TargetMode::Enemy };
