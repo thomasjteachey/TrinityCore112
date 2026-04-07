@@ -29,6 +29,7 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
+#include <algorithm>
 #include <chrono>
 
 namespace
@@ -123,6 +124,37 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
+void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
+{
+    if (!player || !target || !spellInfo)
+        return;
+
+    if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
+        return;
+
+    ObjectGuid const casterGuid = player->GetGUID();
+    player->SetFacingToObject(target);
+    player->SetInFront(target);
+
+    // Managed playerbots run as virtual sessions: use JumpTo directly for a
+    // short backward jump while temporarily facing the cast target.
+    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
+    float constexpr normalJumpSpeedZ = 7.95555f;
+    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
+
+    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
+    {
+        Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
+        if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+            return;
+
+        if (caster->IsNonMeleeSpellCast(false, false, true))
+            return;
+
+        caster->SetFacingTo(resumeOrientation);
+    }, 250ms);
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -170,6 +202,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "self_target_mismatch";
         return false;
     }
+
+    float preCastOrientation = player->GetOrientation();
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
@@ -236,7 +270,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
     if (spellInfo->CalcCastTime() > 0)
+    {
         player->StopMoving();
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        {
+            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            player->SendMovementFlagUpdate();
+        }
+    }
 
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
@@ -253,6 +294,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
         return false;
+
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
