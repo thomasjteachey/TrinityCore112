@@ -303,7 +303,8 @@ bool CanProcessPlayerLifecycle(Player const* player)
         std::ostringstream cadenceDetail;
         cadenceDetail << "can-process=no cadence-throttled wait_ms=" << waitRemainingMs
                       << " cadence_ms=" << cadenceInterval.count()
-                      << " bg_active=" << (inActiveBattleground ? 1 : 0);
+                      << " bg_active=" << (inActiveBattleground ? 1 : 0)
+                      << " model=bg-fasttick-v2";
         EmitLifecycleGmDebug(player, cadenceDetail.str());
         return false;
     }
@@ -330,16 +331,16 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
         return;
 
-    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
-    playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
-    playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+    PvpValues const values = PvpCore::CollectValues(player);
+    BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
+    BattlegroundTacticalActions::Execute(player, tacticalContext);
 
-    playerbot::BattlegroundLifecycleContext inProgressContext;
+    BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
-    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
-    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
+    inProgressContext.queueOperation = QueueOperationType::None;
+    inProgressContext.invitationResponse = InvitationResponseType::None;
     inProgressContext.shouldHandleInProgressStatus = true;
-    playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+    BattlegroundLifecycleActions::Execute(player, inProgressContext);
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
