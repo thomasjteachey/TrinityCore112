@@ -28,6 +28,7 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Pet.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
@@ -1319,6 +1320,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     bool const needsPetSummon = !pet || !pet->IsAlive();
 
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
+    if (player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708))
+        return { "warlock fel domination", "prepare instant pet recovery before voidwalker summon", 18708, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->IsInCombat() && needsPetSummon && IsSpellReady(player, 697))
         return { "warlock summon voidwalker", "maintain voidwalker pet while out of combat", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->IsInCombat() && needsPetSummon && IsSpellReady(player, 697))

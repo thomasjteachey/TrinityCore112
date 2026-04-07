@@ -21,6 +21,7 @@
 #include "ObjectAccessor.h"
 #include "Log.h"
 #include "Player.h"
+#include "Pet.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
 #include "SpellInfo.h"
@@ -275,6 +276,23 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
         return false;
+
+    // Fel Domination is off the global cooldown. When used mid-fight to recover
+    // a missing warlock pet, immediately follow with Summon Voidwalker so the
+    // bot does not wait for the next class-decision cadence tick.
+    if (context.spellId == 18708 && player->GetClass() == CLASS_WARLOCK && player->HasSpell(697))
+    {
+        Pet* pet = player->GetPet();
+        if (!pet || !pet->IsAlive())
+        {
+            SpellInfo const* summonVoidwalkerInfo = sSpellMgr->GetSpellInfo(697);
+            if (summonVoidwalkerInfo &&
+                !player->GetSpellHistory()->HasCooldown(697) &&
+                !player->GetSpellHistory()->HasGlobalCooldown(summonVoidwalkerInfo) &&
+                !player->IsNonMeleeSpellCast(false, false, true))
+                player->CastSpell(player, 697, false);
+        }
+    }
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
