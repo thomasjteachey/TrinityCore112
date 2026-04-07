@@ -30,6 +30,19 @@
 
 namespace
 {
+char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
+
+void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted)
+{
+    if (!player || !player->duel)
+        return;
+
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "[PvP duel] {} decision={} spell={} target={} success={} reason={}",
+        player->GetName(), context.actionName ? context.actionName : "none", context.spellId,
+        GetTargetModeLabel(context.targetMode), casted ? "yes" : "no", context.reason ? context.reason : "none");
+}
+
 void FinalizeVirtualNearTeleport(Player* player)
 {
     if (!player || !player->IsBeingTeleportedNear())
