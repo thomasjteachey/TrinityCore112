@@ -234,6 +234,61 @@ bool CanProcessPlayerLifecycle(Player const* player)
     return true;
 }
 
+void TryFinalizePendingVirtualBotTeleport(Player* player)
+{
+    if (!player || !playerbot::IsManagedRandomBot(player))
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session || !session->IsVirtualSession())
+        return;
+
+    if (player->IsBeingTeleportedFar())
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot lifecycle pre-check teleport finalization: guid={} type=far.",
+            player->GetGUID().ToString());
+        session->HandleMoveWorldportAck();
+    }
+
+    if (player->IsBeingTeleportedNear())
+    {
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot lifecycle pre-check teleport finalization: guid={} type=near.",
+            player->GetGUID().ToString());
+        WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+        teleportAck << player->GetPackGUID();
+        teleportAck << uint32(0);
+        teleportAck << uint32(0);
+        session->HandleMoveTeleportAck(teleportAck);
+
+        if (player->IsBeingTeleportedNear())
+        {
+            uint32 const oldZone = player->GetZoneId();
+            WorldLocation const& dest = player->GetTeleportDest();
+            player->SetSemaphoreTeleportNear(false);
+            player->UpdatePosition(dest, true);
+            player->SetFallInformation(0, player->GetPositionZ());
+
+            uint32 newZone = 0;
+            uint32 newArea = 0;
+            player->GetZoneAndAreaId(newZone, newArea);
+            player->UpdateZone(newZone, newArea);
+
+            if (oldZone != newZone)
+            {
+                if (player->pvpInfo.IsHostile)
+                    player->CastSpell(player, 2479, true);
+                else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+                    player->UpdatePvP(false, false);
+            }
+
+            player->ResummonPetTemporaryUnSummonedIfAny();
+            player->ProcessDelayedOperations();
+        }
+    }
+}
+
 void TryReviveManagedBotAfterStartup(Player* player)
 {
     if (!player || !playerbot::IsManagedRandomBot(player))
@@ -804,6 +859,7 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
+    TryFinalizePendingVirtualBotTeleport(player);
 
     if (!CanProcessPlayerLifecycle(player))
         return;
