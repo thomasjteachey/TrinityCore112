@@ -203,6 +203,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         return;
 
     ObjectGuid const casterGuid = player->GetGUID();
+    ObjectGuid const targetGuid = target->GetGUID();
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
@@ -212,16 +213,29 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     float constexpr normalJumpSpeedZ = 7.95555f;
     player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
 
-    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
+    player->m_Events.AddEventAtOffset([casterGuid, targetGuid, resumeOrientation]()
     {
         Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
-        if (caster->IsNonMeleeSpellCast(false, false, true))
+        caster->SetFacingTo(resumeOrientation);
+
+        // JumpTo can leave virtual-session bots briefly idle after landing.
+        // Re-issue a short forward MovePoint on the pre-cast heading to
+        // preserve run-and-cast flow instead of stopping in place.
+        if (caster->HasUnitState(UNIT_STATE_ROOT) || caster->HasUnitState(UNIT_STATE_STUNNED))
             return;
 
-        caster->SetFacingTo(resumeOrientation);
+        Unit* resolvedTarget = ObjectAccessor::GetUnit(*caster, targetGuid);
+        if (!resolvedTarget || !resolvedTarget->IsAlive())
+            return;
+
+        float const stepDistance = std::max(8.0f, caster->GetSpeed(MOVE_RUN) * 1.35f);
+        Position destination(caster->GetPositionX() + std::cos(resumeOrientation) * stepDistance,
+            caster->GetPositionY() + std::sin(resumeOrientation) * stepDistance,
+            caster->GetPositionZ(), resumeOrientation);
+        caster->GetMotionMaster()->MovePoint(0, destination);
     }, 250ms);
 }
 
