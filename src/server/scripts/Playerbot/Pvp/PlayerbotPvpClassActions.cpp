@@ -47,10 +47,8 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         message += GetTargetModeLabel(context.targetMode);
         message += " | success=";
         message += casted ? "yes" : "no";
-        message += " | decision_reason=";
+        message += " | reason=";
         message += context.reason ? context.reason : "none";
-        if (!casted && !failureReason.empty())
-            message += " | fail_reason=" + failureReason;
 
         player->Whisper(message, LANG_UNIVERSAL, opponent);
     }
@@ -166,7 +164,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             failureReason = "invalid_enemy_target";
             return false;
-        }
 
         // Keep explicit enemy selection/victim linkage for virtual sessions so
         // cast checks and AI follow-up consistently reference the same hostile.
@@ -174,11 +171,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (player->GetVictim() != target)
             player->Attack(target, false);
 
-        // Virtual playerbot sessions do not naturally rotate their character the
-        // same way a real client does while selecting/casting. Make sure the bot
-        // is facing its hostile target before casting so facing-sensitive spells
-        // do not fail in duels and other PvP contexts.
-        player->SetFacingToObject(target);
+        // Virtual sessions can visually "turn" while server-side facing checks
+        // still fail for the immediate cast tick. SetInFront updates orientation
+        // instantly, so facing-sensitive spells pass UNIT_NOT_INFRONT checks.
+        player->SetInFront(target);
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
@@ -227,6 +223,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (spellInfo->CalcCastTime() > 0)
         player->StopMoving();
 
+    // Cast-time spells like Frostbolt fail while moving. Since playerbots do
+    // not have client-side stop-cast behavior, explicitly stop movement before
+    // attempting non-instant casts.
+    if (spellInfo->CalcCastTime() > 0)
+        player->StopMoving();
+
+    SpellCastResult castResult = SPELL_FAILED_ERROR;
+
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
@@ -241,10 +245,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         castResult = player->CastSpell(target, context.spellId, false);
 
     if (castResult != SPELL_CAST_OK)
-    {
-        failureReason = "cast_result_" + std::to_string(static_cast<uint32>(castResult));
         return false;
-    }
 
     bool hasTeleportEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
