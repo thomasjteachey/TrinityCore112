@@ -1568,48 +1568,6 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
     }
 }
 
-SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
-{
-    SpellDecision decision;
-    if (!player)
-    {
-        decision.reason = "missing-player";
-        return decision;
-    }
-
-    if (profileSelection.unsupportedClass)
-    {
-        decision.reason = "unsupported-class";
-        return decision;
-    }
-
-    bool const inMelee = target && player->IsWithinMeleeRange(target);
-    switch (player->GetClass())
-    {
-        case CLASS_HUNTER:
-            return SelectHunterSpell(player, target, inMelee);
-        case CLASS_MAGE:
-            return SelectMageSpell(player, target, inMelee);
-        case CLASS_PRIEST:
-            return SelectPriestSpell(player, target, allyTarget, profileSelection);
-        case CLASS_PALADIN:
-            return SelectPaladinSpell(player, target);
-        case CLASS_WARLOCK:
-            return SelectWarlockSpell(player, target);
-        case CLASS_DRUID:
-            return SelectDruidSpell(player, target);
-        case CLASS_WARRIOR:
-            return SelectWarriorSpell(player, target, profileSelection);
-        case CLASS_ROGUE:
-            return SelectRogueSpell(player, target);
-        case CLASS_SHAMAN:
-            return SelectShamanSpell(player, target);
-        default:
-            decision.reason = "class-not-in-this-pass";
-            return decision;
-    }
-}
-
 char const* GetClassLabel(uint8 classId)
 {
     switch (classId)
