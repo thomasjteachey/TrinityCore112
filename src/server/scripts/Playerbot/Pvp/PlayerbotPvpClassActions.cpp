@@ -18,10 +18,12 @@
 #include "PlayerbotPvpClassActions.h"
 
 #include "GameTime.h"
+#include "Item.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
 #include "MotionMaster.h"
 #include "Player.h"
+#include "Pet.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
 #include "SpellInfo.h"
@@ -32,10 +34,74 @@
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_map>
 
 namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
+
+struct WarlockCurseCooldownKey
+{
+    ObjectGuid casterGuid;
+    ObjectGuid targetGuid;
+    uint32 spellId = 0;
+
+    bool operator==(WarlockCurseCooldownKey const& other) const
+    {
+        return casterGuid == other.casterGuid && targetGuid == other.targetGuid && spellId == other.spellId;
+    }
+};
+
+struct WarlockCurseCooldownKeyHash
+{
+    std::size_t operator()(WarlockCurseCooldownKey const& key) const
+    {
+        std::size_t const casterHash = std::hash<uint64>{}(key.casterGuid.GetRawValue());
+        std::size_t const targetHash = std::hash<uint64>{}(key.targetGuid.GetRawValue());
+        std::size_t const spellHash = std::hash<uint32>{}(key.spellId);
+        return casterHash ^ (targetHash << 1) ^ (spellHash << 2);
+    }
+};
+
+std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
+
+uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
+{
+    if (!player || !baseSpellId)
+        return 0;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return 0;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (player->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+
+    return resolvedSpellId;
+}
+
+void CommandPetAttackTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    Pet* pet = player->GetPet();
+    if (!pet || !pet->IsAlive() || !pet->IsValidAttackTarget(target))
+        return;
+
+    if (pet->GetVictim() != target)
+        pet->Attack(target, true);
+
+    if (CharmInfo* charmInfo = pet->GetCharmInfo())
+    {
+        charmInfo->SetIsCommandAttack(true);
+        charmInfo->SetIsAtStay(false);
+        charmInfo->SetIsCommandFollow(false);
+        charmInfo->SetCommandState(COMMAND_ATTACK);
+    }
+}
 
 void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted, std::string const& failureReason)
 {
@@ -188,9 +254,29 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    Item* itemTarget = nullptr;
+    if (context.spellId == 11202 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        if (mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            itemTarget = mainHand;
+        else
+        {
+            Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+            if (offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+                itemTarget = offHand;
+        }
+
+        if (!itemTarget)
+        {
+            failureReason = "weapon_already_poisoned";
+            return false;
+        }
+    }
+
     Unit* target = ResolveTarget(player, context);
 
-    if (!target || !target->IsAlive())
+    if ((!target || !target->IsAlive()) && !itemTarget)
     {
         failureReason = "target_invalid_or_dead";
         return false;
@@ -214,8 +300,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Keep explicit enemy selection/victim linkage for virtual sessions so
         // cast checks and AI follow-up consistently reference the same hostile.
         player->SetSelection(target->GetGUID());
-        if (player->GetVictim() != target)
+        bool const preserveStealthForOpener = player->HasStealthAura();
+        if (preserveStealthForOpener)
+            player->AttackStop();
+        else if (player->GetVictim() != target)
             player->Attack(target, false);
+        CommandPetAttackTarget(player, target);
 
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
@@ -237,21 +327,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    if (!player->IsWithinLOSInMap(target))
+    if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
         failureReason = "no_los";
         return false;
     }
 
     float const maxRange = spellInfo->GetMaxRange(false);
-    if (maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
+    if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
         failureReason = "out_of_range";
         return false;
     }
 
     float const minRange = spellInfo->GetMinRange(false);
-    if (minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
+    if (!itemTarget && minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
     {
         failureReason = "too_close";
         return false;
@@ -280,6 +370,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
         castResult = player->CastSpell(CastSpellTargetArg(dest), context.spellId);
     }
+    else if (itemTarget)
+        castResult = player->CastSpell(CastSpellTargetArg(itemTarget), context.spellId);
     else
         castResult = player->CastSpell(target, context.spellId, false);
 
@@ -383,8 +475,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // short tactical cooldowns on selected PvP debuffs.
     if (context.spellId == 112826)
         player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(15));
-    if (context.spellId == 3034 || context.spellId == 1714)
-        player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(12));
+    if (context.spellId == 3034 || context.spellId == 1714 || context.spellId == 11713)
+    {
+        if (uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId))
+            player->GetSpellHistory()->AddCooldown(resolvedSpellId, 0, std::chrono::seconds(12));
+    }
+
+    if ((context.spellId == 1714 || context.spellId == 11713) && target)
+        playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
 
     return true;
 }
@@ -420,6 +518,33 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
 
 namespace playerbot
 {
+bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId)
+{
+    if (!player || !target || !spellId)
+        return false;
+
+    WarlockCurseCooldownKey const key{ player->GetGUID(), target->GetGUID(), spellId };
+    auto const itr = g_WarlockCurseTargetCooldowns.find(key);
+    if (itr == g_WarlockCurseTargetCooldowns.end())
+        return false;
+
+    if (GameTime::Now() >= itr->second)
+    {
+        g_WarlockCurseTargetCooldowns.erase(itr);
+        return false;
+    }
+
+    return true;
+}
+
+void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown)
+{
+    if (!player || !target || !spellId || cooldown <= std::chrono::seconds::zero())
+        return;
+
+    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)

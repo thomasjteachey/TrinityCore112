@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpCore.h"
+#include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 
 #include "Battleground.h"
@@ -28,7 +29,9 @@
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "Pet.h"
 #include "SpellAuras.h"
+#include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
 
@@ -234,7 +237,24 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
 
 bool IsSpellReady(Player const* player, uint32 spellId)
 {
-    return player && spellId && player->HasSpell(spellId) && !player->GetSpellHistory()->HasCooldown(spellId);
+    if (!player || !spellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!baseSpellInfo)
+        return false;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+    {
+        if (player->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+    }
+
+    if (!resolvedSpellId)
+        return false;
+
+    return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
 bool HasHostileTarget(Player const* player, Unit const* target)
@@ -282,6 +302,42 @@ bool IsMeleeClass(Unit const* unit)
         case CLASS_SHAMAN:
         case CLASS_PALADIN:
             return IsUsingTwoHander(player);
+        default:
+            return false;
+    }
+}
+
+bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
+{
+    if (!unit || !baseSpellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return false;
+
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (unit->HasAura(chainSpellId))
+            return true;
+
+    return false;
+}
+
+bool IsCasterClass(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    switch (player->GetClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+        case CLASS_DRUID:
+        case CLASS_SHAMAN:
+        case CLASS_PALADIN:
+            return true;
         default:
             return false;
     }
@@ -1045,6 +1101,10 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!HasHostileTarget(player, activeTarget))
         return decision;
 
+    Pet const* pet = player->GetPet();
+    bool const hasLivingPet = pet && pet->IsAlive();
+    bool const hasDeadPet = pet && !pet->IsAlive();
+
     Unit const* enemyOnTopTarget = SelectNearbyEnemyTarget(player, activeTarget, 5.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 20.0f, activeTarget);
     Unit const* closeMeleeThreat = SelectNearbyMeleeTarget(player, enemyOnTopTarget, 5.0f);
@@ -1064,9 +1124,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!targetClose && IsSpellReady(player, 5116))
         return { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
-    if (enemyOnTop && IsSpellReady(player, 2974) && !enemyOnTopTarget->HasAura(2974))
-        return { "hunter wing clip", "close-range fallback snare", 2974, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget->GetGUID() };
-    if (enemyOnTop && enemyOnTopTarget->HasAura(2974) && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
+    if (enemyOnTop && IsSpellReady(player, 14268) && !enemyOnTopTarget->HasAura(14268))
+        return { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget->GetGUID() };
+    if (enemyOnTop && enemyOnTopTarget->HasAura(14268) && IsSpellReady(player, 5384) && IsSpellReady(player, 1499))
         return { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, enemyOnTopTarget->GetGUID() };
     if (enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503))
         return { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget->GetGUID() };
@@ -1087,7 +1147,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         return { "hunter viper sting", "drain mana on mana users", 3034, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget->GetGUID() };
     if (!player->HasAura(19506) && IsSpellReady(player, 19506))
         return { "hunter trueshot aura", "maintain personal buff aura", 19506, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->IsInCombat() && IsSpellReady(player, 982))
+    if (!hasLivingPet && !hasDeadPet && IsSpellReady(player, 883))
+        return { "hunter call pet", "summon active stable pet when no pet is present", 883, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (hasDeadPet && !player->IsInCombat() && IsSpellReady(player, 982))
         return { "hunter revive pet", "recover pet out of combat", 982, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
@@ -1168,8 +1230,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             if (Unit const* casterAlly = SelectFriendlyHealthTarget(player, 40.0f, 100.0f))
                 if (casterAlly->GetPowerType() == POWER_MANA)
                     return { "priest power infusion", "boost nearby caster throughput in combat", 10060, casterAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, casterAlly->GetGUID() };
-        if (!player->IsInCombat() && !player->HasAura(1243) && IsSpellReady(player, 1243))
-            return { "priest power word fortitude", "maintain fortitude out of combat", 1243, playerbot::PvpClassSpellContext::TargetMode::Self };
+        if (!player->IsInCombat() && !player->HasAura(10938) && IsSpellReady(player, 10938))
+            return { "priest power word fortitude", "maintain fortitude out of combat", 10938, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !player->HasAura(976) && IsSpellReady(player, 976))
             return { "priest shadow protection", "maintain shadow protection out of combat", 976, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !player->HasAura(588) && IsSpellReady(player, 588))
@@ -1291,22 +1353,31 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     if (!HasHostileTarget(player, target))
         return decision;
 
+    Pet const* pet = player->GetPet();
+    bool const needsPetSummon = !pet || !pet->IsAlive();
+
     bool const closePressure = player->IsWithinDistInMap(target, 8.0f);
-    if (!player->IsInCombat() && IsSpellReady(player, 697))
+    if (player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708))
+        return { "warlock fel domination", "prepare instant pet recovery before voidwalker summon", 18708, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->IsInCombat() && needsPetSummon && IsSpellReady(player, 697))
         return { "warlock summon voidwalker", "maintain voidwalker pet while out of combat", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (player->IsInCombat() && IsSpellReady(player, 697))
+    if (player->IsInCombat() && needsPetSummon && IsSpellReady(player, 697))
         return { "warlock summon voidwalker", "recover voidwalker in combat when absent", 697, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->HealthBelowPct(45) && IsSpellReady(player, 7812))
         return { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->HasAura(19028) && IsSpellReady(player, 19028))
+    if (!player->HasAura(25228) && IsSpellReady(player, 19028))
         return { "warlock soul link", "maintain soul link when pet is available", 19028, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (IsSpellReady(player, 5782))
         if (Unit const* fearTarget = SelectWarlockFearTarget(player, 20.0f))
             return { "warlock fear", "prioritize fear control on paladin/priest targets in range", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget->GetGUID() };
-    if (target->GetPowerType() == POWER_MANA && !target->HasAura(1714) && IsSpellReady(player, 1714))
+    if (target->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(target, 1714) &&
+        !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(172) && IsSpellReady(player, 172))
-        return { "warlock corruption", "maintain corruption dot", 172, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 980) && !HasAuraFromSpellChain(target, 1714) &&
+        !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713))
+        return { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!target->HasAura(25311) && IsSpellReady(player, 25311))
+        return { "warlock corruption", "maintain corruption dot", 25311, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if ((target->HealthBelowPct(20) || (closePressure && IsMeleeClass(target))) && IsSpellReady(player, 6789))
         return { "warlock death coil", "peel melee or finish low enemy target", 6789, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19647))
@@ -1357,12 +1428,12 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         return { "warrior intercept", "close gap to target while in combat", 20252, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
     if (activeTarget->HealthBelowPct(20) && IsSpellReady(player, 5308))
         return { "warrior execute", "finisher at low enemy health", 5308, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
-    if (!player->HasAura(6673) && IsSpellReady(player, 6673))
+    if (!player->HasAura(25289) && IsSpellReady(player, 6673))
         return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (player->IsWithinMeleeRange(activeTarget))
     {
-        if ((!activeTarget->HasAura(1715) || (activeTarget->GetAura(1715) && activeTarget->GetAura(1715)->GetDuration() < 2000)) && IsSpellReady(player, 1715))
-            return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+        if ((!activeTarget->HasAura(7373) || (activeTarget->GetAura(7373) && activeTarget->GetAura(7373)->GetDuration() < 2000)) && IsSpellReady(player, 7373))
+            return { "warrior hamstring", "maintain stickiness snare", 7373, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
         if (profileSelection.profile == ClassicClassProfile::PrimaryClassic && !activeTarget->HasAura(12294) && IsSpellReady(player, 12294))
             return { "warrior mortal strike", "arms-like burst pressure", 12294, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
         if (activeTarget->GetClass() == CLASS_ROGUE && !activeTarget->HasAura(772) && IsSpellReady(player, 772))
@@ -1379,6 +1450,16 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
     SpellDecision decision;
     if (!HasHostileTarget(player, target))
         return decision;
+
+    if (!player->IsInCombat() && IsSpellReady(player, 11202))
+    {
+        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+        bool const mainHandMissingPoison = mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        bool const offHandMissingPoison = offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+        if (mainHandMissingPoison || offHandMissingPoison)
+            return { "rogue crippling poison", "apply crippling poison to unpoisoned weapons out of combat", 11202, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
 
     if (!player->IsInCombat() && !player->HasAura(1784) && IsSpellReady(player, 1784))
         return { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self };
@@ -1397,6 +1478,8 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
         return { "rogue eviscerate", "combo finisher pressure", 2098, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554))
         return { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 1833) && player->HasStealthAura())
+        return { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 16511))
         return { "rogue hemorrhage", "default subtlety combo point builder", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
@@ -1744,6 +1827,21 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.actionName = decision.actionName;
     context.reason = decision.reason;
     context.spellId = decision.spellId;
+    if (context.spellId)
+    {
+        if (SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(context.spellId))
+        {
+            uint32 resolvedSpellId = 0;
+            for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+            {
+                if (player->HasSpell(chainSpellId))
+                    resolvedSpellId = chainSpellId;
+            }
+
+            if (resolvedSpellId)
+                context.spellId = resolvedSpellId;
+        }
+    }
     context.targetMode = decision.targetMode;
     context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
     context.itemEntry = decision.itemEntry;
