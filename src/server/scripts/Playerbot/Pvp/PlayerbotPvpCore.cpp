@@ -685,6 +685,37 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
     return bestSecondary ? bestSecondary : fallbackPrimary;
 }
 
+Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (!(candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST))
+            continue;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 Unit const* SelectCombatTarget(Player const* player)
 {
     if (!player)
@@ -819,7 +850,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         return { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220))
         return { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (!player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008))
+    if (IsSpellReady(player, 10054) && !player->HasItemCount(8008))
         return { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
@@ -871,8 +902,9 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         return { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->HasAura(19028) && IsSpellReady(player, 19028))
         return { "warlock soul link", "maintain soul link when pet is available", 19028, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if ((target->GetClass() == CLASS_PALADIN || target->GetClass() == CLASS_PRIEST) && !target->HasAura(5782) && IsSpellReady(player, 5782))
-        return { "warlock fear", "prioritize fear control on healer targets", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 5782))
+        if (Unit const* fearTarget = SelectWarlockFearTarget(player, 20.0f))
+            return { "warlock fear", "prioritize fear control on paladin/priest targets in range", 5782, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget->GetGUID() };
     if (target->GetPowerType() == POWER_MANA && !target->HasAura(1714) && IsSpellReady(player, 1714))
         return { "warlock curse of tongues", "slow enemy casting throughput", 1714, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!target->HasAura(172) && IsSpellReady(player, 172))
