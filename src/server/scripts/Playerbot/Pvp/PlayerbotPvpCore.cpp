@@ -286,6 +286,140 @@ bool IsMeleeClass(Unit const* unit)
     }
 }
 
+bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
+
+uint8 GetArmorPriority(Unit const* unit)
+{
+    if (!unit)
+        return 4;
+
+    switch (unit->GetClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+            return 0; // Cloth
+        case CLASS_ROGUE:
+        case CLASS_DRUID:
+            return 1; // Leather
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return 2; // Mail
+        case CLASS_WARRIOR:
+        case CLASS_PALADIN:
+        case CLASS_DEATH_KNIGHT:
+            return 3; // Plate
+        default:
+            return 4;
+    }
+}
+
+Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        return HasHostileTarget(player, candidate) &&
+            !IsTargetInvalidByImmunity(player, candidate) &&
+            player->IsWithinLOSInMap(candidate) &&
+            player->IsWithinDistInMap(candidate, maxDistance);
+    };
+
+    Unit const* best = nullptr;
+    uint8 bestArmorPriority = std::numeric_limits<uint8>::max();
+    float bestDistance = std::numeric_limits<float>::max();
+
+    if (isCandidateUsable(preferredTarget))
+    {
+        best = preferredTarget;
+        bestArmorPriority = GetArmorPriority(preferredTarget);
+        bestDistance = player->GetDistance(preferredTarget);
+    }
+
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        uint8 const armorPriority = GetArmorPriority(candidate);
+        float const distance = player->GetDistance(candidate);
+        if (armorPriority < bestArmorPriority || (armorPriority == bestArmorPriority && distance < bestDistance))
+        {
+            best = candidate;
+            bestArmorPriority = armorPriority;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
+Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        return HasHostileTarget(player, candidate) &&
+            !IsTargetInvalidByImmunity(player, candidate) &&
+            IsMeleeClass(candidate) &&
+            player->IsWithinLOSInMap(candidate) &&
+            player->IsWithinDistInMap(candidate, maxDistance);
+    };
+
+    if (isCandidateUsable(preferredTarget))
+        return preferredTarget;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
+uint32 CountNearbyUnsNaredEnemies(Player const* player, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return 0;
+
+    uint32 count = 0;
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (candidate->HasAura(1715))
+            continue;
+
+        ++count;
+    }
+
+    return count;
+}
+
 bool HasBreakableCrowdControl(Unit const* unit)
 {
     // Approximation list for common "break on damage" PvP CCs.
@@ -763,30 +897,49 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     if (!HasHostileTarget(player, target))
         return decision;
 
+    Unit const* activeTarget = SelectWarriorPriorityTarget(player, target, 25.0f);
+    if (!HasHostileTarget(player, activeTarget))
+        activeTarget = target;
+
+    bool const inDefensiveStance = player->HasAura(71);
+    Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
+    Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
+    bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
+
     if ((player->HasAuraWithMechanic(1 << MECHANIC_FEAR) || player->HasAuraWithMechanic(1 << MECHANIC_SAPPED)) && player->HasAura(2458) && IsSpellReady(player, 18499))
         return { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if ((!target->HasAura(1715) || (target->GetAura(1715) && target->GetAura(1715)->GetDuration() < 2000)) && IsSpellReady(player, 1715))
-        return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!player->IsWithinMeleeRange(target) && !player->IsInCombat() && IsSpellReady(player, 100))
-        return { "warrior charge", "close gap to target from out of combat", 100, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!player->IsWithinMeleeRange(target) && player->IsInCombat() && IsSpellReady(player, 20252))
-        return { "warrior intercept", "close gap to target while in combat", 20252, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (target->HealthBelowPct(20) && IsSpellReady(player, 5308))
-        return { "warrior execute", "finisher at low enemy health", 5308, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 6552))
-        return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsMeleeClass(target) && IsSpellReady(player, 676))
-        return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsMeleeClass(target) && IsSpellReady(player, 71))
+    if (inDefensiveStance && (!IsSpellReady(player, 676) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458))
+        return { "warrior berserker stance", "leave defensive stance when disarm is unavailable or no melee threat is nearby", 2458, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if ((IsSpellReady(player, 6552) || IsSpellReady(player, 676) || IsSpellReady(player, 20252) || IsSpellReady(player, 1680) || IsSpellReady(player, 12294)) &&
+        player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687))
+        return { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (HasHostileTarget(player, nearbyCastingTarget) && IsSpellReady(player, 6552))
+        return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget->GetGUID() };
+    if (CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323))
+        return { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (hasNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 71))
         return { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (hasNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 676))
+        return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget->GetGUID() };
+    if (!player->IsWithinMeleeRange(activeTarget) && !player->IsInCombat() && IsSpellReady(player, 100))
+        return { "warrior charge", "close gap to target from out of combat", 100, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+    if (!player->IsWithinMeleeRange(activeTarget) && player->IsInCombat() && IsSpellReady(player, 20252))
+        return { "warrior intercept", "close gap to target while in combat", 20252, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+    if (activeTarget->HealthBelowPct(20) && IsSpellReady(player, 5308))
+        return { "warrior execute", "finisher at low enemy health", 5308, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
     if (!player->HasAura(6673) && IsSpellReady(player, 6673))
         return { "warrior battle shout", "maintain attack power buff", 6673, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (target->GetClass() == CLASS_ROGUE && !target->HasAura(772) && IsSpellReady(player, 772))
-        return { "warrior rend", "apply anti-stealth bleed pressure on rogues", 772, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (profileSelection.profile == ClassicClassProfile::PrimaryClassic && IsSpellReady(player, 12294))
-        return { "warrior mortal strike", "arms-like burst pressure", 12294, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsSpellReady(player, 1680))
-        return { "warrior whirlwind", "fallback aoe melee pressure", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (player->IsWithinMeleeRange(activeTarget))
+    {
+        if ((!activeTarget->HasAura(1715) || (activeTarget->GetAura(1715) && activeTarget->GetAura(1715)->GetDuration() < 2000)) && IsSpellReady(player, 1715))
+            return { "warrior hamstring", "maintain stickiness snare", 1715, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+        if (profileSelection.profile == ClassicClassProfile::PrimaryClassic && !activeTarget->HasAura(12294) && IsSpellReady(player, 12294))
+            return { "warrior mortal strike", "arms-like burst pressure", 12294, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+        if (activeTarget->GetClass() == CLASS_ROGUE && !activeTarget->HasAura(772) && IsSpellReady(player, 772))
+            return { "warrior rend", "apply anti-stealth bleed pressure on rogues", 772, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+        if (IsSpellReady(player, 1680))
+            return { "warrior whirlwind", "fallback aoe melee pressure", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() };
+    }
 
     return decision;
 }
