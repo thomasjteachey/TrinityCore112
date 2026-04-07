@@ -175,6 +175,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
             return false;
 
+    // Cast-time spells like Frostbolt fail while moving. Since playerbots do
+    // not have client-side stop-cast behavior, explicitly stop movement before
+    // attempting non-instant casts.
+    if (spellInfo->CalcCastTime() > 0)
+        player->StopMoving();
+
+    SpellCastResult castResult = SPELL_FAILED_ERROR;
+
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
@@ -182,10 +190,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (context.spellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
-        player->CastSpell(CastSpellTargetArg(dest), context.spellId);
+        castResult = player->CastSpell(CastSpellTargetArg(dest), context.spellId);
     }
     else
-        player->CastSpell(target, context.spellId, false);
+        castResult = player->CastSpell(target, context.spellId, false);
+
+    if (castResult != SPELL_CAST_OK)
+        return false;
 
     bool hasTeleportEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
