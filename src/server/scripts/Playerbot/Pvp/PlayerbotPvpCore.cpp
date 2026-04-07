@@ -814,7 +814,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, 8.0f);
     float const manaPct = player->GetPowerPct(POWER_MANA);
 
-    if (player->HealthBelowPct(20) && IsSpellReady(player, 11958))
+    if (player->HealthBelowPct(25) && IsSpellReady(player, 11958))
         return { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (manaPct < 25.0f && IsSpellReady(player, 12051))
         return { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self };
@@ -838,7 +838,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             return { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget->GetGUID() };
     if (!player->HasAura(11426) && IsSpellReady(player, 11426))
         return { "mage ice barrier", "maintain defensive absorb shield", 11426, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (hasHostileTarget && target->HealthBelowPct(10) && IsSpellReady(player, 2136))
+    if (hasHostileTarget && target->HealthBelowPct(20) && IsSpellReady(player, 2136))
         return { "mage fire blast", "instant execute pressure on low health target", 2136, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 112826) && !AnyEnemyPolymorphed(player, 40.0f))
         if (Unit const* polymorphTarget = SelectPolymorphTarget(player, 30.0f))
@@ -949,7 +949,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget->GetGUID() };
     if (CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323))
         return { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (hasNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 71))
+    if (hasNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200)
         return { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (hasNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 676))
         return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget->GetGUID() };
