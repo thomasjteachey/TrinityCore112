@@ -61,6 +61,21 @@ bool IsWarsongGulch(Player const* player)
     return battleground && battleground->GetMapId() == 489;
 }
 
+bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+
+    Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+    Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+
+    destination = (botTeam == TEAM_ALLIANCE) ? hordeFlagStand : allianceFlagStand;
+    return true;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
@@ -881,6 +896,14 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (!battleground || !player)
         return false;
 
+    // WSG needs deterministic cross-map intent; base anchors can be missing or
+    // locally-biased in sparse managed-bot matches, which leaves bots stalling.
+    if (TryGetWarsongEnemyBasePosition(player, destination))
+    {
+        ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        return true;
+    }
+
     Position const* allianceStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_ALLIANCE));
     Position const* hordeStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_HORDE));
 
@@ -1052,10 +1075,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         return true;
     }
 
-    if (IsWarsongGulch(player))
-        return MoveToClosestBattlegroundGraveyard(player);
-
-    if (EngageNearestEnemyPlayer(player, 65.0f))
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 65.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
     if (Battleground* battleground = player->GetBattleground())
@@ -1071,6 +1092,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return true;
         }
     }
+
+    if (IsWarsongGulch(player))
+        return MoveToClosestBattlegroundGraveyard(player);
 
     EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
     return true;
@@ -1120,14 +1144,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!CanIssueBotMovement(player))
         return false;
 
-    if (IsWarsongGulch(player))
-        return MoveToClosestBattlegroundGraveyard(player);
-
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
         return true;
 
-    if (EngageNearestEnemyPlayer(player, 80.0f))
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 80.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
@@ -1187,6 +1209,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     bool const fallbackEngage = EngageNearestEnemyPlayer(player, 55.0f);
     if (!fallbackEngage)
     {
+        if (IsWarsongGulch(player))
+            return MoveToClosestBattlegroundGraveyard(player);
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP movement skipped: bot={} reason=no-objective-movement-and-no-fallback-target.",
             player->GetGUID().ToString());
@@ -1200,11 +1225,12 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 60.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
+        return true;
+
     if (IsWarsongGulch(player))
         return MoveToClosestBattlegroundGraveyard(player);
-
-    if (EngageNearestEnemyPlayer(player, 60.0f))
-        return true;
 
     return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
 }
