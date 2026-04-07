@@ -156,6 +156,7 @@ struct PvpClassSpellContext
     TargetMode targetMode = TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;
     ObjectGuid allyTargetGuid = ObjectGuid::Empty;
+    uint32 itemEntry = 0;
 };
 
 struct BattlegroundLifecycleContext
