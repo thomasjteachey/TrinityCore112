@@ -3707,6 +3707,40 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
         TellMasterNoFacing(out);
     }
 
+    bool hasTeleportEffect = false;
+    for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
+    {
+        if (spellInfo->Effects[effectIndex].Effect == SPELL_EFFECT_TELEPORT_UNITS)
+        {
+            hasTeleportEffect = true;
+            break;
+        }
+    }
+
+    // Playerbots do not have a real client to ACK spell teleports (e.g. Blink).
+    // When the server still marks a near-teleport pending, complete the synthetic
+    // ACK immediately so other actors (charge/intercept callers) see the new spot.
+    if (!IsRealPlayer() && hasTeleportEffect && bot->IsBeingTeleportedNear())
+    {
+        if (HasStrategy("debug spell", BOT_STATE_NON_COMBAT))
+        {
+            std::ostringstream out;
+            out << "Teleport ACK pre: map=" << bot->GetMapId() << " x=" << bot->GetPositionX() << " y="
+                << bot->GetPositionY() << " z=" << bot->GetPositionZ();
+            TellMasterNoFacing(out);
+        }
+
+        HandleTeleportAck();
+
+        if (HasStrategy("debug spell", BOT_STATE_NON_COMBAT))
+        {
+            std::ostringstream out;
+            out << "Teleport ACK post: map=" << bot->GetMapId() << " x=" << bot->GetPositionX() << " y="
+                << bot->GetPositionY() << " z=" << bot->GetPositionZ();
+            TellMasterNoFacing(out);
+        }
+    }
+
     return true;
 }
 
