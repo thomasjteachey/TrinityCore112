@@ -123,6 +123,50 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
+void HoldInstantCastFacingForVisual(Player* player, Unit* target, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !spellInfo)
+        return;
+
+    if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
+        return;
+
+    ObjectGuid const casterGuid = player->GetGUID();
+    ObjectGuid const targetGuid = target->GetGUID();
+    float const restoreOrientation = player->GetOrientation();
+
+    auto scheduleFacingRefresh = [player, casterGuid, targetGuid](std::chrono::milliseconds offset)
+    {
+        player->m_Events.AddEventAtOffset([casterGuid, targetGuid]()
+        {
+            Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
+            if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+                return;
+
+            Unit* facingTarget = ObjectAccessor::GetUnit(*caster, targetGuid);
+            if (!facingTarget || !facingTarget->IsInWorld() || !facingTarget->IsAlive())
+                return;
+
+            caster->SetFacingToObject(facingTarget);
+            caster->SetInFront(facingTarget);
+        }, offset);
+    };
+
+    scheduleFacingRefresh(100ms);
+    scheduleFacingRefresh(200ms);
+    scheduleFacingRefresh(300ms);
+    scheduleFacingRefresh(400ms);
+
+    player->m_Events.AddEventAtOffset([casterGuid, restoreOrientation]()
+    {
+        Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
+        if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+            return;
+
+        caster->SetFacingTo(restoreOrientation);
+    }, 500ms);
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -253,6 +297,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
         return false;
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        HoldInstantCastFacingForVisual(player, target, spellInfo);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
