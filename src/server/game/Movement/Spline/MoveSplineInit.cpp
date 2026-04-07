@@ -264,19 +264,33 @@ namespace Movement
                     if (WorldSession const* session = moverPlayer->GetSession())
                         virtualSessionControlled = session->IsVirtualSession();
                 bool const navmeshAvailable = path.HasNavigationData();
+                bool const usesUnsafePathMode = navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT));
 
                 if (!(pathType & PATHFIND_NOPATH))
                 {
-                    if (!((playerControlled && !virtualSessionControlled) && ((pathType & PATHFIND_INCOMPLETE) ||
-                        (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))))
+                    bool const strictPlayerRejectPath = playerControlled && !virtualSessionControlled &&
+                        ((pathType & PATHFIND_INCOMPLETE) || usesUnsafePathMode);
+                    bool const virtualPlayerRejectPath = virtualSessionControlled && usesUnsafePathMode;
+
+                    if (!(strictPlayerRejectPath || virtualPlayerRejectPath))
                     {
                         MovebyPath(path.GetPath());
                         return;
                     }
                 }
 
+                if (virtualSessionControlled && ((pathType & PATHFIND_NOPATH) || usesUnsafePathMode))
+                {
+                    args.path_Idx_offset = 0;
+                    args.path.resize(2);
+                    TransportPathTransform transform(unit, args.TransformForTransport);
+                    Vector3 stay(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
+                    args.path[1] = transform(stay);
+                    return;
+                }
+
                 if ((playerControlled && !virtualSessionControlled) && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
-                    (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT)))))
+                    usesUnsafePathMode))
                 {
                     args.path_Idx_offset = 0;
                     args.path.resize(2);
