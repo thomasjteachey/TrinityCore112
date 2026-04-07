@@ -143,11 +143,19 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
     if (!destinationChanged && !canReissueByTime)
+    {
+        std::ostringstream throttledDetail;
+        throttledDetail << "movepoint-skip reason=throttle"
+                        << " curr=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
+                        << " dest=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
+                        << " lastIssuedMsAgo=" << (nowMs - state.lastIssueMs);
+        EmitBattlegroundGmDebug(player, throttledDetail.str(), 2000);
         return false;
+    }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == IDLE_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
         std::ostringstream overrideDetail;
         overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
@@ -155,7 +163,16 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         motionMaster->Clear();
     }
 
-    motionMaster->MovePoint(0, destination);
+    std::ostringstream moveDetail;
+    moveDetail << "movepoint-issue"
+               << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
+               << " to=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
+               << " movementType=" << static_cast<uint32>(currentMovement)
+               << " forceDirect=1";
+    EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
+
+    // Use direct point movement for battleground objective travel diagnostics.
+    motionMaster->MovePoint(0, destination, false);
     state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
@@ -963,8 +980,11 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         Position destination;
         if (TryGetObjectivePosition(battleground, player, destination))
         {
-            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+            bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
+            if (!withinObjectiveRange)
                 IssueMovePointThrottled(player, destination);
+            else
+                EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
             return true;
         }
     }
@@ -1054,8 +1074,11 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             Position destination;
             if (TryGetObjectivePosition(battleground, player, destination))
             {
-                if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
+                if (!withinObjectiveRange)
                     IssueMovePointThrottled(player, destination);
+                else
+                    EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
                 return true;
             }
 
