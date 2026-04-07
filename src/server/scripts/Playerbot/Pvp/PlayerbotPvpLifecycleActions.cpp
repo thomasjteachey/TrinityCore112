@@ -124,7 +124,7 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     }
 }
 
-bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 1200)
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
 {
     if (!player)
         return false;
@@ -168,11 +168,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
                << " to=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
                << " movementType=" << static_cast<uint32>(currentMovement)
-               << " forceDirect=1";
+               << " generatePath=1";
     EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
 
-    // Use direct point movement for battleground objective travel diagnostics.
-    motionMaster->MovePoint(0, destination, false);
+    // Use pathfinding for battleground objective travel to avoid wall clipping.
+    motionMaster->MovePoint(0, destination, true);
     state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
@@ -796,6 +796,19 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
     return DriveCombatPositioning(player, target, profile);
 }
 
+void ApplyDeterministicObjectiveOffset(Battleground const* battleground, Player const* player, Position& destination)
+{
+    if (!battleground || !player)
+        return;
+
+    // Keep each bot slightly spread out, but stable across updates, to avoid
+    // objective destination churn that causes oscillating movement.
+    uint64 const seed = player->GetGUID().GetRawValue() ^ (uint64(battleground->GetMapId()) << 32) ^ battleground->GetInstanceID();
+    float const angle = float(seed % 6283) / 1000.0f;
+    float const radius = 2.0f + float((seed / 6283) % 600) / 100.0f; // [2.0, 8.0)
+    destination.RelocateOffset(Position(std::cos(angle) * radius, std::sin(angle) * radius, 0.0f, 0.0f));
+}
+
 bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination)
 {
     if (!battleground || !player)
@@ -809,7 +822,7 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
         float const distanceToAllianceStart = player->GetDistance(allianceStart->GetPositionX(), allianceStart->GetPositionY(), allianceStart->GetPositionZ());
         float const distanceToHordeStart = player->GetDistance(hordeStart->GetPositionX(), hordeStart->GetPositionY(), hordeStart->GetPositionZ());
         destination = (distanceToAllianceStart > distanceToHordeStart) ? Position(*allianceStart) : Position(*hordeStart);
-        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        ApplyDeterministicObjectiveOffset(battleground, player, destination);
         return true;
     }
 
@@ -819,7 +832,7 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
     {
         destination = Position(*enemyStart);
-        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        ApplyDeterministicObjectiveOffset(battleground, player, destination);
         return true;
     }
 
@@ -838,7 +851,7 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
         else
             destination = hordeFlagStand;
 
-        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        ApplyDeterministicObjectiveOffset(battleground, player, destination);
         return true;
     }
 
