@@ -207,7 +207,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     // Emit a normal jump movement opcode so observers see the same jump flow as
     // a player-generated jump packet instead of knockback/spline movement.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
-    float constexpr normalJumpSpeedZ = 7.95555f;
+    float constexpr normalJumpSpeedZ = 8.2f;
     float constexpr backwardAngle = 3.14159265f;
     float const jumpDirection = player->GetOrientation() + backwardAngle;
 
@@ -233,7 +233,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
-        if (caster->IsNonMeleeSpellCast(false, false, true))
+        if (caster->GetCurrentSpell(CURRENT_GENERIC_SPELL) || caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
             return;
 
         caster->SetFacingTo(resumeOrientation);
@@ -379,7 +379,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
     if (spellInfo->CalcCastTime() > 0)
+    {
         player->StopMoving();
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        {
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+        }
+    }
 
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
