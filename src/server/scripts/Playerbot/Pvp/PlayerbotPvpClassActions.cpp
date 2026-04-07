@@ -20,6 +20,7 @@
 #include "GameTime.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
+#include "MotionMaster.h"
 #include "Player.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
@@ -136,10 +137,11 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Use a short backward jump (relative to temporary "face target" orientation)
-    // so the bot keeps retreat momentum while visibly turning to land an instant.
+    // Use MotionMaster jump (not Unit::JumpTo knockback) so movement looks like a
+    // regular player jump arc while preserving retreat momentum.
     float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
-    player->JumpTo(jumpSpeedXY, 4.5f, false);
+    float constexpr backwardAngle = 3.14159265f;
+    player->GetMotionMaster()->MoveJumpTo(backwardAngle, jumpSpeedXY, 4.5f);
 
     player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
