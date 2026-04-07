@@ -457,10 +457,10 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         return { "mage ice barrier", "maintain defensive absorb shield", 11426, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (target->HealthBelowPct(10) && IsSpellReady(player, 2136))
         return { "mage fire blast", "instant execute pressure on low health target", 2136, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (!target->HasAura(118) && !closePressure && target->GetClass() != CLASS_DRUID && IsSpellReady(player, 118))
-        return { "mage polymorph", "safe ranged crowd control", 118, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsSpellReady(player, 116))
-        return { "mage frostbolt", "default ranged pressure", 116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (!target->HasAura(112826) && !closePressure && target->GetClass() != CLASS_DRUID && IsSpellReady(player, 112826))
+        return { "mage polymorph", "safe ranged crowd control", 112826, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+    if (IsSpellReady(player, 25304))
+        return { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
     return decision;
 }
