@@ -129,6 +129,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
             return false;
+
+        // Virtual playerbot sessions do not naturally rotate their character the
+        // same way a real client does while selecting/casting. Make sure the bot
+        // is facing its hostile target before casting so facing-sensitive spells
+        // do not fail in duels and other PvP contexts.
+        player->SetFacingToObject(target);
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
