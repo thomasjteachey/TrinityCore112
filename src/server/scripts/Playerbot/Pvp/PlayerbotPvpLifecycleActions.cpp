@@ -120,8 +120,7 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
         if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
             continue;
 
-        if (WorldSession* observerSession = observer->GetSession())
-            ChatHandler(observerSession).PSendSysMessage("%s", message.c_str());
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
     }
 }
 
@@ -903,7 +902,6 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         player->RemoveAurasDueToSpell(SPELL_PREPARATION);
         player->RemoveAurasDueToSpell(SPELL_ARENA_PREPARATION);
         player->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
-        EmitBattlegroundGmDebug(player, "removed lingering preparation state in STATUS_IN_PROGRESS");
     }
 
     // Keep managed bots moving even when tactical decision hooks are disabled
@@ -921,10 +919,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
 
     if (EngageNearestEnemyPlayer(player, 65.0f))
-    {
-        EmitBattlegroundGmDebug(player, "engaging nearest enemy (65y)");
         return true;
-    }
 
     if (Battleground* battleground = player->GetBattleground())
     {
@@ -932,14 +927,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         if (TryGetObjectivePosition(battleground, player, destination))
         {
             if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-            {
                 player->GetMotionMaster()->MovePoint(0, destination);
-                std::ostringstream movementDetail;
-                movementDetail << "issued MovePoint to objective x=" << destination.GetPositionX()
-                               << " y=" << destination.GetPositionY()
-                               << " z=" << destination.GetPositionZ();
-                EmitBattlegroundGmDebug(player, movementDetail.str());
-            }
             return true;
         }
     }

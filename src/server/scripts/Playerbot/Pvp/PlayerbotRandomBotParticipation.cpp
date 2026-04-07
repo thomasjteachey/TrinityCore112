@@ -24,10 +24,12 @@
 #include "AccountMgr.h"
 #include "Configuration/Config.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
+#include "Map.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
@@ -44,6 +46,7 @@
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -66,6 +69,44 @@ std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
+
+void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
+{
+    if (!player || !player->InBattleground())
+        return;
+
+    static std::unordered_map<uint64, uint32> nextEmitMsByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& nextEmitMs = nextEmitMsByGuid[botGuid];
+    if (nowMs < nextEmitMs)
+        return;
+
+    nextEmitMs = nowMs + throttleMs;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return;
+
+    std::ostringstream os;
+    os << "[PBDBG lifecycle] bot=" << player->GetName()
+       << " guid=" << player->GetGUID().ToString()
+       << " bgId=" << player->GetBattlegroundId()
+       << " detail=" << detail;
+    std::string const message = os.str();
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (observer->GetBattlegroundId() != player->GetBattlegroundId())
+            continue;
+
+        const_cast<Player*>(player)->Whisper(message, LANG_UNIVERSAL, observer);
+    }
+}
 
 enum class LifecycleObservationReason : uint8
 {
@@ -205,18 +246,21 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!IsLifecycleGateEnabled())
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        EmitLifecycleGmDebug(player, "can-process=no gate-disabled");
         return false;
     }
 
     if (!playerbot::IsManagedRandomBot(player))
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        EmitLifecycleGmDebug(player, "can-process=no unmanaged-bot");
         return false;
     }
 
     if (!player->IsInWorld())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
+        EmitLifecycleGmDebug(player, "can-process=no not-in-world");
         return false;
     }
 
@@ -246,6 +290,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (nextProcessTime > now)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
+        EmitLifecycleGmDebug(player, "can-process=no cadence-throttled");
         return false;
     }
 
