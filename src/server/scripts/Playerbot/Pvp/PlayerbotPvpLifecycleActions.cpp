@@ -837,6 +837,26 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (HandleBattlegroundDeathState(player))
         return true;
 
+    // Keep managed bots moving even when tactical decision hooks are disabled
+    // or when another behavior tree branch (e.g. buffing) wins the current tick.
+    // This prevents "stand still at gate-open" stalls in active battlegrounds.
+    if (CanIssueBotMovement(player))
+    {
+        if (EngageNearestEnemyPlayer(player, 65.0f))
+            return true;
+
+        if (Battleground* battleground = player->GetBattleground())
+        {
+            Position destination;
+            if (TryGetObjectivePosition(battleground, player, destination))
+            {
+                if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                    player->GetMotionMaster()->MovePoint(0, destination);
+                return true;
+            }
+        }
+    }
+
     return true;
 }
 
