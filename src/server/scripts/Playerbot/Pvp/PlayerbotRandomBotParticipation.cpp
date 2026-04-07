@@ -64,7 +64,6 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
-constexpr std::chrono::milliseconds BattlegroundActiveCadenceInterval(2000);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
@@ -293,18 +292,69 @@ bool CanProcessPlayerLifecycle(Player const* player)
     bool const inActiveBattleground = player->InBattleground() &&
         player->GetBattleground() &&
         player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
-    std::chrono::milliseconds const cadenceInterval = inActiveBattleground ?
-        BattlegroundActiveCadenceInterval : RandomBotLifecycleCadenceInterval;
+    std::chrono::milliseconds const cadenceInterval = RandomBotLifecycleCadenceInterval;
 
     if (nextProcessTime > now)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
-        EmitLifecycleGmDebug(player, "can-process=no cadence-throttled");
+        auto const waitRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(nextProcessTime - now).count();
+        std::ostringstream cadenceDetail;
+        cadenceDetail << "can-process=no cadence-throttled wait_ms=" << waitRemainingMs
+                      << " cadence_ms=" << cadenceInterval.count()
+                      << " bg_active=" << (inActiveBattleground ? 1 : 0)
+                      << " model=bg-fasttick-v3";
+        EmitLifecycleGmDebug(player, cadenceDetail.str());
         return false;
     }
 
     nextProcessTime = now + cadenceInterval;
     return true;
+}
+
+void ProcessActiveBattlegroundTacticalTick(Player* player)
+{
+    if (!player || !IsLifecycleGateEnabled())
+        return;
+
+    if (!playerbot::IsManagedRandomBot(player))
+        return;
+
+    if (!player->IsInWorld() || !player->InBattleground())
+        return;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return;
+
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
+    playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
+    bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+
+    playerbot::BattlegroundLifecycleContext inProgressContext;
+    inProgressContext.lifecycleEnabled = true;
+    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
+    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
+    inProgressContext.shouldHandleInProgressStatus = true;
+    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+
+    if (!didExecuteTactical && !didExecuteLifecycle)
+    {
+        uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+        TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+        TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+
+        if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+        {
+            if (!player->IsWithinDist3d(enemyStart->GetPositionX(), enemyStart->GetPositionY(), enemyStart->GetPositionZ(), 10.0f))
+            {
+                player->GetMotionMaster()->MovePoint(0, *enemyStart, false);
+                EmitLifecycleGmDebug(player, "bg-fasttick-fallback=enemy-start-movepoint");
+            }
+        }
+    }
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
@@ -933,6 +983,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingVirtualBotTeleport(player);
+    ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
         return;
