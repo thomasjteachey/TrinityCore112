@@ -194,35 +194,66 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
-void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
+bool ScheduleFacingPauseInstantCast(Player* player, Unit* target, SpellInfo const* spellInfo, uint32 spellId)
 {
     if (!player || !target || !spellInfo)
-        return;
+        return false;
 
     if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
-        return;
+        return false;
+
+    // If we're already in front enough for instant cast checks, proceed with
+    // the normal immediate cast path.
+    if (player->isInFrontInMap(target, 0.0f, float(M_PI) / 2.0f))
+        return false;
 
     ObjectGuid const casterGuid = player->GetGUID();
-    player->SetFacingToObject(target);
-    player->SetInFront(target);
+    ObjectGuid const targetGuid = target->GetGUID();
+    float const resumeOrientation = player->GetOrientation();
+    uint32 const resumeMovementFlags = player->GetUnitMovementFlags() & MOVEMENTFLAG_MASK_MOVING;
 
-    // Managed playerbots run as virtual sessions: use JumpTo directly for a
-    // short backward jump while temporarily facing the cast target.
-    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
-    float constexpr normalJumpSpeedZ = 7.95555f;
-    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
+    player->StopMoving();
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    {
+        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        player->SendMovementFlagUpdate();
+    }
 
-    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
+    player->m_Events.AddEventAtOffset([casterGuid, targetGuid, spellId, resumeOrientation, resumeMovementFlags]()
     {
         Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
             return;
 
+        Unit* delayedTarget = ObjectAccessor::GetUnit(*caster, targetGuid);
+        if (!delayedTarget || !delayedTarget->IsAlive())
+            return;
+
         if (caster->IsNonMeleeSpellCast(false, false, true))
             return;
 
+        SpellInfo const* delayedSpellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!delayedSpellInfo ||
+            caster->GetSpellHistory()->HasCooldown(spellId) ||
+            caster->GetSpellHistory()->HasGlobalCooldown(delayedSpellInfo))
+            return;
+
+        caster->SetFacingToObject(delayedTarget);
+        caster->SetInFront(delayedTarget);
+        SpellCastResult const delayedCastResult = caster->CastSpell(delayedTarget, spellId, false);
+        if (delayedCastResult != SPELL_CAST_OK)
+            return;
+
         caster->SetFacingTo(resumeOrientation);
+
+        if (resumeMovementFlags)
+        {
+            caster->AddUnitMovementFlag(resumeMovementFlags);
+            caster->SendMovementFlagUpdate();
+        }
     }, 250ms);
+
+    return true;
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -320,8 +351,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    float preCastOrientation = player->GetOrientation();
-
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
@@ -387,6 +416,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+    // If a moving bot is not facing enough for an instant enemy cast, pause
+    // briefly, face target, cast, then resume previous movement direction.
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !itemTarget &&
+        ScheduleFacingPauseInstantCast(player, target, spellInfo, context.spellId))
+        return true;
+
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
@@ -421,10 +457,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = reasonText.Title;
         return false;
     }
-
-    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
-        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
