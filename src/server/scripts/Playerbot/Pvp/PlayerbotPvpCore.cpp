@@ -949,7 +949,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         return { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget->GetGUID() };
     if (CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323))
         return { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (hasNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200)
+    if (hasNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 676) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200)
         return { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (hasNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 676))
         return { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget->GetGUID() };
