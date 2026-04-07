@@ -460,7 +460,7 @@ uint32 CountNearbyUnsNaredEnemies(Player const* player, float maxDistance)
 bool HasBreakableCrowdControl(Unit const* unit)
 {
     // Approximation list for common "break on damage" PvP CCs.
-    return HasAnyAura(unit, { 118, 12824, 12825, 12826, 28272, 28271, 61305, 61721, 6770, 2070, 11297, 1776, 2094, 5782, 6213, 6215, 5484, 5246 });
+    return HasAnyAura(unit, { 118, 12824, 12825, 12826, 28272, 28271, 61305, 61721, 6770, 2070, 11297, 1776, 2094, 5782, 6213, 6215, 5484, 5246, 19503 });
 }
 
 bool IsPolymorphed(Unit const* unit)
