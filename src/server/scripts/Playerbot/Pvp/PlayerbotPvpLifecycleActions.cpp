@@ -152,7 +152,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         std::ostringstream overrideDetail;
         overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
         EmitBattlegroundGmDebug(player, overrideDetail.str(), 5000);
-        motionMaster->Clear(false);
+        motionMaster->Clear();
     }
 
     motionMaster->MovePoint(0, destination);
