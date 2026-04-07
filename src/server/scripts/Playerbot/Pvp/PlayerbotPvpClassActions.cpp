@@ -194,7 +194,7 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
-void StrafeAwayForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo)
+void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
 {
     if (!player || !target || !spellInfo)
         return;
@@ -202,17 +202,27 @@ void StrafeAwayForInstantCastVisual(Player* player, Unit* target, SpellInfo cons
     if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
         return;
 
+    ObjectGuid const casterGuid = player->GetGUID();
     player->SetFacingToObject(target);
     player->SetInFront(target);
 
-    // Keep moving without jump-turn visuals: strafe while maintaining a valid
-    // facing direction for instant kiting casts.
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    // Managed playerbots run as virtual sessions: use JumpTo directly for a
+    // short backward jump while temporarily facing the cast target.
+    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
+    float constexpr normalJumpSpeedZ = 7.95555f;
+    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
+
+    player->m_Events.AddEventAtOffset([casterGuid, resumeOrientation]()
     {
-        player->RemoveUnitMovementFlag(MOVEMENTFLAG_STRAFE_LEFT | MOVEMENTFLAG_STRAFE_RIGHT);
-        player->AddUnitMovementFlag(MOVEMENTFLAG_BACKWARD | MOVEMENTFLAG_STRAFE_LEFT);
-        player->SendMovementFlagUpdate();
-    }
+        Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
+        if (!caster || !caster->IsInWorld() || !caster->IsAlive())
+            return;
+
+        if (caster->IsNonMeleeSpellCast(false, false, true))
+            return;
+
+        caster->SetFacingTo(resumeOrientation);
+    }, 250ms);
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -309,6 +319,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "self_target_mismatch";
         return false;
     }
+
+    float preCastOrientation = player->GetOrientation();
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
@@ -412,7 +424,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
-        StrafeAwayForInstantCastVisual(player, target, spellInfo);
+        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
