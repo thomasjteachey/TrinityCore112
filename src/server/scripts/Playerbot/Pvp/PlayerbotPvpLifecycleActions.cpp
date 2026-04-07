@@ -156,23 +156,6 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     if (!map)
         return;
 
-    std::ostringstream whisper;
-    whisper << "[PBDBG] bot=" << bot->GetName() << " guid=" << bot->GetGUID().ToString()
-            << " map=" << bot->GetMapId() << " detail=" << detail;
-    std::string const message = whisper.str();
-
-    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
-    {
-        Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
-            continue;
-
-        if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
-            continue;
-
-        bot->Whisper(message, LANG_UNIVERSAL, observer);
-    }
-
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "PBDBG bot={} guid={} map={} detail={}",
         bot->GetName(), bot->GetGUID().ToString(), bot->GetMapId(), detail);
@@ -218,8 +201,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-    if (IsWarsongGulch(player))
-        generatePath = false;
+    bool usedDirectLosFallback = false;
 
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
@@ -314,6 +296,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                     {
                         issuedDestination = emergencyDestination;
                         generatePath = false;
+                        usedDirectLosFallback = true;
                         EmitBattlegroundGmDebug(player, "wsg-step-direct-los-fallback enabled", 1500);
                     }
                 }
@@ -322,7 +305,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     std::ostringstream moveDetail;
-    if (IsWarsongGulch(player) &&
+    if (usedDirectLosFallback &&
         !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
     {
         EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);

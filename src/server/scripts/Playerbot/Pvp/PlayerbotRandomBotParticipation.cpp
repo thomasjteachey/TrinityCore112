@@ -312,6 +312,36 @@ bool CanProcessPlayerLifecycle(Player const* player)
     return true;
 }
 
+void ProcessActiveBattlegroundTacticalTick(Player* player)
+{
+    if (!player || !IsLifecycleGateEnabled())
+        return;
+
+    if (!playerbot::IsManagedRandomBot(player))
+        return;
+
+    if (!player->IsInWorld() || !player->InBattleground())
+        return;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return;
+
+    PvpValues const values = PvpCore::CollectValues(player);
+    BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
+    BattlegroundTacticalActions::Execute(player, tacticalContext);
+
+    BattlegroundLifecycleContext inProgressContext;
+    inProgressContext.lifecycleEnabled = true;
+    inProgressContext.queueOperation = QueueOperationType::None;
+    inProgressContext.invitationResponse = InvitationResponseType::None;
+    inProgressContext.shouldHandleInProgressStatus = true;
+    BattlegroundLifecycleActions::Execute(player, inProgressContext);
+}
+
 void TryFinalizePendingVirtualBotTeleport(Player* player)
 {
     if (!player || !playerbot::IsManagedRandomBot(player))
@@ -938,6 +968,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingVirtualBotTeleport(player);
+    ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
         return;
