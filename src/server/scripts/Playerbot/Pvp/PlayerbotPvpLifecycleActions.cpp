@@ -711,6 +711,25 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
         return true;
     }
 
+    // Fallback for sparse/invalid start-anchor states:
+    // WSG bots can otherwise idle in their own base graveyard when no objective
+    // anchor is resolved from battleground starts.
+    if (battleground->GetMapId() == 489) // Warsong Gulch
+    {
+        Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+        Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+
+        if (botTeam == TEAM_ALLIANCE)
+            destination = hordeFlagStand;
+        else if (botTeam == TEAM_HORDE)
+            destination = allianceFlagStand;
+        else
+            destination = hordeFlagStand;
+
+        destination.RelocateOffset(Position(float(urand(0, 16)) - 8.0f, float(urand(0, 16)) - 8.0f, 0.0f, 0.0f));
+        return true;
+    }
+
     return false;
 }
 }
