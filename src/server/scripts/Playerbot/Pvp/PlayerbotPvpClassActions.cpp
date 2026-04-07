@@ -260,6 +260,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    bool const isTemporaryWeaponImbue = [&spellInfo]()
+    {
+        for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
+            if (effectInfo.Effect == SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY)
+                return true;
+
+        return false;
+    }();
+
     Item* itemTarget = nullptr;
     if (context.spellId == 11202 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
@@ -276,6 +285,24 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (!itemTarget)
         {
             failureReason = "weapon_already_poisoned";
+            return false;
+        }
+    }
+    else if (isTemporaryWeaponImbue && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        if (mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            itemTarget = mainHand;
+        else
+        {
+            Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+            if (offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+                itemTarget = offHand;
+        }
+
+        if (!itemTarget)
+        {
+            failureReason = "weapon_already_imbued";
             return false;
         }
     }
