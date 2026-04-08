@@ -1415,8 +1415,8 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
-    uint8 const teamIndex = Battleground::GetTeamIndexByTeamId(teamId == TEAM_NEUTRAL ? player->GetTeamId() : teamId);
-    Position const* start = battleground->GetTeamStartPosition(teamIndex);
+    TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
+    Position const* start = battleground->GetTeamStartPosition(startTeam);
     if (!start)
         return false;
 
