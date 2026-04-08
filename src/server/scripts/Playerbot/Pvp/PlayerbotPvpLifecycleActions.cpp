@@ -355,6 +355,69 @@ bool TryGetWarsongLaneWaypoint(Player* player, Position const& finalDestination,
     return true;
 }
 
+bool TryGetWarsongProgressiveWaypoint(Player* player, Position const& finalDestination, Position& waypointOut)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    struct WsgProgressState
+    {
+        std::vector<uint32> path;
+        uint32 goalNode = std::numeric_limits<uint32>::max();
+    };
+
+    static std::unordered_map<uint64, WsgProgressState> stateByGuid;
+    WsgProgressState& state = stateByGuid[player->GetGUID().GetRawValue()];
+
+    std::vector<WsgBattlePathNode> const& graph = GetWarsongBattlePathGraph();
+    if (graph.empty())
+        return false;
+
+    Position origin(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+    uint32 const startNode = FindClosestGraphNode(graph, origin);
+    uint32 const goalNode = FindClosestGraphNode(graph, finalDestination);
+
+    if (state.path.empty() || state.goalNode != goalNode)
+    {
+        state.path.clear();
+        if (!TryBuildWarsongGraphPath(startNode, goalNode, state.path))
+            return false;
+        state.goalNode = goalNode;
+    }
+
+    if (state.path.empty())
+        return false;
+
+    uint32 nearestPathIndex = 0;
+    float nearestDistanceSq = std::numeric_limits<float>::max();
+    for (uint32 i = 0; i < state.path.size(); ++i)
+    {
+        uint32 const node = state.path[i];
+        if (node >= graph.size())
+            continue;
+
+        Position const& point = graph[node].point;
+        float const dx = point.GetPositionX() - origin.GetPositionX();
+        float const dy = point.GetPositionY() - origin.GetPositionY();
+        float const dz = point.GetPositionZ() - origin.GetPositionZ();
+        float const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq < nearestDistanceSq)
+        {
+            nearestDistanceSq = distSq;
+            nearestPathIndex = i;
+        }
+    }
+
+    uint32 const stepAdvance = std::min<uint32>(2, uint32(state.path.size() - 1 - nearestPathIndex));
+    uint32 const nextPathIndex = nearestPathIndex + stepAdvance;
+    uint32 const nextNode = state.path[nextPathIndex];
+    if (nextNode >= graph.size())
+        return false;
+
+    waypointOut = graph[nextNode].point;
+    return true;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
@@ -499,7 +562,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         else
         {
             Position laneWaypoint;
-            if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
+            if (TryGetWarsongProgressiveWaypoint(player, destination, laneWaypoint))
                 issuedDestination = laneWaypoint;
         }
     }
@@ -1489,8 +1552,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
         return true;
 
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 80.0f;
-    if (EngageNearestEnemyPlayer(player, engageDistance))
+    // Reference parity: objective pathing should drive WSG map traversal.
+    // Keep enemy pressure for local fights only.
+    if (player->IsInCombat() && EngageNearestEnemyPlayer(player, 80.0f))
         return true;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
