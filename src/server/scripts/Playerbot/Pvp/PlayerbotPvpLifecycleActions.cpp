@@ -552,9 +552,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
     {
-        // Reference module behavior is waypoint-driven in WSG; avoid navmesh
-        // dependence and always step lane-to-lane using fixed points.
-        generatePath = false;
+        // Reference module is waypoint-driven in WSG, but movement should still
+        // use normal path generation to respect map collision (avoid wall/air cuts).
 
         Position bootstrapWaypoint;
         if (TryGetWarsongBaseExitWaypoint(player, bootstrapWaypoint))
