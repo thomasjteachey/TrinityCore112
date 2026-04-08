@@ -37,6 +37,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Player.h"
+#include "SpellMgr.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -45,6 +46,7 @@
 
 #include <cstring>
 #include <cmath>
+#include <chrono>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -55,6 +57,8 @@
 
 namespace
 {
+std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+
 bool IsWarsongGulch(Player const* player)
 {
     if (!player)
@@ -915,6 +919,59 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
     if (profile.primarilyRanged)
     {
+        if (player->GetClass() == CLASS_HUNTER)
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
+            uint32& pauseUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
+            if (pauseUntilMs > nowMs)
+            {
+                player->StopMoving();
+                return true;
+            }
+
+            SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
+            if (autoShotInfo)
+            {
+                float const minAutoShotRange = autoShotInfo->GetMinRange(false);
+                float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
+                bool const canAutoShotWithoutDeadzone = distance > minAutoShotRange && distance <= maxAutoShotRange;
+                uint32 const autoShotTimerMs = player->GetAttackTimer(RANGED_ATTACK);
+                if (canAutoShotWithoutDeadzone && autoShotTimerMs <= 600)
+                {
+                    uint32 const pauseDurationMs = std::max<uint32>(autoShotTimerMs, 150);
+                    pauseUntilMs = nowMs + pauseDurationMs;
+
+                    ObjectGuid const hunterGuid = player->GetGUID();
+                    ObjectGuid const targetGuid = target->GetGUID();
+                    float const followDistance = profile.preferredIdealRange;
+                    float const followAngle = player->GetFollowAngle();
+
+                    player->StopMoving();
+                    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+                    {
+                        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+                        player->SendMovementFlagUpdate();
+                    }
+
+                    player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, followDistance, followAngle]()
+                    {
+                        Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
+                        if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
+                            return;
+
+                        if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, targetGuid))
+                        {
+                            if (resumedTarget->IsAlive())
+                                hunter->GetMotionMaster()->MoveFollow(resumedTarget, followDistance, followAngle);
+                        }
+                    }, std::chrono::milliseconds(pauseDurationMs));
+
+                    return true;
+                }
+            }
+        }
+
         if (profile.createDistanceWhenCrowded && IsMeleePressureTarget(target) && distance < profile.preferredIdealRange)
         {
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
