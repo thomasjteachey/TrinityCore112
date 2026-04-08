@@ -107,43 +107,52 @@ TeamId ResolveBotTeamId(Player const* player)
 
 std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
 {
-    // Reference-style objective routing through the same major WSG lane segments:
-    // own flag room -> tunnel/field spine -> enemy flag room.
+    // Reference-parity WSG routing:
+    // use graveyard jump lane, then lower-graveyard route to enemy flag room.
     static std::vector<Position> const allianceToHorde =
     {
-        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
-        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
-        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
-        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
-        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
-        Position(1316.07f, 1533.53f, 315.700f, 0.0f),
+        // vPath_WSG_AllianceGraveyardJump
+        Position(1420.08f, 1552.84f, 342.878f, 0.0f),
+        Position(1404.06f, 1551.37f, 342.850f, 0.0f),
+        Position(1386.24f, 1543.37f, 321.944f, 0.0f),
+        // vPath_WSG_AllianceGraveyardLower_to_HordeFlagRoom
+        Position(1320.53f, 1569.85f, 313.389f, 0.0f),
+        Position(1266.52f, 1554.64f, 311.532f, 0.0f),
         Position(1206.84f, 1528.22f, 307.677f, 0.0f),
+        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
+        Position(1135.93f, 1505.27f, 308.085f, 0.0f),
         Position(1103.54f, 1521.89f, 314.583f, 0.0f),
+        Position(1073.49f, 1551.19f, 319.418f, 0.0f),
+        Position(1042.92f, 1530.49f, 336.667f, 0.0f),
         Position(1052.11f, 1493.52f, 342.176f, 0.0f),
         Position(1057.42f, 1452.75f, 341.131f, 0.0f),
         Position(1037.96f, 1422.27f, 339.919f, 0.0f),
         Position(966.01f, 1422.84f, 345.223f, 0.0f),
         Position(942.74f, 1423.10f, 345.467f, 0.0f),
-        Position(933.331f, 1433.72f, 345.536f, 0.0f)
+        Position(929.39f, 1434.75f, 345.535f, 0.0f)
     };
 
     static std::vector<Position> const hordeToAlliance =
     {
-        // Prefer main-gate/gy lane instead of tunnel lane for Horde.
-        Position(1029.14f, 1387.49f, 340.836f, 0.0f),
-        Position(1034.95f, 1392.62f, 340.856f, 0.0f),
-        Position(1043.87f, 1426.9f, 339.197f, 0.0f),
-        Position(1052.11f, 1493.52f, 342.176f, 0.0f),
-        Position(1073.49f, 1551.19f, 319.418f, 0.0f),
-        Position(1103.54f, 1521.89f, 314.583f, 0.0f),
-        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
-        Position(1276.17f, 1533.72f, 311.722f, 0.0f),
-        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
-        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
-        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
-        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
-        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
-        Position(1519.53f, 1481.87f, 352.024f, 0.0f)
+        // vPath_WSG_HordeGraveyardJump
+        Position(1045.70f, 1389.15f, 340.638f, 0.0f),
+        Position(1057.43f, 1390.12f, 339.869f, 0.0f),
+        Position(1074.59f, 1400.67f, 323.811f, 0.0f),
+        Position(1092.85f, 1399.38f, 317.429f, 0.0f),
+        // vPath_WSG_HordeGraveyardLower_to_AllianceFlagRoom
+        Position(1164.96f, 1356.91f, 313.884f, 0.0f),
+        Position(1208.32f, 1346.27f, 313.816f, 0.0f),
+        Position(1245.06f, 1346.12f, 312.112f, 0.0f),
+        Position(1291.43f, 1394.60f, 314.359f, 0.0f),
+        Position(1329.33f, 1411.13f, 318.399f, 0.0f),
+        Position(1361.57f, 1391.21f, 326.756f, 0.0f),
+        Position(1382.19f, 1381.03f, 332.314f, 0.0f),
+        Position(1408.06f, 1412.93f, 344.565f, 0.0f),
+        Position(1407.88f, 1458.76f, 347.346f, 0.0f),
+        Position(1430.40f, 1489.34f, 348.658f, 0.0f),
+        Position(1466.64f, 1493.50f, 351.869f, 0.0f),
+        Position(1511.51f, 1493.75f, 352.009f, 0.0f),
+        Position(1531.44f, 1481.79f, 351.959f, 0.0f)
     };
 
     return (botTeam == TEAM_ALLIANCE) ? allianceToHorde : hordeToAlliance;
@@ -231,51 +240,6 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     }
 
     return false;
-}
-
-bool TryJumpOffWarsongGraveyard(Player* player)
-{
-    if (!player || !player->IsAlive() || !IsWarsongGulch(player) || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-        return false;
-
-    struct JumpRoute
-    {
-        Position launch;
-        Position landing;
-    };
-
-    static std::array<JumpRoute, 2> const routes =
-    {{
-        { Position(957.20f, 1424.40f, 345.48f, 0.0f), Position(978.20f, 1427.10f, 335.20f, 0.0f) },      // Horde GY -> field
-        { Position(1517.60f, 1485.30f, 352.00f, 0.0f), Position(1498.60f, 1484.30f, 340.20f, 0.0f) }      // Alliance GY -> field
-    }};
-
-    float nearestDist = std::numeric_limits<float>::max();
-    JumpRoute const* nearest = nullptr;
-    for (JumpRoute const& route : routes)
-    {
-        float const dist = player->GetDistance(route.launch.GetPositionX(), route.launch.GetPositionY(), route.launch.GetPositionZ());
-        if (dist < nearestDist)
-        {
-            nearestDist = dist;
-            nearest = &route;
-        }
-    }
-
-    if (!nearest || nearestDist > 22.0f)
-        return false;
-
-    if (!player->IsWithinDist3d(nearest->launch.GetPositionX(), nearest->launch.GetPositionY(), nearest->launch.GetPositionZ(), 3.5f))
-    {
-        IssueMovePointThrottled(player, nearest->launch, 1.5f, 500);
-        return true;
-    }
-
-    float const jumpSpeedXY = std::max(6.0f, player->GetSpeed(MOVE_RUN) * 1.1f);
-    float const jumpSpeedZ = 8.0f;
-    player->SetFacingTo(player->GetAbsoluteAngle(nearest->landing.GetPositionX(), nearest->landing.GetPositionY()));
-    player->JumpTo(jumpSpeedXY, jumpSpeedZ, false);
-    return true;
 }
 
 bool IsLifecycleGateEnabled()
@@ -1443,10 +1407,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, 80.0f);
-    /*
-    if (TryJumpOffWarsongGraveyard(player))
-        return true;
-        */
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
