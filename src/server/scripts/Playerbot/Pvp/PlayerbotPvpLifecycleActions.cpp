@@ -125,10 +125,13 @@ bool TryGetWarsongBaseExitWaypoint(Player* player, Position& waypointOut)
     Position const hordeExit(944.859f, 1423.05f, 345.437f, 0.0f);
 
     Position const& baseAnchor = (botTeam == TEAM_ALLIANCE) ? allianceFlagRoom : hordeFlagRoom;
-    if (player->GetDistance(baseAnchor) > 45.0f)
+    if (player->GetDistance(baseAnchor) > 18.0f)
         return false;
 
     waypointOut = (botTeam == TEAM_ALLIANCE) ? allianceExit : hordeExit;
+    if (player->IsWithinDist3d(waypointOut.GetPositionX(), waypointOut.GetPositionY(), waypointOut.GetPositionZ(), 6.0f))
+        return false;
+
     return true;
 }
 
