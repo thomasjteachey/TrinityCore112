@@ -202,6 +202,15 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
         return;
 
+    // Rogues should not use the jump-turn visual while kiting/chasing.
+    // For instant casts, only face the target and keep normal movement flow.
+    if (player->GetClass() == CLASS_ROGUE)
+    {
+        player->SetFacingToObject(target);
+        player->SetInFront(target);
+        return;
+    }
+
     ObjectGuid const casterGuid = player->GetGUID();
     ObjectGuid const targetGuid = target->GetGUID();
     float destinationX = 0.0f;
