@@ -320,9 +320,26 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     if (!map)
         return;
 
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "PBDBG bot={} guid={} map={} detail={}",
-        bot->GetName(), bot->GetGUID().ToString(), bot->GetMapId(), detail);
+    std::ostringstream os;
+    os << "[PBDBG movepoint] bot=" << bot->GetName()
+       << " guid=" << bot->GetGUID().ToString()
+       << " bgId=" << bot->GetBattlegroundId()
+       << " detail=" << detail;
+    std::string const message = os.str();
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
+            continue;
+
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
