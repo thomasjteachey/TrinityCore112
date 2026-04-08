@@ -1237,10 +1237,11 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
         if (IsWarsongGulch(player))
         {
             Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
-            Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
+            // Keep pre-start holds clustered at main-gate side (not tunnel side).
+            Position const wsHorde2(951.250f, 1418.900f, 345.420f, 6.10f);
             Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
             Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
-            Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
+            Position const wsAlliance2(1516.200f, 1490.400f, 352.000f, 3.1f);
             Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
 
             uint32 const role = uint32(botGuid % 10);
