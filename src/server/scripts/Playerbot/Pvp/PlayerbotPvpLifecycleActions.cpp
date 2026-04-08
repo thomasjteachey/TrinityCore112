@@ -113,6 +113,25 @@ bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
     return true;
 }
 
+bool TryGetWarsongBaseExitWaypoint(Player* player, Position& waypointOut)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    TeamId const botTeam = ResolveBotTeamId(player);
+    Position const allianceFlagRoom(1519.53f, 1481.87f, 352.024f, 0.0f);
+    Position const hordeFlagRoom(933.331f, 1433.72f, 345.536f, 0.0f);
+    Position const allianceExit(1508.27f, 1493.17f, 352.005f, 0.0f);
+    Position const hordeExit(944.859f, 1423.05f, 345.437f, 0.0f);
+
+    Position const& baseAnchor = (botTeam == TEAM_ALLIANCE) ? allianceFlagRoom : hordeFlagRoom;
+    if (player->GetDistance(baseAnchor) > 45.0f)
+        return false;
+
+    waypointOut = (botTeam == TEAM_ALLIANCE) ? allianceExit : hordeExit;
+    return true;
+}
+
 struct WsgBattlePathNode
 {
     Position point;
@@ -467,9 +486,19 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
     {
-        Position laneWaypoint;
-        if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
-            issuedDestination = laneWaypoint;
+        // Reference module behavior is waypoint-driven in WSG; avoid navmesh
+        // dependence and always step lane-to-lane using fixed points.
+        generatePath = false;
+
+        Position bootstrapWaypoint;
+        if (TryGetWarsongBaseExitWaypoint(player, bootstrapWaypoint))
+            issuedDestination = bootstrapWaypoint;
+        else
+        {
+            Position laneWaypoint;
+            if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
+                issuedDestination = laneWaypoint;
+        }
     }
 
     motionMaster->MovePoint(0, issuedDestination, generatePath);
