@@ -948,6 +948,45 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
     return best;
 }
 
+Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    uint32 constexpr mechanicMask =
+        (1 << MECHANIC_ROOT) |
+        (1 << MECHANIC_STUN) |
+        (1 << MECHANIC_FREEZE) |
+        (1 << MECHANIC_SNARE);
+
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (!candidate->HasAuraWithMechanic(mechanicMask))
+            continue;
+        if (HasBreakableCrowdControl(candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType, Unit const* preferredTarget, float maxDistance)
 {
     if (!player || !player->GetMap())
@@ -1305,6 +1344,10 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             return { "priest shadow protection", "maintain shadow protection out of combat", 10958, playerbot::PvpClassSpellContext::TargetMode::Self };
         if (!player->IsInCombat() && !HasAuraFromSpellChain(player, 1006) && IsSpellReady(player, 1006))
             return { "priest inner fire", "maintain inner fire out of combat", 1006, playerbot::PvpClassSpellContext::TargetMode::Self };
+        if (IsSpellReady(player, 10929))
+            if (Unit const* renewTarget = SelectFriendlyHealthTarget(player, 40.0f, 80.0f))
+                if (!HasAuraFromSpellChain(renewTarget, 10929))
+                    return { "priest renew", "maintain renew on moderately injured allies", 10929, renewTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, renewTarget->GetGUID() };
         if (IsSpellReady(player, 10917))
             if (Unit const* healTarget = SelectFriendlyHealthTarget(player, 40.0f, 85.0f))
                 return { "priest flash heal", "heal party with flash heal", 10917, healTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, healTarget->GetGUID() };
@@ -1319,8 +1362,16 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         return { "priest mana burn", "burn mana from enemy casters", 14033, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (CountNearbyEnemies(player, 10.0f) >= 2 && CountNearbyFriendlyPlayers(player, 10.0f) >= 2 && IsSpellReady(player, 27801))
         return { "priest holy nova", "aoe pressure and splash healing in melee cluster", 27801, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (IsSpellReady(player, 10917))
-        return { "priest flash heal", "fallback healing throughput", 10917, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsSpellReady(player, 27605))
+    {
+        if (!HasBreakableCrowdControl(target) && !HasAuraFromSpellChain(target, 27605))
+            return { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled or open targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+        if (Unit const* controlledTarget = SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f))
+            if (!HasAuraFromSpellChain(controlledTarget, 27605))
+                return { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy, controlledTarget->GetGUID() };
+    }
+    if (IsSpellReady(player, 10917) && player->HealthBelowPct(85))
+        return { "priest flash heal", "fallback self-healing while under pressure", 10917, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
 }
