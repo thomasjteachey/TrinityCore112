@@ -935,6 +935,48 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
     return best;
 }
 
+Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType, Unit const* preferredTarget, float maxDistance)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto hasDispellableAura = [&](Unit const* target)
+    {
+        if (!target || !target->IsAlive())
+            return false;
+        if (!HasHostileTarget(player, target))
+            return false;
+        if (!player->IsWithinLOSInMap(target) || !player->IsWithinDistInMap(target, maxDistance))
+            return false;
+
+        DispelChargesList dispelList;
+        target->GetDispellableAuraList(player, (1 << dispelType), dispelList);
+        return !dispelList.empty();
+    };
+
+    if (hasDispellableAura(preferredTarget))
+        return preferredTarget;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!hasDispellableAura(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance, float maxManaPct)
 {
     if (!player || !player->GetMap())
@@ -1234,9 +1276,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             if (Unit const* debuffedAlly = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f))
                 return { "priest dispel magic ally", "prioritize dispelling magic debuffs from allies", 988, debuffedAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, debuffedAlly->GetGUID() };
         if (IsSpellReady(player, 988))
-            if (Unit const* enemyBuffedTarget = SelectNearbyEnemyTarget(player, target, 30.0f))
-                if (enemyBuffedTarget->HasAuraType(SPELL_AURA_MOD_STAT) || enemyBuffedTarget->HasAuraType(SPELL_AURA_MOD_INCREASE_SPEED))
-                    return { "priest dispel magic enemy", "prioritize dispelling magic buffs from enemies", 988, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyBuffedTarget->GetGUID() };
+            if (Unit const* enemyBuffedTarget = SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f))
+                return { "priest dispel magic enemy", "prioritize dispelling magic buffs from enemies", 988, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyBuffedTarget->GetGUID() };
 
         Unit const* shieldTarget = SelectFriendlyHealthTarget(player, 40.0f, 50.0f);
         if (shieldTarget && !HasAuraFromSpellChain(shieldTarget, 10901) && IsSpellReady(player, 10901))
