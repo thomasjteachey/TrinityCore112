@@ -5007,6 +5007,21 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(5); // 40yd
     });
 
+    // Intimidating Shout / Demoralizing Shout / Demoralizing Roar / Psychic Scream (Classic ranks)
+    // should not miss hit checks (still can be resisted)
+    ApplySpellFix({
+        5246,                   // Intimidating Shout
+        1160, 6190, 11554,      // Demoralizing Shout (Ranks 1-3)
+        11555, 11556, 25202,    // Demoralizing Shout (Ranks 4-6)
+        25203,                  // Demoralizing Shout (Rank 7)
+        99, 1735, 9490,         // Demoralizing Roar (Ranks 1-3)
+        9747, 9898,             // Demoralizing Roar (Ranks 4-5)
+        8122, 8124, 10888, 10890// Psychic Scream (Ranks 1-4)
+    }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT;
+    });
+
     for (uint32 i = 0; i < GetSpellInfoStoreSize(); ++i)
     {
         SpellInfo* spellInfo = mSpellInfoMap[i];
