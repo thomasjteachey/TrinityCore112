@@ -79,6 +79,17 @@ TeamId ResolveBotTeamId(Player const* player)
     if (!player)
         return TEAM_NEUTRAL;
 
+    if (Battleground const* battleground = player->GetBattleground())
+    {
+        uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+        if (assignedTeam)
+        {
+            TeamId const resolved = ResolveTeamId(assignedTeam);
+            if (resolved != TEAM_NEUTRAL)
+                return resolved;
+        }
+    }
+
     if (uint32 const bgTeam = player->GetBGTeam())
     {
         TeamId const resolved = ResolveTeamId(bgTeam);

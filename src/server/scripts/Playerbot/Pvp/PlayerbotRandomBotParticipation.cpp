@@ -349,11 +349,15 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
 
     std::ostringstream tickDetail;
+    uint32 const bgTeam = player->GetBGTeam();
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
                << " lifecycle=" << (didExecuteLifecycle ? 1 : 0)
                << " alive=" << (player->IsAlive() ? 1 : 0)
                << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
                << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0)
+               << " bgTeam=" << bgTeam
+               << " assignedTeam=" << assignedTeam
                << " x=" << int32(player->GetPositionX())
                << " y=" << int32(player->GetPositionY());
     EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
