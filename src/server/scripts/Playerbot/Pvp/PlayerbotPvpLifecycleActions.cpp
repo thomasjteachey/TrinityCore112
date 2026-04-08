@@ -51,6 +51,8 @@
 #include <unordered_map>
 #include <array>
 #include <algorithm>
+#include <queue>
+#include <vector>
 
 namespace
 {
@@ -63,13 +65,36 @@ bool IsWarsongGulch(Player const* player)
     return battleground && battleground->GetMapId() == 489;
 }
 
+TeamId ResolveTeamId(uint32 teamValue)
+{
+    if (teamValue == TEAM_ALLIANCE || teamValue == ALLIANCE)
+        return TEAM_ALLIANCE;
+    if (teamValue == TEAM_HORDE || teamValue == HORDE)
+        return TEAM_HORDE;
+    return TEAM_NEUTRAL;
+}
+
+TeamId ResolveBotTeamId(Player const* player)
+{
+    if (!player)
+        return TEAM_NEUTRAL;
+
+    if (uint32 const bgTeam = player->GetBGTeam())
+    {
+        TeamId const resolved = ResolveTeamId(bgTeam);
+        if (resolved != TEAM_NEUTRAL)
+            return resolved;
+    }
+
+    return ResolveTeamId(player->GetTeam());
+}
+
 bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
 {
     if (!player || !IsWarsongGulch(player))
         return false;
 
-    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
-    TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+    TeamId const botTeam = ResolveBotTeamId(player);
 
     Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
     Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
@@ -78,51 +103,142 @@ bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
     return true;
 }
 
-bool TryGetWarsongLaneWaypoint(Player* player, Position& waypointOut)
+struct WsgBattlePathNode
+{
+    Position point;
+    std::vector<uint32> neighbors;
+};
+
+std::vector<WsgBattlePathNode> const& GetWarsongBattlePathGraph()
+{
+    // Approximate battle-path graph with multiple route choices (mid/ramp/tunnel)
+    // and cross-links for recovery when one lane has poor navmesh probes.
+    static std::vector<WsgBattlePathNode> const graph =
+    {
+        { Position(1540.4f, 1481.3f, 351.8f, 0.0f), { 1, 2, 3 } },   // Alliance flag room
+        { Position(1496.0f, 1478.0f, 352.0f, 0.0f), { 0, 4 } },      // Alliance ramp
+        { Position(1504.0f, 1455.0f, 350.0f, 0.0f), { 0, 7 } },      // Alliance tunnel
+        { Position(1458.0f, 1470.0f, 351.0f, 0.0f), { 0, 10 } },     // Alliance roof exit
+        { Position(1410.0f, 1470.0f, 349.5f, 0.0f), { 1, 5, 10 } },
+        { Position(1340.0f, 1464.0f, 346.5f, 0.0f), { 4, 6, 11 } },
+        { Position(1260.0f, 1456.0f, 342.5f, 0.0f), { 5, 12, 13 } }, // Mid bridge hub
+        { Position(1418.0f, 1448.0f, 345.5f, 0.0f), { 2, 8, 11 } },
+        { Position(1325.0f, 1438.0f, 341.5f, 0.0f), { 7, 9, 12 } },
+        { Position(1232.0f, 1430.0f, 337.5f, 0.0f), { 8, 13 } },
+        { Position(1380.0f, 1488.0f, 351.5f, 0.0f), { 3, 4, 11 } },
+        { Position(1290.0f, 1480.0f, 347.5f, 0.0f), { 5, 7, 10, 12 } },
+        { Position(1198.0f, 1468.0f, 341.5f, 0.0f), { 6, 8, 11, 13 } },
+        { Position(1110.0f, 1452.0f, 338.5f, 0.0f), { 6, 9, 12, 14 } },
+        { Position(1020.0f, 1442.0f, 338.5f, 0.0f), { 13, 15, 16 } },
+        { Position(965.0f, 1437.0f, 343.0f, 0.0f), { 14, 17 } },
+        { Position(1006.0f, 1415.0f, 341.0f, 0.0f), { 14, 18 } },
+        { Position(934.0f, 1434.0f, 345.2f, 0.0f), { 15, 19 } },      // Horde ramp
+        { Position(944.0f, 1410.0f, 345.0f, 0.0f), { 16, 19 } },      // Horde tunnel
+        { Position(916.0f, 1434.4f, 345.4f, 0.0f), { 17, 18 } }       // Horde flag room
+    };
+
+    return graph;
+}
+
+uint32 FindClosestGraphNode(std::vector<WsgBattlePathNode> const& graph, Position const& origin)
+{
+    uint32 closestIndex = 0;
+    float closestDistance = std::numeric_limits<float>::max();
+
+    for (uint32 i = 0; i < graph.size(); ++i)
+    {
+        float const dx = graph[i].point.GetPositionX() - origin.GetPositionX();
+        float const dy = graph[i].point.GetPositionY() - origin.GetPositionY();
+        float const dz = graph[i].point.GetPositionZ() - origin.GetPositionZ();
+        float const distSq = dx * dx + dy * dy + dz * dz;
+        if (distSq < closestDistance)
+        {
+            closestDistance = distSq;
+            closestIndex = i;
+        }
+    }
+
+    return closestIndex;
+}
+
+bool TryBuildWarsongGraphPath(uint32 startNode, uint32 goalNode, std::vector<uint32>& pathOut)
+{
+    std::vector<WsgBattlePathNode> const& graph = GetWarsongBattlePathGraph();
+    if (startNode >= graph.size() || goalNode >= graph.size())
+        return false;
+
+    std::vector<float> bestDistance(graph.size(), std::numeric_limits<float>::max());
+    std::vector<int32> previous(graph.size(), -1);
+
+    using QueueEntry = std::pair<float, uint32>;
+    std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<QueueEntry>> queue;
+    bestDistance[startNode] = 0.0f;
+    queue.push({ 0.0f, startNode });
+
+    while (!queue.empty())
+    {
+        QueueEntry const current = queue.top();
+        queue.pop();
+
+        float const distanceSoFar = current.first;
+        uint32 const node = current.second;
+        if (distanceSoFar > bestDistance[node])
+            continue;
+
+        if (node == goalNode)
+            break;
+
+        Position const& nodePos = graph[node].point;
+        for (uint32 neighbor : graph[node].neighbors)
+        {
+            if (neighbor >= graph.size())
+                continue;
+
+            Position const& neighborPos = graph[neighbor].point;
+            float const edgeWeight = nodePos.GetExactDist(neighborPos);
+            float const candidateDistance = distanceSoFar + edgeWeight;
+            if (candidateDistance < bestDistance[neighbor])
+            {
+                bestDistance[neighbor] = candidateDistance;
+                previous[neighbor] = static_cast<int32>(node);
+                queue.push({ candidateDistance, neighbor });
+            }
+        }
+    }
+
+    if (bestDistance[goalNode] == std::numeric_limits<float>::max())
+        return false;
+
+    pathOut.clear();
+    for (int32 node = static_cast<int32>(goalNode); node >= 0; node = previous[node])
+        pathOut.push_back(static_cast<uint32>(node));
+
+    std::reverse(pathOut.begin(), pathOut.end());
+    return !pathOut.empty();
+}
+
+bool TryGetWarsongLaneWaypoint(Player* player, Position const& finalDestination, Position& waypointOut)
 {
     if (!player || !IsWarsongGulch(player))
         return false;
 
-    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
-    bool const allianceToHorde = (bgTeam == ALLIANCE);
-
-    static std::array<Position, 5> const kAllianceToHorde =
-    {
-        Position(1450.0f, 1470.0f, 350.0f, 0.0f),
-        Position(1320.0f, 1460.0f, 345.0f, 0.0f),
-        Position(1180.0f, 1450.0f, 340.0f, 0.0f),
-        Position(1040.0f, 1440.0f, 338.0f, 0.0f),
-        Position(950.0f, 1438.0f, 344.0f, 0.0f)
-    };
-
-    static std::array<Position, 5> const kHordeToAlliance =
-    {
-        Position(1000.0f, 1438.0f, 344.0f, 0.0f),
-        Position(1120.0f, 1444.0f, 339.0f, 0.0f),
-        Position(1260.0f, 1453.0f, 341.0f, 0.0f),
-        Position(1390.0f, 1466.0f, 346.0f, 0.0f),
-        Position(1510.0f, 1478.0f, 351.0f, 0.0f)
-    };
-
-    std::array<Position, 5> const& lane = allianceToHorde ? kAllianceToHorde : kHordeToAlliance;
-
-    int closestIndex = -1;
-    float closestDistance = std::numeric_limits<float>::max();
-    for (uint32 i = 0; i < lane.size(); ++i)
-    {
-        float const dist = player->GetDistance(lane[i].GetPositionX(), lane[i].GetPositionY(), lane[i].GetPositionZ());
-        if (dist < closestDistance)
-        {
-            closestDistance = dist;
-            closestIndex = int(i);
-        }
-    }
-
-    if (closestIndex < 0)
+    std::vector<WsgBattlePathNode> const& graph = GetWarsongBattlePathGraph();
+    if (graph.empty())
         return false;
 
-    uint32 const nextIndex = std::min<uint32>(closestIndex + 1, lane.size() - 1);
-    waypointOut = lane[nextIndex];
+    Position origin(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+    uint32 const startNode = FindClosestGraphNode(graph, origin);
+    uint32 const goalNode = FindClosestGraphNode(graph, finalDestination);
+
+    std::vector<uint32> path;
+    if (!TryBuildWarsongGraphPath(startNode, goalNode, path))
+        return false;
+
+    uint32 nextNode = path.front();
+    if (path.size() > 1)
+        nextNode = path[1];
+
+    waypointOut = graph[nextNode].point;
     return true;
 }
 
@@ -357,7 +473,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
     {
         Position laneWaypoint;
-        if (TryGetWarsongLaneWaypoint(player, laneWaypoint))
+        if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
         {
             issuedDestination = laneWaypoint;
             generatePath = false;
@@ -788,7 +904,7 @@ GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
     if (!player || !bgWs || !player->GetMap())
         return nullptr;
 
-    uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const botBgTeam = ResolveBotTeamId(player);
     if (bgWs->GetFlagState(botBgTeam) != BG_WS_FLAG_STATE_ON_GROUND)
         return nullptr;
 
@@ -804,7 +920,7 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
     if (!player || !droppedFlag || !player->GetMap())
         return false;
 
-    uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const botBgTeam = ResolveBotTeamId(player);
     float const botDistance = player->GetDistance(droppedFlag);
 
     Map::PlayerList const& players = player->GetMap()->GetPlayers();
@@ -816,7 +932,7 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
         if (teammate->GetBattlegroundId() != player->GetBattlegroundId())
             continue;
 
-        uint32 const teammateBgTeam = teammate->GetBGTeam() ? teammate->GetBGTeam() : teammate->GetTeam();
+        TeamId const teammateBgTeam = ResolveBotTeamId(teammate);
         if (teammateBgTeam != botBgTeam || playerbot::IsManagedRandomBot(teammate))
             continue;
 
@@ -888,7 +1004,7 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
     if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
         return nullptr;
 
-    uint32 const playerBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const playerBgTeam = ResolveBotTeamId(player);
 
     float nearestDistance = std::numeric_limits<float>::max();
     Player* nearestEnemy = nullptr;
@@ -901,7 +1017,7 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
             continue;
         if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
             continue;
-        uint32 const candidateBgTeam = candidate->GetBGTeam() ? candidate->GetBGTeam() : candidate->GetTeam();
+        TeamId const candidateBgTeam = ResolveBotTeamId(candidate);
         if (candidateBgTeam == playerBgTeam)
             continue;
 
@@ -1072,8 +1188,7 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
         return true;
     }
 
-    uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
-    TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+    TeamId const botTeam = ResolveBotTeamId(player);
     TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
     if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
     {
