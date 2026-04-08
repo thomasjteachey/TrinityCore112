@@ -598,11 +598,16 @@ bool HasConflictingBattlegroundLifecycleContext(playerbot::BattlegroundLifecycle
 
 bool HandleBattlegroundDeathState(Player* player)
 {
+    static std::unordered_map<uint64, uint32> queuedSinceMsByGuid;
+
     if (!player || !player->InBattleground())
         return false;
 
     if (player->IsAlive())
+    {
+        queuedSinceMsByGuid.erase(player->GetGUID().GetRawValue());
         return false;
+    }
 
     if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
     {
@@ -619,24 +624,67 @@ bool HandleBattlegroundDeathState(Player* player)
         return true;
 
     if (battleground->IsPlayerInResurrectQueue(player->GetGUID()))
+    {
+        uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32& queuedSinceMs = queuedSinceMsByGuid[playerGuidRaw];
+        if (!queuedSinceMs)
+            queuedSinceMs = nowMs;
+
+        // Fallback recovery: if a bot remains ghosted in the resurrect queue for too long,
+        // refresh its spirit-guide queue registration so it revives on normal BG wave timing.
+        if (nowMs >= queuedSinceMs + 12000)
+        {
+            battleground->RemovePlayerFromResurrectQueue(player->GetGUID());
+
+            uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+            Creature* spiritGuide = spiritEntry ? player->FindNearestCreature(spiritEntry, 30.0f, false) : nullptr;
+            if (!spiritGuide)
+            {
+                spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
+                if (!spiritGuide)
+                    spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
+            }
+
+            if (spiritGuide)
+            {
+                battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
+                sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(player, battleground, spiritGuide->GetGUID());
+                queuedSinceMs = nowMs;
+                TC_LOG_WARN("playerbots.pvp.lifecycle",
+                    "Playerbot PvP death handling fallback spirit queue refresh: guid={} spiritGuide={}.",
+                    player->GetGUID().ToString(), spiritGuide->GetGUID().ToString());
+            }
+            else
+            {
+                queuedSinceMs = nowMs;
+            }
+        }
         return true;
+    }
 
     uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
     if (!spiritEntry)
         return true;
 
-    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 90.0f, false);
+    // Mirror player core BG death handling behavior: once ghosted at a battleground
+    // graveyard, register at a nearby spirit guide and wait for the periodic wave rez.
+    // Avoid script-driven ghost movement because missed/path-blocked moves can prevent
+    // ever getting queued for resurrection.
+    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 30.0f, false);
     if (!spiritGuide)
-        return true;
-
-    if (!player->IsWithinDist3d(spiritGuide->GetPositionX(), spiritGuide->GetPositionY(), spiritGuide->GetPositionZ(), 8.0f))
     {
-        Position destination(spiritGuide->GetPositionX(), spiritGuide->GetPositionY(), spiritGuide->GetPositionZ(), player->GetOrientation());
-        IssueMovePointThrottled(player, destination, 3.0f, 700);
-        return true;
+        // Rare fallback: if team resolution and nearby search disagree (e.g. after team
+        // swaps or delayed map state), use any nearby spirit guide so bots still rez.
+        spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
+        if (!spiritGuide)
+            spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
+        if (!spiritGuide)
+            return true;
     }
 
     battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
+    queuedSinceMsByGuid[player->GetGUID().GetRawValue()] = GameTime::GetGameTimeMS();
     sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(player, battleground, spiritGuide->GetGUID());
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP death handling: guid={} action=queue-resurrect spiritGuide={}.",
