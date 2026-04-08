@@ -111,13 +111,15 @@ std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
     // own flag room -> tunnel/field spine -> enemy flag room.
     static std::vector<Position> const allianceToHorde =
     {
+        // Open through tunnel lane so bots naturally run out of tunnel at match start.
+        Position(1519.53f, 1481.87f, 352.024f, 0.0f),
         Position(1508.27f, 1493.17f, 352.005f, 0.0f),
         Position(1490.78f, 1493.51f, 352.141f, 0.0f),
         Position(1469.79f, 1494.13f, 351.774f, 0.0f),
         Position(1443.33f, 1517.78f, 345.534f, 0.0f),
         Position(1415.33f, 1554.79f, 343.156f, 0.0f),
-        Position(1316.07f, 1533.53f, 315.700f, 0.0f),
-        Position(1206.84f, 1528.22f, 307.677f, 0.0f),
+        Position(1276.17f, 1533.72f, 311.722f, 0.0f),
+        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
         Position(1103.54f, 1521.89f, 314.583f, 0.0f),
         Position(1052.11f, 1493.52f, 342.176f, 0.0f),
         Position(1057.42f, 1452.75f, 341.131f, 0.0f),
@@ -129,10 +131,12 @@ std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
 
     static std::vector<Position> const hordeToAlliance =
     {
-        // Prefer main-gate/gy lane instead of tunnel lane for Horde.
-        Position(1029.14f, 1387.49f, 340.836f, 0.0f),
-        Position(1034.95f, 1392.62f, 340.856f, 0.0f),
-        Position(1043.87f, 1426.9f, 339.197f, 0.0f),
+        // Open through tunnel lane so bots naturally run out of tunnel at match start.
+        Position(933.33f, 1433.72f, 345.536f, 0.0f),
+        Position(942.74f, 1423.10f, 345.467f, 0.0f),
+        Position(966.01f, 1422.84f, 345.223f, 0.0f),
+        Position(1037.96f, 1422.27f, 339.919f, 0.0f),
+        Position(1057.42f, 1452.75f, 341.131f, 0.0f),
         Position(1052.11f, 1493.52f, 342.176f, 0.0f),
         Position(1073.49f, 1551.19f, 319.418f, 0.0f),
         Position(1103.54f, 1521.89f, 314.583f, 0.0f),
@@ -1379,20 +1383,10 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     {
         if (IsWarsongGulch(player))
         {
-            Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
-            // Keep pre-start holds clustered at main-gate side (not tunnel side).
-            Position const wsHorde2(951.250f, 1418.900f, 345.420f, 6.10f);
-            Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
-            Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
-            Position const wsAlliance2(1516.200f, 1490.400f, 352.000f, 3.1f);
-            Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
-
-            uint32 const role = uint32(botGuid % 10);
-            Position const base = (startTeam == TEAM_HORDE)
-                ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
-                : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
-            float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
-            hold.destination = base;
+            // During prep, hard-stack at each side tunnel entrance with no random/role offset.
+            Position const wsHordeTunnelEntrance(933.484f, 1433.726f, 345.535f, 0.08f);
+            Position const wsAllianceTunnelEntrance(1519.530f, 1481.870f, 352.024f, 3.20f);
+            hold.destination = (startTeam == TEAM_HORDE) ? wsHordeTunnelEntrance : wsAllianceTunnelEntrance;
         }
         else
         {
