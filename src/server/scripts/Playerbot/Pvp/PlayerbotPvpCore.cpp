@@ -2112,6 +2112,11 @@ BattlegroundObjectiveSelection PvpCore::SelectObjectiveSkeleton(PvpValues const&
 {
     BattlegroundObjectiveSelection objective;
 
+    // WSG brawl mode: ignore flag/objective play and let tactical movement
+    // converge bots to the shared midfield fight anchor.
+    if (values.battlegroundTypeId == BATTLEGROUND_WS)
+        return objective;
+
     if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
         objective.type = BattlegroundObjectiveType::AttackFlagCarrier;
     else if ((!values.battlegroundTeamHasHumans && IsTriggerActive(PvpTrigger::PlayerHasFlag, values)) ||
@@ -2144,6 +2149,9 @@ BattlegroundMovementPrimitive PvpCore::SelectMovementPrimitiveSkeleton(PvpValues
 
 FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const& values)
 {
+    if (values.battlegroundTypeId == BATTLEGROUND_WS)
+        return FlagCarrierDirective::None;
+
     if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
         return FlagCarrierDirective::AttackEnemyCarrier;
 
