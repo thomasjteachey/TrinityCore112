@@ -31,6 +31,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
@@ -998,6 +999,9 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
+
+    std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+    g_FastTickMotionByGuid.erase(player->GetGUID().GetRawValue());
 }
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
