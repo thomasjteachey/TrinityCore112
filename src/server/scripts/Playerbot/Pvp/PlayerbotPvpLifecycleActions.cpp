@@ -1214,10 +1214,9 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
 
     if (IsWarsongGulch(player))
     {
-        TeamId const botTeam = ResolveBotTeamId(player);
-        Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
-        Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
-        destination = (botTeam == TEAM_ALLIANCE) ? hordeFlagStand : allianceFlagStand;
+        // Midfield brawl behavior for WSG: collapse both teams toward center map.
+        Position const midfieldAnchor(1239.40f, 1543.60f, 306.00f, 0.0f);
+        destination = midfieldAnchor;
         ApplyDeterministicObjectiveOffset(battleground, player, destination);
         return true;
     }
