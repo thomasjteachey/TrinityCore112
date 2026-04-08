@@ -31,6 +31,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
@@ -64,13 +65,19 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
-constexpr std::chrono::milliseconds BattlegroundActiveCadenceInterval(2000);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
+struct FastTickMotionState
+{
+    Position lastPosition;
+    uint32 lastMovedMs = 0;
+};
+std::unordered_map<uint64, FastTickMotionState> g_FastTickMotionByGuid;
+std::mutex g_FastTickMotionLock;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
@@ -293,18 +300,97 @@ bool CanProcessPlayerLifecycle(Player const* player)
     bool const inActiveBattleground = player->InBattleground() &&
         player->GetBattleground() &&
         player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
-    std::chrono::milliseconds const cadenceInterval = inActiveBattleground ?
-        BattlegroundActiveCadenceInterval : RandomBotLifecycleCadenceInterval;
+    std::chrono::milliseconds const cadenceInterval = RandomBotLifecycleCadenceInterval;
 
     if (nextProcessTime > now)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
-        EmitLifecycleGmDebug(player, "can-process=no cadence-throttled");
+        auto const waitRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(nextProcessTime - now).count();
+        std::ostringstream cadenceDetail;
+        cadenceDetail << "can-process=no cadence-throttled wait_ms=" << waitRemainingMs
+                      << " cadence_ms=" << cadenceInterval.count()
+                      << " bg_active=" << (inActiveBattleground ? 1 : 0)
+                      << " model=bg-fasttick-v3";
+        EmitLifecycleGmDebug(player, cadenceDetail.str());
         return false;
     }
 
     nextProcessTime = now + cadenceInterval;
     return true;
+}
+
+void ProcessActiveBattlegroundTacticalTick(Player* player)
+{
+    if (!player || !IsLifecycleGateEnabled())
+        return;
+
+    if (!playerbot::IsManagedRandomBot(player))
+        return;
+
+    if (!player->IsInWorld() || !player->InBattleground())
+        return;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return;
+
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
+    playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
+    bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+
+    playerbot::BattlegroundLifecycleContext inProgressContext;
+    inProgressContext.lifecycleEnabled = true;
+    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
+    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
+    inProgressContext.shouldHandleInProgressStatus = true;
+    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+
+    std::ostringstream tickDetail;
+    tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
+               << " lifecycle=" << (didExecuteLifecycle ? 1 : 0)
+               << " alive=" << (player->IsAlive() ? 1 : 0)
+               << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
+               << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0)
+               << " x=" << int32(player->GetPositionX())
+               << " y=" << int32(player->GetPositionY());
+    EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
+
+    uint64 const guidRaw = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool shouldForceUnstick = false;
+    {
+        std::lock_guard<std::mutex> lock(g_FastTickMotionLock);
+        FastTickMotionState& motionState = g_FastTickMotionByGuid[guidRaw];
+        if (motionState.lastMovedMs == 0)
+            motionState.lastMovedMs = nowMs;
+
+        if (motionState.lastPosition.GetExactDist(*player) > 1.5f)
+        {
+            motionState.lastPosition = *player;
+            motionState.lastMovedMs = nowMs;
+        }
+        else if (nowMs > motionState.lastMovedMs + 4000)
+            shouldForceUnstick = true;
+    }
+
+    if (shouldForceUnstick)
+    {
+        uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+        TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
+        TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
+
+        if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+        {
+            player->GetMotionMaster()->MovePoint(0, *enemyStart, false);
+            EmitLifecycleGmDebug(player, "bg-fasttick-unstick=enemy-start-movepoint", 1000);
+            std::lock_guard<std::mutex> lock(g_FastTickMotionLock);
+            g_FastTickMotionByGuid[guidRaw].lastMovedMs = nowMs;
+            g_FastTickMotionByGuid[guidRaw].lastPosition = *player;
+        }
+    }
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
@@ -927,12 +1013,16 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
+
+    std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+    g_FastTickMotionByGuid.erase(player->GetGUID().GetRawValue());
 }
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingVirtualBotTeleport(player);
+    ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
         return;
