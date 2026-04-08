@@ -106,13 +106,15 @@ TeamId ResolveBotTeamId(Player const* player)
     return ResolveTeamId(player->GetTeam());
 }
 
-std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
+Position GetWarsongMidfieldAnchor()
 {
-    // Reference-style objective routing through the same major WSG lane segments:
-    // own flag room -> tunnel/field spine -> enemy flag room.
-    static std::vector<Position> const allianceToHorde =
+    return Position(1029.140015f, 1387.489990f, 340.835999f, 0.0f);
+}
+
+std::vector<Position> const& GetWarsongObjectivePathToMidForTeam(TeamId botTeam)
+{
+    static std::vector<Position> const allianceToMid =
     {
-        // Open through tunnel lane so bots naturally run out of tunnel at match start.
         Position(1519.53f, 1481.87f, 352.024f, 0.0f),
         Position(1508.27f, 1493.17f, 352.005f, 0.0f),
         Position(1490.78f, 1493.51f, 352.141f, 0.0f),
@@ -125,33 +127,19 @@ std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
         Position(1052.11f, 1493.52f, 342.176f, 0.0f),
         Position(1057.42f, 1452.75f, 341.131f, 0.0f),
         Position(1037.96f, 1422.27f, 339.919f, 0.0f),
-        Position(966.01f, 1422.84f, 345.223f, 0.0f),
-        Position(942.74f, 1423.10f, 345.467f, 0.0f),
-        Position(933.331f, 1433.72f, 345.536f, 0.0f)
+        Position(1029.140015f, 1387.489990f, 340.835999f, 0.0f)
     };
 
-    static std::vector<Position> const hordeToAlliance =
+    static std::vector<Position> const hordeToMid =
     {
-        // Open through tunnel lane so bots naturally run out of tunnel at match start.
         Position(933.33f, 1433.72f, 345.536f, 0.0f),
         Position(942.74f, 1423.10f, 345.467f, 0.0f),
         Position(966.01f, 1422.84f, 345.223f, 0.0f),
-        Position(1037.96f, 1422.27f, 339.919f, 0.0f),
-        Position(1057.42f, 1452.75f, 341.131f, 0.0f),
-        Position(1052.11f, 1493.52f, 342.176f, 0.0f),
-        Position(1073.49f, 1551.19f, 319.418f, 0.0f),
-        Position(1103.54f, 1521.89f, 314.583f, 0.0f),
-        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
-        Position(1276.17f, 1533.72f, 311.722f, 0.0f),
-        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
-        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
-        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
-        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
-        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
-        Position(1519.53f, 1481.87f, 352.024f, 0.0f)
+        Position(1000.10f, 1419.80f, 343.600f, 0.0f),
+        Position(1029.140015f, 1387.489990f, 340.835999f, 0.0f)
     };
 
-    return (botTeam == TEAM_ALLIANCE) ? allianceToHorde : hordeToAlliance;
+    return (botTeam == TEAM_ALLIANCE) ? allianceToMid : hordeToMid;
 }
 
 bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& finalDestination, Position& waypointOut)
@@ -173,8 +161,7 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
     if (!battleground)
         return false;
 
-    TeamId const botTeam = ResolveBotTeamId(player);
-    std::vector<Position> const& path = GetWarsongObjectivePathForTeam(botTeam);
+    std::vector<Position> const& path = GetWarsongObjectivePathToMidForTeam(ResolveBotTeamId(player));
     if (path.empty())
         return false;
 
@@ -182,17 +169,6 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
     {
         state.battlegroundInstanceId = battleground->GetInstanceID();
         state.nextIndex = 0;
-
-        float nearestDist = std::numeric_limits<float>::max();
-        for (uint32 i = 0; i < path.size(); ++i)
-        {
-            float const dist = player->GetDistance(path[i].GetPositionX(), path[i].GetPositionY(), path[i].GetPositionZ());
-            if (dist < nearestDist)
-            {
-                nearestDist = dist;
-                state.nextIndex = i;
-            }
-        }
     }
 
     if (state.nextIndex >= path.size())
@@ -205,8 +181,7 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
             ++state.nextIndex;
     }
 
-    // Close enough to final objective anchor: move directly to final objective.
-    if (player->IsWithinDist3d(finalDestination.GetPositionX(), finalDestination.GetPositionY(), finalDestination.GetPositionZ(), 35.0f))
+    if (player->IsWithinDist3d(finalDestination.GetPositionX(), finalDestination.GetPositionY(), finalDestination.GetPositionZ(), 8.0f))
     {
         waypointOut = finalDestination;
         return true;
@@ -217,6 +192,23 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
+
+Creature* FindNearbySpiritGuide(Player* player, float searchRadius)
+{
+    if (!player || !player->InBattleground())
+        return nullptr;
+
+    uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+    Creature* spiritGuide = spiritEntry ? player->FindNearestCreature(spiritEntry, searchRadius, false) : nullptr;
+    if (spiritGuide)
+        return spiritGuide;
+
+    spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, searchRadius, false);
+    if (!spiritGuide)
+        spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, searchRadius, false);
+
+    return spiritGuide;
+}
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
 {
@@ -642,14 +634,7 @@ bool HandleBattlegroundDeathState(Player* player)
         {
             battleground->RemovePlayerFromResurrectQueue(player->GetGUID());
 
-            uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
-            Creature* spiritGuide = spiritEntry ? player->FindNearestCreature(spiritEntry, 30.0f, false) : nullptr;
-            if (!spiritGuide)
-            {
-                spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
-                if (!spiritGuide)
-                    spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
-            }
+            Creature* spiritGuide = FindNearbySpiritGuide(player, 80.0f);
 
             if (spiritGuide)
             {
@@ -662,30 +647,21 @@ bool HandleBattlegroundDeathState(Player* player)
             }
             else
             {
+                MoveToClosestBattlegroundGraveyard(player);
                 queuedSinceMs = nowMs;
             }
         }
         return true;
     }
 
-    uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
-    if (!spiritEntry)
-        return true;
-
     // Mirror player core BG death handling behavior: once ghosted at a battleground
     // graveyard, register at a nearby spirit guide and wait for the periodic wave rez.
-    // Avoid script-driven ghost movement because missed/path-blocked moves can prevent
-    // ever getting queued for resurrection.
-    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 30.0f, false);
+    // If no guide is in range, walk the ghost toward the closest graveyard and retry.
+    Creature* spiritGuide = FindNearbySpiritGuide(player, 80.0f);
     if (!spiritGuide)
     {
-        // Rare fallback: if team resolution and nearby search disagree (e.g. after team
-        // swaps or delayed map state), use any nearby spirit guide so bots still rez.
-        spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
-        if (!spiritGuide)
-            spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
-        if (!spiritGuide)
-            return true;
+        MoveToClosestBattlegroundGraveyard(player);
+        return true;
     }
 
     battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
@@ -1215,10 +1191,7 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
 
     if (IsWarsongGulch(player))
     {
-        // Midfield brawl behavior for WSG: collapse both teams toward center map.
-        Position const midfieldAnchor(1239.40f, 1543.60f, 306.00f, 0.0f);
-        destination = midfieldAnchor;
-        ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        destination = GetWarsongMidfieldAnchor();
         return true;
     }
 
@@ -1474,9 +1447,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->isMoving())
-        return false;
-
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {
         case IDLE_MOTION_TYPE:
@@ -1490,6 +1460,10 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, 80.0f);
+
+    float const engageDistance = IsWarsongGulch(player) ? 120.0f : 70.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
+        return true;
     /*
     if (TryJumpOffWarsongGraveyard(player))
         return true;
