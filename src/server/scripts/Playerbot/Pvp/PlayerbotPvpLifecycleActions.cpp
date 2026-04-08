@@ -1480,7 +1480,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         case CHASE_MOTION_TYPE:
         case POINT_MOTION_TYPE:
         case FOLLOW_MOTION_TYPE:
-        case ESCORT_MOTION_TYPE:
             break;
         default:
             return true;
