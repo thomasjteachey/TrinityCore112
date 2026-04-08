@@ -1075,6 +1075,16 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
             "Playerbot PvP distance band: bot={} profile={} decision=hold-band distance={} min={} ideal={} max={}.",
             player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
             profile.preferredMaxPressureRange);
+
+        // Ranged bots should fully settle once they are inside their preferred
+        // firing band. Continuously following in-band keeps movement active and
+        // can suppress Auto Shot firing windows for hunters.
+        player->StopMoving();
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        {
+            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            player->SendMovementFlagUpdate();
+        }
         return true;
     }
 
