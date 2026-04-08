@@ -1226,6 +1226,12 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!player)
         return decision;
 
+    // If Auto Shot is already active, avoid layering a separate spell decision
+    // that can interfere with the auto-repeat cycle.
+    Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    if (autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75)
+        return decision;
+
     Unit const* activeTarget = SelectCombatTarget(player);
     if (!HasHostileTarget(player, activeTarget))
         return decision;

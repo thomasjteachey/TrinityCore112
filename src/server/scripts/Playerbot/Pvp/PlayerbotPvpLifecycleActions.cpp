@@ -1172,10 +1172,19 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
     bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
+    bool const alreadyAttackingTarget = player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID();
     if (isStealthedRogue)
         player->AttackStop();
-    else
+    else if (!alreadyAttackingTarget)
         player->Attack(target, useMeleeAttack);
+
+    if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && !player->IsWithinMeleeRange(target) && player->IsWithinLOSInMap(target))
+    {
+        Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+        bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75;
+        if (!autoShotActive && player->HasSpell(75))
+            player->CastSpell(target, 75, false);
+    }
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP positioning profile: bot={} profile={} ranged={} createDistance={} meleeFallback={}.",
