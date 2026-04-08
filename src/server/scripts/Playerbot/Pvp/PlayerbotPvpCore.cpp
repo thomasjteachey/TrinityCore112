@@ -1132,7 +1132,11 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (rogueTarget && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 25295))
         return { "hunter serpent sting", "apply ranged dot pressure", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget->GetGUID() };
 
-    if (!targetClose && IsSpellReady(player, 5116))
+    bool const targetSnaredOrStunned = target &&
+        (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
+         target->HasAuraWithMechanic((1 << MECHANIC_ROOT) | (1 << MECHANIC_STUN)));
+
+    if (!targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116))
         return { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
     if (enemyOnTop && IsSpellReady(player, 14268) && !HasAuraFromSpellChain(enemyOnTopTarget, 14268))
