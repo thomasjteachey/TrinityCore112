@@ -1179,7 +1179,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!battleground || battleground->GetStatus() == STATUS_WAIT_JOIN)
         return false;
 
-    if (!CanIssueBotMovement(player))
+    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
     if (player->isMoving())
@@ -1197,7 +1197,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     }
 
     if (player->IsInCombat())
-        return false;
+        return EngageNearestEnemyPlayer(player, 80.0f);
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
