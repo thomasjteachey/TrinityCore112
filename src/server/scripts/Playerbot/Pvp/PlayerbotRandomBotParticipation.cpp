@@ -31,6 +31,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
