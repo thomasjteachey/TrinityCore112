@@ -366,24 +366,13 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
     bool usedDirectLosFallback = false;
+    bool usedLaneGraphFallback = false;
 
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
     {
-        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
-        constexpr float maxStepDistance = 45.0f;
-        if (directDistance > maxStepDistance)
-        {
-            float const ratio = maxStepDistance / directDistance;
-            issuedDestination.Relocate(
-                player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                player->GetOrientation());
-        }
-
-        // Keep WSG movement path-safe for managed virtual bots: if the local step
-        // still resolves to unsafe navmesh modes, iteratively shorten the step.
+        // Keep WSG movement path-safe for managed virtual bots: evaluate probes and
+        // reject unsafe navmesh modes early.
         auto evaluatePath = [player](Position const& candidate, PathType& pathTypeOut, bool& calculateOkOut) -> bool
         {
             PathGenerator path(player);
@@ -400,6 +389,40 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
             return pathTypeOut & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
         };
+
+        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        constexpr float maxStepDistance = 45.0f;
+        if (directDistance > maxStepDistance)
+        {
+            // Prefer a graph waypoint when long direct probes are likely to cross
+            // navmesh trouble spots (tunnel/ramp transitions).
+            Position graphWaypoint;
+            if (TryGetWarsongLaneWaypoint(player, destination, graphWaypoint))
+            {
+                PathType graphPathType = PATHFIND_BLANK;
+                bool graphCalculated = false;
+                if (!evaluatePath(graphWaypoint, graphPathType, graphCalculated))
+                {
+                    issuedDestination = graphWaypoint;
+                    usedLaneGraphFallback = true;
+                    std::ostringstream laneGraphDetail;
+                    laneGraphDetail << "wsg-graph-step-selected"
+                                    << " pathType=" << uint32(graphPathType)
+                                    << " calc=" << (graphCalculated ? 1 : 0);
+                    EmitBattlegroundGmDebug(player, laneGraphDetail.str(), 1500);
+                }
+            }
+
+            if (!usedLaneGraphFallback)
+            {
+                float const ratio = maxStepDistance / directDistance;
+                issuedDestination.Relocate(
+                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
+                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
+                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
+                    player->GetOrientation());
+            }
+        }
 
         PathType issuedPathType = PATHFIND_BLANK;
         bool issuedCalculated = false;
@@ -437,6 +460,27 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
             if (!foundSafeCandidate)
             {
+                Position laneWaypoint;
+                if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
+                {
+                    PathType lanePathType = PATHFIND_BLANK;
+                    bool laneCalculated = false;
+                    if (!evaluatePath(laneWaypoint, lanePathType, laneCalculated))
+                    {
+                        issuedDestination = laneWaypoint;
+                        foundSafeCandidate = true;
+                        usedLaneGraphFallback = true;
+                        std::ostringstream laneSafeDetail;
+                        laneSafeDetail << "wsg-graph-fallback-selected"
+                                       << " pathType=" << uint32(lanePathType)
+                                       << " calc=" << (laneCalculated ? 1 : 0);
+                        EmitBattlegroundGmDebug(player, laneSafeDetail.str(), 1500);
+                    }
+                }
+            }
+
+            if (!foundSafeCandidate)
+            {
                 std::ostringstream unsafeDetail;
                 unsafeDetail << "wsg-step-unsafe-all-candidates"
                              << " directDist=" << int32(directDistance)
@@ -469,20 +513,25 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     std::ostringstream moveDetail;
-    if (usedDirectLosFallback &&
+    if (IsWarsongGulch(player) &&
         !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
     {
         Position laneWaypoint;
         if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
         {
             issuedDestination = laneWaypoint;
-            generatePath = false;
+            generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            usedLaneGraphFallback = true;
             EmitBattlegroundGmDebug(player, "movepoint-lane-fallback reason=no-los-to-issued-destination", 1500);
         }
-        else
+        else if (usedDirectLosFallback)
         {
             EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
             return false;
+        }
+        else
+        {
+            EmitBattlegroundGmDebug(player, "movepoint-continue reason=no-los-and-no-lane-waypoint", 1500);
         }
     }
 
@@ -490,7 +539,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
                << " to=(" << int32(issuedDestination.GetPositionX()) << "," << int32(issuedDestination.GetPositionY()) << "," << int32(issuedDestination.GetPositionZ()) << ")"
                << " movementType=" << static_cast<uint32>(currentMovement)
-               << " generatePath=" << (generatePath ? 1 : 0);
+               << " generatePath=" << (generatePath ? 1 : 0)
+               << " laneFallback=" << (usedLaneGraphFallback ? 1 : 0)
+               << " losFallback=" << (usedDirectLosFallback ? 1 : 0);
     EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
 
     // Reference-module parity: issue MovePoint directly and let MotionMaster handle path generation.
