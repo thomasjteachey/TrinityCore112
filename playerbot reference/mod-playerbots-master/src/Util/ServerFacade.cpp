@@ -46,15 +46,16 @@ void ServerFacade::SetFacingTo(Player* bot, WorldObject* wo, bool force)
 
     float angle = bot->GetAngle(wo);
 
-    // if (!force && bot->isMoving())
-    //     bot->SetFacingTo(bot->GetAngle(wo));
-    // else
-    // {
+    if (!force && bot->isMoving())
+    {
+        bot->SetFacingTo(angle);
+        return;
+    }
+
     bot->SetOrientation(angle);
 
     if (!bot->IsRooted())
         bot->SendMovementFlagUpdate();
-    // }
 }
 
 Unit* ServerFacade::GetChaseTarget(Unit* target)
