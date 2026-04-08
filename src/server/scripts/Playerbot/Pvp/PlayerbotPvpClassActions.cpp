@@ -194,62 +194,16 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     }
 }
 
-void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const* spellInfo, float resumeOrientation)
+void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spellInfo)
 {
     if (!player || !target || !spellInfo)
         return;
 
-    if (spellInfo->CalcCastTime() > 0 || !player->isMoving())
+    if (spellInfo->CalcCastTime() > 0)
         return;
 
-    // Rogues should not use the jump-turn visual while kiting/chasing.
-    // For instant casts, only face the target and keep normal movement flow.
-    if (player->GetClass() == CLASS_ROGUE)
-    {
-        player->SetFacingToObject(target);
-        player->SetInFront(target);
-        return;
-    }
-
-    ObjectGuid const casterGuid = player->GetGUID();
-    ObjectGuid const targetGuid = target->GetGUID();
-    float destinationX = 0.0f;
-    float destinationY = 0.0f;
-    float destinationZ = 0.0f;
-    bool const hadDestination = player->GetMotionMaster()->GetDestination(destinationX, destinationY, destinationZ);
     player->SetFacingToObject(target);
     player->SetInFront(target);
-
-    // Managed playerbots run as virtual sessions: use JumpTo directly for a
-    // short backward jump while temporarily facing the cast target.
-    float const jumpSpeedXY = std::max(2.5f, player->GetSpeed(MOVE_RUN));
-    float constexpr normalJumpSpeedZ = 7.95555f;
-    player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
-
-    player->m_Events.AddEventAtOffset([casterGuid, targetGuid, resumeOrientation, hadDestination, destinationX, destinationY, destinationZ]()
-    {
-        Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
-        if (!caster || !caster->IsInWorld() || !caster->IsAlive())
-            return;
-
-        caster->SetFacingTo(resumeOrientation);
-
-        // JumpTo can leave virtual-session bots briefly idle after landing.
-        // If there was already an active destination before the jump, re-issue
-        // that same destination so the jump does not alter movement intent.
-        if (caster->HasUnitState(UNIT_STATE_ROOT) || caster->HasUnitState(UNIT_STATE_STUNNED))
-            return;
-
-        Unit* resolvedTarget = ObjectAccessor::GetUnit(*caster, targetGuid);
-        if (!resolvedTarget || !resolvedTarget->IsAlive())
-            return;
-
-        if (hadDestination)
-        {
-            Position destination(destinationX, destinationY, destinationZ, resumeOrientation);
-            caster->GetMotionMaster()->MovePoint(0, destination);
-        }
-    }, 250ms);
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -347,8 +301,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    float preCastOrientation = player->GetOrientation();
-
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
@@ -431,6 +383,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
     // front destination to mirror client cast payload semantics.
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+        FaceTargetForInstantCast(player, target, spellInfo);
+
     SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (context.spellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
@@ -448,10 +404,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = reasonText.Title;
         return false;
     }
-
-    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
-        JumpTurnForInstantCastVisual(player, target, spellInfo, preCastOrientation);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
