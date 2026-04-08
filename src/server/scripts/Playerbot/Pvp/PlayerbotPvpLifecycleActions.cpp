@@ -227,6 +227,51 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     return false;
 }
 
+bool TryJumpOffWarsongGraveyard(Player* player)
+{
+    if (!player || !player->IsAlive() || !IsWarsongGulch(player) || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        return false;
+
+    struct JumpRoute
+    {
+        Position launch;
+        Position landing;
+    };
+
+    static std::array<JumpRoute, 2> const routes =
+    {{
+        { Position(957.20f, 1424.40f, 345.48f, 0.0f), Position(978.20f, 1427.10f, 335.20f, 0.0f) },      // Horde GY -> field
+        { Position(1517.60f, 1485.30f, 352.00f, 0.0f), Position(1498.60f, 1484.30f, 340.20f, 0.0f) }      // Alliance GY -> field
+    }};
+
+    float nearestDist = std::numeric_limits<float>::max();
+    JumpRoute const* nearest = nullptr;
+    for (JumpRoute const& route : routes)
+    {
+        float const dist = player->GetDistance(route.launch.GetPositionX(), route.launch.GetPositionY(), route.launch.GetPositionZ());
+        if (dist < nearestDist)
+        {
+            nearestDist = dist;
+            nearest = &route;
+        }
+    }
+
+    if (!nearest || nearestDist > 22.0f)
+        return false;
+
+    if (!player->IsWithinDist3d(nearest->launch.GetPositionX(), nearest->launch.GetPositionY(), nearest->launch.GetPositionZ(), 3.5f))
+    {
+        IssueMovePointThrottled(player, nearest->launch, 1.5f, 500);
+        return true;
+    }
+
+    float const jumpSpeedXY = std::max(6.0f, player->GetSpeed(MOVE_RUN) * 1.1f);
+    float const jumpSpeedZ = 8.0f;
+    player->SetFacingTo(player->GetAngle(nearest->landing.GetPositionX(), nearest->landing.GetPositionY()));
+    player->JumpTo(jumpSpeedXY, jumpSpeedZ, false);
+    return true;
+}
+
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -555,9 +600,6 @@ bool HandleBattlegroundDeathState(Player* player)
 
     if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
     {
-        if (player->getDeathState() == JUST_DIED)
-            player->KillPlayer();
-
         player->BuildPlayerRepop();
         player->RepopAtGraveyard();
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -566,6 +608,33 @@ bool HandleBattlegroundDeathState(Player* player)
         return true;
     }
 
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return true;
+
+    if (battleground->IsPlayerInResurrectQueue(player->GetGUID()))
+        return true;
+
+    uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+    if (!spiritEntry)
+        return true;
+
+    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 90.0f, false);
+    if (!spiritGuide)
+        return true;
+
+    if (!player->IsWithinDist3d(spiritGuide->GetPositionX(), spiritGuide->GetPositionY(), spiritGuide->GetPositionZ(), 8.0f))
+    {
+        Position destination(spiritGuide->GetPositionX(), spiritGuide->GetPositionY(), spiritGuide->GetPositionZ(), player->GetOrientation());
+        IssueMovePointThrottled(player, destination, 3.0f, 700);
+        return true;
+    }
+
+    battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
+    sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(player, battleground, spiritGuide->GetGUID());
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP death handling: guid={} action=queue-resurrect spiritGuide={}.",
+        player->GetGUID().ToString(), spiritGuide->GetGUID().ToString());
     return true;
 }
 
@@ -1305,6 +1374,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, 80.0f);
+
+    if (TryJumpOffWarsongGraveyard(player))
+        return true;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
