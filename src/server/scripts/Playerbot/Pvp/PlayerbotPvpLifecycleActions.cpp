@@ -625,15 +625,20 @@ bool HandleBattlegroundDeathState(Player* player)
     if (!spiritEntry)
         return true;
 
-    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 90.0f, false);
+    // Mirror player core BG death handling behavior: once ghosted at a battleground
+    // graveyard, register at a nearby spirit guide and wait for the periodic wave rez.
+    // Avoid script-driven ghost movement because missed/path-blocked moves can prevent
+    // ever getting queued for resurrection.
+    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 30.0f, false);
     if (!spiritGuide)
-        return true;
-
-    if (!player->IsWithinDist3d(spiritGuide->GetPositionX(), spiritGuide->GetPositionY(), spiritGuide->GetPositionZ(), 8.0f))
     {
-        Position destination(spiritGuide->GetPositionX(), spiritGuide->GetPositionY(), spiritGuide->GetPositionZ(), player->GetOrientation());
-        IssueMovePointThrottled(player, destination, 3.0f, 700);
-        return true;
+        // Rare fallback: if team resolution and nearby search disagree (e.g. after team
+        // swaps or delayed map state), use any nearby spirit guide so bots still rez.
+        spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
+        if (!spiritGuide)
+            spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
+        if (!spiritGuide)
+            return true;
     }
 
     battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
