@@ -213,6 +213,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
 
     ObjectGuid const casterGuid = player->GetGUID();
     ObjectGuid const targetGuid = target->GetGUID();
+    uint32 const preJumpMovementFlags = player->GetUnitMovementFlags() & MOVEMENTFLAG_MASK_MOVING;
     float destinationX = 0.0f;
     float destinationY = 0.0f;
     float destinationZ = 0.0f;
@@ -226,7 +227,7 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
     float constexpr normalJumpSpeedZ = 7.95555f;
     player->JumpTo(jumpSpeedXY, normalJumpSpeedZ, false);
 
-    player->m_Events.AddEventAtOffset([casterGuid, targetGuid, resumeOrientation, hadDestination, destinationX, destinationY, destinationZ]()
+    player->m_Events.AddEventAtOffset([casterGuid, targetGuid, resumeOrientation, hadDestination, destinationX, destinationY, destinationZ, preJumpMovementFlags]()
     {
         Player* caster = ObjectAccessor::FindConnectedPlayer(casterGuid);
         if (!caster || !caster->IsInWorld() || !caster->IsAlive())
@@ -248,6 +249,16 @@ void JumpTurnForInstantCastVisual(Player* player, Unit* target, SpellInfo const*
         {
             Position destination(destinationX, destinationY, destinationZ, resumeOrientation);
             caster->GetMotionMaster()->MovePoint(0, destination);
+            return;
+        }
+
+        // Some kiting movement modes use direct movement flags rather than an
+        // active motion-master destination. Restore those flags after landing
+        // so instant-cast jump turns do not leave the bot standing still.
+        if (preJumpMovementFlags)
+        {
+            caster->AddUnitMovementFlag(MovementFlags(preJumpMovementFlags));
+            caster->SendMovementFlagUpdate();
         }
     }, 250ms);
 }

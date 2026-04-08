@@ -88,7 +88,7 @@ bool CastDisengageAction::Execute(Event event)
     if (!target)
         return false;
     // can cast spell check passed in isUseful()
-    bot->SetFacingTo(bot->GetAngle(target));
+    bot->SetOrientation(bot->GetAngle(target));
     return CastSpellAction::Execute(event);
 }
 
