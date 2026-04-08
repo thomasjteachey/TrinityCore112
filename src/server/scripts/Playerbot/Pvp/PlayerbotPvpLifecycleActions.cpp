@@ -1106,7 +1106,7 @@ void ApplyDeterministicObjectiveOffset(Battleground const* battleground, Player 
     // objective destination churn that causes oscillating movement.
     uint64 const seed = player->GetGUID().GetRawValue() ^ (uint64(battleground->GetMapId()) << 32) ^ battleground->GetInstanceID();
     float const angle = float(seed % 6283) / 1000.0f;
-    float const radius = 2.0f + float((seed / 6283) % 600) / 100.0f; // [2.0, 8.0)
+    float const radius = 0;
     destination.RelocateOffset(Position(std::cos(angle) * radius, std::sin(angle) * radius, 0.0f, 0.0f));
 }
 
