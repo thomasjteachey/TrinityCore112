@@ -65,25 +65,6 @@ struct WarlockCurseCooldownKeyHash
 
 std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
 
-uint32 NormalizeWarlockCurseCooldownSpellId(uint32 spellId)
-{
-    switch (spellId)
-    {
-        case 1714:  // Curse of Tongues (Rank 1)
-        case 11719: // Curse of Tongues (Rank 2)
-            return 1714;
-        case 980:   // Curse of Agony (Rank 1)
-        case 1014:  // Curse of Agony (Rank 2)
-        case 6217:  // Curse of Agony (Rank 3)
-        case 11711: // Curse of Agony (Rank 4)
-        case 11712: // Curse of Agony (Rank 5)
-        case 11713: // Curse of Agony (Rank 6)
-            return 980;
-        default:
-            return spellId;
-    }
-}
-
 uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
 {
     if (!player || !baseSpellId)
@@ -557,13 +538,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // short tactical cooldowns on selected PvP debuffs.
     if (context.spellId == 112826)
         player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(15));
-    if (context.spellId == 3034 || context.spellId == 1714 || context.spellId == 11713)
+    if (context.spellId == 3034 || context.spellId == 11719 || context.spellId == 11713)
     {
         if (uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId))
             player->GetSpellHistory()->AddCooldown(resolvedSpellId, 0, std::chrono::seconds(12));
     }
 
-    if ((context.spellId == 1714 || context.spellId == 11719 || context.spellId == 11713) && target)
+    if ((context.spellId == 11719 || context.spellId == 11713) && target)
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
 
     return true;
@@ -605,7 +586,7 @@ bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, U
     if (!player || !target || !spellId)
         return false;
 
-    WarlockCurseCooldownKey const key{ player->GetGUID(), target->GetGUID(), NormalizeWarlockCurseCooldownSpellId(spellId) };
+    WarlockCurseCooldownKey const key{ player->GetGUID(), target->GetGUID(), spellId };
     auto const itr = g_WarlockCurseTargetCooldowns.find(key);
     if (itr == g_WarlockCurseTargetCooldowns.end())
         return false;
@@ -624,7 +605,7 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
     if (!player || !target || !spellId || cooldown <= std::chrono::seconds::zero())
         return;
 
-    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), NormalizeWarlockCurseCooldownSpellId(spellId) }] = GameTime::Now() + cooldown;
+    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
 }
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
