@@ -6,6 +6,7 @@
 #include "MageActions.h"
 #include <cmath>
 #include "UseItemAction.h"
+#include "Position.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 #include "ServerFacade.h"
@@ -139,7 +140,7 @@ bool CastBlinkBackAction::Execute(Event event)
     if (!target)
         return false;
     // can cast spell check passed in isUseful()
-    bot->SetOrientation(bot->GetAngle(target) + M_PI);
+    bot->SetFacingTo(Position::NormalizeOrientation(bot->GetAngle(target) + M_PI));
     if (!CastSpellAction::Execute(event))
         return false;
 
