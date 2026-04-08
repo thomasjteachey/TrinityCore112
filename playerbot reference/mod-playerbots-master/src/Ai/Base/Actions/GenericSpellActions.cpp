@@ -209,7 +209,14 @@ CastHealingSpellAction::CastHealingSpellAction(PlayerbotAI* botAI, std::string c
     range = botAI->GetRange("heal");
 }
 
-bool CastHealingSpellAction::isUseful() { return CastAuraSpellAction::isUseful(); }
+bool CastHealingSpellAction::isUseful()
+{
+    Unit* target = GetTarget();
+    if (!target || target->IsFullHealth())
+        return false;
+
+    return CastSpellAction::isUseful();
+}
 
 bool CastAoeHealSpellAction::isUseful() { return CastSpellAction::isUseful(); }
 
