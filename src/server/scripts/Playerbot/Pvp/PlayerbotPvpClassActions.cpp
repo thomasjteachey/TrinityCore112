@@ -206,6 +206,51 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
     player->SetInFront(target);
 }
 
+bool TryEnableHunterAutoShot(Player* player, Unit* preferredTarget, char const* triggerReason)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !player->HasSpell(75))
+        return false;
+
+    Unit* target = preferredTarget;
+    if (!target || !target->IsAlive())
+        target = player->GetVictim();
+    if (!target || !target->IsAlive())
+        target = player->GetSelectedUnit();
+
+    if (!target || !target->IsAlive() || !player->IsValidAttackTarget(target))
+        return false;
+    if (player->IsWithinMeleeRange(target) || !player->IsWithinLOSInMap(target))
+        return false;
+
+    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
+    if (!autoShotInfo)
+        return false;
+
+    float const minRange = autoShotInfo->GetMinRange(false);
+    float const maxRange = autoShotInfo->GetMaxRange(false);
+    float const distance = player->GetDistance(target);
+    if (distance <= minRange || distance > maxRange)
+        return false;
+
+    Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75;
+    if (autoShotActive)
+        return true;
+
+    player->SetSelection(target->GetGUID());
+    player->SetFacingToObject(target);
+    player->SetInFront(target);
+
+    SpellCastResult const castResult = player->CastSpell(target, 75, false);
+    if (castResult != SPELL_CAST_OK)
+        return false;
+
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP hunter auto shot primed: guid={} target={} reason={}.",
+        player->GetGUID().ToString(), target->GetGUID().ToString(), triggerReason ? triggerReason : "none");
+    return true;
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -582,8 +627,15 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
-    if (!player || !context.classSpellsEnabled || !context.shouldExecute)
+    if (!player || !context.classSpellsEnabled)
         return false;
+
+    Unit* contextTarget = nullptr;
+    if (!context.targetGuid.IsEmpty())
+        contextTarget = ObjectAccessor::GetUnit(*player, context.targetGuid);
+
+    if (!context.shouldExecute)
+        return TryEnableHunterAutoShot(player, contextTarget, "decision-tree-complete");
 
     std::string failureReason;
     bool casted = false;
@@ -600,6 +652,10 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         context.targetGuid.ToString(),
         casted,
         context.reason ? context.reason : "none");
+
+    if (casted && (context.spellId == 20904 || context.spellId == 25294 || context.spellId == 5116))
+        TryEnableHunterAutoShot(player, contextTarget, context.actionName);
+
     return casted;
 }
 }
