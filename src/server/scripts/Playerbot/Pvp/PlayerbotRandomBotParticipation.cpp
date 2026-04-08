@@ -71,7 +71,8 @@ std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
-std::unordered_map<uint64, std::pair<Position, uint32>> g_BgFastTickProgressByGuid;
+std::unordered_map<uint64, std::pair<Position, uint32>> g_FastTickMotionByGuid;
+std::mutex g_FastTickMotionLock;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
@@ -345,14 +346,18 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     uint32 const nowMs = GameTime::GetGameTimeMS();
     uint64 const botGuid = player->GetGUID().GetRawValue();
     Position const currentPosition(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
-    auto& progressState = g_BgFastTickProgressByGuid[botGuid];
-    if (progressState.second == 0 || progressState.first.GetExactDist(currentPosition) > 3.0f)
+    bool movementStalled = false;
     {
-        progressState.first = currentPosition;
-        progressState.second = nowMs;
-    }
+        std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+        auto& progressState = g_FastTickMotionByGuid[botGuid];
+        if (progressState.second == 0 || progressState.first.GetExactDist(currentPosition) > 3.0f)
+        {
+            progressState.first = currentPosition;
+            progressState.second = nowMs;
+        }
 
-    bool const movementStalled = progressState.second != 0 && (nowMs - progressState.second) > 4500;
+        movementStalled = progressState.second != 0 && (nowMs - progressState.second) > 4500;
+    }
     bool didForceObjectiveMove = false;
     if (movementStalled && !player->IsInCombat() &&
         !player->HasUnitState(UNIT_STATE_ROOT) && !player->HasUnitState(UNIT_STATE_STUNNED))
@@ -999,7 +1004,6 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
-
     std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
     g_FastTickMotionByGuid.erase(player->GetGUID().GetRawValue());
 }
