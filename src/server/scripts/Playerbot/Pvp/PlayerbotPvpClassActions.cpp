@@ -348,6 +348,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const maxRange = spellInfo->GetMaxRange(false);
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
+        // Stealthed rogue openers (e.g., Cheap Shot) should actively close to
+        // melee instead of idling on repeated out-of-range cast attempts.
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+            player->GetMotionMaster()->MoveChase(target);
+
         failureReason = "out_of_range";
         return false;
     }
@@ -404,6 +409,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = reasonText.Title;
         return false;
     }
+
+    // Cheap Shot opener flow: after a successful stealth stun, immediately
+    // start melee auto attack so white swings begin without waiting for a
+    // later lifecycle tick to issue Attack().
+    if (context.spellId == 1833 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target && target->IsAlive())
+        player->Attack(target, true);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
