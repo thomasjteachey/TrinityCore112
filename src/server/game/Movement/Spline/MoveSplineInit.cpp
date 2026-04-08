@@ -20,10 +20,12 @@
 #include "MoveSpline.h"
 #include "MovementPacketBuilder.h"
 #include "Unit.h"
+#include "Player.h"
 #include "PathGenerator.h"
 #include "Transport.h"
 #include "Opcodes.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 
 namespace Movement
 {
@@ -257,20 +259,38 @@ namespace Movement
             {
                 PathType const pathType = path.GetPathType();
                 bool const playerControlled = unit->IsControlledByPlayer() || unit->GetOwnerGUID().IsPlayer();
+                bool virtualSessionControlled = false;
+                if (Player const* moverPlayer = unit->ToPlayer())
+                    if (WorldSession const* session = moverPlayer->GetSession())
+                        virtualSessionControlled = session->IsVirtualSession();
                 bool const navmeshAvailable = path.HasNavigationData();
+                bool const usesUnsafePathMode = navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT));
 
                 if (!(pathType & PATHFIND_NOPATH))
                 {
-                    if (!(playerControlled && ((pathType & PATHFIND_INCOMPLETE) ||
-                        (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))))
+                    bool const strictPlayerRejectPath = playerControlled && !virtualSessionControlled &&
+                        ((pathType & PATHFIND_INCOMPLETE) || usesUnsafePathMode);
+                    bool const virtualPlayerRejectPath = virtualSessionControlled && usesUnsafePathMode;
+
+                    if (!(strictPlayerRejectPath || virtualPlayerRejectPath))
                     {
                         MovebyPath(path.GetPath());
                         return;
                     }
                 }
 
-                if (playerControlled && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
-                    (navmeshAvailable && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT)))))
+                if (virtualSessionControlled && ((pathType & PATHFIND_NOPATH) || usesUnsafePathMode))
+                {
+                    args.path_Idx_offset = 0;
+                    args.path.resize(2);
+                    TransportPathTransform transform(unit, args.TransformForTransport);
+                    Vector3 stay(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
+                    args.path[1] = transform(stay);
+                    return;
+                }
+
+                if ((playerControlled && !virtualSessionControlled) && ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
+                    usesUnsafePathMode))
                 {
                     args.path_Idx_offset = 0;
                     args.path.resize(2);
