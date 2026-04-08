@@ -34,9 +34,11 @@
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
+#include "Util.h"
 
 #include <array>
 #include <cmath>
+#include <vector>
 
 namespace
 {
@@ -807,20 +809,36 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
     if (!player || !player->GetMap())
         return nullptr;
 
-    Unit const* best = nullptr;
-    float bestDistance = std::numeric_limits<float>::max();
     Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
         if (!HasHostileTarget(player, candidate))
             continue;
-        if (!(candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST))
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (candidate->HasAuraType(SPELL_AURA_MOD_FEAR))
+            return nullptr;
+    }
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    std::vector<Unit const*> fallbackCandidates;
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
             continue;
         if (IsTargetInvalidByImmunity(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             continue;
+
+        if (!(candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST))
+        {
+            fallbackCandidates.push_back(candidate);
+            continue;
+        }
 
         float const distance = player->GetDistance(candidate);
         if (distance < bestDistance)
@@ -830,7 +848,13 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         }
     }
 
-    return best;
+    if (best)
+        return best;
+
+    if (fallbackCandidates.empty())
+        return nullptr;
+
+    return fallbackCandidates[urand(0u, static_cast<uint32>(fallbackCandidates.size() - 1))];
 }
 
 Unit const* SelectEnemyClassTarget(Player const* player, uint8 classId, float maxDistance)
