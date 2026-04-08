@@ -1512,19 +1512,45 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     StartHoldState& hold = holdByGuid[botGuid];
     if (hold.battlegroundInstanceId != battleground->GetInstanceID())
     {
-        // Reference module parity intent: deterministic pre-start staging,
-        // not per-tick random retarget churn.
-        float const spread = IsWarsongGulch(player) ? 10.0f : 7.0f;
-        constexpr double tau = 6.28318530717958647692;
-        float const angle = float((botGuid % 12) * (tau / 12.0));
-        hold.destination = *start;
-        hold.destination.Relocate(
-            start->GetPositionX() + std::cos(angle) * spread,
-            start->GetPositionY() + std::sin(angle) * spread,
-            start->GetPositionZ(),
-            start->GetOrientation());
+        // Reference-module parity for WSG: use fixed waiting spots (left/right/spawn).
+        if (IsWarsongGulch(player))
+        {
+            Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
+            Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
+            Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
+            Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
+            Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
+            Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
+
+            uint32 const role = uint32(botGuid % 10);
+            Position base = (startTeam == TEAM_HORDE)
+                ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
+                : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
+            float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
+            hold.destination = base;
+            hold.destination.Relocate(
+                base.GetPositionX() + frand(-spread, spread),
+                base.GetPositionY() + frand(-spread, spread),
+                base.GetPositionZ(),
+                base.GetOrientation());
+        }
+        else
+        {
+            float const spread = 7.0f;
+            constexpr double tau = 6.28318530717958647692;
+            float const angle = float((botGuid % 12) * (tau / 12.0));
+            hold.destination = *start;
+            hold.destination.Relocate(
+                start->GetPositionX() + std::cos(angle) * spread,
+                start->GetPositionY() + std::sin(angle) * spread,
+                start->GetPositionZ(),
+                start->GetOrientation());
+        }
         hold.battlegroundInstanceId = battleground->GetInstanceID();
     }
+
+    if (player->isMoving())
+        return true;
 
     if (!player->IsWithinDist3d(hold.destination.GetPositionX(), hold.destination.GetPositionY(), hold.destination.GetPositionZ(), 4.0f))
         IssueMovePointThrottled(player, hold.destination, 3.0f, 1200);
