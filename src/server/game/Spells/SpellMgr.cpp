@@ -3625,6 +3625,17 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->Stances = UI64LIT(1) << (FORM_CAT - 1);
     });
 
+    // Sweeping Strikes should remain active after switching stances,
+    // but still only be castable in its original required stance.
+    ApplySpellFix({
+        12328, // Sweeping Strikes (Rank 1)
+        18765, // Sweeping Strikes (Rank 2)
+        35429  // Sweeping Strikes (Rank 3)
+    }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_NOT_SHAPESHIFT;
+    });
+
     ApplySpellFix({ 48421 }, [](SpellInfo* spellInfo)
     {
         spellInfo->Stances = UI64LIT(1) << (FORM_MOONKIN - 1);
