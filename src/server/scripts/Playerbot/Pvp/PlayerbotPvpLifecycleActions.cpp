@@ -34,7 +34,6 @@
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
-#include "PathGenerator.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Player.h"
@@ -100,156 +99,109 @@ TeamId ResolveBotTeamId(Player const* player)
     return ResolveTeamId(player->GetTeam());
 }
 
-bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
+std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
+{
+    // Reference-style objective routing through the same major WSG lane segments:
+    // own flag room -> tunnel/field spine -> enemy flag room.
+    static std::vector<Position> const allianceToHorde =
+    {
+        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
+        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
+        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
+        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
+        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
+        Position(1316.07f, 1533.53f, 315.700f, 0.0f),
+        Position(1206.84f, 1528.22f, 307.677f, 0.0f),
+        Position(1103.54f, 1521.89f, 314.583f, 0.0f),
+        Position(1052.11f, 1493.52f, 342.176f, 0.0f),
+        Position(1057.42f, 1452.75f, 341.131f, 0.0f),
+        Position(1037.96f, 1422.27f, 339.919f, 0.0f),
+        Position(966.01f, 1422.84f, 345.223f, 0.0f),
+        Position(942.74f, 1423.10f, 345.467f, 0.0f),
+        Position(933.331f, 1433.72f, 345.536f, 0.0f)
+    };
+
+    static std::vector<Position> const hordeToAlliance =
+    {
+        Position(944.859f, 1423.05f, 345.437f, 0.0f),
+        Position(965.049f, 1459.15f, 338.076f, 0.0f),
+        Position(1005.47f, 1448.19f, 335.864f, 0.0f),
+        Position(1051.09f, 1459.89f, 323.126f, 0.0f),
+        Position(1106.87f, 1462.13f, 316.558f, 0.0f),
+        Position(1124.37f, 1462.28f, 315.853f, 0.0f),
+        Position(1126.45f, 1487.4f, 314.136f, 0.0f),
+        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
+        Position(1276.17f, 1533.72f, 311.722f, 0.0f),
+        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
+        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
+        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
+        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
+        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
+        Position(1519.53f, 1481.87f, 352.024f, 0.0f)
+    };
+
+    return (botTeam == TEAM_ALLIANCE) ? allianceToHorde : hordeToAlliance;
+}
+
+bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& finalDestination, Position& waypointOut)
 {
     if (!player || !IsWarsongGulch(player))
         return false;
 
-    TeamId const botTeam = ResolveBotTeamId(player);
-
-    Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
-    Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
-
-    destination = (botTeam == TEAM_ALLIANCE) ? hordeFlagStand : allianceFlagStand;
-    return true;
-}
-
-struct WsgBattlePathNode
-{
-    Position point;
-    std::vector<uint32> neighbors;
-};
-
-std::vector<WsgBattlePathNode> const& GetWarsongBattlePathGraph()
-{
-    // Approximate battle-path graph with multiple route choices (mid/ramp/tunnel)
-    // and cross-links for recovery when one lane has poor navmesh probes.
-    static std::vector<WsgBattlePathNode> const graph =
+    struct WsgObjectivePathState
     {
-        { Position(1540.4f, 1481.3f, 351.8f, 0.0f), { 1, 2, 3 } },   // Alliance flag room
-        { Position(1496.0f, 1478.0f, 352.0f, 0.0f), { 0, 4 } },      // Alliance ramp
-        { Position(1504.0f, 1455.0f, 350.0f, 0.0f), { 0, 7 } },      // Alliance tunnel
-        { Position(1458.0f, 1470.0f, 351.0f, 0.0f), { 0, 10 } },     // Alliance roof exit
-        { Position(1410.0f, 1470.0f, 349.5f, 0.0f), { 1, 5, 10 } },
-        { Position(1340.0f, 1464.0f, 346.5f, 0.0f), { 4, 6, 11 } },
-        { Position(1260.0f, 1456.0f, 342.5f, 0.0f), { 5, 12, 13 } }, // Mid bridge hub
-        { Position(1418.0f, 1448.0f, 345.5f, 0.0f), { 2, 8, 11 } },
-        { Position(1325.0f, 1438.0f, 341.5f, 0.0f), { 7, 9, 12 } },
-        { Position(1232.0f, 1430.0f, 337.5f, 0.0f), { 8, 13 } },
-        { Position(1380.0f, 1488.0f, 351.5f, 0.0f), { 3, 4, 11 } },
-        { Position(1290.0f, 1480.0f, 347.5f, 0.0f), { 5, 7, 10, 12 } },
-        { Position(1198.0f, 1468.0f, 341.5f, 0.0f), { 6, 8, 11, 13 } },
-        { Position(1110.0f, 1452.0f, 338.5f, 0.0f), { 6, 9, 12, 14 } },
-        { Position(1020.0f, 1442.0f, 338.5f, 0.0f), { 13, 15, 16 } },
-        { Position(965.0f, 1437.0f, 343.0f, 0.0f), { 14, 17 } },
-        { Position(1006.0f, 1415.0f, 341.0f, 0.0f), { 14, 18 } },
-        { Position(934.0f, 1434.0f, 345.2f, 0.0f), { 15, 19 } },      // Horde ramp
-        { Position(944.0f, 1410.0f, 345.0f, 0.0f), { 16, 19 } },      // Horde tunnel
-        { Position(916.0f, 1434.4f, 345.4f, 0.0f), { 17, 18 } }       // Horde flag room
+        uint32 battlegroundInstanceId = 0;
+        uint32 nextIndex = 0;
     };
 
-    return graph;
-}
+    static std::unordered_map<uint64, WsgObjectivePathState> stateByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    WsgObjectivePathState& state = stateByGuid[botGuid];
 
-uint32 FindClosestGraphNode(std::vector<WsgBattlePathNode> const& graph, Position const& origin)
-{
-    uint32 closestIndex = 0;
-    float closestDistance = std::numeric_limits<float>::max();
-
-    for (uint32 i = 0; i < graph.size(); ++i)
-    {
-        float const dx = graph[i].point.GetPositionX() - origin.GetPositionX();
-        float const dy = graph[i].point.GetPositionY() - origin.GetPositionY();
-        float const dz = graph[i].point.GetPositionZ() - origin.GetPositionZ();
-        float const distSq = dx * dx + dy * dy + dz * dz;
-        if (distSq < closestDistance)
-        {
-            closestDistance = distSq;
-            closestIndex = i;
-        }
-    }
-
-    return closestIndex;
-}
-
-bool TryBuildWarsongGraphPath(uint32 startNode, uint32 goalNode, std::vector<uint32>& pathOut)
-{
-    std::vector<WsgBattlePathNode> const& graph = GetWarsongBattlePathGraph();
-    if (startNode >= graph.size() || goalNode >= graph.size())
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
         return false;
 
-    std::vector<float> bestDistance(graph.size(), std::numeric_limits<float>::max());
-    std::vector<int32> previous(graph.size(), -1);
+    TeamId const botTeam = ResolveBotTeamId(player);
+    std::vector<Position> const& path = GetWarsongObjectivePathForTeam(botTeam);
+    if (path.empty())
+        return false;
 
-    using QueueEntry = std::pair<float, uint32>;
-    std::priority_queue<QueueEntry, std::vector<QueueEntry>, std::greater<QueueEntry>> queue;
-    bestDistance[startNode] = 0.0f;
-    queue.push({ 0.0f, startNode });
-
-    while (!queue.empty())
+    if (state.battlegroundInstanceId != battleground->GetInstanceID())
     {
-        QueueEntry const current = queue.top();
-        queue.pop();
+        state.battlegroundInstanceId = battleground->GetInstanceID();
+        state.nextIndex = 0;
 
-        float const distanceSoFar = current.first;
-        uint32 const node = current.second;
-        if (distanceSoFar > bestDistance[node])
-            continue;
-
-        if (node == goalNode)
-            break;
-
-        Position const& nodePos = graph[node].point;
-        for (uint32 neighbor : graph[node].neighbors)
+        float nearestDist = std::numeric_limits<float>::max();
+        for (uint32 i = 0; i < path.size(); ++i)
         {
-            if (neighbor >= graph.size())
-                continue;
-
-            Position const& neighborPos = graph[neighbor].point;
-            float const edgeWeight = nodePos.GetExactDist(neighborPos);
-            float const candidateDistance = distanceSoFar + edgeWeight;
-            if (candidateDistance < bestDistance[neighbor])
+            float const dist = player->GetDistance(path[i].GetPositionX(), path[i].GetPositionY(), path[i].GetPositionZ());
+            if (dist < nearestDist)
             {
-                bestDistance[neighbor] = candidateDistance;
-                previous[neighbor] = static_cast<int32>(node);
-                queue.push({ candidateDistance, neighbor });
+                nearestDist = dist;
+                state.nextIndex = i;
             }
         }
     }
 
-    if (bestDistance[goalNode] == std::numeric_limits<float>::max())
-        return false;
+    if (state.nextIndex >= path.size())
+        state.nextIndex = static_cast<uint32>(path.size() - 1);
 
-    pathOut.clear();
-    for (int32 node = static_cast<int32>(goalNode); node >= 0; node = previous[node])
-        pathOut.push_back(static_cast<uint32>(node));
+    Position const& currentWp = path[state.nextIndex];
+    if (player->IsWithinDist3d(currentWp.GetPositionX(), currentWp.GetPositionY(), currentWp.GetPositionZ(), 10.0f))
+    {
+        if (state.nextIndex + 1 < path.size())
+            ++state.nextIndex;
+    }
 
-    std::reverse(pathOut.begin(), pathOut.end());
-    return !pathOut.empty();
-}
+    // Close enough to final objective anchor: move directly to final objective.
+    if (player->IsWithinDist3d(finalDestination.GetPositionX(), finalDestination.GetPositionY(), finalDestination.GetPositionZ(), 35.0f))
+    {
+        waypointOut = finalDestination;
+        return true;
+    }
 
-bool TryGetWarsongLaneWaypoint(Player* player, Position const& finalDestination, Position& waypointOut)
-{
-    if (!player || !IsWarsongGulch(player))
-        return false;
-
-    std::vector<WsgBattlePathNode> const& graph = GetWarsongBattlePathGraph();
-    if (graph.empty())
-        return false;
-
-    Position origin(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
-    uint32 const startNode = FindClosestGraphNode(graph, origin);
-    uint32 const goalNode = FindClosestGraphNode(graph, finalDestination);
-
-    std::vector<uint32> path;
-    if (!TryBuildWarsongGraphPath(startNode, goalNode, path))
-        return false;
-
-    uint32 nextNode = path.front();
-    if (path.size() > 1)
-        nextNode = path[1];
-
-    waypointOut = graph[nextNode].point;
+    waypointOut = path[state.nextIndex];
     return true;
 }
 
@@ -361,8 +313,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     struct MoveOrderState
     {
         Position lastDestination;
-        Position lastPosition;
-        uint32 lastProgressMs = 0;
         uint32 lastIssueMs = 0;
     };
 
@@ -370,232 +320,27 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
-    Position const currentPosition(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
-    if (state.lastProgressMs == 0 || state.lastPosition.GetExactDist(currentPosition) > 1.5f)
-    {
-        state.lastPosition = currentPosition;
-        state.lastProgressMs = nowMs;
-    }
-
-    bool const movementStalled = state.lastProgressMs != 0 && (nowMs - state.lastProgressMs) > 3500;
-
     bool const destinationChanged = state.lastIssueMs == 0 ||
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-    if (!destinationChanged && !canReissueByTime && !movementStalled)
+    if (!destinationChanged && !canReissueByTime)
     {
-        std::ostringstream throttledDetail;
-        throttledDetail << "movepoint-skip reason=throttle"
-                        << " curr=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
-                        << " dest=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
-                        << " lastIssuedMsAgo=" << (nowMs - state.lastIssueMs);
-        EmitBattlegroundGmDebug(player, throttledDetail.str(), 2000);
         return false;
-    }
-
-    if (movementStalled)
-    {
-        std::ostringstream stalledDetail;
-        stalledDetail << "movepoint-force-reissue reason=stalled"
-                      << " stalledMs=" << (nowMs - state.lastProgressMs);
-        EmitBattlegroundGmDebug(player, stalledDetail.str(), 1200);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE || movementStalled)
+    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
-        std::ostringstream overrideDetail;
-        overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
-        EmitBattlegroundGmDebug(player, overrideDetail.str(), 5000);
         motionMaster->Clear();
-        if (movementStalled)
-            player->StopMoving();
     }
 
-    bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-    bool usedDirectLosFallback = false;
-    bool usedLaneGraphFallback = false;
+    bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
 
-    Position issuedDestination = destination;
-    if (IsWarsongGulch(player))
-    {
-        // Keep WSG movement path-safe for managed virtual bots: evaluate probes and
-        // reject unsafe navmesh modes early.
-        auto evaluatePath = [player](Position const& candidate, PathType& pathTypeOut, bool& calculateOkOut) -> bool
-        {
-            PathGenerator path(player);
-            calculateOkOut = path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false);
-            if (!calculateOkOut)
-            {
-                pathTypeOut = PATHFIND_NOPATH;
-                return true;
-            }
-
-            pathTypeOut = path.GetPathType();
-            if (pathTypeOut & PATHFIND_NOPATH)
-                return true;
-
-            return pathTypeOut & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
-        };
-
-        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
-        constexpr float maxStepDistance = 45.0f;
-        if (directDistance > maxStepDistance)
-        {
-            // Prefer a graph waypoint when long direct probes are likely to cross
-            // navmesh trouble spots (tunnel/ramp transitions).
-            Position graphWaypoint;
-            if (TryGetWarsongLaneWaypoint(player, destination, graphWaypoint))
-            {
-                PathType graphPathType = PATHFIND_BLANK;
-                bool graphCalculated = false;
-                if (!evaluatePath(graphWaypoint, graphPathType, graphCalculated))
-                {
-                    issuedDestination = graphWaypoint;
-                    usedLaneGraphFallback = true;
-                    std::ostringstream laneGraphDetail;
-                    laneGraphDetail << "wsg-graph-step-selected"
-                                    << " pathType=" << uint32(graphPathType)
-                                    << " calc=" << (graphCalculated ? 1 : 0);
-                    EmitBattlegroundGmDebug(player, laneGraphDetail.str(), 1500);
-                }
-            }
-
-            if (!usedLaneGraphFallback)
-            {
-                float const ratio = maxStepDistance / directDistance;
-                issuedDestination.Relocate(
-                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                    player->GetOrientation());
-            }
-        }
-
-        PathType issuedPathType = PATHFIND_BLANK;
-        bool issuedCalculated = false;
-        bool unsafeIssuedPath = evaluatePath(issuedDestination, issuedPathType, issuedCalculated);
-        if (unsafeIssuedPath)
-        {
-            constexpr float fallbackSteps[] = { 32.0f, 24.0f, 16.0f, 10.0f };
-            bool foundSafeCandidate = false;
-            for (float stepDistance : fallbackSteps)
-            {
-                if (directDistance <= stepDistance)
-                    continue;
-
-                float const ratio = stepDistance / directDistance;
-                Position candidate(
-                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                    player->GetOrientation());
-
-                PathType candidatePathType = PATHFIND_BLANK;
-                bool candidateCalculated = false;
-                if (!evaluatePath(candidate, candidatePathType, candidateCalculated))
-                {
-                    issuedDestination = candidate;
-                    foundSafeCandidate = true;
-                    std::ostringstream safeStepDetail;
-                    safeStepDetail << "wsg-step-selected step=" << int32(stepDistance)
-                                   << " pathType=" << uint32(candidatePathType)
-                                   << " calc=" << (candidateCalculated ? 1 : 0);
-                    EmitBattlegroundGmDebug(player, safeStepDetail.str(), 1500);
-                    break;
-                }
-            }
-
-            if (!foundSafeCandidate)
-            {
-                Position laneWaypoint;
-                if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
-                {
-                    PathType lanePathType = PATHFIND_BLANK;
-                    bool laneCalculated = false;
-                    if (!evaluatePath(laneWaypoint, lanePathType, laneCalculated))
-                    {
-                        issuedDestination = laneWaypoint;
-                        foundSafeCandidate = true;
-                        usedLaneGraphFallback = true;
-                        std::ostringstream laneSafeDetail;
-                        laneSafeDetail << "wsg-graph-fallback-selected"
-                                       << " pathType=" << uint32(lanePathType)
-                                       << " calc=" << (laneCalculated ? 1 : 0);
-                        EmitBattlegroundGmDebug(player, laneSafeDetail.str(), 1500);
-                    }
-                }
-            }
-
-            if (!foundSafeCandidate)
-            {
-                std::ostringstream unsafeDetail;
-                unsafeDetail << "wsg-step-unsafe-all-candidates"
-                             << " directDist=" << int32(directDistance)
-                             << " issuedPathType=" << uint32(issuedPathType)
-                             << " calc=" << (issuedCalculated ? 1 : 0);
-                EmitBattlegroundGmDebug(player, unsafeDetail.str(), 1500);
-
-                // Final troubleshooting fallback: take a tiny direct-Los step so
-                // bots don't deadlock when navmesh flags all short probes unsafe.
-                float const emergencyStepDistance = std::min(8.0f, directDistance);
-                if (emergencyStepDistance > 0.0f)
-                {
-                    float const ratio = emergencyStepDistance / directDistance;
-                    Position emergencyDestination(
-                        player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                        player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                        player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                        player->GetOrientation());
-
-                    if (player->IsWithinLOS(emergencyDestination.GetPositionX(), emergencyDestination.GetPositionY(), emergencyDestination.GetPositionZ()))
-                    {
-                        issuedDestination = emergencyDestination;
-                        generatePath = false;
-                        usedDirectLosFallback = true;
-                        EmitBattlegroundGmDebug(player, "wsg-step-direct-los-fallback enabled", 1500);
-                    }
-                }
-            }
-        }
-    }
-
-    std::ostringstream moveDetail;
-    if (IsWarsongGulch(player) &&
-        !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
-    {
-        Position laneWaypoint;
-        if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
-        {
-            issuedDestination = laneWaypoint;
-            generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-            usedLaneGraphFallback = true;
-            EmitBattlegroundGmDebug(player, "movepoint-lane-fallback reason=no-los-to-issued-destination", 1500);
-        }
-        else if (usedDirectLosFallback)
-        {
-            EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
-            return false;
-        }
-        else
-        {
-            EmitBattlegroundGmDebug(player, "movepoint-continue reason=no-los-and-no-lane-waypoint", 1500);
-        }
-    }
-
-    moveDetail << "movepoint-issue"
-               << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
-               << " to=(" << int32(issuedDestination.GetPositionX()) << "," << int32(issuedDestination.GetPositionY()) << "," << int32(issuedDestination.GetPositionZ()) << ")"
-               << " movementType=" << static_cast<uint32>(currentMovement)
-               << " generatePath=" << (generatePath ? 1 : 0)
-               << " laneFallback=" << (usedLaneGraphFallback ? 1 : 0)
-               << " losFallback=" << (usedDirectLosFallback ? 1 : 0);
-    EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
-
-    // Reference-module parity: issue MovePoint directly and let MotionMaster handle path generation.
-    motionMaster->MovePoint(0, issuedDestination, generatePath);
-    state.lastDestination = issuedDestination;
+    // Reference parity: issue movement directly to resolved objective/start targets.
+    // Let core pathing own corridor/tunnel traversal instead of script-layer lane steering.
+    motionMaster->MovePoint(0, destination, generatePath);
+    state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
 }
@@ -1268,10 +1013,12 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (!battleground || !player)
         return false;
 
-    // WSG needs deterministic cross-map intent; base anchors can be missing or
-    // locally-biased in sparse managed-bot matches, which leaves bots stalling.
-    if (TryGetWarsongEnemyBasePosition(player, destination))
+    if (IsWarsongGulch(player))
     {
+        TeamId const botTeam = ResolveBotTeamId(player);
+        Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+        Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+        destination = (botTeam == TEAM_ALLIANCE) ? hordeFlagStand : allianceFlagStand;
         ApplyDeterministicObjectiveOffset(battleground, player, destination);
         return true;
     }
@@ -1293,25 +1040,6 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
     {
         destination = Position(*enemyStart);
-        ApplyDeterministicObjectiveOffset(battleground, player, destination);
-        return true;
-    }
-
-    // Fallback for sparse/invalid start-anchor states:
-    // WSG bots can otherwise idle in their own base graveyard when no objective
-    // anchor is resolved from battleground starts.
-    if (battleground->GetMapId() == 489) // Warsong Gulch
-    {
-        Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
-        Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
-
-        if (botTeam == TEAM_ALLIANCE)
-            destination = hordeFlagStand;
-        else if (botTeam == TEAM_HORDE)
-            destination = allianceFlagStand;
-        else
-            destination = hordeFlagStand;
-
         ApplyDeterministicObjectiveOffset(battleground, player, destination);
         return true;
     }
@@ -1432,43 +1160,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         player->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
     }
 
-    // Keep managed bots moving even when tactical decision hooks are disabled
-    // or when another behavior tree branch (e.g. buffing) wins the current tick.
-    // This prevents "stand still at gate-open" stalls in active battlegrounds.
-    if (!CanIssueBotMovement(player))
-    {
-        std::ostringstream blockedReason;
-        blockedReason << "movement-blocked alive=" << (player->IsAlive() ? 1 : 0)
-                      << " ghost=" << (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST) ? 1 : 0)
-                      << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
-                      << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0);
-        EmitBattlegroundGmDebug(player, blockedReason.str());
-        return true;
-    }
-
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 65.0f;
-    if (EngageNearestEnemyPlayer(player, engageDistance))
-        return true;
-
-    if (Battleground* battleground = player->GetBattleground())
-    {
-        Position destination;
-        if (TryGetObjectivePosition(battleground, player, destination))
-        {
-            bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
-            if (!withinObjectiveRange)
-                IssueMovePointThrottled(player, destination);
-            else
-                EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
-            return true;
-        }
-    }
-
-    if (IsWarsongGulch(player))
-        return MoveToClosestBattlegroundGraveyard(player);
-
-    EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
-    return true;
+    // Reference module parity: in-progress movement/combat are handled by
+    // tactical actions (move to objective / check objective), not lifecycle.
+    return false;
 }
 
 bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalContext const& context)
@@ -1478,6 +1172,18 @@ bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalCo
 
     if (!player->IsAlive())
         return false;
+
+    if (Battleground* battleground = player->GetBattleground())
+    {
+        // During prep phase only process the explicit start-position action.
+        // This prevents competing tactical actions from pulling bots back/forth.
+        if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+        {
+            if (IsTacticalAction(context.actionName, "bg move to start"))
+                return MoveToStartPrimitive(player);
+            return false;
+        }
+    }
 
     if (IsTacticalAction(context.actionName, "bg move to start"))
         return MoveToStartPrimitive(player);
@@ -1502,26 +1208,102 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
-    if (Battleground* battleground = player->GetBattleground())
-        return battleground->GetStatus() == STATUS_WAIT_JOIN;
+    struct StartHoldState
+    {
+        Position destination;
+        uint32 battlegroundInstanceId = 0;
+    };
 
-    return false;
+    static std::unordered_map<uint64, StartHoldState> holdByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
+    {
+        holdByGuid.erase(botGuid);
+        return false;
+    }
+
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
+    TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
+    Position const* start = battleground->GetTeamStartPosition(startTeam);
+    if (!start)
+        return false;
+
+    StartHoldState& hold = holdByGuid[botGuid];
+    if (hold.battlegroundInstanceId != battleground->GetInstanceID())
+    {
+        if (IsWarsongGulch(player))
+        {
+            Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
+            Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
+            Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
+            Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
+            Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
+            Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
+
+            uint32 const role = uint32(botGuid % 10);
+            Position const base = (startTeam == TEAM_HORDE)
+                ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
+                : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
+            float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
+            hold.destination.Relocate(
+                base.GetPositionX() + frand(-spread, spread),
+                base.GetPositionY() + frand(-spread, spread),
+                base.GetPositionZ(),
+                base.GetOrientation());
+        }
+        else
+        {
+            hold.destination = *start;
+            hold.destination.Relocate(
+                start->GetPositionX() + frand(-7.0f, 7.0f),
+                start->GetPositionY() + frand(-7.0f, 7.0f),
+                start->GetPositionZ(),
+                start->GetOrientation());
+        }
+
+        hold.battlegroundInstanceId = battleground->GetInstanceID();
+    }
+
+    if (player->isMoving())
+        return true;
+
+    if (!player->IsWithinDist3d(hold.destination.GetPositionX(), hold.destination.GetPositionY(), hold.destination.GetPositionZ(), 4.0f))
+        IssueMovePointThrottled(player, hold.destination, 3.0f, 1200);
+
+    return true;
 }
 
 bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
         return false;
-    if (!CanIssueBotMovement(player))
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() == STATUS_WAIT_JOIN)
         return false;
 
-    bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
-    if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
-        return true;
+    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        return false;
 
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 80.0f;
-    if (EngageNearestEnemyPlayer(player, engageDistance))
-        return true;
+    if (player->isMoving())
+        return false;
+
+    switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
+    {
+        case IDLE_MOTION_TYPE:
+        case CHASE_MOTION_TYPE:
+        case POINT_MOTION_TYPE:
+        case FOLLOW_MOTION_TYPE:
+            break;
+        default:
+            return true;
+    }
+
+    if (player->IsInCombat())
+        return EngageNearestEnemyPlayer(player, 80.0f);
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
@@ -1548,47 +1330,28 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition)
     {
-        if (Battleground* battleground = player->GetBattleground())
+        if (battleground)
         {
             Position destination;
             if (TryGetObjectivePosition(battleground, player, destination))
             {
-                bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
+                Position issuedDestination = destination;
+                if (IsWarsongGulch(player))
+                    TryGetWarsongObjectiveProgressWaypoint(player, destination, issuedDestination);
+
+                bool const withinObjectiveRange = player->IsWithinDist3d(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ(), 12.0f);
                 if (!withinObjectiveRange)
-                    IssueMovePointThrottled(player, destination);
+                    IssueMovePointThrottled(player, issuedDestination);
                 else
                     EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
                 return true;
             }
 
-            // WSG can enter sparse states where objective anchors are unavailable.
-            // In those windows, force a large-radius enemy scan before falling
-            // back to local graveyard movement so bots keep crossing the map.
-            if (EngageNearestEnemyPlayer(player, 2000.0f))
-                return true;
-
-            if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
-            {
-                Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
-                if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    IssueMovePointThrottled(player, destination);
-                return true;
-            }
+            return false;
         }
     }
 
-    bool const fallbackEngage = EngageNearestEnemyPlayer(player, 55.0f);
-    if (!fallbackEngage)
-    {
-        if (IsWarsongGulch(player))
-            return MoveToClosestBattlegroundGraveyard(player);
-
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP movement skipped: bot={} reason=no-objective-movement-and-no-fallback-target.",
-            player->GetGUID().ToString());
-    }
-
-    return fallbackEngage;
+    return false;
 }
 
 bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
