@@ -38,6 +38,7 @@
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Player.h"
+#include "Spell.h"
 #include "SpellMgr.h"
 #include "SpellInfo.h"
 #include "World.h"
