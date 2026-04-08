@@ -331,14 +331,24 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
 
     playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
     playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
-    playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+    bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
 
     playerbot::BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
     inProgressContext.queueOperation = playerbot::QueueOperationType::None;
     inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
     inProgressContext.shouldHandleInProgressStatus = true;
-    playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+
+    std::ostringstream tickDetail;
+    tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
+               << " lifecycle=" << (didExecuteLifecycle ? 1 : 0)
+               << " alive=" << (player->IsAlive() ? 1 : 0)
+               << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
+               << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0)
+               << " x=" << int32(player->GetPositionX())
+               << " y=" << int32(player->GetPositionY());
+    EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
