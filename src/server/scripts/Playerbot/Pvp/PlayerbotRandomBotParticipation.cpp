@@ -71,13 +71,7 @@ std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
-struct FastTickMotionState
-{
-    Position lastPosition;
-    uint32 lastMovedMs = 0;
-};
-std::unordered_map<uint64, FastTickMotionState> g_FastTickMotionByGuid;
-std::mutex g_FastTickMotionLock;
+std::unordered_map<uint64, std::pair<Position, uint32>> g_BgFastTickProgressByGuid;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
@@ -348,6 +342,26 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     inProgressContext.shouldHandleInProgressStatus = true;
     bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
 
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    Position const currentPosition(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+    auto& progressState = g_BgFastTickProgressByGuid[botGuid];
+    if (progressState.second == 0 || progressState.first.GetExactDist(currentPosition) > 3.0f)
+    {
+        progressState.first = currentPosition;
+        progressState.second = nowMs;
+    }
+
+    bool const movementStalled = progressState.second != 0 && (nowMs - progressState.second) > 4500;
+    bool didForceObjectiveMove = false;
+    if (movementStalled && !player->IsInCombat() &&
+        !player->HasUnitState(UNIT_STATE_ROOT) && !player->HasUnitState(UNIT_STATE_STUNNED))
+    {
+        didForceObjectiveMove = playerbot::BattlegroundTacticalActions::MoveToObjectivePrimitive(player, tacticalContext);
+        if (!didForceObjectiveMove)
+            didForceObjectiveMove = playerbot::BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(player);
+    }
+
     std::ostringstream tickDetail;
     uint32 const bgTeam = player->GetBGTeam();
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
@@ -356,6 +370,8 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
                << " alive=" << (player->IsAlive() ? 1 : 0)
                << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
                << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0)
+               << " stalled=" << (movementStalled ? 1 : 0)
+               << " forceMove=" << (didForceObjectiveMove ? 1 : 0)
                << " bgTeam=" << bgTeam
                << " assignedTeam=" << assignedTeam
                << " x=" << int32(player->GetPositionX())
