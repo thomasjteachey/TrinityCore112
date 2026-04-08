@@ -357,40 +357,6 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
                << " x=" << int32(player->GetPositionX())
                << " y=" << int32(player->GetPositionY());
     EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
-
-    uint64 const guidRaw = player->GetGUID().GetRawValue();
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    bool shouldForceUnstick = false;
-    {
-        std::lock_guard<std::mutex> lock(g_FastTickMotionLock);
-        FastTickMotionState& motionState = g_FastTickMotionByGuid[guidRaw];
-        if (motionState.lastMovedMs == 0)
-            motionState.lastMovedMs = nowMs;
-
-        if (motionState.lastPosition.GetExactDist(*player) > 1.5f)
-        {
-            motionState.lastPosition = *player;
-            motionState.lastMovedMs = nowMs;
-        }
-        else if (nowMs > motionState.lastMovedMs + 4000)
-            shouldForceUnstick = true;
-    }
-
-    if (shouldForceUnstick)
-    {
-        uint32 const bgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
-        TeamId const botTeam = (bgTeam == ALLIANCE) ? TEAM_ALLIANCE : TEAM_HORDE;
-        TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
-
-        if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
-        {
-            player->GetMotionMaster()->MovePoint(0, *enemyStart, false);
-            EmitLifecycleGmDebug(player, "bg-fasttick-unstick=enemy-start-movepoint", 1000);
-            std::lock_guard<std::mutex> lock(g_FastTickMotionLock);
-            g_FastTickMotionByGuid[guidRaw].lastMovedMs = nowMs;
-            g_FastTickMotionByGuid[guidRaw].lastPosition = *player;
-        }
-    }
 }
 
 void TryFinalizePendingVirtualBotTeleport(Player* player)
