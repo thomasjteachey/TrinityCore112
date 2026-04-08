@@ -34,7 +34,6 @@
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
-#include "PathGenerator.h"
 #include "Item.h"
 #include "ItemTemplate.h"
 #include "Player.h"
@@ -114,6 +113,25 @@ bool TryGetWarsongEnemyBasePosition(Player* player, Position& destination)
     return true;
 }
 
+bool TryGetWarsongBaseExitWaypoint(Player* player, Position& waypointOut)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    TeamId const botTeam = ResolveBotTeamId(player);
+    Position const allianceFlagRoom(1519.53f, 1481.87f, 352.024f, 0.0f);
+    Position const hordeFlagRoom(933.331f, 1433.72f, 345.536f, 0.0f);
+    Position const allianceExit(1508.27f, 1493.17f, 352.005f, 0.0f);
+    Position const hordeExit(944.859f, 1423.05f, 345.437f, 0.0f);
+
+    Position const& baseAnchor = (botTeam == TEAM_ALLIANCE) ? allianceFlagRoom : hordeFlagRoom;
+    if (player->GetDistance(baseAnchor) > 45.0f)
+        return false;
+
+    waypointOut = (botTeam == TEAM_ALLIANCE) ? allianceExit : hordeExit;
+    return true;
+}
+
 struct WsgBattlePathNode
 {
     Position point;
@@ -122,30 +140,111 @@ struct WsgBattlePathNode
 
 std::vector<WsgBattlePathNode> const& GetWarsongBattlePathGraph()
 {
-    // Approximate battle-path graph with multiple route choices (mid/ramp/tunnel)
-    // and cross-links for recovery when one lane has poor navmesh probes.
+    // Reference-module parity: mirror mod-playerbots WSG waypoint lanes (vmangos
+    // battle paths) and connect adjacent points as a routing graph.
     static std::vector<WsgBattlePathNode> const graph =
     {
-        { Position(1540.4f, 1481.3f, 351.8f, 0.0f), { 1, 2, 3 } },   // Alliance flag room
-        { Position(1496.0f, 1478.0f, 352.0f, 0.0f), { 0, 4 } },      // Alliance ramp
-        { Position(1504.0f, 1455.0f, 350.0f, 0.0f), { 0, 7 } },      // Alliance tunnel
-        { Position(1458.0f, 1470.0f, 351.0f, 0.0f), { 0, 10 } },     // Alliance roof exit
-        { Position(1410.0f, 1470.0f, 349.5f, 0.0f), { 1, 5, 10 } },
-        { Position(1340.0f, 1464.0f, 346.5f, 0.0f), { 4, 6, 11 } },
-        { Position(1260.0f, 1456.0f, 342.5f, 0.0f), { 5, 12, 13 } }, // Mid bridge hub
-        { Position(1418.0f, 1448.0f, 345.5f, 0.0f), { 2, 8, 11 } },
-        { Position(1325.0f, 1438.0f, 341.5f, 0.0f), { 7, 9, 12 } },
-        { Position(1232.0f, 1430.0f, 337.5f, 0.0f), { 8, 13 } },
-        { Position(1380.0f, 1488.0f, 351.5f, 0.0f), { 3, 4, 11 } },
-        { Position(1290.0f, 1480.0f, 347.5f, 0.0f), { 5, 7, 10, 12 } },
-        { Position(1198.0f, 1468.0f, 341.5f, 0.0f), { 6, 8, 11, 13 } },
-        { Position(1110.0f, 1452.0f, 338.5f, 0.0f), { 6, 9, 12, 14 } },
-        { Position(1020.0f, 1442.0f, 338.5f, 0.0f), { 13, 15, 16 } },
-        { Position(965.0f, 1437.0f, 343.0f, 0.0f), { 14, 17 } },
-        { Position(1006.0f, 1415.0f, 341.0f, 0.0f), { 14, 18 } },
-        { Position(934.0f, 1434.0f, 345.2f, 0.0f), { 15, 19 } },      // Horde ramp
-        { Position(944.0f, 1410.0f, 345.0f, 0.0f), { 16, 19 } },      // Horde tunnel
-        { Position(916.0f, 1434.4f, 345.4f, 0.0f), { 17, 18 } }       // Horde flag room
+        // Alliance graveyard(lower) <-> Horde flag room push lane
+        { Position(1316.07f, 1533.53f, 315.700f, 0.0f), { 1 } },
+        { Position(1276.17f, 1533.72f, 311.722f, 0.0f), { 0, 2 } },
+        { Position(1246.25f, 1533.86f, 307.072f, 0.0f), { 1, 3 } },
+        { Position(1206.84f, 1528.22f, 307.677f, 0.0f), { 2, 4 } },
+        { Position(1172.28f, 1523.28f, 301.958f, 0.0f), { 3, 5 } },
+        { Position(1135.93f, 1505.27f, 308.085f, 0.0f), { 4, 6 } },
+        { Position(1103.54f, 1521.89f, 314.583f, 0.0f), { 5, 7 } },
+        { Position(1073.49f, 1551.19f, 319.418f, 0.0f), { 6, 8 } },
+        { Position(1042.92f, 1530.49f, 336.667f, 0.0f), { 7, 9 } },
+        { Position(1052.11f, 1493.52f, 342.176f, 0.0f), { 8, 10 } },
+        { Position(1057.42f, 1452.75f, 341.131f, 0.0f), { 9, 11, 26 } },
+        { Position(1037.96f, 1422.27f, 339.919f, 0.0f), { 10, 12 } },
+        { Position(966.01f, 1422.84f, 345.223f, 0.0f), { 11, 13, 36 } },
+        { Position(942.74f, 1423.10f, 345.467f, 0.0f), { 12, 14 } },
+        { Position(929.39f, 1434.75f, 345.535f, 0.0f), { 13, 15 } },
+        { Position(933.331f, 1433.72f, 345.536f, 0.0f), { 14, 16, 40 } },
+
+        // Horde graveyard -> Horde tunnel
+        { Position(1029.14f, 1387.49f, 340.836f, 0.0f), { 17, 34 } },
+        { Position(1034.95f, 1392.62f, 340.856f, 0.0f), { 16, 18 } },
+        { Position(1038.21f, 1406.43f, 341.562f, 0.0f), { 17, 19 } },
+        { Position(1043.87f, 1426.9f, 339.197f, 0.0f), { 18, 20 } },
+        { Position(1054.53f, 1441.47f, 339.725f, 0.0f), { 19, 21 } },
+        { Position(1056.33f, 1456.03f, 341.463f, 0.0f), { 20, 22 } },
+        { Position(1057.39f, 1469.98f, 342.148f, 0.0f), { 21, 23 } },
+        { Position(1057.67f, 1487.55f, 342.537f, 0.0f), { 22, 24 } },
+        { Position(1048.7f, 1505.37f, 341.117f, 0.0f), { 23, 25 } },
+        { Position(1042.19f, 1521.69f, 338.003f, 0.0f), { 24, 26 } },
+        { Position(1050.01f, 1538.22f, 332.43f, 0.0f), { 25, 10, 27 } },
+        { Position(1068.15f, 1548.1f, 321.446f, 0.0f), { 26, 28 } },
+        { Position(1088.14f, 1538.45f, 316.398f, 0.0f), { 27, 29 } },
+        { Position(1101.26f, 1522.79f, 314.918f, 0.0f), { 28, 30 } },
+        { Position(1114.67f, 1503.18f, 312.947f, 0.0f), { 29, 31 } },
+        { Position(1126.45f, 1487.4f, 314.136f, 0.0f), { 30, 32 } },
+        { Position(1124.37f, 1462.28f, 315.853f, 0.0f), { 31, 33, 59 } },
+
+        // Horde tunnel -> Horde flag room
+        { Position(1106.87f, 1462.13f, 316.558f, 0.0f), { 32, 34 } },
+        { Position(1089.44f, 1461.04f, 316.332f, 0.0f), { 33, 35 } },
+        { Position(1072.07f, 1459.46f, 317.449f, 0.0f), { 34, 36 } },
+        { Position(1051.09f, 1459.89f, 323.126f, 0.0f), { 35, 12, 37 } },
+        { Position(1030.1f, 1459.58f, 330.204f, 0.0f), { 36, 38 } },
+        { Position(1010.76f, 1457.49f, 334.896f, 0.0f), { 37, 39 } },
+        { Position(1005.47f, 1448.19f, 335.864f, 0.0f), { 38, 40 } },
+        { Position(999.974f, 1458.49f, 335.632f, 0.0f), { 39, 41 } },
+        { Position(982.632f, 1459.18f, 336.127f, 0.0f), { 40, 42 } },
+        { Position(965.049f, 1459.15f, 338.076f, 0.0f), { 41, 43 } },
+        { Position(944.526f, 1459.0f, 344.207f, 0.0f), { 42, 44 } },
+        { Position(937.479f, 1451.12f, 345.553f, 0.0f), { 43, 15 } },
+
+        // Alliance tunnel -> Alliance flag room
+        { Position(1348.02f, 1461.06f, 323.167f, 0.0f), { 45, 63 } },
+        { Position(1359.8f, 1461.49f, 324.527f, 0.0f), { 44, 46 } },
+        { Position(1372.47f, 1461.61f, 324.354f, 0.0f), { 45, 47 } },
+        { Position(1389.08f, 1461.12f, 325.913f, 0.0f), { 46, 48 } },
+        { Position(1406.57f, 1460.48f, 330.615f, 0.0f), { 47, 49 } },
+        { Position(1424.04f, 1459.57f, 336.029f, 0.0f), { 48, 50 } },
+        { Position(1442.5f, 1459.7f, 342.024f, 0.0f), { 49, 51 } },
+        { Position(1449.59f, 1469.14f, 342.65f, 0.0f), { 50, 52 } },
+        { Position(1458.03f, 1458.43f, 342.746f, 0.0f), { 51, 53 } },
+        { Position(1469.4f, 1458.14f, 342.794f, 0.0f), { 52, 54 } },
+        { Position(1489.06f, 1457.86f, 342.794f, 0.0f), { 53, 55 } },
+        { Position(1502.27f, 1457.52f, 347.589f, 0.0f), { 54, 56 } },
+        { Position(1512.87f, 1457.81f, 352.039f, 0.0f), { 55, 57 } },
+        { Position(1517.53f, 1468.79f, 352.033f, 0.0f), { 56, 58 } },
+        { Position(1519.53f, 1481.87f, 352.024f, 0.0f), { 57, 79 } },
+
+        // Alliance graveyard -> Alliance tunnel
+        { Position(1415.33f, 1554.79f, 343.156f, 0.0f), { 60 } },
+        { Position(1428.29f, 1551.79f, 342.751f, 0.0f), { 59, 61 } },
+        { Position(1441.51f, 1545.79f, 342.757f, 0.0f), { 60, 62 } },
+        { Position(1441.15f, 1530.35f, 343.712f, 0.0f), { 61, 63 } },
+        { Position(1435.53f, 1517.29f, 346.698f, 0.0f), { 62, 64 } },
+        { Position(1424.81f, 1499.24f, 349.486f, 0.0f), { 63, 65 } },
+        { Position(1416.31f, 1483.94f, 348.536f, 0.0f), { 64, 66 } },
+        { Position(1408.83f, 1468.4f, 347.648f, 0.0f), { 65, 67 } },
+        { Position(1404.64f, 1449.79f, 347.279f, 0.0f), { 66, 68 } },
+        { Position(1405.34f, 1432.33f, 345.792f, 0.0f), { 67, 69 } },
+        { Position(1406.38f, 1416.18f, 344.755f, 0.0f), { 68, 70 } },
+        { Position(1400.22f, 1401.87f, 340.496f, 0.0f), { 69, 71 } },
+        { Position(1385.96f, 1394.15f, 333.829f, 0.0f), { 70, 72 } },
+        { Position(1372.38f, 1390.75f, 328.722f, 0.0f), { 71, 73 } },
+        { Position(1362.93f, 1390.02f, 327.034f, 0.0f), { 72, 74 } },
+        { Position(1357.91f, 1398.07f, 325.674f, 0.0f), { 73, 75 } },
+        { Position(1354.17f, 1411.56f, 324.327f, 0.0f), { 74, 76 } },
+        { Position(1351.44f, 1430.38f, 323.506f, 0.0f), { 75, 77 } },
+        { Position(1350.36f, 1444.43f, 323.388f, 0.0f), { 76, 78 } },
+        { Position(1348.02f, 1461.06f, 323.167f, 0.0f), { 77, 44 } },
+
+        // Alliance flag room -> Alliance graveyard
+        { Position(1508.27f, 1493.17f, 352.005f, 0.0f), { 58, 80 } },
+        { Position(1490.78f, 1493.51f, 352.141f, 0.0f), { 79, 81 } },
+        { Position(1469.79f, 1494.13f, 351.774f, 0.0f), { 80, 82 } },
+        { Position(1453.65f, 1494.39f, 350.614f, 0.0f), { 81, 83 } },
+        { Position(1443.51f, 1501.75f, 348.317f, 0.0f), { 82, 84 } },
+        { Position(1443.33f, 1517.78f, 345.534f, 0.0f), { 83, 85 } },
+        { Position(1443.55f, 1533.4f, 343.148f, 0.0f), { 84, 86 } },
+        { Position(1441.47f, 1548.12f, 342.752f, 0.0f), { 85, 87 } },
+        { Position(1433.79f, 1552.67f, 342.763f, 0.0f), { 86, 88 } },
+        { Position(1422.88f, 1552.37f, 342.751f, 0.0f), { 87, 59 } }
     };
 
     return graph;
@@ -361,8 +460,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     struct MoveOrderState
     {
         Position lastDestination;
-        Position lastPosition;
-        uint32 lastProgressMs = 0;
         uint32 lastIssueMs = 0;
     };
 
@@ -370,230 +467,40 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
-    Position const currentPosition(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
-    if (state.lastProgressMs == 0 || state.lastPosition.GetExactDist(currentPosition) > 1.5f)
-    {
-        state.lastPosition = currentPosition;
-        state.lastProgressMs = nowMs;
-    }
-
-    bool const movementStalled = state.lastProgressMs != 0 && (nowMs - state.lastProgressMs) > 3500;
-
     bool const destinationChanged = state.lastIssueMs == 0 ||
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-    if (!destinationChanged && !canReissueByTime && !movementStalled)
+    if (!destinationChanged && !canReissueByTime)
     {
-        std::ostringstream throttledDetail;
-        throttledDetail << "movepoint-skip reason=throttle"
-                        << " curr=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
-                        << " dest=(" << int32(destination.GetPositionX()) << "," << int32(destination.GetPositionY()) << "," << int32(destination.GetPositionZ()) << ")"
-                        << " lastIssuedMsAgo=" << (nowMs - state.lastIssueMs);
-        EmitBattlegroundGmDebug(player, throttledDetail.str(), 2000);
         return false;
-    }
-
-    if (movementStalled)
-    {
-        std::ostringstream stalledDetail;
-        stalledDetail << "movepoint-force-reissue reason=stalled"
-                      << " stalledMs=" << (nowMs - state.lastProgressMs);
-        EmitBattlegroundGmDebug(player, stalledDetail.str(), 1200);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE || movementStalled)
+    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
-        std::ostringstream overrideDetail;
-        overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
-        EmitBattlegroundGmDebug(player, overrideDetail.str(), 5000);
         motionMaster->Clear();
-        if (movementStalled)
-            player->StopMoving();
     }
 
     bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-    bool usedDirectLosFallback = false;
-    bool usedLaneGraphFallback = false;
-
     Position issuedDestination = destination;
     if (IsWarsongGulch(player))
     {
-        // Keep WSG movement path-safe for managed virtual bots: evaluate probes and
-        // reject unsafe navmesh modes early.
-        auto evaluatePath = [player](Position const& candidate, PathType& pathTypeOut, bool& calculateOkOut) -> bool
-        {
-            PathGenerator path(player);
-            calculateOkOut = path.CalculatePath(candidate.GetPositionX(), candidate.GetPositionY(), candidate.GetPositionZ(), false);
-            if (!calculateOkOut)
-            {
-                pathTypeOut = PATHFIND_NOPATH;
-                return true;
-            }
+        // Reference module behavior is waypoint-driven in WSG; avoid navmesh
+        // dependence and always step lane-to-lane using fixed points.
+        generatePath = false;
 
-            pathTypeOut = path.GetPathType();
-            if (pathTypeOut & PATHFIND_NOPATH)
-                return true;
-
-            return pathTypeOut & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT);
-        };
-
-        float const directDistance = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
-        constexpr float maxStepDistance = 45.0f;
-        if (directDistance > maxStepDistance)
-        {
-            // Prefer a graph waypoint when long direct probes are likely to cross
-            // navmesh trouble spots (tunnel/ramp transitions).
-            Position graphWaypoint;
-            if (TryGetWarsongLaneWaypoint(player, destination, graphWaypoint))
-            {
-                PathType graphPathType = PATHFIND_BLANK;
-                bool graphCalculated = false;
-                if (!evaluatePath(graphWaypoint, graphPathType, graphCalculated))
-                {
-                    issuedDestination = graphWaypoint;
-                    usedLaneGraphFallback = true;
-                    std::ostringstream laneGraphDetail;
-                    laneGraphDetail << "wsg-graph-step-selected"
-                                    << " pathType=" << uint32(graphPathType)
-                                    << " calc=" << (graphCalculated ? 1 : 0);
-                    EmitBattlegroundGmDebug(player, laneGraphDetail.str(), 1500);
-                }
-            }
-
-            if (!usedLaneGraphFallback)
-            {
-                float const ratio = maxStepDistance / directDistance;
-                issuedDestination.Relocate(
-                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                    player->GetOrientation());
-            }
-        }
-
-        PathType issuedPathType = PATHFIND_BLANK;
-        bool issuedCalculated = false;
-        bool unsafeIssuedPath = evaluatePath(issuedDestination, issuedPathType, issuedCalculated);
-        if (unsafeIssuedPath)
-        {
-            constexpr float fallbackSteps[] = { 32.0f, 24.0f, 16.0f, 10.0f };
-            bool foundSafeCandidate = false;
-            for (float stepDistance : fallbackSteps)
-            {
-                if (directDistance <= stepDistance)
-                    continue;
-
-                float const ratio = stepDistance / directDistance;
-                Position candidate(
-                    player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                    player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                    player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                    player->GetOrientation());
-
-                PathType candidatePathType = PATHFIND_BLANK;
-                bool candidateCalculated = false;
-                if (!evaluatePath(candidate, candidatePathType, candidateCalculated))
-                {
-                    issuedDestination = candidate;
-                    foundSafeCandidate = true;
-                    std::ostringstream safeStepDetail;
-                    safeStepDetail << "wsg-step-selected step=" << int32(stepDistance)
-                                   << " pathType=" << uint32(candidatePathType)
-                                   << " calc=" << (candidateCalculated ? 1 : 0);
-                    EmitBattlegroundGmDebug(player, safeStepDetail.str(), 1500);
-                    break;
-                }
-            }
-
-            if (!foundSafeCandidate)
-            {
-                Position laneWaypoint;
-                if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
-                {
-                    PathType lanePathType = PATHFIND_BLANK;
-                    bool laneCalculated = false;
-                    if (!evaluatePath(laneWaypoint, lanePathType, laneCalculated))
-                    {
-                        issuedDestination = laneWaypoint;
-                        foundSafeCandidate = true;
-                        usedLaneGraphFallback = true;
-                        std::ostringstream laneSafeDetail;
-                        laneSafeDetail << "wsg-graph-fallback-selected"
-                                       << " pathType=" << uint32(lanePathType)
-                                       << " calc=" << (laneCalculated ? 1 : 0);
-                        EmitBattlegroundGmDebug(player, laneSafeDetail.str(), 1500);
-                    }
-                }
-            }
-
-            if (!foundSafeCandidate)
-            {
-                std::ostringstream unsafeDetail;
-                unsafeDetail << "wsg-step-unsafe-all-candidates"
-                             << " directDist=" << int32(directDistance)
-                             << " issuedPathType=" << uint32(issuedPathType)
-                             << " calc=" << (issuedCalculated ? 1 : 0);
-                EmitBattlegroundGmDebug(player, unsafeDetail.str(), 1500);
-
-                // Final troubleshooting fallback: take a tiny direct-Los step so
-                // bots don't deadlock when navmesh flags all short probes unsafe.
-                float const emergencyStepDistance = std::min(8.0f, directDistance);
-                if (emergencyStepDistance > 0.0f)
-                {
-                    float const ratio = emergencyStepDistance / directDistance;
-                    Position emergencyDestination(
-                        player->GetPositionX() + (destination.GetPositionX() - player->GetPositionX()) * ratio,
-                        player->GetPositionY() + (destination.GetPositionY() - player->GetPositionY()) * ratio,
-                        player->GetPositionZ() + (destination.GetPositionZ() - player->GetPositionZ()) * ratio,
-                        player->GetOrientation());
-
-                    if (player->IsWithinLOS(emergencyDestination.GetPositionX(), emergencyDestination.GetPositionY(), emergencyDestination.GetPositionZ()))
-                    {
-                        issuedDestination = emergencyDestination;
-                        generatePath = false;
-                        usedDirectLosFallback = true;
-                        EmitBattlegroundGmDebug(player, "wsg-step-direct-los-fallback enabled", 1500);
-                    }
-                }
-            }
-        }
-    }
-
-    std::ostringstream moveDetail;
-    if (IsWarsongGulch(player) &&
-        !player->IsWithinLOS(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ()))
-    {
-        Position laneWaypoint;
-        if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
-        {
-            issuedDestination = laneWaypoint;
-            generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-            usedLaneGraphFallback = true;
-            EmitBattlegroundGmDebug(player, "movepoint-lane-fallback reason=no-los-to-issued-destination", 1500);
-        }
-        else if (usedDirectLosFallback)
-        {
-            EmitBattlegroundGmDebug(player, "movepoint-skip reason=no-los-to-issued-destination", 1500);
-            return false;
-        }
+        Position bootstrapWaypoint;
+        if (TryGetWarsongBaseExitWaypoint(player, bootstrapWaypoint))
+            issuedDestination = bootstrapWaypoint;
         else
         {
-            EmitBattlegroundGmDebug(player, "movepoint-continue reason=no-los-and-no-lane-waypoint", 1500);
+            Position laneWaypoint;
+            if (TryGetWarsongLaneWaypoint(player, destination, laneWaypoint))
+                issuedDestination = laneWaypoint;
         }
     }
 
-    moveDetail << "movepoint-issue"
-               << " from=(" << int32(player->GetPositionX()) << "," << int32(player->GetPositionY()) << "," << int32(player->GetPositionZ()) << ")"
-               << " to=(" << int32(issuedDestination.GetPositionX()) << "," << int32(issuedDestination.GetPositionY()) << "," << int32(issuedDestination.GetPositionZ()) << ")"
-               << " movementType=" << static_cast<uint32>(currentMovement)
-               << " generatePath=" << (generatePath ? 1 : 0)
-               << " laneFallback=" << (usedLaneGraphFallback ? 1 : 0)
-               << " losFallback=" << (usedDirectLosFallback ? 1 : 0);
-    EmitBattlegroundGmDebug(player, moveDetail.str(), 2000);
-
-    // Reference-module parity: issue MovePoint directly and let MotionMaster handle path generation.
     motionMaster->MovePoint(0, issuedDestination, generatePath);
     state.lastDestination = issuedDestination;
     state.lastIssueMs = nowMs;
@@ -1502,18 +1409,56 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
-    if (Battleground* battleground = player->GetBattleground())
-        return battleground->GetStatus() == STATUS_WAIT_JOIN;
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
+        return false;
 
-    return false;
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
+    TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
+    Position const* start = battleground->GetTeamStartPosition(startTeam);
+    if (!start)
+        return false;
+
+    // Reference module parity: move bots to randomized pre-start hold spots.
+    // We don't have role buckets here, so we emulate start spread via random offsets.
+    float const spread = IsWarsongGulch(player) ? 10.0f : 7.0f;
+    Position destination(*start);
+    destination.Relocate(
+        start->GetPositionX() + frand(-spread, spread),
+        start->GetPositionY() + frand(-spread, spread),
+        start->GetPositionZ(),
+        start->GetOrientation());
+
+    IssueMovePointThrottled(player, destination, 3.0f, 1200);
+    return true;
 }
 
 bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
         return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() == STATUS_WAIT_JOIN)
+        return false;
+
     if (!CanIssueBotMovement(player))
         return false;
+
+    // Reference module parity: don't churn movement orders if already moving.
+    if (player->isMoving() || !player->IsStopped())
+        return false;
+
+    switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
+    {
+        case IDLE_MOTION_TYPE:
+        case CHASE_MOTION_TYPE:
+        case POINT_MOTION_TYPE:
+            break;
+        default:
+            return true;
+    }
 
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
@@ -1548,7 +1493,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition)
     {
-        if (Battleground* battleground = player->GetBattleground())
+        if (battleground)
         {
             Position destination;
             if (TryGetObjectivePosition(battleground, player, destination))
