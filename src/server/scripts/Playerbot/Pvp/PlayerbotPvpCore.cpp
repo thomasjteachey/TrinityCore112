@@ -354,6 +354,19 @@ bool IsCasterClass(Unit const* unit)
     }
 }
 
+bool ShouldUseCurseOfTongues(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    if (!player)
+        return false;
+
+    // Curse of Tongues should focus on true caster targets and avoid hunters or melee hybrids.
+    if (player->GetClass() == CLASS_HUNTER)
+        return false;
+
+    return IsCasterClass(player) && !IsMeleeClass(player);
+}
+
 bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
 
 uint8 GetArmorPriority(Unit const* unit)
@@ -1426,7 +1439,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     if (IsSpellReady(player, 6215))
         if (Unit const* fearTarget = SelectWarlockFearTarget(player, 20.0f))
             return { "warlock fear", "prioritize fear control on paladin/priest targets in range", 6215, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget->GetGUID() };
-    if (target->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(target, 11719) &&
+    if (target->GetPowerType() == POWER_MANA && ShouldUseCurseOfTongues(target) && !HasAuraFromSpellChain(target, 11719) &&
         !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11719) && IsSpellReady(player, 11719))
         return { "warlock curse of tongues", "slow enemy casting throughput", 11719, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!IsCasterClass(target) && !HasAuraFromSpellChain(target, 11713) && !HasAuraFromSpellChain(target, 11719) &&
