@@ -30,6 +30,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Pet.h"
+#include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
