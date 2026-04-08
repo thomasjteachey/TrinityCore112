@@ -31,6 +31,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
@@ -70,6 +71,13 @@ std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
+struct FastTickMotionState
+{
+    Position lastPosition;
+    uint32 lastMovedMs = 0;
+};
+std::unordered_map<uint64, FastTickMotionState> g_FastTickMotionByGuid;
+std::mutex g_FastTickMotionLock;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
@@ -975,6 +983,9 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 
     std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
     g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
+
+    std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+    g_FastTickMotionByGuid.erase(player->GetGUID().GetRawValue());
 }
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
