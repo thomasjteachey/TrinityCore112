@@ -1443,9 +1443,10 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, 80.0f);
-
+    /*
     if (TryJumpOffWarsongGraveyard(player))
         return true;
+        */
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
