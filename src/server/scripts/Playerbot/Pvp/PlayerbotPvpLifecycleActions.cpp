@@ -320,9 +320,26 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     if (!map)
         return;
 
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "PBDBG bot={} guid={} map={} detail={}",
-        bot->GetName(), bot->GetGUID().ToString(), bot->GetMapId(), detail);
+    std::ostringstream os;
+    os << "[PBDBG movepoint] bot=" << bot->GetName()
+       << " guid=" << bot->GetGUID().ToString()
+       << " bgId=" << bot->GetBattlegroundId()
+       << " detail=" << detail;
+    std::string const message = os.str();
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (observer->GetBattlegroundId() != bot->GetBattlegroundId())
+            continue;
+
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
@@ -333,6 +350,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     struct MoveOrderState
     {
         Position lastDestination;
+        Position lastPosition;
+        uint32 lastProgressMs = 0;
         uint32 lastIssueMs = 0;
     };
 
@@ -340,10 +359,19 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
+    Position const currentPosition(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), player->GetOrientation());
+    if (state.lastProgressMs == 0 || state.lastPosition.GetExactDist(currentPosition) > 1.5f)
+    {
+        state.lastPosition = currentPosition;
+        state.lastProgressMs = nowMs;
+    }
+
+    bool const movementStalled = state.lastProgressMs != 0 && (nowMs - state.lastProgressMs) > 3500;
+
     bool const destinationChanged = state.lastIssueMs == 0 ||
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-    if (!destinationChanged && !canReissueByTime)
+    if (!destinationChanged && !canReissueByTime && !movementStalled)
     {
         std::ostringstream throttledDetail;
         throttledDetail << "movepoint-skip reason=throttle"
@@ -354,14 +382,24 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         return false;
     }
 
+    if (movementStalled)
+    {
+        std::ostringstream stalledDetail;
+        stalledDetail << "movepoint-force-reissue reason=stalled"
+                      << " stalledMs=" << (nowMs - state.lastProgressMs);
+        EmitBattlegroundGmDebug(player, stalledDetail.str(), 1200);
+    }
+
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+    if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE || movementStalled)
     {
         std::ostringstream overrideDetail;
         overrideDetail << "movement generator override before MovePoint type=" << static_cast<uint32>(currentMovement);
         EmitBattlegroundGmDebug(player, overrideDetail.str(), 5000);
         motionMaster->Clear();
+        if (movementStalled)
+            player->StopMoving();
     }
 
     bool generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
