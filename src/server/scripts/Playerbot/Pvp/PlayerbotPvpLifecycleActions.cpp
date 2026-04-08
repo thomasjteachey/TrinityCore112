@@ -1102,9 +1102,21 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
+    struct StartHoldState
+    {
+        Position destination;
+        uint32 battlegroundInstanceId = 0;
+    };
+
+    static std::unordered_map<uint64, StartHoldState> holdByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+
     Battleground* battleground = player->GetBattleground();
     if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
+    {
+        holdByGuid.erase(botGuid);
         return false;
+    }
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
@@ -1113,38 +1125,47 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!start)
         return false;
 
-    Position destination;
-    if (IsWarsongGulch(player))
+    StartHoldState& hold = holdByGuid[botGuid];
+    if (hold.battlegroundInstanceId != battleground->GetInstanceID())
     {
-        Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
-        Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
-        Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
-        Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
-        Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
-        Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
+        if (IsWarsongGulch(player))
+        {
+            Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
+            Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
+            Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
+            Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
+            Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
+            Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
 
-        uint32 const role = uint32(player->GetGUID().GetRawValue() % 10);
-        Position const base = (startTeam == TEAM_HORDE)
-            ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
-            : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
-        float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
-        destination.Relocate(
-            base.GetPositionX() + frand(-spread, spread),
-            base.GetPositionY() + frand(-spread, spread),
-            base.GetPositionZ(),
-            base.GetOrientation());
-    }
-    else
-    {
-        destination = *start;
-        destination.Relocate(
-            start->GetPositionX() + frand(-7.0f, 7.0f),
-            start->GetPositionY() + frand(-7.0f, 7.0f),
-            start->GetPositionZ(),
-            start->GetOrientation());
+            uint32 const role = uint32(botGuid % 10);
+            Position const base = (startTeam == TEAM_HORDE)
+                ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
+                : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
+            float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
+            hold.destination.Relocate(
+                base.GetPositionX() + frand(-spread, spread),
+                base.GetPositionY() + frand(-spread, spread),
+                base.GetPositionZ(),
+                base.GetOrientation());
+        }
+        else
+        {
+            hold.destination = *start;
+            hold.destination.Relocate(
+                start->GetPositionX() + frand(-7.0f, 7.0f),
+                start->GetPositionY() + frand(-7.0f, 7.0f),
+                start->GetPositionZ(),
+                start->GetOrientation());
+        }
+
+        hold.battlegroundInstanceId = battleground->GetInstanceID();
     }
 
-    IssueMovePointThrottled(player, destination, 2.5f, 800);
+    if (player->isMoving())
+        return true;
+
+    if (!player->IsWithinDist3d(hold.destination.GetPositionX(), hold.destination.GetPositionY(), hold.destination.GetPositionZ(), 4.0f))
+        IssueMovePointThrottled(player, hold.destination, 3.0f, 1200);
 
     return true;
 }
@@ -1164,14 +1185,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (player->isMoving())
         return false;
 
-    if (!player->IsStopped())
-        return false;
-
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {
         case IDLE_MOTION_TYPE:
         case CHASE_MOTION_TYPE:
         case POINT_MOTION_TYPE:
+        case FOLLOW_MOTION_TYPE:
             break;
         default:
             return true;
