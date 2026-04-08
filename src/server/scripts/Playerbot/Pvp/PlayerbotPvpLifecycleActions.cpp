@@ -99,6 +99,112 @@ TeamId ResolveBotTeamId(Player const* player)
     return ResolveTeamId(player->GetTeam());
 }
 
+std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
+{
+    // Reference-style objective routing through the same major WSG lane segments:
+    // own flag room -> tunnel/field spine -> enemy flag room.
+    static std::vector<Position> const allianceToHorde =
+    {
+        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
+        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
+        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
+        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
+        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
+        Position(1316.07f, 1533.53f, 315.700f, 0.0f),
+        Position(1206.84f, 1528.22f, 307.677f, 0.0f),
+        Position(1103.54f, 1521.89f, 314.583f, 0.0f),
+        Position(1052.11f, 1493.52f, 342.176f, 0.0f),
+        Position(1057.42f, 1452.75f, 341.131f, 0.0f),
+        Position(1037.96f, 1422.27f, 339.919f, 0.0f),
+        Position(966.01f, 1422.84f, 345.223f, 0.0f),
+        Position(942.74f, 1423.10f, 345.467f, 0.0f),
+        Position(933.331f, 1433.72f, 345.536f, 0.0f)
+    };
+
+    static std::vector<Position> const hordeToAlliance =
+    {
+        Position(944.859f, 1423.05f, 345.437f, 0.0f),
+        Position(965.049f, 1459.15f, 338.076f, 0.0f),
+        Position(1005.47f, 1448.19f, 335.864f, 0.0f),
+        Position(1051.09f, 1459.89f, 323.126f, 0.0f),
+        Position(1106.87f, 1462.13f, 316.558f, 0.0f),
+        Position(1124.37f, 1462.28f, 315.853f, 0.0f),
+        Position(1126.45f, 1487.4f, 314.136f, 0.0f),
+        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
+        Position(1276.17f, 1533.72f, 311.722f, 0.0f),
+        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
+        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
+        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
+        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
+        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
+        Position(1519.53f, 1481.87f, 352.024f, 0.0f)
+    };
+
+    return (botTeam == TEAM_ALLIANCE) ? allianceToHorde : hordeToAlliance;
+}
+
+bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& finalDestination, Position& waypointOut)
+{
+    if (!player || !IsWarsongGulch(player))
+        return false;
+
+    struct WsgObjectivePathState
+    {
+        uint32 battlegroundInstanceId = 0;
+        uint32 nextIndex = 0;
+    };
+
+    static std::unordered_map<uint64, WsgObjectivePathState> stateByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    WsgObjectivePathState& state = stateByGuid[botGuid];
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    TeamId const botTeam = ResolveBotTeamId(player);
+    std::vector<Position> const& path = GetWarsongObjectivePathForTeam(botTeam);
+    if (path.empty())
+        return false;
+
+    if (state.battlegroundInstanceId != battleground->GetInstanceID())
+    {
+        state.battlegroundInstanceId = battleground->GetInstanceID();
+        state.nextIndex = 0;
+
+        float nearestDist = std::numeric_limits<float>::max();
+        for (uint32 i = 0; i < path.size(); ++i)
+        {
+            float const dist = player->GetDistance(path[i].GetPositionX(), path[i].GetPositionY(), path[i].GetPositionZ());
+            if (dist < nearestDist)
+            {
+                nearestDist = dist;
+                state.nextIndex = i;
+            }
+        }
+    }
+
+    if (state.nextIndex >= path.size())
+        state.nextIndex = static_cast<uint32>(path.size() - 1);
+
+    Position const& currentWp = path[state.nextIndex];
+    if (player->IsWithinDist3d(currentWp.GetPositionX(), currentWp.GetPositionY(), currentWp.GetPositionZ(), 10.0f))
+    {
+        if (state.nextIndex + 1 < path.size())
+            ++state.nextIndex;
+    }
+
+    // Close enough to final objective anchor: move directly to final objective.
+    if (player->IsWithinDist3d(finalDestination.GetPositionX(), finalDestination.GetPositionY(), finalDestination.GetPositionZ(), 35.0f))
+    {
+        waypointOut = finalDestination;
+        return true;
+    }
+
+    waypointOut = path[state.nextIndex];
+    return true;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
@@ -1229,9 +1335,13 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             Position destination;
             if (TryGetObjectivePosition(battleground, player, destination))
             {
-                bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
+                Position issuedDestination = destination;
+                if (IsWarsongGulch(player))
+                    TryGetWarsongObjectiveProgressWaypoint(player, destination, issuedDestination);
+
+                bool const withinObjectiveRange = player->IsWithinDist3d(issuedDestination.GetPositionX(), issuedDestination.GetPositionY(), issuedDestination.GetPositionZ(), 12.0f);
                 if (!withinObjectiveRange)
-                    IssueMovePointThrottled(player, destination);
+                    IssueMovePointThrottled(player, issuedDestination);
                 else
                     EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
                 return true;
