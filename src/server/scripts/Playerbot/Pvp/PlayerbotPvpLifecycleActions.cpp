@@ -1397,8 +1397,8 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
         {
             hold.destination = *start;
             hold.destination.Relocate(
-                start->GetPositionX() + frand(-7.0f, 7.0f),
-                start->GetPositionY() + frand(-7.0f, 7.0f),
+                start->GetPositionX() + frand(-1.0f, 1.0f),
+                start->GetPositionY() + frand(-1.0f, 1.0f),
                 start->GetPositionZ(),
                 start->GetOrientation());
         }
