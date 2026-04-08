@@ -1419,10 +1419,6 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         return true;
     }
 
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 65.0f;
-    if (EngageNearestEnemyPlayer(player, engageDistance))
-        return true;
-
     if (Battleground* battleground = player->GetBattleground())
     {
         Position destination;
@@ -1436,6 +1432,10 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return true;
         }
     }
+
+    float const engageDistance = IsWarsongGulch(player) ? 80.0f : 65.0f;
+    if (EngageNearestEnemyPlayer(player, engageDistance))
+        return true;
 
     if (IsWarsongGulch(player))
         return MoveToClosestBattlegroundGraveyard(player);
@@ -1451,6 +1451,18 @@ bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalCo
 
     if (!player->IsAlive())
         return false;
+
+    if (Battleground* battleground = player->GetBattleground())
+    {
+        // During prep phase only process the explicit start-position action.
+        // This prevents competing tactical actions from pulling bots back/forth.
+        if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+        {
+            if (IsTacticalAction(context.actionName, "bg move to start"))
+                return MoveToStartPrimitive(player);
+            return false;
+        }
+    }
 
     if (IsTacticalAction(context.actionName, "bg move to start"))
         return MoveToStartPrimitive(player);
@@ -1534,7 +1546,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         return false;
 
     // Reference module parity: don't churn movement orders if already moving.
-    if (player->isMoving() || !player->IsStopped())
+    if (player->isMoving())
         return false;
 
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
