@@ -1581,8 +1581,10 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
             return { "rogue crippling poison", "apply crippling poison to unpoisoned weapons out of combat", 11202, playerbot::PvpClassSpellContext::TargetMode::Self };
     }
 
-    if (!player->IsInCombat() && !HasAuraFromSpellChain(player, 1787) && IsSpellReady(player, 1787))
-        return { "rogue stealth", "enter stealth before engagement", 1787, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (!player->IsInCombat() && !HasAuraFromSpellChain(player, 1784) && IsSpellReady(player, 1784))
+        return { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (IsSpellReady(player, 1833) && player->HasStealthAura())
+        return { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 1766))
         return { "rogue kick", "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (player->HealthBelowPct(40) && IsSpellReady(player, 5277))
@@ -1598,8 +1600,6 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
         return { "rogue eviscerate", "combo finisher pressure", 11300, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (!player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554))
         return { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy };
-    if (IsSpellReady(player, 1833) && player->HasStealthAura())
-        return { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 16511))
         return { "rogue hemorrhage", "default subtlety combo point builder", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
