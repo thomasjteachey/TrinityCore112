@@ -406,6 +406,8 @@ namespace
     // Honor token helpers (bosses / minibosses -> team-wide honor on kill)
     // ---------------------------------------------------------------------------
 
+    std::unordered_set<uint32> s_StockadesInvasionBonusInstances;
+
     // Return how many honor tokens this creature entry should award per kill.
     uint32 GetHonorTokensForCreatureEntry(uint32 entry)
     {
@@ -432,6 +434,22 @@ namespace
         }
 
         return 0;
+    }
+
+    void SetStockadesInvasionBonusActive(uint32 instanceId, bool active)
+    {
+        if (!instanceId)
+            return;
+
+        if (active)
+            s_StockadesInvasionBonusInstances.insert(instanceId);
+        else
+            s_StockadesInvasionBonusInstances.erase(instanceId);
+    }
+
+    bool IsStockadesInvasionBonusActive(uint32 instanceId)
+    {
+        return instanceId && s_StockadesInvasionBonusInstances.find(instanceId) != s_StockadesInvasionBonusInstances.end();
     }
 
     // Find the killer's team inside its current run
@@ -513,7 +531,11 @@ namespace
         if (!tokens)
             return; // this mob doesn't award tokens
 
-        AwardHonorTokensToKillerTeam(killer, tokens);
+        uint32 adjustedTokens = std::max<uint32>(1, tokens / 2);
+        if (IsStockadesInvasionBonusActive(killed->GetInstanceId()))
+            adjustedTokens *= 2;
+
+        AwardHonorTokensToKillerTeam(killer, adjustedTokens);
 
         // Also treat boss kills as the Stockades completion trigger so teleport
         // spells unlock even if the instance death hook misses the GUID match.
@@ -556,6 +578,7 @@ public:
             _bigBadWolves("Big Bad Wolves", StockadesPvPvE::GetBigBadWolfEntries()),
             _wrathboneSkeletons("Wrathbone Skeletons", StockadesPvPvE::GetWrathboneSkeletonEntries())
         {
+            SetStockadesInvasionBonusActive(instance->GetInstanceId(), false);
         }
 
         void OnPlayerEnter(Player* player) override
@@ -829,6 +852,12 @@ public:
             // Only if we actually found opponents do we tell the invading player.
             if (hasOpponents)
             {
+                if (!_invasionTriggered)
+                {
+                    _invasionTriggered = true;
+                    SetStockadesInvasionBonusActive(instance->GetInstanceId(), true);
+                }
+
                 if (WorldSession* invSession = invadingPlayer->GetSession())
                 {
                     invSession->SendNotification("You sense an evil presence");
@@ -878,6 +907,7 @@ public:
         KeyDropGroup _bigBadWolves;
         KeyDropGroup _wrathboneSkeletons;
         bool         _bossSpawned = false;
+        bool         _invasionTriggered = false;
         ObjectGuid   _bossGuid = ObjectGuid::Empty;
     };
 };
