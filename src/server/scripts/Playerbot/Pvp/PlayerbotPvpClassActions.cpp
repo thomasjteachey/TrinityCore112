@@ -547,13 +547,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // short tactical cooldowns on selected PvP debuffs.
     if (context.spellId == 112826)
         player->GetSpellHistory()->AddCooldown(context.spellId, 0, std::chrono::seconds(15));
-    if (context.spellId == 3034 || context.spellId == 1714 || context.spellId == 11713)
+    if (context.spellId == 3034 || context.spellId == 11719 || context.spellId == 11713)
     {
         if (uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId))
             player->GetSpellHistory()->AddCooldown(resolvedSpellId, 0, std::chrono::seconds(12));
     }
 
-    if ((context.spellId == 1714 || context.spellId == 11713) && target)
+    if ((context.spellId == 11719 || context.spellId == 11713) && target)
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
 
     return true;
