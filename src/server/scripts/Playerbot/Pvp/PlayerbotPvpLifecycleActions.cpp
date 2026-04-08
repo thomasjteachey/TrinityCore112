@@ -1412,9 +1412,21 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
+    struct StartHoldState
+    {
+        Position destination;
+        uint32 battlegroundInstanceId = 0;
+    };
+
+    static std::unordered_map<uint64, StartHoldState> holdByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+
     Battleground* battleground = player->GetBattleground();
     if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
+    {
+        holdByGuid.erase(botGuid);
         return false;
+    }
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
@@ -1423,17 +1435,26 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!start)
         return false;
 
-    // Reference module parity: move bots to randomized pre-start hold spots.
-    // We don't have role buckets here, so we emulate start spread via random offsets.
-    float const spread = IsWarsongGulch(player) ? 10.0f : 7.0f;
-    Position destination(*start);
-    destination.Relocate(
-        start->GetPositionX() + frand(-spread, spread),
-        start->GetPositionY() + frand(-spread, spread),
-        start->GetPositionZ(),
-        start->GetOrientation());
+    StartHoldState& hold = holdByGuid[botGuid];
+    if (hold.battlegroundInstanceId != battleground->GetInstanceID())
+    {
+        // Reference module parity intent: deterministic pre-start staging,
+        // not per-tick random retarget churn.
+        float const spread = IsWarsongGulch(player) ? 10.0f : 7.0f;
+        constexpr double tau = 6.28318530717958647692;
+        float const angle = float((botGuid % 12) * (tau / 12.0));
+        hold.destination = *start;
+        hold.destination.Relocate(
+            start->GetPositionX() + std::cos(angle) * spread,
+            start->GetPositionY() + std::sin(angle) * spread,
+            start->GetPositionZ(),
+            start->GetOrientation());
+        hold.battlegroundInstanceId = battleground->GetInstanceID();
+    }
 
-    IssueMovePointThrottled(player, destination, 3.0f, 1200);
+    if (!player->IsWithinDist3d(hold.destination.GetPositionX(), hold.destination.GetPositionY(), hold.destination.GetPositionZ(), 4.0f))
+        IssueMovePointThrottled(player, hold.destination, 3.0f, 1200);
+
     return true;
 }
 
@@ -1458,6 +1479,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         case IDLE_MOTION_TYPE:
         case CHASE_MOTION_TYPE:
         case POINT_MOTION_TYPE:
+        case FOLLOW_MOTION_TYPE:
+        case ESCORT_MOTION_TYPE:
             break;
         default:
             return true;
