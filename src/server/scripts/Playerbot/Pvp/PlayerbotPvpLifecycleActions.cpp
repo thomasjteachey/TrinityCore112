@@ -1409,18 +1409,56 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
-    if (Battleground* battleground = player->GetBattleground())
-        return battleground->GetStatus() == STATUS_WAIT_JOIN;
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
+        return false;
 
-    return false;
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
+    uint8 const teamIndex = Battleground::GetTeamIndexByTeamId(teamId == TEAM_NEUTRAL ? player->GetTeamId() : teamId);
+    Position const* start = battleground->GetTeamStartPosition(teamIndex);
+    if (!start)
+        return false;
+
+    // Reference module parity: move bots to randomized pre-start hold spots.
+    // We don't have role buckets here, so we emulate start spread via random offsets.
+    float const spread = IsWarsongGulch(player) ? 10.0f : 7.0f;
+    Position destination(*start);
+    destination.Relocate(
+        start->GetPositionX() + frand(-spread, spread),
+        start->GetPositionY() + frand(-spread, spread),
+        start->GetPositionZ(),
+        start->GetOrientation());
+
+    IssueMovePointThrottled(player, destination, 3.0f, 1200);
+    return true;
 }
 
 bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
         return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetStatus() == STATUS_WAIT_JOIN)
+        return false;
+
     if (!CanIssueBotMovement(player))
         return false;
+
+    // Reference module parity: don't churn movement orders if already moving.
+    if (player->isMoving() || !player->IsStopped())
+        return false;
+
+    switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
+    {
+        case IDLE_MOTION_TYPE:
+        case CHASE_MOTION_TYPE:
+        case POINT_MOTION_TYPE:
+            break;
+        default:
+            return true;
+    }
 
     bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
     if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
@@ -1455,7 +1493,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition)
     {
-        if (Battleground* battleground = player->GetBattleground())
+        if (battleground)
         {
             Position destination;
             if (TryGetObjectivePosition(battleground, player, destination))
