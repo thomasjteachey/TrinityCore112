@@ -28,6 +28,7 @@
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "CharacterCache.h"
+#include "Creature.h"
 #include "Chat.h"
 #include "Log.h"
 #include "Map.h"
@@ -38,6 +39,7 @@
 #include "ItemTemplate.h"
 #include "Player.h"
 #include "SpellMgr.h"
+#include "SpellInfo.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -271,7 +273,7 @@ bool TryJumpOffWarsongGraveyard(Player* player)
 
     float const jumpSpeedXY = std::max(6.0f, player->GetSpeed(MOVE_RUN) * 1.1f);
     float const jumpSpeedZ = 8.0f;
-    player->SetFacingTo(player->GetAngle(nearest->landing.GetPositionX(), nearest->landing.GetPositionY()));
+    player->SetFacingTo(player->GetAbsoluteAngle(nearest->landing.GetPositionX(), nearest->landing.GetPositionY()));
     player->JumpTo(jumpSpeedXY, jumpSpeedZ, false);
     return true;
 }
@@ -1005,7 +1007,7 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
                 float const minAutoShotRange = autoShotInfo->GetMinRange(false);
                 float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
                 bool const canAutoShotWithoutDeadzone = distance > minAutoShotRange && distance <= maxAutoShotRange;
-                uint32 const autoShotTimerMs = player->GetAttackTimer(RANGED_ATTACK);
+                uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
                 if (canAutoShotWithoutDeadzone && autoShotTimerMs <= 600)
                 {
                     uint32 const pauseDurationMs = std::max<uint32>(autoShotTimerMs, 150);
