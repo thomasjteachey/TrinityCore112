@@ -123,13 +123,13 @@ std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
 
     static std::vector<Position> const hordeToAlliance =
     {
-        Position(944.859f, 1423.05f, 345.437f, 0.0f),
-        Position(965.049f, 1459.15f, 338.076f, 0.0f),
-        Position(1005.47f, 1448.19f, 335.864f, 0.0f),
-        Position(1051.09f, 1459.89f, 323.126f, 0.0f),
-        Position(1106.87f, 1462.13f, 316.558f, 0.0f),
-        Position(1124.37f, 1462.28f, 315.853f, 0.0f),
-        Position(1126.45f, 1487.4f, 314.136f, 0.0f),
+        // Prefer main-gate/gy lane instead of tunnel lane for Horde.
+        Position(1029.14f, 1387.49f, 340.836f, 0.0f),
+        Position(1034.95f, 1392.62f, 340.856f, 0.0f),
+        Position(1043.87f, 1426.9f, 339.197f, 0.0f),
+        Position(1052.11f, 1493.52f, 342.176f, 0.0f),
+        Position(1073.49f, 1551.19f, 319.418f, 0.0f),
+        Position(1103.54f, 1521.89f, 314.583f, 0.0f),
         Position(1172.28f, 1523.28f, 301.958f, 0.0f),
         Position(1276.17f, 1533.72f, 311.722f, 0.0f),
         Position(1415.33f, 1554.79f, 343.156f, 0.0f),
