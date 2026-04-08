@@ -1387,11 +1387,7 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
                 ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
                 : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
             float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
-            hold.destination.Relocate(
-                base.GetPositionX() + frand(-spread, spread),
-                base.GetPositionY() + frand(-spread, spread),
-                base.GetPositionZ(),
-                base.GetOrientation());
+            hold.destination = base;
         }
         else
         {
