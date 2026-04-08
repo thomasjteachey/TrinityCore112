@@ -74,6 +74,29 @@ bool g_StartupRevivePending = false;
 std::unordered_map<uint64, std::pair<Position, uint32>> g_FastTickMotionByGuid;
 std::mutex g_FastTickMotionLock;
 
+bool TryForceWarsongAdvanceMove(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetMapId() != 489 || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+    Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+
+    Position destination = (assignedTeam == HORDE) ? allianceFlagStand : hordeFlagStand;
+    float const dist = player->GetDistance(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+    if (dist < 18.0f)
+        destination = (assignedTeam == HORDE) ? Position(1410.0f, 1470.0f, 349.5f, 0.0f) : Position(1020.0f, 1442.0f, 338.5f, 0.0f);
+
+    player->GetMotionMaster()->Clear();
+    player->GetMotionMaster()->MovePoint(0, destination, true);
+    return true;
+}
+
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
     if (!player || !player->InBattleground())
@@ -365,6 +388,8 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
         didForceObjectiveMove = playerbot::BattlegroundTacticalActions::MoveToObjectivePrimitive(player, tacticalContext);
         if (!didForceObjectiveMove)
             didForceObjectiveMove = playerbot::BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(player);
+        if (!didForceObjectiveMove)
+            didForceObjectiveMove = TryForceWarsongAdvanceMove(player);
     }
 
     std::ostringstream tickDetail;
