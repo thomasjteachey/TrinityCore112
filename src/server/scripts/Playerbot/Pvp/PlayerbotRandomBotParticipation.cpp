@@ -72,6 +72,7 @@ std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
 std::unordered_map<uint64, std::pair<Position, uint32>> g_FastTickMotionByGuid;
+std::unordered_map<uint64, uint8> g_FastTickStallAttemptsByGuid;
 std::mutex g_FastTickMotionLock;
 
 bool TryForceWarsongAdvanceMove(Player* player)
@@ -93,8 +94,36 @@ bool TryForceWarsongAdvanceMove(Player* player)
         destination = (assignedTeam == HORDE) ? Position(1410.0f, 1470.0f, 349.5f, 0.0f) : Position(1020.0f, 1442.0f, 338.5f, 0.0f);
 
     player->GetMotionMaster()->Clear();
-    player->GetMotionMaster()->MovePoint(0, destination, true);
+    player->GetMotionMaster()->MovePoint(0, destination, false);
     return true;
+}
+
+bool TryNudgeWarsongStalledBot(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground || battleground->GetMapId() != 489 || battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    Position const allianceMid(1260.0f, 1456.0f, 342.5f, 0.0f);
+    Position const hordeMid(1198.0f, 1468.0f, 341.5f, 0.0f);
+    Position const target = (assignedTeam == HORDE) ? allianceMid : hordeMid;
+
+    float const distance = player->GetDistance(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ());
+    if (distance < 3.0f)
+        return false;
+
+    float const step = std::min(12.0f, distance);
+    float const ratio = step / distance;
+    Position nudged(player->GetPositionX() + (target.GetPositionX() - player->GetPositionX()) * ratio,
+                    player->GetPositionY() + (target.GetPositionY() - player->GetPositionY()) * ratio,
+                    player->GetPositionZ() + (target.GetPositionZ() - player->GetPositionZ()) * ratio,
+                    player->GetOrientation());
+
+    return player->UpdatePosition(nudged, true);
 }
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
@@ -390,6 +419,26 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
             didForceObjectiveMove = playerbot::BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(player);
         if (!didForceObjectiveMove)
             didForceObjectiveMove = TryForceWarsongAdvanceMove(player);
+
+        uint8 stallAttempts = 0;
+        {
+            std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+            uint8& attemptRef = g_FastTickStallAttemptsByGuid[botGuid];
+            attemptRef = std::min<uint8>(attemptRef + 1, 10);
+            stallAttempts = attemptRef;
+        }
+
+        if (stallAttempts >= 3 && TryNudgeWarsongStalledBot(player))
+        {
+            didForceObjectiveMove = true;
+            std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+            g_FastTickStallAttemptsByGuid[botGuid] = 0;
+        }
+    }
+    else
+    {
+        std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
+        g_FastTickStallAttemptsByGuid[botGuid] = 0;
     }
 
     std::ostringstream tickDetail;
@@ -1031,6 +1080,7 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
     g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
     std::lock_guard<std::mutex> motionLock(g_FastTickMotionLock);
     g_FastTickMotionByGuid.erase(player->GetGUID().GetRawValue());
+    g_FastTickStallAttemptsByGuid.erase(player->GetGUID().GetRawValue());
 }
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
