@@ -907,6 +907,16 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
     if (!battleground || !player)
         return false;
 
+    if (IsWarsongGulch(player))
+    {
+        TeamId const botTeam = ResolveBotTeamId(player);
+        Position const allianceFlagStand(1540.423f, 1481.325f, 351.8284f, 3.089233f);
+        Position const hordeFlagStand(916.0226f, 1434.405f, 345.413f, 0.01745329f);
+        destination = (botTeam == TEAM_ALLIANCE) ? hordeFlagStand : allianceFlagStand;
+        ApplyDeterministicObjectiveOffset(battleground, player, destination);
+        return true;
+    }
+
     Position const* allianceStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_ALLIANCE));
     Position const* hordeStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(TEAM_HORDE));
 
@@ -1044,43 +1054,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         player->RemoveUnitFlag(UNIT_FLAG_PREPARATION);
     }
 
-    // Keep managed bots moving even when tactical decision hooks are disabled
-    // or when another behavior tree branch (e.g. buffing) wins the current tick.
-    // This prevents "stand still at gate-open" stalls in active battlegrounds.
-    if (!CanIssueBotMovement(player))
-    {
-        std::ostringstream blockedReason;
-        blockedReason << "movement-blocked alive=" << (player->IsAlive() ? 1 : 0)
-                      << " ghost=" << (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST) ? 1 : 0)
-                      << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
-                      << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0);
-        EmitBattlegroundGmDebug(player, blockedReason.str());
-        return true;
-    }
-
-    if (Battleground* battleground = player->GetBattleground())
-    {
-        Position destination;
-        if (TryGetObjectivePosition(battleground, player, destination))
-        {
-            bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
-            if (!withinObjectiveRange)
-                IssueMovePointThrottled(player, destination);
-            else
-                EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
-            return true;
-        }
-    }
-
-    float const engageDistance = IsWarsongGulch(player) ? 80.0f : 65.0f;
-    if (EngageNearestEnemyPlayer(player, engageDistance))
-        return true;
-
-    if (IsWarsongGulch(player))
-        return MoveToClosestBattlegroundGraveyard(player);
-
-    EmitBattlegroundGmDebug(player, "no enemy target and no objective position resolved");
-    return true;
+    // Reference module parity: in-progress movement/combat are handled by
+    // tactical actions (move to objective / check objective), not lifecycle.
+    return false;
 }
 
 bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalContext const& context)
@@ -1126,21 +1102,9 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
-    struct StartHoldState
-    {
-        Position destination;
-        uint32 battlegroundInstanceId = 0;
-    };
-
-    static std::unordered_map<uint64, StartHoldState> holdByGuid;
-    uint64 const botGuid = player->GetGUID().GetRawValue();
-
     Battleground* battleground = player->GetBattleground();
     if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
-    {
-        holdByGuid.erase(botGuid);
         return false;
-    }
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
@@ -1149,51 +1113,38 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     if (!start)
         return false;
 
-    StartHoldState& hold = holdByGuid[botGuid];
-    if (hold.battlegroundInstanceId != battleground->GetInstanceID())
+    Position destination;
+    if (IsWarsongGulch(player))
     {
-        // Reference-module parity for WSG: use fixed waiting spots (left/right/spawn).
-        if (IsWarsongGulch(player))
-        {
-            Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
-            Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
-            Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
-            Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
-            Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
-            Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
+        Position const wsHorde1(944.981f, 1423.478f, 345.434f, 6.18f);
+        Position const wsHorde2(948.488f, 1459.834f, 343.066f, 6.27f);
+        Position const wsHorde3(933.484f, 1433.726f, 345.535f, 0.08f);
+        Position const wsAlliance1(1510.502f, 1493.385f, 351.995f, 3.1f);
+        Position const wsAlliance2(1496.578f, 1457.900f, 344.442f, 3.1f);
+        Position const wsAlliance3(1521.235f, 1480.951f, 352.007f, 3.2f);
 
-            uint32 const role = uint32(botGuid % 10);
-            Position base = (startTeam == TEAM_HORDE)
-                ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
-                : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
-            float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
-            hold.destination = base;
-            hold.destination.Relocate(
-                base.GetPositionX() + frand(-spread, spread),
-                base.GetPositionY() + frand(-spread, spread),
-                base.GetPositionZ(),
-                base.GetOrientation());
-        }
-        else
-        {
-            float const spread = 7.0f;
-            constexpr double tau = 6.28318530717958647692;
-            float const angle = float((botGuid % 12) * (tau / 12.0));
-            hold.destination = *start;
-            hold.destination.Relocate(
-                start->GetPositionX() + std::cos(angle) * spread,
-                start->GetPositionY() + std::sin(angle) * spread,
-                start->GetPositionZ(),
-                start->GetOrientation());
-        }
-        hold.battlegroundInstanceId = battleground->GetInstanceID();
+        uint32 const role = uint32(player->GetGUID().GetRawValue() % 10);
+        Position const base = (startTeam == TEAM_HORDE)
+            ? ((role < 4) ? wsHorde2 : (role > 6 ? wsHorde1 : wsHorde3))
+            : ((role < 4) ? wsAlliance2 : (role > 6 ? wsAlliance1 : wsAlliance3));
+        float const spread = (role < 4 || role > 6) ? 4.0f : 10.0f;
+        destination.Relocate(
+            base.GetPositionX() + frand(-spread, spread),
+            base.GetPositionY() + frand(-spread, spread),
+            base.GetPositionZ(),
+            base.GetOrientation());
+    }
+    else
+    {
+        destination = *start;
+        destination.Relocate(
+            start->GetPositionX() + frand(-7.0f, 7.0f),
+            start->GetPositionY() + frand(-7.0f, 7.0f),
+            start->GetPositionZ(),
+            start->GetOrientation());
     }
 
-    if (player->isMoving())
-        return true;
-
-    if (!player->IsWithinDist3d(hold.destination.GetPositionX(), hold.destination.GetPositionY(), hold.destination.GetPositionZ(), 4.0f))
-        IssueMovePointThrottled(player, hold.destination, 3.0f, 1200);
+    IssueMovePointThrottled(player, destination, 2.5f, 800);
 
     return true;
 }
@@ -1210,8 +1161,10 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!CanIssueBotMovement(player))
         return false;
 
-    // Reference module parity: don't churn movement orders if already moving.
     if (player->isMoving())
+        return false;
+
+    if (!player->IsStopped())
         return false;
 
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
@@ -1219,20 +1172,13 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         case IDLE_MOTION_TYPE:
         case CHASE_MOTION_TYPE:
         case POINT_MOTION_TYPE:
-        case FOLLOW_MOTION_TYPE:
             break;
         default:
             return true;
     }
 
-    bool const teamHasHumans = PvpCore::TeamHasHumanPlayers(player);
-    if (teamHasHumans && TryReturnDroppedFriendlyFlagWithHumanPriority(player))
-        return true;
-
-    // Reference parity: objective pathing should drive WSG map traversal.
-    // Keep enemy pressure for local fights only.
-    if (player->IsInCombat() && EngageNearestEnemyPlayer(player, 80.0f))
-        return true;
+    if (player->IsInCombat())
+        return false;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
@@ -1272,34 +1218,11 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 return true;
             }
 
-            // WSG can enter sparse states where objective anchors are unavailable.
-            // In those windows, force a large-radius enemy scan before falling
-            // back to local graveyard movement so bots keep crossing the map.
-            if (EngageNearestEnemyPlayer(player, 2000.0f))
-                return true;
-
-            if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
-            {
-                Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
-                if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-                    IssueMovePointThrottled(player, destination);
-                return true;
-            }
+            return false;
         }
     }
 
-    bool const fallbackEngage = EngageNearestEnemyPlayer(player, 55.0f);
-    if (!fallbackEngage)
-    {
-        if (IsWarsongGulch(player))
-            return MoveToClosestBattlegroundGraveyard(player);
-
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP movement skipped: bot={} reason=no-objective-movement-and-no-fallback-target.",
-            player->GetGUID().ToString());
-    }
-
-    return fallbackEngage;
+    return false;
 }
 
 bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
