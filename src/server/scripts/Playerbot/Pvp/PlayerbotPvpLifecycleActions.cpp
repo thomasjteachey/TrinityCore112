@@ -1589,6 +1589,13 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (TryJumpOffWarsongGraveyard(player))
         return true;
 
+    // Prioritize combat over objective waypoint routing:
+    // if an enemy is currently detectable within the bot's vision envelope,
+    // switch to engagement immediately and defer waypoint movement.
+    float const visionScanDistance = std::max(5.0f, player->GetVisibilityRange());
+    if (EngageNearestEnemyPlayer(player, visionScanDistance))
+        return true;
+
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
         context.flagCarrierDirective == FlagCarrierDirective::None)
