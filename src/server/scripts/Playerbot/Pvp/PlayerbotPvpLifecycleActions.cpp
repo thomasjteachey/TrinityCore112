@@ -111,6 +111,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, ui
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
 bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
+bool CanIssueBotMovement(Player const* player);
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
@@ -183,8 +185,6 @@ bool RecoverStaleBattlegroundState(Player* player)
 
     return true;
 }
-
-bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
 {
@@ -973,18 +973,6 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
             " canMove=" + std::to_string(CanIssueBotMovement(player) ? 1 : 0) +
             " motionType=" + std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())), 1200);
         return false;
-    }
-
-    float const distanceToTarget = player->GetDistance(target);
-    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
-    {
-        Position destination = target->GetPosition();
-        bool const moved = IssueMovePointThrottled(player, destination, 4.0f, 700);
-        EmitBattlegroundGmDebug(player,
-            "move-toward-unit mode=segmented target=" + target->GetName() +
-            " dist=" + std::to_string(int32(distanceToTarget)) +
-            " issued=" + std::to_string(moved ? 1 : 0), 1200);
-        return moved || player->isMoving();
     }
 
     float const distanceToTarget = player->GetDistance(target);
