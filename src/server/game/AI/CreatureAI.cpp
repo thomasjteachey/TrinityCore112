@@ -227,10 +227,7 @@ void CreatureAI::EnterEvadeMode(EvadeReason why)
     // Stockades PvPvE: clear combat/reset logic but do not path home or set evade state.
     // This keeps creatures standing where they deaggroed while still allowing normal re-aggro.
     if (me->GetMapId() == 34)
-    {
-        Reset();
         return;
-    }
 
     if (!me->GetVehicle()) // otherwise me will be in evade mode forever
     {
