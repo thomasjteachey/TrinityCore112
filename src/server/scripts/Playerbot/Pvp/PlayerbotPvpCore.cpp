@@ -326,6 +326,108 @@ bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
     return false;
 }
 
+ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance, bool includeSelf)
+{
+    if (!player || !player->GetMap() || !baseSpellId)
+        return ObjectGuid::Empty;
+
+    auto isEligible = [&](Player* candidate)
+    {
+        if (!candidate || !candidate->IsAlive())
+            return false;
+        if (candidate != player && !player->IsValidAssistTarget(candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return false;
+        if (HasAuraFromSpellChain(candidate, baseSpellId))
+            return false;
+
+        return true;
+    };
+
+    if (includeSelf &&
+        player->IsAlive() &&
+        player->IsWithinLOSInMap(player) &&
+        player->IsWithinDistInMap(player, maxDistance) &&
+        !HasAuraFromSpellChain(player, baseSpellId))
+    {
+        return player->GetGUID();
+    }
+
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isEligible(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
+
+SpellDecision SelectPreparationBuffSpell(Player const* player)
+{
+    SpellDecision decision;
+    if (!player || player->IsInCombat())
+        return decision;
+
+    switch (player->GetClass())
+    {
+        case CLASS_PRIEST:
+        {
+            if (IsSpellReady(player, 10938))
+            {
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 10938, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "priest power word fortitude prep", "buff nearby team before gates open", 10938, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+            }
+
+            if (IsSpellReady(player, 10958))
+            {
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 10958, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "priest shadow protection prep", "buff nearby team before gates open", 10958, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+            }
+
+            break;
+        }
+        case CLASS_MAGE:
+        {
+            if (IsSpellReady(player, 10157))
+            {
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 10157, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "arcane intellect prep", "buff nearby team before gates open", 10157, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+            }
+
+            if (!HasAuraFromSpellChain(player, 10220) && IsSpellReady(player, 10220))
+                return { "frost armor prep", "maintain armor before gates open", 10220, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            break;
+        }
+        case CLASS_PALADIN:
+        {
+            if (IsSpellReady(player, 25898))
+            {
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "paladin greater blessing of kings prep", "buff nearby team before gates open", 25898, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+            }
+
+            break;
+        }
+        default:
+            break;
+    }
+
+    return decision;
+}
+
 bool HasTemporaryWeaponImbue(Player const* player)
 {
     if (!player)
@@ -1970,9 +2072,26 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return context;
 
     bool const inActiveBattleground = values.inBattleground && IsTriggerActive(PvpTrigger::BgActive, values);
+    bool const inBattlegroundPreparation = player->InBattleground() && player->HasUnitFlag(UNIT_FLAG_PREPARATION);
     bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
-    if (!inActiveBattleground && !inActiveDuel)
+    if (!inActiveBattleground && !inBattlegroundPreparation && !inActiveDuel)
         return context;
+
+    if (inBattlegroundPreparation)
+    {
+        SpellDecision const prepDecision = SelectPreparationBuffSpell(player);
+        if (prepDecision.spellId)
+        {
+            context.actionName = prepDecision.actionName;
+            context.reason = prepDecision.reason;
+            context.spellId = prepDecision.spellId;
+            context.targetMode = prepDecision.targetMode;
+            context.targetGuid = prepDecision.targetGuid;
+            context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
+            context.shouldExecute = true;
+            return context;
+        }
+    }
 
     Unit const* target = SelectCombatTarget(player);
     bool const hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
