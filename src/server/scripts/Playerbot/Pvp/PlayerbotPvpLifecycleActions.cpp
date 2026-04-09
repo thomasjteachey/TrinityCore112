@@ -353,14 +353,17 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     if (!bot || !bot->InBattleground())
         return;
 
-    static std::unordered_map<uint64, uint32> nextEmitTimeByBotGuid;
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    uint64 const botGuid = bot->GetGUID().GetRawValue();
-    uint32& nextEmitMs = nextEmitTimeByBotGuid[botGuid];
-    if (nowMs < nextEmitMs)
-        return;
+    if (throttleMs > 0)
+    {
+        static std::unordered_map<uint64, uint32> nextEmitTimeByBotGuid;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint64 const botGuid = bot->GetGUID().GetRawValue();
+        uint32& nextEmitMs = nextEmitTimeByBotGuid[botGuid];
+        if (nowMs < nextEmitMs)
+            return;
 
-    nextEmitMs = nowMs + throttleMs;
+        nextEmitMs = nowMs + throttleMs;
+    }
 
     if (!bot->GetMap())
         return;
@@ -449,6 +452,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     // toward the furthest available point on that segment. This chains
     // truncated navmesh paths into full-map traversal without disabling
     // collision/pathing entirely.
+    Position issuedDestination = destination;
     if (generatePath && player->InBattleground())
     {
         bool const canDirectDropToDestination = destination.GetPositionZ() + 8.0f < player->GetPositionZ() &&
@@ -456,6 +460,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         if (canDirectDropToDestination)
         {
             motionMaster->MovePoint(0, destination, false);
+            issuedDestination = destination;
             state.lastDestination = destination;
             state.lastIssueMs = nowMs;
             return true;
@@ -482,11 +487,12 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                 motionMaster->MovePoint(0, segmentDestination, false);
             else
                 motionMaster->MovePoint(0, segmentDestination, true);
+            issuedDestination = segmentDestination;
 
             EmitBattlegroundGmDebug(player,
                 "movepoint=segmented pathType=" + std::to_string(uint32(pathType)) +
                 " points=" + std::to_string(points.size()) +
-                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))));
+                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
         }
         else
         {
@@ -497,12 +503,13 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             if (actualEndDistance > 3.0f && actualEndDistance + 5.0f < destinationDistance)
             {
                 motionMaster->MovePoint(0, actualEndDestination, true);
+                issuedDestination = actualEndDestination;
                 EmitBattlegroundGmDebug(player,
                     "movepoint=fallback-actual-end pathOk=" + std::to_string(pathOk ? 1 : 0) +
                     " pathType=" + std::to_string(uint32(pathType)) +
                     " points=" + std::to_string(points.size()) +
                     " actualEndDist=" + std::to_string(int32(actualEndDistance)) +
-                    " destDist=" + std::to_string(int32(destinationDistance)));
+                    " destDist=" + std::to_string(int32(destinationDistance)), 0);
 
                 state.lastDestination = actualEndDestination;
                 state.lastIssueMs = nowMs;
@@ -526,12 +533,13 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                         destination.GetOrientation());
 
                     motionMaster->MovePoint(0, intermediateDestination, true);
+                    issuedDestination = intermediateDestination;
                     EmitBattlegroundGmDebug(player,
                         "movepoint=fallback-intermediate pathOk=" + std::to_string(pathOk ? 1 : 0) +
                         " pathType=" + std::to_string(uint32(pathType)) +
                         " points=" + std::to_string(points.size()) +
                         " stepDist=" + std::to_string(int32(player->GetDistance(intermediateDestination))) +
-                        " destDist=" + std::to_string(int32(destinationDistance)));
+                        " destDist=" + std::to_string(int32(destinationDistance)), 0);
 
                     state.lastDestination = intermediateDestination;
                     state.lastIssueMs = nowMs;
@@ -540,19 +548,21 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
 
             motionMaster->MovePoint(0, destination, true);
+            issuedDestination = destination;
             EmitBattlegroundGmDebug(player,
                 "movepoint=fallback-direct pathOk=" + std::to_string(pathOk ? 1 : 0) +
                 " pathType=" + std::to_string(uint32(pathType)) +
                 " points=" + std::to_string(points.size()) +
-                " destDist=" + std::to_string(int32(destinationDistance)));
+                " destDist=" + std::to_string(int32(destinationDistance)), 0);
         }
     }
     else
     {
         motionMaster->MovePoint(0, destination, generatePath);
+        issuedDestination = destination;
     }
 
-    state.lastDestination = destination;
+    state.lastDestination = issuedDestination;
     state.lastIssueMs = nowMs;
     return true;
 }
