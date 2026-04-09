@@ -308,7 +308,7 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                 Creature* sh = nullptr;
                 for (GuidVector::const_iterator itr2 = (itr->second).begin(); itr2 != (itr->second).end(); ++itr2)
                 {
-                    Player* player = ObjectAccessor::FindPlayer(*itr2);
+                    Player* player = ObjectAccessor::FindConnectedPlayer(*itr2);
                     if (!player)
                         continue;
 
@@ -330,11 +330,11 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                 {
                     // Managed playerbot avatars (virtual sessions) can occasionally miss the
                     // regular resurrect queue registration. During each spirit guide wave,
-                    // manually include nearby dead playerbots so they resurrect reliably.
+                    // include all dead virtual bots in the battleground for this wave.
                     for (BattlegroundPlayerMap::const_iterator bgPlayerItr = m_Players.begin(); bgPlayerItr != m_Players.end(); ++bgPlayerItr)
                     {
-                        Player* nearbyPlayer = ObjectAccessor::FindPlayer(bgPlayerItr->first);
-                        if (!nearbyPlayer || nearbyPlayer->IsAlive() || !nearbyPlayer->IsInWorld() || !nearbyPlayer->IsWithinDistInMap(sh, 15.0f))
+                        Player* nearbyPlayer = ObjectAccessor::FindConnectedPlayer(bgPlayerItr->first);
+                        if (!nearbyPlayer || nearbyPlayer->IsAlive() || !nearbyPlayer->IsInWorld())
                             continue;
 
                         WorldSession* session = nearbyPlayer->GetSession();
@@ -362,7 +362,7 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
     {
         for (GuidVector::const_iterator itr = m_ResurrectQueue.begin(); itr != m_ResurrectQueue.end(); ++itr)
         {
-            Player* player = ObjectAccessor::FindPlayer(*itr);
+            Player* player = ObjectAccessor::FindConnectedPlayer(*itr);
             if (!player)
                 continue;
             player->ResurrectPlayer(1.0f);
