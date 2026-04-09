@@ -927,6 +927,26 @@ bool HasConflictingBattlegroundLifecycleContext(playerbot::BattlegroundLifecycle
 bool HandleBattlegroundDeathState(Player* player)
 {
     static std::unordered_map<uint64, uint32> queuedSinceMsByGuid;
+    auto resolveSpiritGuide = [](Player* candidate, uint32 preferredEntry) -> Creature*
+    {
+        if (!candidate)
+            return nullptr;
+
+        // Keep spirit-healer lookup local to the graveyard.
+        // Some virtual-session bots can temporarily report a neutral BG team;
+        // in that case we still search both faction spirit-guide entries.
+        float constexpr spiritGuideSearchRadius = 30.0f;
+
+        Creature* spiritGuide = preferredEntry ? candidate->FindNearestCreature(preferredEntry, spiritGuideSearchRadius, false) : nullptr;
+        if (!spiritGuide)
+        {
+            spiritGuide = candidate->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, spiritGuideSearchRadius, false);
+            if (!spiritGuide)
+                spiritGuide = candidate->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, spiritGuideSearchRadius, false);
+        }
+
+        return spiritGuide;
+    };
 
     if (!player || !player->InBattleground())
         return false;
@@ -966,13 +986,7 @@ bool HandleBattlegroundDeathState(Player* player)
             battleground->RemovePlayerFromResurrectQueue(player->GetGUID());
 
             uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
-            Creature* spiritGuide = spiritEntry ? player->FindNearestCreature(spiritEntry, 30.0f, false) : nullptr;
-            if (!spiritGuide)
-            {
-                spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
-                if (!spiritGuide)
-                    spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
-            }
+            Creature* spiritGuide = resolveSpiritGuide(player, spiritEntry);
 
             if (spiritGuide)
             {
@@ -992,24 +1006,14 @@ bool HandleBattlegroundDeathState(Player* player)
     }
 
     uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
-    if (!spiritEntry)
-        return true;
 
     // Mirror player core BG death handling behavior: once ghosted at a battleground
     // graveyard, register at a nearby spirit guide and wait for the periodic wave rez.
     // Avoid script-driven ghost movement because missed/path-blocked moves can prevent
     // ever getting queued for resurrection.
-    Creature* spiritGuide = player->FindNearestCreature(spiritEntry, 30.0f, false);
+    Creature* spiritGuide = resolveSpiritGuide(player, spiritEntry);
     if (!spiritGuide)
-    {
-        // Rare fallback: if team resolution and nearby search disagree (e.g. after team
-        // swaps or delayed map state), use any nearby spirit guide so bots still rez.
-        spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, 30.0f, false);
-        if (!spiritGuide)
-            spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, 30.0f, false);
-        if (!spiritGuide)
-            return true;
-    }
+        return true;
 
     battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
     queuedSinceMsByGuid[player->GetGUID().GetRawValue()] = GameTime::GetGameTimeMS();
