@@ -3924,6 +3924,13 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->AuraInterruptFlags = AURA_INTERRUPT_FLAG_HITBYSPELL | AURA_INTERRUPT_FLAG_TAKE_DAMAGE;
     });
 
+    // Rogue - Stealth (all ranks)
+    ApplySpellFix({ 1784, 1785, 1786, 1787, 1788, 1789 }, [](SpellInfo* spellInfo)
+    {
+        // Break stealth when hit by hostile spells even if incoming damage is fully absorbed.
+        spellInfo->AuraInterruptFlags |= AURA_INTERRUPT_FLAG_HITBYSPELL;
+    });
+
     // Death Knight T10 Tank 2P Bonus
     ApplySpellFix({ 70650 }, [](SpellInfo* spellInfo)
     {
