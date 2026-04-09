@@ -389,28 +389,39 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     };
 
     static std::unordered_map<uint64, MoveOrderState> stateByGuid;
+    static std::unordered_map<uint64, uint8> stationaryReissueCountByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
     MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    uint8& stationaryReissueCount = stationaryReissueCountByGuid[botGuid];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
     bool const destinationChanged = state.lastIssueMs == 0 ||
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
     bool const botCurrentlyMoving = player->isMoving();
+    bool const forcedStationaryReissue = !destinationChanged && !canReissueByTime && !botCurrentlyMoving;
+    if (forcedStationaryReissue)
+        stationaryReissueCount = std::min<uint8>(uint8(stationaryReissueCount + 1), 20);
+    else
+        stationaryReissueCount = 0;
+
     if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
     {
         return false;
     }
 
-    if (!destinationChanged && !canReissueByTime && !botCurrentlyMoving)
+    uint32 bgStatus = 0;
+    if (Battleground* bg = player->GetBattleground())
+        bgStatus = uint32(bg->GetStatus());
+
+    if (forcedStationaryReissue)
     {
-        uint32 bgStatus = 0;
-        if (Battleground* bg = player->GetBattleground())
-            bgStatus = uint32(bg->GetStatus());
         EmitBattlegroundGmDebug(player,
             "movepoint=forced-reissue reason=stationary-with-throttle lastIssueMs=" + std::to_string(state.lastIssueMs) +
             " nowMs=" + std::to_string(nowMs) +
             " motionType=" + std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())) +
-            " bgStatus=" + std::to_string(bgStatus), 1000);
+            " bgStatus=" + std::to_string(bgStatus) +
+            " reissueCount=" + std::to_string(stationaryReissueCount), 1000);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -454,7 +465,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         // Explicitly cap each navmesh solve to a medium segment so very long
         // cross-map targets still yield incremental path points immediately.
         path.SetPathLengthLimit(90.0f);
-        bool const pathOk = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        bool const pathOk = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true);
         PathType const pathType = path.GetPathType();
 
         Movement::PointsArray const& points = path.GetPath();
@@ -480,6 +491,24 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         else
         {
             float const destinationDistance = player->GetDistance(destination);
+            G3D::Vector3 const& actualEnd = path.GetActualEndPosition();
+            Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, destination.GetOrientation());
+            float const actualEndDistance = player->GetDistance(actualEndDestination);
+            if (actualEndDistance > 3.0f && actualEndDistance + 5.0f < destinationDistance)
+            {
+                motionMaster->MovePoint(0, actualEndDestination, true);
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=fallback-actual-end pathOk=" + std::to_string(pathOk ? 1 : 0) +
+                    " pathType=" + std::to_string(uint32(pathType)) +
+                    " points=" + std::to_string(points.size()) +
+                    " actualEndDist=" + std::to_string(int32(actualEndDistance)) +
+                    " destDist=" + std::to_string(int32(destinationDistance)));
+
+                state.lastDestination = actualEndDestination;
+                state.lastIssueMs = nowMs;
+                return true;
+            }
+
             if (destinationDistance > 120.0f)
             {
                 float const dx = destination.GetPositionX() - player->GetPositionX();
