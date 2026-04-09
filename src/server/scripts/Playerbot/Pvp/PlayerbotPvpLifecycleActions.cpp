@@ -385,6 +385,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     if (!player)
         return false;
 
+    if (IsWarsongGulch(player))
+        minReissueMs = std::max<uint32>(minReissueMs, 2000);
+
     struct MoveOrderState
     {
         Position lastDestination;
