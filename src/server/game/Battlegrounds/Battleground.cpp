@@ -325,6 +325,29 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                     player->CastSpell(player, SPELL_RESURRECTION_VISUAL, true);
                     m_ResurrectQueue.push_back(*itr2);
                 }
+
+                if (sh)
+                {
+                    // Managed playerbot avatars (virtual sessions) can occasionally miss the
+                    // regular resurrect queue registration. During each spirit guide wave,
+                    // manually include nearby dead playerbots so they resurrect reliably.
+                    for (BattlegroundPlayerMap::const_iterator bgPlayerItr = m_Players.begin(); bgPlayerItr != m_Players.end(); ++bgPlayerItr)
+                    {
+                        Player* nearbyPlayer = ObjectAccessor::FindPlayer(bgPlayerItr->first);
+                        if (!nearbyPlayer || nearbyPlayer->IsAlive() || !nearbyPlayer->IsInWorld() || !nearbyPlayer->IsWithinDistInMap(sh, 15.0f))
+                            continue;
+
+                        WorldSession* session = nearbyPlayer->GetSession();
+                        if (!session || !session->IsVirtualSession())
+                            continue;
+
+                        if (std::find(m_ResurrectQueue.begin(), m_ResurrectQueue.end(), nearbyPlayer->GetGUID()) != m_ResurrectQueue.end())
+                            continue;
+
+                        nearbyPlayer->CastSpell(nearbyPlayer, SPELL_RESURRECTION_VISUAL, true);
+                        m_ResurrectQueue.push_back(nearbyPlayer->GetGUID());
+                    }
+                }
                 (itr->second).clear();
             }
 
