@@ -197,6 +197,32 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
     return true;
 }
 
+bool RecoverStaleBattlegroundState(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    if (player->GetBattleground())
+        return false;
+
+    // Ignore in-flight teleports; let normal worldport handling finish first.
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    uint32 const staleBattlegroundId = player->GetBattlegroundId();
+    BattlegroundTypeId const staleBattlegroundTypeId = player->GetBattlegroundTypeId();
+
+    player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+    player->SetBGTeam(0);
+
+    bool const teleported = player->TeleportToBGEntryPoint();
+    TC_LOG_INFO("playerbots.pvp.lifecycle",
+        "Playerbot PvP stale battleground recovery: guid={} staleInstanceId={} staleTypeId={} teleported={}.",
+        player->GetGUID().ToString(), staleBattlegroundId, uint32(staleBattlegroundTypeId), teleported ? 1 : 0);
+
+    return true;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
@@ -1289,6 +1315,9 @@ bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycle
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
         return false;
 
+    if (RecoverStaleBattlegroundState(player))
+        return true;
+
     if (HasConflictingBattlegroundLifecycleContext(context))
     {
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -1648,6 +1677,9 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
         return false;
+
+    if (RecoverStaleBattlegroundState(player))
+        return true;
 
     if (HasConflictingArenaLifecycleContext(context))
     {
