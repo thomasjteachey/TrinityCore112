@@ -387,6 +387,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const maxRange = spellInfo->GetMaxRange(false);
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
+        // When we are trying to cast but are still out of range, proactively
+        // close the gap instead of idling and repeating failed cast attempts.
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, maxRange - 1.0f), player->GetFollowAngle());
+        else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
+            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, maxRange - 1.0f), player->GetFollowAngle());
+
         failureReason = "out_of_range";
         return false;
     }
