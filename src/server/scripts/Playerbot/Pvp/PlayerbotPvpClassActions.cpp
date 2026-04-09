@@ -21,6 +21,7 @@
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "Log.h"
+#include "Map.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Pet.h"
