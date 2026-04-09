@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <sstream>
 #include <unordered_map>
 
 namespace
@@ -131,6 +132,36 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         player->GetName(), context.actionName ? context.actionName : "none", context.spellId,
         GetTargetModeLabel(context.targetMode), casted ? "yes" : "no", context.reason ? context.reason : "none",
         failureReason.empty() ? "none" : failureReason);
+}
+
+void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellContext const& context, SpellCastResult castResult)
+{
+    if (!bot || castResult == SPELL_CAST_OK || castResult == SPELL_FAILED_SPELL_IN_PROGRESS)
+        return;
+
+    Map* map = bot->GetMap();
+    if (!map)
+        return;
+
+    EnumText const resultText = EnumUtils::ToString(castResult);
+    std::ostringstream os;
+    os << "[Playerbot spell-fail] bot=" << bot->GetName()
+       << " guid=" << bot->GetGUID().ToString()
+       << " map=" << bot->GetMapId()
+       << " spell=" << context.spellId
+       << " action=" << (context.actionName ? context.actionName : "none")
+       << " target=" << GetTargetModeLabel(context.targetMode)
+       << " result=" << resultText.Title;
+    std::string const message = os.str();
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
 }
 
 void FinalizeVirtualNearTeleport(Player* player)
@@ -400,6 +431,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
     {
+        NotifySpellCastFailureToGameMasters(player, context, castResult);
         EnumText const reasonText = EnumUtils::ToString(castResult);
         failureReason = reasonText.Title;
         return false;
