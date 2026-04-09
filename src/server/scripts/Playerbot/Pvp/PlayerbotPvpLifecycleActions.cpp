@@ -138,9 +138,7 @@ std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
         Position(1073.515869f, 1459.7177f, 317.142853f, 0.0f), //halfway down tunnel
         Position(1134.972534f, 1463.462158f, 315.624f, 0.0f), //halfway to mid
         Position(1204.189331f, 1469.181396f, 307.059204f, 0.0f), //south of big rock
-        Position(1073.49f, 1551.19f, 319.418f, 0.0f), //mid
-        Position(1258.810181f, 1463.801758f, 312.229401f, 0.0f), //mid
-        Position(1172.28f, 1523.28f, 301.958f, 0.0f)
+        Position(1258.810181f, 1463.801758f, 312.229401f, 0.0f) //mid
     };
 
     return (botTeam == TEAM_ALLIANCE) ? allianceToHorde : hordeToAlliance;
