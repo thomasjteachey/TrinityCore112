@@ -133,22 +133,14 @@ std::vector<Position> const& GetWarsongObjectivePathForTeam(TeamId botTeam)
     static std::vector<Position> const hordeToAlliance =
     {
         // Open through tunnel lane so bots naturally run out of tunnel at match start.
-        Position(933.33f, 1433.72f, 345.536f, 0.0f),
-        Position(942.74f, 1423.10f, 345.467f, 0.0f),
-        Position(966.01f, 1422.84f, 345.223f, 0.0f),
-        Position(1037.96f, 1422.27f, 339.919f, 0.0f),
-        Position(1057.42f, 1452.75f, 341.131f, 0.0f),
-        Position(1052.11f, 1493.52f, 342.176f, 0.0f),
-        Position(1073.49f, 1551.19f, 319.418f, 0.0f),
-        Position(1103.54f, 1521.89f, 314.583f, 0.0f),
-        Position(1172.28f, 1523.28f, 301.958f, 0.0f),
-        Position(1276.17f, 1533.72f, 311.722f, 0.0f),
-        Position(1415.33f, 1554.79f, 343.156f, 0.0f),
-        Position(1443.33f, 1517.78f, 345.534f, 0.0f),
-        Position(1469.79f, 1494.13f, 351.774f, 0.0f),
-        Position(1490.78f, 1493.51f, 352.141f, 0.0f),
-        Position(1508.27f, 1493.17f, 352.005f, 0.0f),
-        Position(1519.53f, 1481.87f, 352.024f, 0.0f)
+        Position(950.949646f, 1458.971802f, 342.466125f, 0.0f), //tunnel entrance
+        Position(1001.682495f, 1459.457397f, 335.441101f, 0.0f), //speed boots
+        Position(1073.515869f, 1459.7177f, 317.142853f, 0.0f), //halfway down tunnel
+        Position(1134.972534f, 1463.462158f, 315.624f, 0.0f), //halfway to mid
+        Position(1204.189331f, 1469.181396f, 307.059204f, 0.0f), //south of big rock
+        Position(1073.49f, 1551.19f, 319.418f, 0.0f), //mid
+        Position(1258.810181f, 1463.801758f, 312.229401f, 0.0f), //mid
+        Position(1172.28f, 1523.28f, 301.958f, 0.0f)
     };
 
     return (botTeam == TEAM_ALLIANCE) ? allianceToHorde : hordeToAlliance;
