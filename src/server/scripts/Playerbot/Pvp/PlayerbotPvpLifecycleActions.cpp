@@ -1525,6 +1525,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, 100.0f);
+
+    // WSG brawl behavior should aggressively acquire ranged pressure targets
+    // instead of endlessly pathing objective waypoints with no combat target.
+    if (IsWarsongGulch(player) && EngageNearestEnemyPlayer(player, 2000.0f))
+        return true;
+
     if (TryJumpOffWarsongGraveyard(player))
         return true;
 
