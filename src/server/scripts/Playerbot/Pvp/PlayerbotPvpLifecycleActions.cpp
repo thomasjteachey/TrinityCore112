@@ -1621,7 +1621,21 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         case FOLLOW_MOTION_TYPE:
             break;
         default:
+        {
+            // If the bot is effectively stationary while stuck in a non-tactical
+            // movement generator, clear it so objective/pursuit movement can
+            // issue a fresh MovePoint.
+            if (!player->isMoving())
+            {
+                EmitBattlegroundGmDebug(player,
+                    "move-to-objective=clear-stale-motion motionType=" +
+                    std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())), 1200);
+                player->GetMotionMaster()->Clear();
+                break;
+            }
+
             return true;
+        }
     }
 
     if (player->IsInCombat())
