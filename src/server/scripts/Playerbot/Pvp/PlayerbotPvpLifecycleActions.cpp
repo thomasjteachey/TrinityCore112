@@ -224,43 +224,102 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     if (!player || !player->IsAlive() || !IsWarsongGulch(player) || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    struct JumpRoute
+    struct PostResurrectRouteState
     {
-        Position launch;
-        Position landing;
+        uint32 battlegroundInstanceId = 0;
+        bool wasAlive = true;
+        bool active = false;
+        uint8 phase = 0; // 0 = move to tip, 1 = run forward burst, 2 = move to mid
+        uint32 forwardBurstEndMs = 0;
     };
 
-    static std::array<JumpRoute, 2> const routes =
-    {{
-        { Position(957.20f, 1424.40f, 345.48f, 0.0f), Position(978.20f, 1427.10f, 335.20f, 0.0f) },      // Horde GY -> field
-        { Position(1517.60f, 1485.30f, 352.00f, 0.0f), Position(1498.60f, 1484.30f, 340.20f, 0.0f) }      // Alliance GY -> field
-    }};
+    static std::unordered_map<uint64, PostResurrectRouteState> stateByGuid;
+    PostResurrectRouteState& state = stateByGuid[player->GetGUID().GetRawValue()];
 
-    float nearestDist = std::numeric_limits<float>::max();
-    JumpRoute const* nearest = nullptr;
-    for (JumpRoute const& route : routes)
-    {
-        float const dist = player->GetDistance(route.launch.GetPositionX(), route.launch.GetPositionY(), route.launch.GetPositionZ());
-        if (dist < nearestDist)
-        {
-            nearestDist = dist;
-            nearest = &route;
-        }
-    }
-
-    if (!nearest || nearestDist > 22.0f)
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
         return false;
 
-    if (!player->IsWithinDist3d(nearest->launch.GetPositionX(), nearest->launch.GetPositionY(), nearest->launch.GetPositionZ(), 3.5f))
+    if (state.battlegroundInstanceId != battleground->GetInstanceID())
     {
-        IssueMovePointThrottled(player, nearest->launch, 1.5f, 500);
+        state = {};
+        state.battlegroundInstanceId = battleground->GetInstanceID();
+        state.wasAlive = player->IsAlive();
+    }
+
+    bool const justResurrected = !state.wasAlive && player->IsAlive();
+    state.wasAlive = player->IsAlive();
+    if (justResurrected)
+    {
+        state.active = true;
+        state.phase = 0;
+        state.forwardBurstEndMs = 0;
+    }
+
+    if (!state.active)
+        return false;
+
+    static Position const hordeGraveyardTip(1066.0946404f, 1380.843994f, 340.612305f, 0.0f);
+    static Position const allianceGraveyardTip(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
+    static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
+    // Per-side anchors that point off the graveyard ledge into the field.
+    static Position const hordeForwardAnchor(978.20f, 1427.10f, 335.20f, 0.0f);
+    static Position const allianceForwardAnchor(1498.60f, 1484.30f, 340.20f, 0.0f);
+
+    TeamId const teamId = ResolveBotTeamId(player);
+    Position const& graveyardTip = (teamId == TEAM_HORDE) ? hordeGraveyardTip : allianceGraveyardTip;
+    Position const& forwardAnchor = (teamId == TEAM_HORDE) ? hordeForwardAnchor : allianceForwardAnchor;
+
+    if (state.phase == 0)
+    {
+        if (!player->IsWithinDist3d(graveyardTip.GetPositionX(), graveyardTip.GetPositionY(), graveyardTip.GetPositionZ(), 2.5f))
+        {
+            IssueMovePointThrottled(player, graveyardTip, 1.0f, 300);
+            return true;
+        }
+
+        state.phase = 1;
+    }
+
+    if (state.phase == 1)
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (!state.forwardBurstEndMs)
+            state.forwardBurstEndMs = nowMs + 1000;
+
+        // Push straight off the graveyard ledge first, then route to mid.
+        float const dx = forwardAnchor.GetPositionX() - graveyardTip.GetPositionX();
+        float const dy = forwardAnchor.GetPositionY() - graveyardTip.GetPositionY();
+        float const len = std::sqrt(dx * dx + dy * dy);
+        if (len <= 0.001f)
+        {
+            state.phase = 2;
+            return true;
+        }
+
+        float const forwardDistance = player->GetSpeed(MOVE_RUN) * 1.0f;
+        Position forwardPoint(
+            graveyardTip.GetPositionX() + (dx / len) * forwardDistance,
+            graveyardTip.GetPositionY() + (dy / len) * forwardDistance,
+            graveyardTip.GetPositionZ(),
+            player->GetAbsoluteAngle(forwardAnchor.GetPositionX(), forwardAnchor.GetPositionY()));
+
+        IssueMovePointThrottled(player, forwardPoint, 0.5f, 100);
+
+        if (nowMs >= state.forwardBurstEndMs)
+            state.phase = 2;
         return true;
     }
 
-    float const jumpSpeedXY = std::max(6.0f, player->GetSpeed(MOVE_RUN) * 1.1f);
-    float const jumpSpeedZ = 8.0f;
-    player->SetFacingTo(player->GetAbsoluteAngle(nearest->landing.GetPositionX(), nearest->landing.GetPositionY()));
-    player->JumpTo(jumpSpeedXY, jumpSpeedZ, false);
+    if (state.phase == 2)
+    {
+        IssueMovePointThrottled(player, midPoint, 1.0f, 300);
+
+        if (player->IsWithinDist3d(midPoint.GetPositionX(), midPoint.GetPositionY(), midPoint.GetPositionZ(), 6.0f))
+            state.active = false;
+        return true;
+    }
+
     return true;
 }
 
@@ -1478,10 +1537,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, 100.0f);
-    /*
     if (TryJumpOffWarsongGraveyard(player))
         return true;
-        */
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
