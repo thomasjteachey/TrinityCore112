@@ -326,27 +326,24 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                     m_ResurrectQueue.push_back(*itr2);
                 }
 
-                if (sh)
+                // Hard override for managed playerbot avatars (virtual sessions):
+                // when a spirit guide resurrection wave happens, include every dead
+                // playerbot in this battleground, regardless of graveyard location.
+                for (BattlegroundPlayerMap::const_iterator bgPlayerItr = m_Players.begin(); bgPlayerItr != m_Players.end(); ++bgPlayerItr)
                 {
-                    // Managed playerbot avatars (virtual sessions) can occasionally miss the
-                    // regular resurrect queue registration. During each spirit guide wave,
-                    // manually include nearby dead playerbots so they resurrect reliably.
-                    for (BattlegroundPlayerMap::const_iterator bgPlayerItr = m_Players.begin(); bgPlayerItr != m_Players.end(); ++bgPlayerItr)
-                    {
-                        Player* nearbyPlayer = ObjectAccessor::FindConnectedPlayer(bgPlayerItr->first);
-                        if (!nearbyPlayer || nearbyPlayer->IsAlive() || !nearbyPlayer->IsInWorld() || !nearbyPlayer->IsWithinDistInMap(sh, 15.0f))
-                            continue;
+                    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bgPlayerItr->first);
+                    if (!botPlayer || botPlayer->IsAlive() || !botPlayer->IsInWorld())
+                        continue;
 
-                        WorldSession* session = nearbyPlayer->GetSession();
-                        if (!session || !session->IsVirtualSession())
-                            continue;
+                    WorldSession* session = botPlayer->GetSession();
+                    if (!session || !session->IsVirtualSession())
+                        continue;
 
-                        if (std::find(m_ResurrectQueue.begin(), m_ResurrectQueue.end(), nearbyPlayer->GetGUID()) != m_ResurrectQueue.end())
-                            continue;
+                    if (std::find(m_ResurrectQueue.begin(), m_ResurrectQueue.end(), botPlayer->GetGUID()) != m_ResurrectQueue.end())
+                        continue;
 
-                        nearbyPlayer->CastSpell(nearbyPlayer, SPELL_RESURRECTION_VISUAL, true);
-                        m_ResurrectQueue.push_back(nearbyPlayer->GetGUID());
-                    }
+                    botPlayer->CastSpell(botPlayer, SPELL_RESURRECTION_VISUAL, true);
+                    m_ResurrectQueue.push_back(botPlayer->GetGUID());
                 }
                 (itr->second).clear();
             }
