@@ -107,24 +107,45 @@ TeamId ResolveBotTeamId(Player const* player)
     return ResolveTeamId(player->GetTeam());
 }
 
-Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance);
+Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers = nullptr, uint32* attackableEnemies = nullptr);
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
 bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
+void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
 {
     if (!player || !IsWarsongGulch(player))
         return false;
 
-    Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max());
+    uint32 scannedPlayers = 0;
+    uint32 attackableEnemies = 0;
+    Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
     if (!nearestEnemy)
+    {
+        EmitBattlegroundGmDebug(player,
+            "wsg-pursuit=no-enemy scanned=" + std::to_string(scannedPlayers) +
+            " attackable=" + std::to_string(attackableEnemies), 1500);
         return false;
+    }
 
+    float const distanceToEnemy = player->GetDistance(nearestEnemy);
     float const combatEngageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
-    if (player->IsWithinDistInMap(nearestEnemy, combatEngageDistance))
+    if (distanceToEnemy <= combatEngageDistance)
+    {
+        EmitBattlegroundGmDebug(player,
+            "wsg-pursuit=engage target=" + nearestEnemy->GetName() +
+            " dist=" + std::to_string(int32(distanceToEnemy)) +
+            " scan=" + std::to_string(scannedPlayers) +
+            " attackable=" + std::to_string(attackableEnemies), 1200);
         return EngageNearestEnemyPlayer(player, combatEngageDistance);
+    }
 
+    EmitBattlegroundGmDebug(player,
+        "wsg-pursuit=chase target=" + nearestEnemy->GetName() +
+        " dist=" + std::to_string(int32(distanceToEnemy)) +
+        " scan=" + std::to_string(scannedPlayers) +
+        " attackable=" + std::to_string(attackableEnemies), 1200);
     return MoveTowardUnit(player, nearestEnemy, 20.0f);
 }
 
@@ -343,7 +364,8 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     std::string const message = os.str();
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
-
+    if (WorldSession* session = bot->GetSession())
+        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
@@ -396,10 +418,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         }
 
         PathGenerator path(player);
-        path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        bool const pathOk = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        PathType const pathType = path.GetPathType();
 
         Movement::PointsArray const& points = path.GetPath();
-        if (!points.empty())
+        if (pathOk && points.size() > 1)
         {
             G3D::Vector3 const& lastPoint = points.back();
             Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, destination.GetOrientation());
@@ -412,10 +435,20 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                 motionMaster->MovePoint(0, segmentDestination, false);
             else
                 motionMaster->MovePoint(0, segmentDestination, true);
+
+            EmitBattlegroundGmDebug(player,
+                "movepoint=segmented pathType=" + std::to_string(uint32(pathType)) +
+                " points=" + std::to_string(points.size()) +
+                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))));
         }
         else
         {
             motionMaster->MovePoint(0, destination, true);
+            EmitBattlegroundGmDebug(player,
+                "movepoint=fallback-direct pathOk=" + std::to_string(pathOk ? 1 : 0) +
+                " pathType=" + std::to_string(uint32(pathType)) +
+                " points=" + std::to_string(points.size()) +
+                " destDist=" + std::to_string(int32(player->GetDistance(destination))));
         }
     }
     else
@@ -912,6 +945,18 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId() || !CanIssueBotMovement(player))
         return false;
 
+    float const distanceToTarget = player->GetDistance(target);
+    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    {
+        Position destination = target->GetPosition();
+        bool const moved = IssueMovePointThrottled(player, destination, 4.0f, 700);
+        EmitBattlegroundGmDebug(player,
+            "move-toward-unit mode=segmented target=" + target->GetName() +
+            " dist=" + std::to_string(int32(distanceToTarget)) +
+            " issued=" + std::to_string(moved ? 1 : 0), 1200);
+        return moved || player->isMoving();
+    }
+
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
@@ -1029,7 +1074,7 @@ bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
     return true;
 }
 
-Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
+Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers, uint32* attackableEnemies)
 {
     if (!player || !player->InBattleground() || !player->GetMap())
         return nullptr;
@@ -1039,6 +1084,10 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
         return nullptr;
 
     TeamId const playerBgTeam = ResolveBotTeamId(player);
+    if (scannedPlayers)
+        *scannedPlayers = 0;
+    if (attackableEnemies)
+        *attackableEnemies = 0;
 
     float nearestDistance = std::numeric_limits<float>::max();
     Player* nearestEnemy = nullptr;
@@ -1049,6 +1098,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!candidate || candidate == player || !candidate->IsAlive())
             continue;
+        if (scannedPlayers)
+            ++(*scannedPlayers);
         if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
             continue;
         TeamId const candidateBgTeam = ResolveBotTeamId(candidate);
@@ -1056,6 +1107,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
             continue;
         if (!player->IsValidAttackTarget(candidate))
             continue;
+        if (attackableEnemies)
+            ++(*attackableEnemies);
 
         float const distance = player->GetDistance(candidate);
         if (distance > maxDistance || distance >= nearestDistance)
