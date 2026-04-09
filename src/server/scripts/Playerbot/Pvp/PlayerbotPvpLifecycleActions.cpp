@@ -463,12 +463,43 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         }
         else
         {
+            float const destinationDistance = player->GetDistance(destination);
+            if (destinationDistance > 120.0f)
+            {
+                float const dx = destination.GetPositionX() - player->GetPositionX();
+                float const dy = destination.GetPositionY() - player->GetPositionY();
+                float const dz = destination.GetPositionZ() - player->GetPositionZ();
+                float const planarLength = std::sqrt(dx * dx + dy * dy);
+                if (planarLength > 0.001f)
+                {
+                    float const stepDistance = 70.0f;
+                    float const stepRatio = std::min(stepDistance / planarLength, 1.0f);
+                    Position intermediateDestination(
+                        player->GetPositionX() + dx * stepRatio,
+                        player->GetPositionY() + dy * stepRatio,
+                        player->GetPositionZ() + dz * stepRatio,
+                        destination.GetOrientation());
+
+                    motionMaster->MovePoint(0, intermediateDestination, true);
+                    EmitBattlegroundGmDebug(player,
+                        "movepoint=fallback-intermediate pathOk=" + std::to_string(pathOk ? 1 : 0) +
+                        " pathType=" + std::to_string(uint32(pathType)) +
+                        " points=" + std::to_string(points.size()) +
+                        " stepDist=" + std::to_string(int32(player->GetDistance(intermediateDestination))) +
+                        " destDist=" + std::to_string(int32(destinationDistance)));
+
+                    state.lastDestination = intermediateDestination;
+                    state.lastIssueMs = nowMs;
+                    return true;
+                }
+            }
+
             motionMaster->MovePoint(0, destination, true);
             EmitBattlegroundGmDebug(player,
                 "movepoint=fallback-direct pathOk=" + std::to_string(pathOk ? 1 : 0) +
                 " pathType=" + std::to_string(uint32(pathType)) +
                 " points=" + std::to_string(points.size()) +
-                " destDist=" + std::to_string(int32(player->GetDistance(destination))));
+                " destDist=" + std::to_string(int32(destinationDistance)));
         }
     }
     else
