@@ -804,6 +804,23 @@ bool IsMeleePressureTarget(Unit const* unit)
     }
 }
 
+bool IsActivelyPressuringInMelee(Unit const* attacker, Player const* bot)
+{
+    if (!attacker || !bot || !attacker->IsAlive() || !bot->IsAlive())
+        return false;
+
+    if (!IsMeleePressureTarget(attacker))
+        return false;
+
+    // Only kite if the melee-capable target is actually threatening this bot.
+    // Otherwise, ranged casters (e.g. frost mages) should hold position and
+    // continue turret casting from their current firing band.
+    if (attacker->GetVictim() == bot)
+        return true;
+
+    return attacker->IsWithinMeleeRange(bot) || bot->IsWithinMeleeRange(attacker);
+}
+
 struct CombatPositioningProfile
 {
     float preferredMinRange = 0.0f;
@@ -1165,7 +1182,7 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
             }
         }
 
-        if (profile.createDistanceWhenCrowded && IsMeleePressureTarget(target) && distance < profile.preferredIdealRange)
+        if (profile.createDistanceWhenCrowded && IsActivelyPressuringInMelee(target, player) && distance < profile.preferredIdealRange)
         {
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP distance band: bot={} profile={} decision=create-distance-vs-melee-pressure distance={} min={} ideal={} max={}.",
