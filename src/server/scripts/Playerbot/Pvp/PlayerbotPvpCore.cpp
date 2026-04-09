@@ -2072,7 +2072,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return context;
 
     bool const inActiveBattleground = values.inBattleground && IsTriggerActive(PvpTrigger::BgActive, values);
-    bool const inBattlegroundPreparation = player->InBattleground() && player->HasUnitFlag(UNIT_FLAG_PREPARATION);
+    bool const inBattlegroundPreparation = player->InBattleground() &&
+        (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));
     bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
     if (!inActiveBattleground && !inBattlegroundPreparation && !inActiveDuel)
         return context;
