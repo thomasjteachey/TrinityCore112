@@ -987,6 +987,18 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
         return moved || player->isMoving();
     }
 
+    float const distanceToTarget = player->GetDistance(target);
+    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    {
+        Position destination = target->GetPosition();
+        bool const moved = IssueMovePointThrottled(player, destination, 4.0f, 700);
+        EmitBattlegroundGmDebug(player,
+            "move-toward-unit mode=segmented target=" + target->GetName() +
+            " dist=" + std::to_string(int32(distanceToTarget)) +
+            " issued=" + std::to_string(moved ? 1 : 0), 1200);
+        return moved || player->isMoving();
+    }
+
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
