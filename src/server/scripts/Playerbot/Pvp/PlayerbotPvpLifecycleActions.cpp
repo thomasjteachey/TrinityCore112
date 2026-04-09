@@ -193,6 +193,23 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
+Creature* FindNearbySpiritGuide(Player* player, float searchRadius)
+{
+    if (!player || !player->InBattleground())
+        return nullptr;
+
+    uint32 const spiritEntry = ResolveBotTeamId(player) == TEAM_ALLIANCE ? BG_CREATURE_ENTRY_A_SPIRITGUIDE : BG_CREATURE_ENTRY_H_SPIRITGUIDE;
+    Creature* spiritGuide = spiritEntry ? player->FindNearestCreature(spiritEntry, searchRadius, false) : nullptr;
+    if (spiritGuide)
+        return spiritGuide;
+
+    spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, searchRadius, false);
+    if (!spiritGuide)
+        spiritGuide = player->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, searchRadius, false);
+
+    return spiritGuide;
+}
+
 bool MoveToClosestBattlegroundGraveyard(Player* player)
 {
     if (!player || !player->InBattleground())
@@ -1094,14 +1111,6 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
         player->AttackStop();
     else if (!alreadyAttackingTarget)
         player->Attack(target, useMeleeAttack);
-
-    if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && !player->IsWithinMeleeRange(target) && player->IsWithinLOSInMap(target))
-    {
-        Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-        bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75;
-        if (!autoShotActive && player->HasSpell(75))
-            player->CastSpell(target, 75, false);
-    }
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP positioning profile: bot={} profile={} ranged={} createDistance={} meleeFallback={}.",
