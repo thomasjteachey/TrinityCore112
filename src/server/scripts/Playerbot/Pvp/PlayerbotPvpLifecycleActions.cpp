@@ -63,6 +63,10 @@ namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_RECOVERY_A = 22734;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_RECOVERY_B = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT = 22328;
+
 bool IsWarsongGulch(Player const* player)
 {
     if (!player)
@@ -114,6 +118,57 @@ float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistan
 bool CanIssueBotMovement(Player const* player);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
+
+bool CanAttemptOutOfCombatSpell(Player const* player, uint32 spellId)
+{
+    if (!player || !spellId || !player->HasSpell(spellId))
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    return !player->GetSpellHistory()->HasCooldown(spellInfo->Id);
+}
+
+bool TryHandleOutOfCombatRecoveryAndMount(Player* player, bool allowMount)
+{
+    if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
+        return false;
+
+    bool const needsHealthRecovery = player->GetHealthPct() < 100.0f;
+    bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
+    bool const needsManaRecovery = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
+
+    if (needsHealthRecovery || needsManaRecovery)
+    {
+        bool didCastRecovery = false;
+        if (CanAttemptOutOfCombatSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_RECOVERY_A))
+        {
+            player->CastSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_RECOVERY_A, false);
+            didCastRecovery = true;
+        }
+
+        if (CanAttemptOutOfCombatSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_RECOVERY_B))
+        {
+            player->CastSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_RECOVERY_B, false);
+            didCastRecovery = true;
+        }
+
+        return didCastRecovery;
+    }
+
+    if (!allowMount || !player->IsOutdoors())
+        return false;
+
+    if (CanAttemptOutOfCombatSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+    {
+        player->CastSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, false);
+        return true;
+    }
+
+    return false;
+}
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
 {
@@ -1926,18 +1981,28 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
+    if (TryHandleOutOfCombatRecoveryAndMount(player, false))
+        return true;
+
     if (IsWarsongGulch(player))
     {
         if (EngageNearestEnemyPlayer(player, 60.0f))
             return true;
-        return TryPursueNearestEnemyInWarsong(player) || MoveToClosestBattlegroundGraveyard(player);
+
+        if (TryPursueNearestEnemyInWarsong(player) || MoveToClosestBattlegroundGraveyard(player))
+            return true;
+
+        return TryHandleOutOfCombatRecoveryAndMount(player, true);
     }
 
     float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
-    return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
+    if (context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None)
+        return true;
+
+    return TryHandleOutOfCombatRecoveryAndMount(player, true);
 }
 
 bool BattlegroundTacticalActions::ResetObjectiveForcePrimitive(Player* player)
@@ -1953,7 +2018,7 @@ bool BattlegroundTacticalActions::UseBuffPrimitive(Player* player)
     if (!player || !player->InBattleground())
         return false;
 
-    return true;
+    return TryHandleOutOfCombatRecoveryAndMount(player, false);
 }
 
 bool BattlegroundTacticalActions::AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context)
