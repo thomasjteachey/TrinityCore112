@@ -18,16 +18,87 @@
 #include "Log.h"
 #include "Chat.h"
 #include "GameTime.h"
+#include "MotionMaster.h"
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
 
+#include <sstream>
+
 using namespace Trinity::ChatCommands;
 
 namespace
 {
+char const* ToString(playerbot::BattlegroundState state)
+{
+    switch (state)
+    {
+        case playerbot::BattlegroundState::Queueing: return "queueing";
+        case playerbot::BattlegroundState::WaitingToStart: return "waiting";
+        case playerbot::BattlegroundState::Active: return "active";
+        case playerbot::BattlegroundState::None:
+        default: return "none";
+    }
+}
+
+char const* ToString(playerbot::QueueOperationType op)
+{
+    switch (op)
+    {
+        case playerbot::QueueOperationType::Join: return "join";
+        case playerbot::QueueOperationType::Leave: return "leave";
+        case playerbot::QueueOperationType::None:
+        default: return "none";
+    }
+}
+
+char const* ToString(playerbot::InvitationResponseType response)
+{
+    switch (response)
+    {
+        case playerbot::InvitationResponseType::Accept: return "accept";
+        case playerbot::InvitationResponseType::Decline: return "decline";
+        case playerbot::InvitationResponseType::None:
+        default: return "none";
+    }
+}
+
+std::string BuildManagedBotStatusLine(Player* bot)
+{
+    if (!bot)
+        return "Playerbot status unavailable.";
+
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(bot);
+    playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(bot, values);
+    playerbot::BattlegroundLifecycleContext const lifecycleContext = playerbot::PvpCore::BuildBattlegroundLifecycleContext(bot, values);
+    playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
+
+    std::ostringstream status;
+    status << "PB status: "
+           << "combat=" << (bot->IsInCombat() ? "yes" : "no")
+           << " alive=" << (bot->IsAlive() ? "yes" : "no")
+           << " moving=" << (bot->isMoving() ? "yes" : "no")
+           << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
+           << " bg_state=" << ToString(values.battlegroundState)
+           << " class_action=" << (classContext.actionName ? classContext.actionName : "none")
+           << " spell=" << classContext.spellId
+           << " reason=" << (classContext.reason ? classContext.reason : "none")
+           << " lifecycle_q=" << ToString(lifecycleContext.queueOperation)
+           << " lifecycle_invite=" << ToString(lifecycleContext.invitationResponse)
+           << " hooks(bg=" << (hooks.battlegroundParticipationHook ? "on" : "off")
+           << ",arena=" << (hooks.arenaParticipationHook ? "on" : "off") << ")"
+           << " motion=" << uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType());
+
+    if (Unit* victim = bot->GetVictim())
+        status << " victim=" << victim->GetName();
+    else
+        status << " victim=none";
+
+    return status.str();
+}
+
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -104,6 +175,23 @@ public:
 
         target->SendDuelCountdown(3000);
         challenger->SendDuelCountdown(3000);
+    }
+
+    void OnChat(Player* sender, uint32 /*type*/, uint32 lang, std::string& /*msg*/, Player* receiver) override
+    {
+        if (!sender || !receiver)
+            return;
+
+        if (lang == LANG_ADDON)
+            return;
+
+        if (!sender->IsGameMaster())
+            return;
+
+        if (!playerbot::IsManagedRandomBot(receiver))
+            return;
+
+        receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
     }
 };
 
