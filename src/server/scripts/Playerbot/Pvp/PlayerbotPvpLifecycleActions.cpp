@@ -385,6 +385,16 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     // collision/pathing entirely.
     if (generatePath && player->InBattleground())
     {
+        bool const canDirectDropToDestination = destination.GetPositionZ() + 8.0f < player->GetPositionZ() &&
+            player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+        if (canDirectDropToDestination)
+        {
+            motionMaster->MovePoint(0, destination, false);
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
+        }
+
         PathGenerator path(player);
         path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
 
@@ -905,6 +915,15 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
+
+    // WSG should not avoid fall damage while pursuing enemies.
+    if (IsWarsongGulch(player) &&
+        target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
+        player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
+    {
+        player->GetMotionMaster()->MovePoint(0, target->GetPosition(), false);
+        return true;
+    }
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
