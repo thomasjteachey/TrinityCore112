@@ -565,7 +565,16 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
     if (!player || !target)
         return true;
 
+    if (Player const* targetPlayer = target->ToPlayer())
+    {
+        if (targetPlayer->isTotalImmune())
+            return true;
+    }
+
     if (target->HasAura(642)) // Divine Shield
+        return true;
+
+    if (target->HasAura(11958)) // Ice Block
         return true;
 
     if (IsPhysicalDamageClass(player->GetClass()) && HasAnyAura(target, { 1022, 5599, 10278 })) // Blessing of Protection ranks
