@@ -330,11 +330,11 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                 {
                     // Managed playerbot avatars (virtual sessions) can occasionally miss the
                     // regular resurrect queue registration. During each spirit guide wave,
-                    // manually include nearby dead playerbots so they resurrect reliably.
+                    // include all dead virtual bots in the battleground for this wave.
                     for (BattlegroundPlayerMap::const_iterator bgPlayerItr = m_Players.begin(); bgPlayerItr != m_Players.end(); ++bgPlayerItr)
                     {
                         Player* nearbyPlayer = ObjectAccessor::FindConnectedPlayer(bgPlayerItr->first);
-                        if (!nearbyPlayer || nearbyPlayer->IsAlive() || !nearbyPlayer->IsInWorld() || !nearbyPlayer->IsWithinDistInMap(sh, 15.0f))
+                        if (!nearbyPlayer || nearbyPlayer->IsAlive() || !nearbyPlayer->IsInWorld())
                             continue;
 
                         WorldSession* session = nearbyPlayer->GetSession();
