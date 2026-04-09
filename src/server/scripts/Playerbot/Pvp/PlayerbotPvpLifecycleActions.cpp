@@ -471,13 +471,58 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         // cross-map targets still yield incremental path points immediately.
         path.SetPathLengthLimit(90.0f);
         bool const pathOk = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true);
-        PathType const pathType = path.GetPathType();
+        PathType pathType = path.GetPathType();
+        Movement::PointsArray points = path.GetPath();
+        G3D::Vector3 actualEnd = path.GetActualEndPosition();
 
-        Movement::PointsArray const& points = path.GetPath();
+        if ((pathType & PATHFIND_SHORTCUT) != 0)
+        {
+            PathGenerator retryPath(player);
+            retryPath.SetPathLengthLimit(90.0f);
+            bool const retryOk = retryPath.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+            PathType const retryType = retryPath.GetPathType();
+            if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0 && retryPath.GetPath().size() > 1)
+            {
+                points = retryPath.GetPath();
+                pathType = retryType;
+                actualEnd = retryPath.GetActualEndPosition();
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=retry-no-shortcut pathType=" + std::to_string(uint32(pathType)), 0);
+            }
+        }
+
         if (points.size() > 1)
         {
             G3D::Vector3 const& lastPoint = points.back();
             Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, destination.GetOrientation());
+            float const segmentDistance = player->GetDistance(segmentDestination);
+            bool const suspiciousLongSegment = (pathType & PATHFIND_SHORTCUT) != 0 && segmentDistance > 160.0f;
+            if (suspiciousLongSegment)
+            {
+                float const dx = segmentDestination.GetPositionX() - player->GetPositionX();
+                float const dy = segmentDestination.GetPositionY() - player->GetPositionY();
+                float const dz = segmentDestination.GetPositionZ() - player->GetPositionZ();
+                float const planarLength = std::sqrt(dx * dx + dy * dy);
+                if (planarLength > 0.001f)
+                {
+                    float const cappedStepDistance = 90.0f;
+                    float const cappedRatio = std::min(cappedStepDistance / planarLength, 1.0f);
+                    Position cappedSegmentDestination(
+                        player->GetPositionX() + dx * cappedRatio,
+                        player->GetPositionY() + dy * cappedRatio,
+                        player->GetPositionZ() + dz * cappedRatio,
+                        destination.GetOrientation());
+                    motionMaster->MovePoint(0, cappedSegmentDestination, true);
+                    issuedDestination = cappedSegmentDestination;
+                    EmitBattlegroundGmDebug(player,
+                        "movepoint=segmented-capped pathType=" + std::to_string(uint32(pathType)) +
+                        " segDist=" + std::to_string(int32(segmentDistance)) +
+                        " cappedDist=" + std::to_string(int32(player->GetDistance(cappedSegmentDestination))), 0);
+                    state.lastDestination = issuedDestination;
+                    state.lastIssueMs = nowMs;
+                    return true;
+                }
+            }
 
             bool const destinationIsSignificantlyLower = segmentDestination.GetPositionZ() + 8.0f < player->GetPositionZ();
             bool const canDirectDrop = destinationIsSignificantlyLower &&
@@ -492,12 +537,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             EmitBattlegroundGmDebug(player,
                 "movepoint=segmented pathType=" + std::to_string(uint32(pathType)) +
                 " points=" + std::to_string(points.size()) +
-                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+                " segDist=" + std::to_string(int32(segmentDistance)), 0);
         }
         else
         {
             float const destinationDistance = player->GetDistance(destination);
-            G3D::Vector3 const& actualEnd = path.GetActualEndPosition();
             Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, destination.GetOrientation());
             float const actualEndDistance = player->GetDistance(actualEndDestination);
             if (actualEndDistance > 3.0f && actualEndDistance + 5.0f < destinationDistance)
