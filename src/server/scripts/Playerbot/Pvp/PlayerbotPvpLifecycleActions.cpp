@@ -262,9 +262,13 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     static Position const hordeGraveyardTip(1066.0946404f, 1380.843994f, 340.612305f, 0.0f);
     static Position const allianceGraveyardTip(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
     static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
+    // Per-side anchors that point off the graveyard ledge into the field.
+    static Position const hordeForwardAnchor(978.20f, 1427.10f, 335.20f, 0.0f);
+    static Position const allianceForwardAnchor(1498.60f, 1484.30f, 340.20f, 0.0f);
 
     TeamId const teamId = ResolveBotTeamId(player);
     Position const& graveyardTip = (teamId == TEAM_HORDE) ? hordeGraveyardTip : allianceGraveyardTip;
+    Position const& forwardAnchor = (teamId == TEAM_HORDE) ? hordeForwardAnchor : allianceForwardAnchor;
 
     if (state.phase == 0)
     {
@@ -283,8 +287,9 @@ bool TryJumpOffWarsongGraveyard(Player* player)
         if (!state.forwardBurstEndMs)
             state.forwardBurstEndMs = nowMs + 1000;
 
-        float const dx = midPoint.GetPositionX() - graveyardTip.GetPositionX();
-        float const dy = midPoint.GetPositionY() - graveyardTip.GetPositionY();
+        // Push straight off the graveyard ledge first, then route to mid.
+        float const dx = forwardAnchor.GetPositionX() - graveyardTip.GetPositionX();
+        float const dy = forwardAnchor.GetPositionY() - graveyardTip.GetPositionY();
         float const len = std::sqrt(dx * dx + dy * dy);
         if (len <= 0.001f)
         {
@@ -297,7 +302,7 @@ bool TryJumpOffWarsongGraveyard(Player* player)
             graveyardTip.GetPositionX() + (dx / len) * forwardDistance,
             graveyardTip.GetPositionY() + (dy / len) * forwardDistance,
             graveyardTip.GetPositionZ(),
-            player->GetAbsoluteAngle(midPoint.GetPositionX(), midPoint.GetPositionY()));
+            player->GetAbsoluteAngle(forwardAnchor.GetPositionX(), forwardAnchor.GetPositionY()));
 
         IssueMovePointThrottled(player, forwardPoint, 0.5f, 100);
 
