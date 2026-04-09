@@ -403,15 +403,31 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (!destinationChanged && !canReissueByTime && !botCurrentlyMoving)
     {
+        uint32 bgStatus = 0;
+        if (Battleground* bg = player->GetBattleground())
+            bgStatus = uint32(bg->GetStatus());
         EmitBattlegroundGmDebug(player,
             "movepoint=forced-reissue reason=stationary-with-throttle lastIssueMs=" + std::to_string(state.lastIssueMs) +
-            " nowMs=" + std::to_string(nowMs), 1000);
+            " nowMs=" + std::to_string(nowMs) +
+            " motionType=" + std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())) +
+            " bgStatus=" + std::to_string(bgStatus), 1000);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
+        motionMaster->Clear();
+    }
+    else if (!botCurrentlyMoving && player->InBattleground() &&
+        currentMovement != IDLE_MOTION_TYPE &&
+        currentMovement != CHASE_MOTION_TYPE &&
+        currentMovement != POINT_MOTION_TYPE)
+    {
+        // Some stale movement generators can block new MovePoint while actor is
+        // stationary. Clear them before reissuing battleground movement.
+        EmitBattlegroundGmDebug(player,
+            "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
         motionMaster->Clear();
     }
 
