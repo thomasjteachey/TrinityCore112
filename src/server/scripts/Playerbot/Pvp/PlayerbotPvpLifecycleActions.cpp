@@ -426,11 +426,14 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         }
 
         PathGenerator path(player);
+        // Explicitly cap each navmesh solve to a medium segment so very long
+        // cross-map targets still yield incremental path points immediately.
+        path.SetPathLengthLimit(90.0f);
         bool const pathOk = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
         PathType const pathType = path.GetPathType();
 
         Movement::PointsArray const& points = path.GetPath();
-        if (pathOk && points.size() > 1)
+        if (points.size() > 1)
         {
             G3D::Vector3 const& lastPoint = points.back();
             Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, destination.GetOrientation());
