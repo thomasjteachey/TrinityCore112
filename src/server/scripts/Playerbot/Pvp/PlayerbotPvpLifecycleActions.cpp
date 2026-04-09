@@ -1021,6 +1021,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
         TeamId const candidateBgTeam = ResolveBotTeamId(candidate);
         if (candidateBgTeam == playerBgTeam)
             continue;
+        if (!player->IsValidAttackTarget(candidate))
+            continue;
 
         float const distance = player->GetDistance(candidate);
         if (distance > maxDistance || distance >= nearestDistance)
@@ -1038,18 +1040,24 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
     if (!player)
         return nullptr;
 
+    auto isViableTarget = [player, scanDistance](Unit* candidate) -> bool
+    {
+        return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate) &&
+            player->IsWithinDistInMap(candidate, scanDistance);
+    };
+
     Unit* target = player->GetVictim();
-    if (!target || !target->IsAlive())
+    if (!isViableTarget(target))
         target = player->GetSelectedUnit();
     if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
     {
         Unit* duelOpponent = player->duel->Opponent;
-        if (duelOpponent && duelOpponent->IsAlive() && duelOpponent->GetMapId() == player->GetMapId())
+        if (isViableTarget(duelOpponent) && duelOpponent->GetMapId() == player->GetMapId())
             target = duelOpponent;
     }
-    if ((!target || !target->IsAlive()) && player->InBattleground())
+    if (!isViableTarget(target) && player->InBattleground())
         target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
-    if (!target || !target->IsAlive())
+    if (!isViableTarget(target))
         return nullptr;
 
     player->SetSelection(target->GetGUID());
