@@ -141,12 +141,21 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
         return EngageNearestEnemyPlayer(player, combatEngageDistance);
     }
 
+    bool chaseIssued = MoveTowardUnit(player, nearestEnemy, 20.0f);
+    if (!chaseIssued && CanIssueBotMovement(player))
+    {
+        // Last-resort kick in case pursuit helper declines movement while the
+        // bot is otherwise free to move.
+        chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 2.0f, 250) || player->isMoving();
+    }
+
     EmitBattlegroundGmDebug(player,
         "wsg-pursuit=chase target=" + nearestEnemy->GetName() +
         " dist=" + std::to_string(int32(distanceToEnemy)) +
         " scan=" + std::to_string(scannedPlayers) +
-        " attackable=" + std::to_string(attackableEnemies), 1200);
-    return MoveTowardUnit(player, nearestEnemy, 20.0f);
+        " attackable=" + std::to_string(attackableEnemies) +
+        " issued=" + std::to_string(chaseIssued ? 1 : 0), 1200);
+    return chaseIssued;
 }
 
 bool RecoverStaleBattlegroundState(Player* player)
@@ -953,8 +962,30 @@ Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirect
 
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 {
-    if (!player || !player->IsAlive() || !target || !target->IsAlive() || player->GetMapId() != target->GetMapId() || !CanIssueBotMovement(player))
+    if (!player || !target)
         return false;
+    if (!player->IsAlive() || !target->IsAlive() || player->GetMapId() != target->GetMapId() || !CanIssueBotMovement(player))
+    {
+        EmitBattlegroundGmDebug(player,
+            "move-toward-unit=blocked botAlive=" + std::to_string(player->IsAlive() ? 1 : 0) +
+            " targetAlive=" + std::to_string(target->IsAlive() ? 1 : 0) +
+            " sameMap=" + std::to_string(player->GetMapId() == target->GetMapId() ? 1 : 0) +
+            " canMove=" + std::to_string(CanIssueBotMovement(player) ? 1 : 0) +
+            " motionType=" + std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())), 1200);
+        return false;
+    }
+
+    float const distanceToTarget = player->GetDistance(target);
+    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    {
+        Position destination = target->GetPosition();
+        bool const moved = IssueMovePointThrottled(player, destination, 4.0f, 700);
+        EmitBattlegroundGmDebug(player,
+            "move-toward-unit mode=segmented target=" + target->GetName() +
+            " dist=" + std::to_string(int32(distanceToTarget)) +
+            " issued=" + std::to_string(moved ? 1 : 0), 1200);
+        return moved || player->isMoving();
+    }
 
     float const distanceToTarget = player->GetDistance(target);
     if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
