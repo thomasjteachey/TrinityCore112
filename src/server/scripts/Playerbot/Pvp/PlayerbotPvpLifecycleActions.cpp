@@ -1553,9 +1553,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->isMoving())
-        return false;
-
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {
         case IDLE_MOTION_TYPE:
@@ -1571,6 +1568,11 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
     if (TryJumpOffWarsongGraveyard(player))
         return true;
+
+    // Evaluate combat/WSG post-res logic before this guard so stale movement
+    // flags do not suppress target pursuit immediately after graveyard rez.
+    if (player->isMoving())
+        return false;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
