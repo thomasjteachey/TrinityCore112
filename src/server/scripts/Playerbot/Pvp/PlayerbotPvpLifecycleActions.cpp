@@ -313,8 +313,9 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     };
 
     TeamId const teamId = ResolveBotTeamId(player);
-    auto const& steps = (teamId == TEAM_HORDE) ? hordeSteps : allianceSteps;
-    if (state.stepIndex >= steps.size())
+    JumpRouteStep const* steps = (teamId == TEAM_HORDE) ? hordeSteps.data() : allianceSteps.data();
+    size_t const stepCount = (teamId == TEAM_HORDE) ? hordeSteps.size() : allianceSteps.size();
+    if (state.stepIndex >= stepCount)
     {
         state.active = false;
         return false;
@@ -327,7 +328,7 @@ bool TryJumpOffWarsongGraveyard(Player* player)
         ++state.stepIndex;
         state.jumpIssuedForStep = false;
         state.lastStepIssueMs = 0;
-        if (state.stepIndex >= steps.size())
+        if (state.stepIndex >= stepCount)
             state.active = false;
         return true;
     }
