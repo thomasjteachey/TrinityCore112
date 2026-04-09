@@ -2555,6 +2555,10 @@ bool Creature::CanCreatureAttack(Unit const* victim, bool skipDistCheck) const
     if (!IsValidAttackTarget(victim))
         return false;
 
+    // Skip fully invulnerable targets (e.g. Divine Shield / Ice Block) so AI can pick another victim.
+    if (victim->IsImmunedToDamageOrSchool(SPELL_SCHOOL_MASK_ALL))
+        return false;
+
     if (!victim->isInAccessiblePlaceFor(this))
         return false;
 
