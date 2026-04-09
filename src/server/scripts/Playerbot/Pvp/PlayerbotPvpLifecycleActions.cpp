@@ -467,6 +467,15 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     if (hardThrottleActive && botCurrentlyMoving)
         return false;
 
+    // Keep the currently issued segment stable while traversing it to avoid
+    // left/right oscillation from frequent recomputes on equivalent routes
+    // (observed strongly near Horde-side WSG exits).
+    if (IsWarsongGulch(player) && botCurrentlyMoving && state.lastIssueMs != 0 &&
+        nowMs < state.lastIssueMs + 8000 && player->GetDistance(state.lastDestination) > 10.0f)
+    {
+        return false;
+    }
+
     if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
     {
         return false;
@@ -572,13 +581,21 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                 }
             }
 
-            motionMaster->MovePoint(0, segmentDestination, true);
+            bool const shortControlledDrop =
+                segmentDistance <= 45.0f &&
+                segmentDestination.GetPositionZ() + 7.0f < player->GetPositionZ() &&
+                player->IsWithinLOS(segmentDestination.GetPositionX(), segmentDestination.GetPositionY(), segmentDestination.GetPositionZ());
+
+            // Allow short, local drops (e.g. WSG graveyard/ramp exits) while
+            // keeping long traversal navmesh-driven.
+            motionMaster->MovePoint(0, segmentDestination, !shortControlledDrop);
             issuedDestination = segmentDestination;
 
             EmitBattlegroundGmDebug(player,
                 "movepoint=segmented pathType=" + std::to_string(uint32(pathType)) +
                 " points=" + std::to_string(points.size()) +
-                " segDist=" + std::to_string(int32(segmentDistance)), 0);
+                " segDist=" + std::to_string(int32(segmentDistance)) +
+                " shortDrop=" + std::to_string(shortControlledDrop ? 1 : 0), 0);
         }
         else
         {
