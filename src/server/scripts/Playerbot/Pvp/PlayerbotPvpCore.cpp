@@ -668,19 +668,23 @@ bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
     return false;
 }
 
-Unit const* SelectPolymorphTarget(Player const* player, float maxDistance)
+Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
 {
     if (!player || !player->GetMap())
         return nullptr;
 
-    Unit const* best = nullptr;
-    uint8 bestPriority = std::numeric_limits<uint8>::max();
-    float bestDistance = std::numeric_limits<float>::max();
+    SpellInfo const* polymorphInfo = sSpellMgr->GetSpellInfo(12826);
+    DiminishingGroup const polymorphDrGroup = polymorphInfo ? polymorphInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
+
+    std::vector<Unit const*> preferredTargets;
+    std::vector<Unit const*> fallbackTargets;
     Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
         if (!HasHostileTarget(player, candidate))
+            continue;
+        if (primaryTarget && candidate == primaryTarget)
             continue;
         if (candidate->GetClass() == CLASS_DRUID)
             continue;
@@ -690,23 +694,22 @@ Unit const* SelectPolymorphTarget(Player const* player, float maxDistance)
             continue;
         if (IsTargetInvalidByImmunity(player, candidate))
             continue;
+        if (polymorphDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(polymorphDrGroup) >= DIMINISHING_LEVEL_IMMUNE)
+            continue;
 
-        uint8 priority = 2;
         if (candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST)
-            priority = 0;
-        else if (candidate->GetPowerType() == POWER_MANA)
-            priority = 1;
-
-        float const distance = player->GetDistance(candidate);
-        if (priority < bestPriority || (priority == bestPriority && distance < bestDistance))
-        {
-            best = candidate;
-            bestPriority = priority;
-            bestDistance = distance;
-        }
+            preferredTargets.push_back(candidate);
+        else
+            fallbackTargets.push_back(candidate);
     }
 
-    return best;
+    if (!preferredTargets.empty())
+        return preferredTargets[urand(0, preferredTargets.size() - 1)];
+
+    if (!fallbackTargets.empty())
+        return fallbackTargets[urand(0, fallbackTargets.size() - 1)];
+
+    return nullptr;
 }
 
 Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
@@ -1332,7 +1335,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     if (hasHostileTarget && target->HealthBelowPct(20) && IsSpellReady(player, 10199))
         return { "mage fire blast", "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (IsSpellReady(player, 12826) && !AnyEnemyPolymorphed(player, 40.0f))
-        if (Unit const* polymorphTarget = SelectPolymorphTarget(player, 30.0f))
+        if (Unit const* polymorphTarget = SelectPolymorphTarget(player, target, 30.0f))
             return { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget->GetGUID() };
     if (hasHostileTarget && IsSpellReady(player, 25304))
         return { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy };
