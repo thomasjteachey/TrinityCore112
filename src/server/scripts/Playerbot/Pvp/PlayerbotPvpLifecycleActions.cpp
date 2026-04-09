@@ -1570,9 +1570,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->isMoving())
-        return false;
-
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {
         case IDLE_MOTION_TYPE:
@@ -1589,12 +1586,10 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (TryJumpOffWarsongGraveyard(player))
         return true;
 
-    // Prioritize combat over objective waypoint routing:
-    // if an enemy is currently detectable within the bot's vision envelope,
-    // switch to engagement immediately and defer waypoint movement.
-    float const visionScanDistance = std::max(5.0f, player->GetVisibilityRange());
-    if (EngageNearestEnemyPlayer(player, visionScanDistance))
-        return true;
+    // Evaluate combat/WSG post-res logic before this guard so stale movement
+    // flags do not suppress target pursuit immediately after graveyard rez.
+    if (player->isMoving())
+        return false;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
