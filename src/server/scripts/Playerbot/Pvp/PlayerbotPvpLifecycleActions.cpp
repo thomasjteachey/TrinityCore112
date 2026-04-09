@@ -1525,11 +1525,26 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
     else if (!alreadyAttackingTarget || !meleeAutoAttackActive)
         player->Attack(target, useMeleeAttack);
 
-    if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && !player->IsWithinMeleeRange(target) && player->IsWithinLOSInMap(target))
+    if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && player->HasSpell(75))
     {
         Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
         bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75;
-        if (!autoShotActive && player->HasSpell(75))
+
+        bool inAutoShotRange = false;
+        if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
+        {
+            float const minAutoShotRange = autoShotInfo->GetMinRange(false);
+            float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
+            float const distance = player->GetDistance(target);
+            inAutoShotRange = player->IsWithinLOSInMap(target) && distance > minAutoShotRange && distance <= maxAutoShotRange;
+        }
+
+        if (!inAutoShotRange)
+        {
+            if (autoShotActive)
+                player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+        }
+        else if (!autoShotActive)
             player->CastSpell(target, 75, false);
     }
 
