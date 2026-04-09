@@ -197,6 +197,32 @@ bool TryGetWarsongObjectiveProgressWaypoint(Player* player, Position const& fina
     return true;
 }
 
+bool RecoverStaleBattlegroundState(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    if (player->GetBattleground())
+        return false;
+
+    // Ignore in-flight teleports; let normal worldport handling finish first.
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    uint32 const staleBattlegroundId = player->GetBattlegroundId();
+    BattlegroundTypeId const staleBattlegroundTypeId = player->GetBattlegroundTypeId();
+
+    player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+    player->SetBGTeam(0);
+
+    bool const teleported = player->TeleportToBGEntryPoint();
+    TC_LOG_INFO("playerbots.pvp.lifecycle",
+        "Playerbot PvP stale battleground recovery: guid={} staleInstanceId={} staleTypeId={} teleported={}.",
+        player->GetGUID().ToString(), staleBattlegroundId, uint32(staleBattlegroundTypeId), teleported ? 1 : 0);
+
+    return true;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool MoveToClosestBattlegroundGraveyard(Player* player)
@@ -229,8 +255,9 @@ bool TryJumpOffWarsongGraveyard(Player* player)
         uint32 battlegroundInstanceId = 0;
         bool wasAlive = true;
         bool active = false;
-        uint8 phase = 0; // 0 = move to tip, 1 = run forward burst, 2 = move to mid
-        uint32 forwardBurstEndMs = 0;
+        uint8 stepIndex = 0;
+        uint32 lastStepIssueMs = 0;
+        bool jumpIssuedForStep = false;
     };
 
     static std::unordered_map<uint64, PostResurrectRouteState> stateByGuid;
@@ -252,74 +279,81 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     if (justResurrected)
     {
         state.active = true;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
+        state.stepIndex = 0;
+        state.lastStepIssueMs = 0;
+        state.jumpIssuedForStep = false;
     }
 
     if (!state.active)
         return false;
 
-    static Position const hordeGraveyardTip(1066.0946404f, 1380.843994f, 340.612305f, 0.0f);
-    static Position const allianceGraveyardTip(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
-    static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-    // Per-side anchors that point off the graveyard ledge into the field.
-    static Position const hordeForwardAnchor(978.20f, 1427.10f, 335.20f, 0.0f);
-    static Position const allianceForwardAnchor(1498.60f, 1484.30f, 340.20f, 0.0f);
+    struct JumpRouteStep
+    {
+        Position destination;
+        bool useJump = false;
+    };
+
+    // Reference-style WSG graveyard jump-down routing:
+    // Horde actions: move(1029)->move(1045)->move(1057)->jump(1075)->move(1096)->move(1134)
+    static std::array<JumpRouteStep, 6> const hordeSteps = {
+        JumpRouteStep{ Position(1029.242f, 1387.024f, 340.866f, 0.0f), false },
+        JumpRouteStep{ Position(1045.764f, 1389.831f, 340.825f, 0.0f), false },
+        JumpRouteStep{ Position(1057.076f, 1393.081f, 339.505f, 0.0f), false },
+        JumpRouteStep{ Position(1075.233f, 1398.645f, 323.669f, 0.0f), true  },
+        JumpRouteStep{ Position(1096.590f, 1395.070f, 317.016f, 0.0f), false },
+        JumpRouteStep{ Position(1134.380f, 1370.130f, 312.741f, 0.0f), false }
+    };
+
+    // Alliance actions: move(1407)->jump(1385)->move(1370)->move(1339)
+    static std::array<JumpRouteStep, 4> const allianceSteps = {
+        JumpRouteStep{ Position(1407.234f, 1551.658f, 343.432f, 0.0f), false },
+        JumpRouteStep{ Position(1385.325f, 1544.592f, 322.047f, 0.0f), true  },
+        JumpRouteStep{ Position(1370.710f, 1543.550f, 321.585f, 0.0f), false },
+        JumpRouteStep{ Position(1339.410f, 1533.420f, 313.336f, 0.0f), false }
+    };
 
     TeamId const teamId = ResolveBotTeamId(player);
-    Position const& graveyardTip = (teamId == TEAM_HORDE) ? hordeGraveyardTip : allianceGraveyardTip;
-    Position const& forwardAnchor = (teamId == TEAM_HORDE) ? hordeForwardAnchor : allianceForwardAnchor;
-
-    if (state.phase == 0)
+    auto const& steps = (teamId == TEAM_HORDE) ? hordeSteps : allianceSteps;
+    if (state.stepIndex >= steps.size())
     {
-        if (!player->IsWithinDist3d(graveyardTip.GetPositionX(), graveyardTip.GetPositionY(), graveyardTip.GetPositionZ(), 2.5f))
-        {
-            IssueMovePointThrottled(player, graveyardTip, 1.0f, 300);
-            return true;
-        }
-
-        state.phase = 1;
+        state.active = false;
+        return false;
     }
 
-    if (state.phase == 1)
+    JumpRouteStep const& step = steps[state.stepIndex];
+    float const arrivalRadius = 4.0f;
+    if (player->IsWithinDist3d(step.destination.GetPositionX(), step.destination.GetPositionY(), step.destination.GetPositionZ(), arrivalRadius))
     {
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        if (!state.forwardBurstEndMs)
-            state.forwardBurstEndMs = nowMs + 1000;
-
-        // Push straight off the graveyard ledge first, then route to mid.
-        float const dx = forwardAnchor.GetPositionX() - graveyardTip.GetPositionX();
-        float const dy = forwardAnchor.GetPositionY() - graveyardTip.GetPositionY();
-        float const len = std::sqrt(dx * dx + dy * dy);
-        if (len <= 0.001f)
-        {
-            state.phase = 2;
-            return true;
-        }
-
-        float const forwardDistance = player->GetSpeed(MOVE_RUN) * 1.0f;
-        Position forwardPoint(
-            graveyardTip.GetPositionX() + (dx / len) * forwardDistance,
-            graveyardTip.GetPositionY() + (dy / len) * forwardDistance,
-            graveyardTip.GetPositionZ(),
-            player->GetAbsoluteAngle(forwardAnchor.GetPositionX(), forwardAnchor.GetPositionY()));
-
-        IssueMovePointThrottled(player, forwardPoint, 0.5f, 100);
-
-        if (nowMs >= state.forwardBurstEndMs)
-            state.phase = 2;
-        return true;
-    }
-
-    if (state.phase == 2)
-    {
-        IssueMovePointThrottled(player, midPoint, 1.0f, 300);
-
-        if (player->IsWithinDist3d(midPoint.GetPositionX(), midPoint.GetPositionY(), midPoint.GetPositionZ(), 6.0f))
+        ++state.stepIndex;
+        state.jumpIssuedForStep = false;
+        state.lastStepIssueMs = 0;
+        if (state.stepIndex >= steps.size())
             state.active = false;
         return true;
     }
 
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (step.useJump)
+    {
+        // Re-issue the jump periodically until we land near the destination.
+        if (!state.jumpIssuedForStep || nowMs >= state.lastStepIssueMs + 900)
+        {
+            float const speed = player->GetSpeed(MOVE_RUN);
+            MotionMaster* motionMaster = player->GetMotionMaster();
+            if (motionMaster)
+            {
+                motionMaster->Clear();
+                motionMaster->MoveJump(step.destination.GetPositionX(), step.destination.GetPositionY(),
+                    step.destination.GetPositionZ(), speed, speed, 1.0f);
+            }
+
+            state.jumpIssuedForStep = true;
+            state.lastStepIssueMs = nowMs;
+        }
+        return true;
+    }
+
+    IssueMovePointThrottled(player, step.destination, 1.0f, 300);
     return true;
 }
 
@@ -747,6 +781,14 @@ bool CanIssueBotMovement(Player const* player)
     return true;
 }
 
+float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance)
+{
+    if (!player)
+        return fallbackDistance;
+
+    return std::max(fallbackDistance, player->GetVisibilityRange());
+}
+
 bool IsMeleePressureTarget(Unit const* unit)
 {
     Player const* player = unit ? unit->ToPlayer() : nullptr;
@@ -768,6 +810,23 @@ bool IsMeleePressureTarget(Unit const* unit)
         default:
             return false;
     }
+}
+
+bool IsActivelyPressuringInMelee(Unit const* attacker, Player const* bot)
+{
+    if (!attacker || !bot || !attacker->IsAlive() || !bot->IsAlive())
+        return false;
+
+    if (!IsMeleePressureTarget(attacker))
+        return false;
+
+    // Only kite if the melee-capable target is actually threatening this bot.
+    // Otherwise, ranged casters (e.g. frost mages) should hold position and
+    // continue turret casting from their current firing band.
+    if (attacker->GetVictim() == bot)
+        return true;
+
+    return attacker->IsWithinMeleeRange(bot) || bot->IsWithinMeleeRange(attacker);
 }
 
 struct CombatPositioningProfile
@@ -1021,6 +1080,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
         TeamId const candidateBgTeam = ResolveBotTeamId(candidate);
         if (candidateBgTeam == playerBgTeam)
             continue;
+        if (!player->IsValidAttackTarget(candidate))
+            continue;
 
         float const distance = player->GetDistance(candidate);
         if (distance > maxDistance || distance >= nearestDistance)
@@ -1038,18 +1099,23 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
     if (!player)
         return nullptr;
 
+    auto isAttackableTarget = [player](Unit* candidate) -> bool
+    {
+        return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate);
+    };
+
     Unit* target = player->GetVictim();
-    if (!target || !target->IsAlive())
+    if (!isAttackableTarget(target))
         target = player->GetSelectedUnit();
     if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
     {
         Unit* duelOpponent = player->duel->Opponent;
-        if (duelOpponent && duelOpponent->IsAlive() && duelOpponent->GetMapId() == player->GetMapId())
+        if (isAttackableTarget(duelOpponent) && duelOpponent->GetMapId() == player->GetMapId())
             target = duelOpponent;
     }
-    if ((!target || !target->IsAlive()) && player->InBattleground())
+    if (!isAttackableTarget(target) && player->InBattleground())
         target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
-    if (!target || !target->IsAlive())
+    if (!isAttackableTarget(target))
         return nullptr;
 
     player->SetSelection(target->GetGUID());
@@ -1124,7 +1190,7 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
             }
         }
 
-        if (profile.createDistanceWhenCrowded && IsMeleePressureTarget(target) && distance < profile.preferredIdealRange)
+        if (profile.createDistanceWhenCrowded && IsActivelyPressuringInMelee(target, player) && distance < profile.preferredIdealRange)
         {
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP distance band: bot={} profile={} decision=create-distance-vs-melee-pressure distance={} min={} ideal={} max={}.",
@@ -1288,6 +1354,9 @@ bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycle
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
         return false;
+
+    if (RecoverStaleBattlegroundState(player))
+        return true;
 
     if (HasConflictingBattlegroundLifecycleContext(context))
     {
@@ -1509,9 +1578,6 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->isMoving())
-        return false;
-
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {
         case IDLE_MOTION_TYPE:
@@ -1533,6 +1599,11 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (TryJumpOffWarsongGraveyard(player))
         return true;
+
+    // Evaluate combat/WSG post-res logic before this guard so stale movement
+    // flags do not suppress target pursuit immediately after graveyard rez.
+    if (player->isMoving())
+        return false;
 
     if (context.objective.type == BattlegroundObjectiveType::None &&
         context.movement == BattlegroundMovementPrimitive::None &&
@@ -1588,7 +1659,7 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 100.0f;
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : GetAggressiveCombatScanDistance(player, 100.0f);
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
@@ -1654,6 +1725,9 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
         return false;
+
+    if (RecoverStaleBattlegroundState(player))
+        return true;
 
     if (HasConflictingArenaLifecycleContext(context))
     {
@@ -1763,6 +1837,6 @@ bool DuelTacticalActions::Execute(Player* player)
     if (!player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
         return false;
 
-    return EngageNearestEnemyPlayer(player, 100.0f);
+    return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
 }
 }
