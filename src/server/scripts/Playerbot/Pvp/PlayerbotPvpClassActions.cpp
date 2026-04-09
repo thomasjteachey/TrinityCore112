@@ -346,7 +346,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->SetSelection(target->GetGUID());
         bool const preserveStealthForOpener = player->HasStealthAura();
         if (preserveStealthForOpener)
+        {
+            // While stealthed, keep auto-attack disabled so we do not break
+            // stealth early, but still chase for Cheap Shot opener range.
+            if (context.spellId == 1833 && !player->IsWithinMeleeRange(target))
+                player->GetMotionMaster()->MoveChase(target);
+
             player->AttackStop();
+        }
         else if (player->GetVictim() != target)
             player->Attack(target, false);
         CommandPetAttackTarget(player, target);

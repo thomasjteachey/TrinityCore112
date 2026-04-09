@@ -1722,7 +1722,7 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
 
     if (!player->IsInCombat() && !HasAuraFromSpellChain(player, 1784) && IsSpellReady(player, 1784))
         return { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self };
-    if (IsSpellReady(player, 1833) && player->HasStealthAura())
+    if (player->HasStealthAura() && IsSpellReady(player, 1833))
         return { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy };
     if (target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 1766))
         return { "rogue kick", "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy };
