@@ -773,6 +773,14 @@ bool CanIssueBotMovement(Player const* player)
     return true;
 }
 
+float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance)
+{
+    if (!player)
+        return fallbackDistance;
+
+    return std::max(fallbackDistance, player->GetVisibilityRange());
+}
+
 bool IsMeleePressureTarget(Unit const* unit)
 {
     Player const* player = unit ? unit->ToPlayer() : nullptr;
@@ -1047,6 +1055,8 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance)
         TeamId const candidateBgTeam = ResolveBotTeamId(candidate);
         if (candidateBgTeam == playerBgTeam)
             continue;
+        if (!player->IsValidAttackTarget(candidate))
+            continue;
 
         float const distance = player->GetDistance(candidate);
         if (distance > maxDistance || distance >= nearestDistance)
@@ -1064,18 +1074,23 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
     if (!player)
         return nullptr;
 
+    auto isAttackableTarget = [player](Unit* candidate) -> bool
+    {
+        return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate);
+    };
+
     Unit* target = player->GetVictim();
-    if (!target || !target->IsAlive())
+    if (!isAttackableTarget(target))
         target = player->GetSelectedUnit();
     if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
     {
         Unit* duelOpponent = player->duel->Opponent;
-        if (duelOpponent && duelOpponent->IsAlive() && duelOpponent->GetMapId() == player->GetMapId())
+        if (isAttackableTarget(duelOpponent) && duelOpponent->GetMapId() == player->GetMapId())
             target = duelOpponent;
     }
-    if ((!target || !target->IsAlive()) && player->InBattleground())
+    if (!isAttackableTarget(target) && player->InBattleground())
         target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
-    if (!target || !target->IsAlive())
+    if (!isAttackableTarget(target))
         return nullptr;
 
     player->SetSelection(target->GetGUID());
@@ -1553,13 +1568,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     }
 
     if (player->IsInCombat())
-        return EngageNearestEnemyPlayer(player, 100.0f);
-
-    // WSG brawl behavior should aggressively acquire ranged pressure targets
-    // instead of endlessly pathing objective waypoints with no combat target.
-    if (IsWarsongGulch(player) && EngageNearestEnemyPlayer(player, 2000.0f))
-        return true;
-
+        return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
     if (TryJumpOffWarsongGraveyard(player))
         return true;
 
@@ -1617,7 +1626,7 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 100.0f;
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : GetAggressiveCombatScanDistance(player, 100.0f);
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
@@ -1795,6 +1804,6 @@ bool DuelTacticalActions::Execute(Player* player)
     if (!player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
         return false;
 
-    return EngageNearestEnemyPlayer(player, 100.0f);
+    return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
 }
 }
