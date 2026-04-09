@@ -132,7 +132,7 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
     }
 
     float const distanceToEnemy = player->GetDistance(nearestEnemy);
-    float const combatEngageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
+    float const combatEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
     if (distanceToEnemy <= combatEngageDistance)
     {
         EmitBattlegroundGmDebug(player,
@@ -1853,12 +1853,16 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
+    if (IsWarsongGulch(player))
+    {
+        if (EngageNearestEnemyPlayer(player, 60.0f))
+            return true;
+        return TryPursueNearestEnemyInWarsong(player) || MoveToClosestBattlegroundGraveyard(player);
+    }
+
     float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
-
-    if (IsWarsongGulch(player))
-        return TryPursueNearestEnemyInWarsong(player) || MoveToClosestBattlegroundGraveyard(player);
 
     return context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None;
 }
