@@ -1470,7 +1470,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     }
 
     if (player->IsInCombat())
-        return EngageNearestEnemyPlayer(player, 80.0f);
+        return EngageNearestEnemyPlayer(player, 100.0f);
     /*
     if (TryJumpOffWarsongGraveyard(player))
         return true;
@@ -1530,7 +1530,7 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
-    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 60.0f;
+    float const engageDistance = IsWarsongGulch(player) ? 2000.0f : 100.0f;
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
@@ -1705,6 +1705,6 @@ bool DuelTacticalActions::Execute(Player* player)
     if (!player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
         return false;
 
-    return EngageNearestEnemyPlayer(player, 65.0f);
+    return EngageNearestEnemyPlayer(player, 100.0f);
 }
 }
