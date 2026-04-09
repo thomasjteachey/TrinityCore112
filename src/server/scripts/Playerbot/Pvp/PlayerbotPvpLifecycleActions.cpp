@@ -405,11 +405,15 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
     bool const botCurrentlyMoving = player->isMoving();
+    bool const hardThrottleActive = IsWarsongGulch(player) && !canReissueByTime;
     bool const forcedStationaryReissue = !destinationChanged && !canReissueByTime && !botCurrentlyMoving;
     if (forcedStationaryReissue)
         stationaryReissueCount = std::min<uint8>(uint8(stationaryReissueCount + 1), 20);
     else
         stationaryReissueCount = 0;
+
+    if (hardThrottleActive && botCurrentlyMoving)
+        return false;
 
     if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
     {
@@ -458,17 +462,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = destination;
     if (generatePath && player->InBattleground())
     {
-        bool const canDirectDropToDestination = destination.GetPositionZ() + 8.0f < player->GetPositionZ() &&
-            player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
-        if (canDirectDropToDestination)
-        {
-            motionMaster->MovePoint(0, destination, false);
-            issuedDestination = destination;
-            state.lastDestination = destination;
-            state.lastIssueMs = nowMs;
-            return true;
-        }
-
         PathGenerator path(player);
         // Explicitly cap each navmesh solve to a medium segment so very long
         // cross-map targets still yield incremental path points immediately.
@@ -527,14 +520,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                 }
             }
 
-            bool const destinationIsSignificantlyLower = segmentDestination.GetPositionZ() + 8.0f < player->GetPositionZ();
-            bool const canDirectDrop = destinationIsSignificantlyLower &&
-                player->IsWithinLOS(segmentDestination.GetPositionX(), segmentDestination.GetPositionY(), segmentDestination.GetPositionZ());
-
-            if (canDirectDrop)
-                motionMaster->MovePoint(0, segmentDestination, false);
-            else
-                motionMaster->MovePoint(0, segmentDestination, true);
+            motionMaster->MovePoint(0, segmentDestination, true);
             issuedDestination = segmentDestination;
 
             EmitBattlegroundGmDebug(player,
