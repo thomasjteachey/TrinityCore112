@@ -219,14 +219,18 @@ void CreatureAI::EnsureEngaged(Unit* who)
 
 void CreatureAI::EnterEvadeMode(EvadeReason why)
 {
-    // Hack requested by user: disable evade for Stockades (map 34)
-    if (me->GetMapId() == 34)
-        return;
-
     if (!_EnterEvadeMode(why))
         return;
 
     TC_LOG_DEBUG("scripts.ai", "CreatureAI::EnterEvadeMode: entering evade mode (why: {}) ({})", why, me->GetGUID().ToString());
+
+    // Stockades PvPvE: clear combat/reset logic but do not path home or set evade state.
+    // This keeps creatures standing where they deaggroed while still allowing normal re-aggro.
+    if (me->GetMapId() == 34)
+    {
+        Reset();
+        return;
+    }
 
     if (!me->GetVehicle()) // otherwise me will be in evade mode forever
     {
@@ -311,9 +315,6 @@ bool CreatureAI::_EnterEvadeMode(EvadeReason /*why*/)
         EngagementOver();
         return false;
     }
-
-    if (me->GetMapId() == 34)
-        return false;
 
     me->RemoveAurasOnEvade();
     me->ClearComboPointHolders(); // Remove all combo points targeting this unit
