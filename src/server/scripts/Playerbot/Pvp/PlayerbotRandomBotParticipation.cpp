@@ -86,28 +86,13 @@ void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint3
 
     nextEmitMs = nowMs + throttleMs;
 
-    Map const* map = player->GetMap();
-    if (!map)
-        return;
-
     std::ostringstream os;
     os << "[PBDBG lifecycle] bot=" << player->GetName()
        << " guid=" << player->GetGUID().ToString()
        << " bgId=" << player->GetBattlegroundId()
        << " detail=" << detail;
     std::string const message = os.str();
-
-    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
-    {
-        Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
-            continue;
-
-        if (observer->GetBattlegroundId() != player->GetBattlegroundId())
-            continue;
-
-        const_cast<Player*>(player)->Whisper(message, LANG_UNIVERSAL, observer);
-    }
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
 }
 
 enum class LifecycleObservationReason : uint8
