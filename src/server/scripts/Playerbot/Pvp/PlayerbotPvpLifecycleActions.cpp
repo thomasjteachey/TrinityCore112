@@ -386,9 +386,17 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     bool const destinationChanged = state.lastIssueMs == 0 ||
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-    if (!destinationChanged && !canReissueByTime)
+    bool const botCurrentlyMoving = player->isMoving();
+    if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
     {
         return false;
+    }
+
+    if (!destinationChanged && !canReissueByTime && !botCurrentlyMoving)
+    {
+        EmitBattlegroundGmDebug(player,
+            "movepoint=forced-reissue reason=stationary-with-throttle lastIssueMs=" + std::to_string(state.lastIssueMs) +
+            " nowMs=" + std::to_string(nowMs), 1000);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
