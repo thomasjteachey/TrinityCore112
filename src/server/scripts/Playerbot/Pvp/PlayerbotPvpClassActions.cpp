@@ -408,6 +408,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    // If we are close enough to actively engage a hostile target, force a
+    // dismount so combat spell execution does not stay blocked by mount state.
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        player->IsMounted() &&
+        player->IsWithinLOSInMap(target) &&
+        player->IsWithinDistInMap(target, 35.0f))
+    {
+        player->Dismount();
+    }
+
     if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {

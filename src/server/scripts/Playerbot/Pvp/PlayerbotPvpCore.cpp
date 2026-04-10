@@ -314,6 +314,23 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (!player->IsOutdoors())
         return decision;
 
+    // Avoid mounting if a hostile enemy player is already close enough to engage.
+    // This keeps bots on-foot so their combat spell selection can start immediately.
+    if (player->GetMap())
+    {
+        Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!HasHostileTarget(player, candidate))
+                continue;
+            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, 35.0f))
+                continue;
+
+            return decision;
+        }
+    }
+
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
         return { "mount", "mount while outside and out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
 
