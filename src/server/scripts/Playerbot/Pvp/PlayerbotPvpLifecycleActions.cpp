@@ -1527,6 +1527,12 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
         return false;
     }
 
+    // Ensure mounted bots immediately transition into combat posture once an
+    // enemy target is acquired. Without this, bots that don't cast right away
+    // (or rely on melee/auto attacks) can stay mounted and fail to engage.
+    if (player->IsMounted())
+        player->Dismount();
+
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
     bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
