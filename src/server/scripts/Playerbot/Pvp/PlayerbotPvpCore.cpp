@@ -44,6 +44,7 @@
 namespace
 {
 playerbot::PvpCoreConfig g_PvpCoreConfig;
+bool HasHostileTarget(Player const* player, Unit const* target);
 
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
