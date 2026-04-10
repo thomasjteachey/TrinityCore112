@@ -66,8 +66,8 @@ struct WarlockCurseCooldownKeyHash
 };
 
 std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
-constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 22734;
-constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 
 uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
 {
@@ -413,14 +413,19 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    // If we are close enough to actively engage a hostile target, force a
-    // dismount so combat spell execution does not stay blocked by mount state.
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
-        player->IsMounted() &&
-        player->IsWithinLOSInMap(target) &&
-        player->IsWithinDistInMap(target, 35.0f))
-    {
+    bool const isMountSpell = spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT;
+
+    // Most combat/utility spells require an unmounted caster. Dismount before
+    // non-mount spell execution so bots do not keep kiting while mounted.
+    if (player->IsMounted() && !isMountSpell)
         player->Dismount();
+
+    // Food/drink should immediately break when the bot transitions into active
+    // spellcasting (combat or utility), mirroring movement opcode behavior.
+    if (context.spellId != SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT && context.spellId != SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK)
+    {
+        player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+        player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
     }
 
     if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
