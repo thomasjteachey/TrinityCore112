@@ -1110,6 +1110,19 @@ bool Aura::IsDeathPersistent() const
 
 bool Aura::IsRemovedOnShapeLost(Unit* target) const
 {
+    // Sweeping Strikes should persist through warrior stance swaps.
+    // SpellMgr already sets SPELL_ATTR0_NOT_SHAPESHIFT for these ranks, but
+    // keep an explicit safeguard here in case spell data or load order changes.
+    switch (m_spellInfo->Id)
+    {
+        case 12328: // Sweeping Strikes (Rank 1)
+        case 18765: // Sweeping Strikes (Rank 2)
+        case 35429: // Sweeping Strikes (Rank 3)
+            return false;
+        default:
+            break;
+    }
+
     return GetCasterGUID() == target->GetGUID()
         && m_spellInfo->Stances
         && !m_spellInfo->HasAttribute(SPELL_ATTR2_NOT_NEED_SHAPESHIFT)
