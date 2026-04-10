@@ -126,8 +126,8 @@ struct SpellDecision
     uint32 itemEntry = 0;
 };
 
-constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 22734;
-constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT = 22328;
 
 struct TacticalDecision
