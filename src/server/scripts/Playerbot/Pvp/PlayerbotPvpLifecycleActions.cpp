@@ -162,6 +162,31 @@ bool CanIssueBotMovement(Player const* player);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
 
+bool IsCrowdControlledForAction(Player const* player)
+{
+    if (!player)
+        return false;
+
+    constexpr uint32 ccMechanicMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(ccMechanicMask) ||
+        player->IsPolymorphed();
+}
+
 bool TryPursueNearestEnemyInWarsong(Player* player)
 {
     if (!player || !IsWarsongGulch(player))
@@ -1595,6 +1620,12 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
     if (!player || !player->IsAlive())
         return false;
 
+    if (IsCrowdControlledForAction(player))
+    {
+        player->AttackStop();
+        return false;
+    }
+
     Unit* target = AcquireCombatTarget(player, scanDistance);
     if (!target)
     {
@@ -1945,6 +1976,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
+
+    if (player->IsMounted() && !player->IsOutdoors())
+        ForcePlayerbotDismount(player);
 
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {
