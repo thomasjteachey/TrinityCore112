@@ -69,6 +69,30 @@ std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_poin
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 
+void ForcePlayerbotDismount(Player* player)
+{
+    if (!player)
+        return;
+
+    if (player->IsMounted())
+        player->Dismount();
+
+    // Some server-side mount effects can remain applied when virtual bot
+    // sessions dismount mid-action. Explicitly strip mount-related aura types
+    // and refresh movement rates to prevent residual mounted speed.
+    player->RemoveAurasByType(SPELL_AURA_MOUNTED);
+    player->RemoveAurasByType(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED);
+    player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS);
+    player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK);
+    player->RemoveAurasByType(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED);
+    player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_FLIGHT_SPEED_ALWAYS);
+    player->RemoveAurasByType(SPELL_AURA_MOD_FLIGHT_SPEED_NOT_STACK);
+
+    player->UpdateSpeed(MOVE_RUN);
+    player->UpdateSpeed(MOVE_SWIM);
+    player->UpdateSpeed(MOVE_FLIGHT);
+}
+
 uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
 {
     if (!player || !baseSpellId)
@@ -418,7 +442,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Most combat/utility spells require an unmounted caster. Dismount before
     // non-mount spell execution so bots do not keep kiting while mounted.
     if (player->IsMounted() && !isMountSpell)
-        player->Dismount();
+        ForcePlayerbotDismount(player);
 
     // Food/drink should immediately break when the bot transitions into active
     // spellcasting (combat or utility), mirroring movement opcode behavior.

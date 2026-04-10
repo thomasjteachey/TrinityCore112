@@ -65,6 +65,27 @@ std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 
+void ForcePlayerbotDismount(Player* player)
+{
+    if (!player)
+        return;
+
+    if (player->IsMounted())
+        player->Dismount();
+
+    player->RemoveAurasByType(SPELL_AURA_MOUNTED);
+    player->RemoveAurasByType(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED);
+    player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS);
+    player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK);
+    player->RemoveAurasByType(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED);
+    player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_FLIGHT_SPEED_ALWAYS);
+    player->RemoveAurasByType(SPELL_AURA_MOD_FLIGHT_SPEED_NOT_STACK);
+
+    player->UpdateSpeed(MOVE_RUN);
+    player->UpdateSpeed(MOVE_SWIM);
+    player->UpdateSpeed(MOVE_FLIGHT);
+}
+
 bool IsRecoveringByEatingOrDrinking(Player const* player)
 {
     if (!player || !player->IsAlive() || player->IsInCombat())
@@ -1548,7 +1569,7 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
     // enemy target is acquired. Without this, bots that don't cast right away
     // (or rely on melee/auto attacks) can stay mounted and fail to engage.
     if (player->IsMounted())
-        player->Dismount();
+        ForcePlayerbotDismount(player);
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
