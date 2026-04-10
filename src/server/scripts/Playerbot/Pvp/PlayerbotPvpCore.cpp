@@ -340,6 +340,25 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (IsHardControlled(player))
         return decision;
 
+    // Keep a single nearby-enemy boundary for "switch to combat posture".
+    // Inside this range we should avoid out-of-combat utility behaviors
+    // (eat/drink/mount), so movement + combat targeting can take over cleanly.
+    constexpr float kNearbyHostileCombatBoundary = 60.0f;
+    if (player->GetMap())
+    {
+        Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        {
+            Player* candidate = itr->GetSource();
+            if (!HasHostileTarget(player, candidate))
+                continue;
+            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, kNearbyHostileCombatBoundary))
+                continue;
+
+            return decision;
+        }
+    }
+
     bool const needsFood = player->GetHealthPct() < 100.0f;
     bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
     bool const needsDrink = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
@@ -380,23 +399,6 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 
     if (!player->IsOutdoors())
         return decision;
-
-    // Avoid mounting if a hostile enemy player is already close enough to engage.
-    // This keeps bots on-foot so their combat spell selection can start immediately.
-    if (player->GetMap())
-    {
-        Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
-        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
-        {
-            Player* candidate = itr->GetSource();
-            if (!HasHostileTarget(player, candidate))
-                continue;
-            if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, 35.0f))
-                continue;
-
-            return decision;
-        }
-    }
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
         if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
