@@ -307,7 +307,7 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
 
 bool TryJumpOffWarsongGraveyard(Player* player)
 {
-    if (!player || !player->IsAlive() || !IsWarsongGulch(player) || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+    if (!player || !IsWarsongGulch(player))
         return false;
 
     struct PostResurrectRouteState
@@ -333,8 +333,15 @@ bool TryJumpOffWarsongGraveyard(Player* player)
         state.wasAlive = player->IsAlive();
     }
 
-    bool const justResurrected = !state.wasAlive && player->IsAlive();
-    state.wasAlive = player->IsAlive();
+    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+    {
+        state.wasAlive = false;
+        state.active = false;
+        return false;
+    }
+
+    bool const justResurrected = !state.wasAlive;
+    state.wasAlive = true;
     if (justResurrected)
     {
         state.active = true;
