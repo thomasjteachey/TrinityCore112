@@ -1677,9 +1677,6 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
 
     Unit const* activeTarget = SelectCombatTarget(player);
 
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, activeTarget); utilityDecision.spellId)
-        return utilityDecision;
-
     if (!HasHostileTarget(player, activeTarget))
         return decision;
 
@@ -1750,9 +1747,6 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     if (!player)
         return decision;
 
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
-
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, GetConfiguredMeleeRange());
     float const manaPct = player->GetPowerPct(POWER_MANA);
@@ -1804,8 +1798,16 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     if (!player)
         return decision;
 
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
+    bool const hasHostileTarget = HasHostileTarget(player, target);
+    Unit const* debuffedAlly = IsSpellReady(player, 988) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
+    Unit const* enemyBuffedTarget = (IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
+    Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f) : nullptr;
+    Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
+    Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
+    Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
+    Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
+
+    std::vector<PrioritizedSpellDecision> candidates;
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
     Unit const* debuffedAlly = IsSpellReady(player, 988) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
@@ -1862,9 +1864,6 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
-
     Unit const* lowManaAlly = IsSpellReady(player, 29166) ? SelectFriendlyLowManaTarget(player, 40.0f, 10.0f) : nullptr;
     Unit const* cursedTarget = IsSpellReady(player, 2782) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
     Unit const* poisonedTarget = IsSpellReady(player, 2893) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
@@ -1909,9 +1908,6 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
-
     Unit const* cleanseTarget = IsSpellReady(player, 4987) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f) : nullptr;
     Unit const* freedomTarget = IsSpellReady(player, 1044) ? SelectFriendlySnaredTarget(player, 40.0f) : nullptr;
     Unit const* sacrificeTarget = IsSpellReady(player, 6940) ? SelectFriendlyHealthTarget(player, 40.0f, 95.0f) : nullptr;
@@ -1954,9 +1950,6 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     SpellDecision decision;
     if (!player)
         return decision;
-
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
 
     Pet const* pet = player->GetPet();
     bool const needsPetSummon = !pet || !pet->IsAlive();
@@ -2011,9 +2004,6 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     SpellDecision decision;
     if (!player)
         return decision;
-
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
 
     if (!HasHostileTarget(player, target))
         return decision;
@@ -2074,9 +2064,6 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
-
     if (!HasHostileTarget(player, target))
         return decision;
 
@@ -2122,9 +2109,6 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
     SpellDecision decision;
     if (!player)
         return decision;
-
-    if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
-        return utilityDecision;
 
     if (!HasHostileTarget(player, target))
         return decision;
@@ -2482,7 +2466,10 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     SpellDecision decision;
     {
         DecisionEvaluationScope decisionScope(player, 0);
-        decision = SelectClassicClassSpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+        if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, hasValidTarget ? target : nullptr); utilityDecision.spellId)
+            decision = utilityDecision;
+        else
+            decision = SelectClassicClassSpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
     }
 
     if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, hasValidTarget ? target : nullptr, allyTarget))
