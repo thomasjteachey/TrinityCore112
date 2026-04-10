@@ -300,6 +300,19 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     bool const needsFood = player->GetHealthPct() < 100.0f;
     bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
     bool const needsDrink = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
+    bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+    bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+
+    // When both health and mana are missing, mirror real player behavior:
+    // apply both food and drink so recovery happens in parallel.
+    if (needsFood && needsDrink)
+    {
+        if (!hasEatAura && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            return { "eat", "recover health out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, playerbot::PvpClassSpellContext::TargetMode::Self };
+
+        if (!hasDrinkAura && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            return { "drink", "recover mana out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
 
     if (needsFood && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
         return { "eat", "recover health out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, playerbot::PvpClassSpellContext::TargetMode::Self };
