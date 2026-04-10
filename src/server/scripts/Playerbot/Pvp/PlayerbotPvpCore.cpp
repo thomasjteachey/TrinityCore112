@@ -53,7 +53,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
-thread_local std::vector<uint32> g_SuppressedDecisionSpellIds;
+thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
 bool IsHunterInRangedMode(Player const* player)
 {
@@ -208,22 +208,22 @@ SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileT
 class DecisionEvaluationScope
 {
 public:
-    DecisionEvaluationScope(Player const* player, std::vector<uint32> const& suppressedSpellIds)
-        : _previousBotGuid(g_CurrentDecisionBotGuid), _previousSuppressedSpellIds(g_SuppressedDecisionSpellIds)
+    DecisionEvaluationScope(Player const* player, uint32 suppressedSpellId)
+        : _previousBotGuid(g_CurrentDecisionBotGuid), _previousSuppressedSpellId(g_SuppressedDecisionSpellId)
     {
         g_CurrentDecisionBotGuid = player ? player->GetGUID() : ObjectGuid::Empty;
-        g_SuppressedDecisionSpellIds = suppressedSpellIds;
+        g_SuppressedDecisionSpellId = suppressedSpellId;
     }
 
     ~DecisionEvaluationScope()
     {
         g_CurrentDecisionBotGuid = _previousBotGuid;
-        g_SuppressedDecisionSpellIds = _previousSuppressedSpellIds;
+        g_SuppressedDecisionSpellId = _previousSuppressedSpellId;
     }
 
 private:
     ObjectGuid _previousBotGuid;
-    std::vector<uint32> _previousSuppressedSpellIds;
+    uint32 _previousSuppressedSpellId = 0;
 };
 
 void AddDecisionCandidate(std::vector<PrioritizedSpellDecision>& candidates, bool condition, float priority, SpellDecision const& decision)
@@ -231,9 +231,8 @@ void AddDecisionCandidate(std::vector<PrioritizedSpellDecision>& candidates, boo
     if (!condition || !decision.spellId)
         return;
 
-    for (uint32 suppressedSpellId : g_SuppressedDecisionSpellIds)
-        if (suppressedSpellId != 0 && decision.spellId == suppressedSpellId)
-            return;
+    if (g_SuppressedDecisionSpellId != 0 && decision.spellId == g_SuppressedDecisionSpellId)
+        return;
 
     candidates.push_back({ priority, decision });
 }
@@ -2481,26 +2480,17 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     Unit const* allyTarget = SelectAllyTarget(player);
     SpellDecision decision;
-    std::vector<uint32> suppressedSpellIds;
-    for (uint8 attempt = 0; attempt < 3; ++attempt)
     {
-        DecisionEvaluationScope decisionScope(player, suppressedSpellIds);
-        SpellDecision const candidate = SelectClassicClassSpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
-        if (!candidate.spellId)
-            break;
+        DecisionEvaluationScope decisionScope(player, 0);
+        decision = SelectClassicClassSpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+    }
 
-        // Preserve the first viable candidate as a fallback if every option in
-        // this bounded pass is currently uncastable.
-        if (!decision.spellId)
-            decision = candidate;
-
-        if (IsDecisionImmediatelyCastable(player, candidate, hasValidTarget ? target : nullptr, allyTarget))
-        {
-            decision = candidate;
-            break;
-        }
-
-        suppressedSpellIds.push_back(candidate.spellId);
+    if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, hasValidTarget ? target : nullptr, allyTarget))
+    {
+        DecisionEvaluationScope fallbackScope(player, decision.spellId);
+        SpellDecision const fallbackDecision = SelectClassicClassSpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+        if (fallbackDecision.spellId)
+            decision = fallbackDecision;
     }
 
     context.actionName = decision.actionName;
