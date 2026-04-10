@@ -41,6 +41,7 @@
 namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
+bool CanIssueFollowCommands(Player const* player);
 
 struct WarlockCurseCooldownKey
 {
@@ -232,6 +233,22 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
     }
 }
 
+bool CanIssueFollowCommands(Player const* player)
+{
+    if (!player || !player->IsAlive())
+        return false;
+
+    if (player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& context)
 {
     if (!player)
@@ -376,7 +393,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // While stealthed, keep auto-attack disabled so we do not break
             // stealth early, but keep chase active for Cheap Shot opener so
             // rogues do not idle in place waiting for an exact cast snapshot.
-            if (context.spellId == 1833)
+            if (context.spellId == 1833 && CanIssueFollowCommands(player))
                 player->GetMotionMaster()->MoveChase(target);
 
             player->AttackStop();
@@ -421,9 +438,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
-        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
             player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, maxRange - 1.0f), player->GetFollowAngle());
-        else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
+        else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
             player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, maxRange - 1.0f), player->GetFollowAngle());
 
         failureReason = "out_of_range";
@@ -438,6 +455,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     bool const isMountSpell = spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT;
+
+    if (isMountSpell &&
+        (player->HasUnitState(UNIT_STATE_STUNNED) ||
+         player->HasUnitState(UNIT_STATE_CONFUSED) ||
+         player->HasUnitState(UNIT_STATE_FLEEING) ||
+         player->HasUnitState(UNIT_STATE_ROOT)))
+    {
+        failureReason = "controlled_cannot_mount";
+        return false;
+    }
 
     // Most combat/utility spells require an unmounted caster. Dismount before
     // non-mount spell execution so bots do not keep kiting while mounted.
