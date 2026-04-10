@@ -65,6 +65,7 @@ namespace
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
+constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 
 void ForcePlayerbotDismount(Player* player)
 {
@@ -107,6 +108,15 @@ void ClearEatDrinkAurasForMovement(Player* player)
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
     if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+}
+
+void ClearStaleWaitingForResurrectAura(Player* player)
+{
+    if (!player || !player->IsAlive())
+        return;
+
+    if (player->HasAura(SPELL_WAITING_FOR_RESURRECT))
+        player->RemoveAurasDueToSpell(SPELL_WAITING_FOR_RESURRECT);
 }
 
 
@@ -1092,6 +1102,9 @@ bool CanIssueBotMovement(Player const* player)
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
+    if (IsCrowdControlledForAction(player))
+        return false;
+
     if (player->HasUnitState(UNIT_STATE_ROOT) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
@@ -1848,6 +1861,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (HandleBattlegroundDeathState(player))
         return true;
 
+    ClearStaleWaitingForResurrectAura(player);
+
     if (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION))
     {
         player->RemoveAurasDueToSpell(SPELL_PREPARATION);
@@ -1867,6 +1882,8 @@ bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalCo
 
     if (!player->IsAlive())
         return false;
+
+    ClearStaleWaitingForResurrectAura(player);
 
     if (IsRecoveringByEatingOrDrinking(player))
     {
