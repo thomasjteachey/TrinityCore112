@@ -390,6 +390,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const maxRange = spellInfo->GetMaxRange(false);
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
         if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
@@ -406,6 +411,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         failureReason = "too_close";
         return false;
+    }
+
+    // If we are close enough to actively engage a hostile target, force a
+    // dismount so combat spell execution does not stay blocked by mount state.
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        player->IsMounted() &&
+        player->IsWithinLOSInMap(target) &&
+        player->IsWithinDistInMap(target, 35.0f))
+    {
+        player->Dismount();
     }
 
     if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)

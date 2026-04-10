@@ -76,6 +76,17 @@ bool IsRecoveringByEatingOrDrinking(Player const* player)
     return needsFood || needsDrink;
 }
 
+void ClearEatDrinkAurasForMovement(Player* player)
+{
+    if (!player)
+        return;
+
+    if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+        player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+    if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+        player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+}
+
 
 bool IsWarsongGulch(Player const* player)
 {
@@ -450,6 +461,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 {
     if (!player)
         return false;
+
+    ClearEatDrinkAurasForMovement(player);
 
     if (IsWarsongGulch(player))
         minReissueMs = std::max<uint32>(minReissueMs, 2000);
@@ -1202,12 +1215,16 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
         target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
         player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
     {
+        ClearEatDrinkAurasForMovement(player);
         player->GetMotionMaster()->MovePoint(0, target->GetPosition(), false);
         return true;
     }
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
+    {
+        ClearEatDrinkAurasForMovement(player);
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
+    }
 
     return true;
 }
