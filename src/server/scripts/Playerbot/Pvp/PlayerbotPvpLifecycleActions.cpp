@@ -131,6 +131,32 @@ bool CanAttemptOutOfCombatSpell(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(spellInfo->Id);
 }
 
+uint32 SelectKnownMountSpell(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    for (PlayerSpellMap::value_type const& knownSpellPair : player->GetSpellMap())
+    {
+        uint32 const spellId = knownSpellPair.first;
+        PlayerSpell const& knownSpell = knownSpellPair.second;
+        if (!knownSpell.active || knownSpell.disabled)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo || spellInfo->IsPassive())
+            continue;
+        if (!spellInfo->HasAura(SPELL_AURA_MOUNTED) && spellInfo->Mechanic != MECHANIC_MOUNT)
+            continue;
+        if (!CanAttemptOutOfCombatSpell(player, spellId))
+            continue;
+
+        return spellId;
+    }
+
+    return 0;
+}
+
 bool TryHandleOutOfCombatRecoveryAndMount(Player* player, bool allowMount)
 {
     if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
@@ -155,15 +181,22 @@ bool TryHandleOutOfCombatRecoveryAndMount(Player* player, bool allowMount)
             didCastRecovery = true;
         }
 
-        return didCastRecovery;
+        if (didCastRecovery)
+            return true;
     }
 
     if (!allowMount || !player->IsOutdoors())
         return false;
 
+    uint32 mountSpellId = 0;
     if (CanAttemptOutOfCombatSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+        mountSpellId = SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT;
+    else
+        mountSpellId = SelectKnownMountSpell(player);
+
+    if (mountSpellId)
     {
-        player->CastSpell(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, false);
+        player->CastSpell(player, mountSpellId, false);
         return true;
     }
 
