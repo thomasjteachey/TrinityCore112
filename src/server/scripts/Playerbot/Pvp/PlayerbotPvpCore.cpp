@@ -94,18 +94,7 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
     g_HunterRangedModeByBot[player->GetGUID()] = rangedMode;
 }
 
-SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget)
-{
-    if (!player)
-        return {};
-
-    // Match reference behavior more closely: do not let out-of-combat utility
-    // preempt combat spell trees while a valid hostile target exists.
-    if (HasHostileTarget(player, hostileTarget))
-        return {};
-
-    return SelectOutOfCombatEatDrinkOrMountSpell(player);
-}
+SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget);
 
 playerbot::PvpCoreConfig g_PvpCoreConfig;
 bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo);
@@ -202,6 +191,19 @@ struct PrioritizedSpellDecision
     float priority = 0.0f;
     SpellDecision decision;
 };
+
+SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget)
+{
+    if (!player)
+        return {};
+
+    // Match reference behavior more closely: do not let out-of-combat utility
+    // preempt combat spell trees while a valid hostile target exists.
+    if (HasHostileTarget(player, hostileTarget))
+        return {};
+
+    return SelectOutOfCombatEatDrinkOrMountSpell(player);
+}
 
 class DecisionEvaluationScope
 {
