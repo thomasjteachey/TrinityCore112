@@ -390,6 +390,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const maxRange = spellInfo->GetMaxRange(false);
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
         if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
