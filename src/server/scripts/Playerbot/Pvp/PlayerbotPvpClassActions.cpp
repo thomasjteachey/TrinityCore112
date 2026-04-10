@@ -456,6 +456,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     bool const isMountSpell = spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT;
 
+    if (isMountSpell &&
+        (player->HasUnitState(UNIT_STATE_STUNNED) ||
+         player->HasUnitState(UNIT_STATE_CONFUSED) ||
+         player->HasUnitState(UNIT_STATE_FLEEING) ||
+         player->HasUnitState(UNIT_STATE_ROOT)))
+    {
+        failureReason = "controlled_cannot_mount";
+        return false;
+    }
+
     // Most combat/utility spells require an unmounted caster. Dismount before
     // non-mount spell execution so bots do not keep kiting while mounted.
     if (player->IsMounted() && !isMountSpell)

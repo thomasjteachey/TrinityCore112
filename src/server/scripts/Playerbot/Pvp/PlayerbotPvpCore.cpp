@@ -28,6 +28,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "Pet.h"
 #include "Spell.h"
@@ -45,6 +46,8 @@ namespace
 {
 playerbot::PvpCoreConfig g_PvpCoreConfig;
 bool HasHostileTarget(Player const* player, Unit const* target);
+bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo);
+bool IsHardControlled(Player const* player);
 
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
@@ -265,6 +268,39 @@ bool IsSpellReady(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
+bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
+{
+    if (!player || !mountSpellInfo)
+        return false;
+
+    uint32 zoneId = 0;
+    uint32 areaId = 0;
+    player->GetZoneAndAreaId(zoneId, areaId);
+    if (mountSpellInfo->CheckLocation(player->GetMapId(), zoneId, areaId, player, false) != SPELL_CAST_OK)
+        return false;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return false;
+
+    bool allowMount = !map->IsDungeon() || map->IsBattlegroundOrArena();
+    if (InstanceTemplate const* instanceTemplate = sObjectMgr->GetInstanceTemplate(player->GetMapId()))
+        allowMount = instanceTemplate->AllowMount;
+
+    return allowMount || mountSpellInfo->AreaGroupId;
+}
+
+bool IsHardControlled(Player const* player)
+{
+    if (!player)
+        return false;
+
+    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasUnitState(UNIT_STATE_ROOT);
+}
+
 uint32 SelectReadyKnownMountSpell(Player const* player)
 {
     if (!player)
@@ -284,6 +320,8 @@ uint32 SelectReadyKnownMountSpell(Player const* player)
             continue;
         if (!IsSpellReady(player, spellId))
             continue;
+        if (!CanAttemptMount(player, spellInfo))
+            continue;
 
         return spellId;
     }
@@ -295,6 +333,11 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 {
     SpellDecision decision;
     if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
+        return decision;
+
+    // Do not attempt recovery/mount actions while hard controlled. This avoids
+    // mount selections during fear/polymorph/stun/root states.
+    if (IsHardControlled(player))
         return decision;
 
     bool const needsFood = player->GetHealthPct() < 100.0f;
@@ -356,7 +399,9 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     }
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
-        return { "mount", "mount while outside and out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
+        if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+            if (CanAttemptMount(player, defaultMountInfo))
+                return { "mount", "mount while outside and out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
         return { "mount", "mount while outside and out of combat", knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
