@@ -66,6 +66,8 @@ struct WarlockCurseCooldownKeyHash
 };
 
 std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 22734;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 29073;
 
 uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
 {
@@ -416,7 +418,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
-    if (spellInfo->CalcCastTime() > 0)
+    bool const isFoodOrDrinkSpell = context.spellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || context.spellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
+    if (spellInfo->CalcCastTime() > 0 || isFoodOrDrinkSpell)
     {
         player->StopMoving();
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())

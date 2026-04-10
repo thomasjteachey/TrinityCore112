@@ -306,6 +306,11 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (needsDrink && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
         return { "drink", "recover mana out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
 
+    bool const inBattlegroundPreparation = player->InBattleground() &&
+        (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));
+    if (inBattlegroundPreparation)
+        return decision;
+
     if (!player->IsOutdoors())
         return decision;
 

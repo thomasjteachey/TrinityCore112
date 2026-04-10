@@ -62,6 +62,19 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 22734;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 29073;
+
+bool IsRecoveringByEatingOrDrinking(Player const* player)
+{
+    if (!player || !player->IsAlive() || player->IsInCombat())
+        return false;
+
+    bool const needsFood = player->GetHealthPct() < 100.0f && player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+    bool const needsDrink = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 100.0f &&
+        player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+    return needsFood || needsDrink;
+}
 
 
 bool IsWarsongGulch(Player const* player)
@@ -1740,6 +1753,13 @@ bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalCo
 
     if (!player->IsAlive())
         return false;
+
+    if (IsRecoveringByEatingOrDrinking(player))
+    {
+        if (player->isMoving())
+            player->StopMoving();
+        return true;
+    }
 
     if (Battleground* battleground = player->GetBattleground())
     {
