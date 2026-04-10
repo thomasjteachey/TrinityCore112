@@ -58,6 +58,7 @@
 #include <algorithm>
 #include <queue>
 #include <vector>
+#include <list>
 
 namespace
 {
@@ -160,6 +161,31 @@ float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistan
 bool CanIssueBotMovement(Player const* player);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
+
+bool IsCrowdControlledForAction(Player const* player)
+{
+    if (!player)
+        return false;
+
+    constexpr uint32 ccMechanicMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(ccMechanicMask) ||
+        player->IsPolymorphed();
+}
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
 {
@@ -306,7 +332,7 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
 
 bool TryJumpOffWarsongGraveyard(Player* player)
 {
-    if (!player || !player->IsAlive() || !IsWarsongGulch(player) || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+    if (!player || !IsWarsongGulch(player))
         return false;
 
     struct PostResurrectRouteState
@@ -332,8 +358,15 @@ bool TryJumpOffWarsongGraveyard(Player* player)
         state.wasAlive = player->IsAlive();
     }
 
-    bool const justResurrected = !state.wasAlive && player->IsAlive();
-    state.wasAlive = player->IsAlive();
+    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+    {
+        state.wasAlive = false;
+        state.active = false;
+        return false;
+    }
+
+    bool const justResurrected = !state.wasAlive;
+    state.wasAlive = true;
     if (justResurrected)
     {
         state.active = true;
@@ -930,12 +963,38 @@ bool HandleBattlegroundDeathState(Player* player)
         // in that case we still search both faction spirit-guide entries.
         float constexpr spiritGuideSearchRadius = 30.0f;
 
-        Creature* spiritGuide = preferredEntry ? candidate->FindNearestCreature(preferredEntry, spiritGuideSearchRadius, false) : nullptr;
+        auto findGuideByEntry = [candidate, spiritGuideSearchRadius](uint32 entry) -> Creature*
+        {
+            if (!entry)
+                return nullptr;
+
+            std::list<Creature*> guides;
+            candidate->GetCreatureListWithEntryInGrid(guides, entry, spiritGuideSearchRadius);
+
+            Creature* nearestGuide = nullptr;
+            float nearestDistanceSq = std::numeric_limits<float>::max();
+            for (Creature* guide : guides)
+            {
+                if (!guide || !guide->IsSpiritService())
+                    continue;
+
+                float const distanceSq = candidate->GetExactDist2dSq(guide);
+                if (distanceSq < nearestDistanceSq)
+                {
+                    nearestGuide = guide;
+                    nearestDistanceSq = distanceSq;
+                }
+            }
+
+            return nearestGuide;
+        };
+
+        Creature* spiritGuide = findGuideByEntry(preferredEntry);
         if (!spiritGuide)
         {
-            spiritGuide = candidate->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, spiritGuideSearchRadius, false);
+            spiritGuide = findGuideByEntry(BG_CREATURE_ENTRY_A_SPIRITGUIDE);
             if (!spiritGuide)
-                spiritGuide = candidate->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, spiritGuideSearchRadius, false);
+                spiritGuide = findGuideByEntry(BG_CREATURE_ENTRY_H_SPIRITGUIDE);
         }
 
         return spiritGuide;
@@ -1556,6 +1615,12 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
     if (!player || !player->IsAlive())
         return false;
 
+    if (IsCrowdControlledForAction(player))
+    {
+        player->AttackStop();
+        return false;
+    }
+
     Unit* target = AcquireCombatTarget(player, scanDistance);
     if (!target)
     {
@@ -1906,6 +1971,9 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
+
+    if (player->IsMounted() && !player->IsOutdoors())
+        ForcePlayerbotDismount(player);
 
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
     {

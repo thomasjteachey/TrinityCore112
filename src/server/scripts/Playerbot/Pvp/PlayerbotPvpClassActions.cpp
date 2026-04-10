@@ -43,6 +43,31 @@ namespace
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 
+bool IsCrowdControlledForAction(Player const* player)
+{
+    if (!player)
+        return false;
+
+    constexpr uint32 ccMechanicMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(ccMechanicMask) ||
+        player->IsPolymorphed();
+}
+
 struct WarlockCurseCooldownKey
 {
     ObjectGuid casterGuid;
@@ -298,6 +323,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    if (IsCrowdControlledForAction(player))
+    {
+        // Hard crowd-control gate: polymorphed/confused actors must not start
+        // attacks or cast attempts until control is restored.
+        failureReason = "crowd_controlled_polymorph";
+        return false;
+    }
+
     // Druids can intentionally swap into Bear Form under melee pressure, but
     // many follow-up heals/utility spells are not castable in Bear/Cat forms.
     // The random bot cadence evaluates roughly every 2 seconds, so waiting for
@@ -465,6 +498,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "controlled_cannot_mount";
         return false;
     }
+    if (isMountSpell && !player->IsOutdoors())
+    {
+        // Enforce indoor mount denial server-side for virtual bot casters.
+        // Mount selection already prefers outdoors, but execution must also
+        // gate this so stale context cannot cast mounts while indoors.
+        failureReason = "indoors_cannot_mount";
+        return false;
+    }
+
 
     // Most combat/utility spells require an unmounted caster. Dismount before
     // non-mount spell execution so bots do not keep kiting while mounted.
