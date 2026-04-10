@@ -1033,8 +1033,13 @@ bool CanIssueBotMovement(Player const* player)
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->HasUnitState(UNIT_STATE_ROOT) || player->HasUnitState(UNIT_STATE_STUNNED))
+    if (player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING))
+    {
         return false;
+    }
 
     return true;
 }
