@@ -348,8 +348,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (preserveStealthForOpener)
         {
             // While stealthed, keep auto-attack disabled so we do not break
-            // stealth early, but still chase for Cheap Shot opener range.
-            if (context.spellId == 1833 && !player->IsWithinMeleeRange(target))
+            // stealth early, but keep chase active for Cheap Shot opener so
+            // rogues do not idle in place waiting for an exact cast snapshot.
+            if (context.spellId == 1833)
                 player->GetMotionMaster()->MoveChase(target);
 
             player->AttackStop();
