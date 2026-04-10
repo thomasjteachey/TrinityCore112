@@ -58,6 +58,7 @@
 #include <algorithm>
 #include <queue>
 #include <vector>
+#include <list>
 
 namespace
 {
@@ -930,12 +931,38 @@ bool HandleBattlegroundDeathState(Player* player)
         // in that case we still search both faction spirit-guide entries.
         float constexpr spiritGuideSearchRadius = 30.0f;
 
-        Creature* spiritGuide = preferredEntry ? candidate->FindNearestCreature(preferredEntry, spiritGuideSearchRadius, false) : nullptr;
+        auto findGuideByEntry = [candidate, spiritGuideSearchRadius](uint32 entry) -> Creature*
+        {
+            if (!entry)
+                return nullptr;
+
+            std::list<Creature*> guides;
+            candidate->GetCreatureListWithEntryInGrid(guides, entry, spiritGuideSearchRadius);
+
+            Creature* nearestGuide = nullptr;
+            float nearestDistanceSq = std::numeric_limits<float>::max();
+            for (Creature* guide : guides)
+            {
+                if (!guide || !guide->IsSpiritService())
+                    continue;
+
+                float const distanceSq = candidate->GetExactDist2dSq(guide);
+                if (distanceSq < nearestDistanceSq)
+                {
+                    nearestGuide = guide;
+                    nearestDistanceSq = distanceSq;
+                }
+            }
+
+            return nearestGuide;
+        };
+
+        Creature* spiritGuide = findGuideByEntry(preferredEntry);
         if (!spiritGuide)
         {
-            spiritGuide = candidate->FindNearestCreature(BG_CREATURE_ENTRY_A_SPIRITGUIDE, spiritGuideSearchRadius, false);
+            spiritGuide = findGuideByEntry(BG_CREATURE_ENTRY_A_SPIRITGUIDE);
             if (!spiritGuide)
-                spiritGuide = candidate->FindNearestCreature(BG_CREATURE_ENTRY_H_SPIRITGUIDE, spiritGuideSearchRadius, false);
+                spiritGuide = findGuideByEntry(BG_CREATURE_ENTRY_H_SPIRITGUIDE);
         }
 
         return spiritGuide;
