@@ -1809,6 +1809,17 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
 
     std::vector<PrioritizedSpellDecision> candidates;
 
+    bool const hasHostileTarget = HasHostileTarget(player, target);
+    Unit const* debuffedAlly = IsSpellReady(player, 988) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
+    Unit const* enemyBuffedTarget = (IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
+    Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f) : nullptr;
+    Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
+    Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
+    Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
+    Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
+
+    std::vector<PrioritizedSpellDecision> candidates;
+
     if (profileSelection.profile == ClassicClassProfile::PrimaryClassic)
     {
         AddDecisionCandidate(candidates, debuffedAlly, 46.0f,
