@@ -125,6 +125,10 @@ struct SpellDecision
     uint32 itemEntry = 0;
 };
 
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 22734;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT = 22328;
+
 struct TacticalDecision
 {
     char const* triggerName = nullptr;
@@ -258,6 +262,60 @@ bool IsSpellReady(Player const* player, uint32 spellId)
         return false;
 
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
+}
+
+uint32 SelectReadyKnownMountSpell(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    for (PlayerSpellMap::value_type const& knownSpellPair : player->GetSpellMap())
+    {
+        uint32 const spellId = knownSpellPair.first;
+        PlayerSpell const& knownSpell = knownSpellPair.second;
+        if (!knownSpell.active || knownSpell.disabled)
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo || spellInfo->IsPassive())
+            continue;
+        if (!spellInfo->HasAura(SPELL_AURA_MOUNTED) && spellInfo->Mechanic != MECHANIC_MOUNT)
+            continue;
+        if (!IsSpellReady(player, spellId))
+            continue;
+
+        return spellId;
+    }
+
+    return 0;
+}
+
+SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
+{
+    SpellDecision decision;
+    if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
+        return decision;
+
+    bool const needsFood = player->GetHealthPct() < 100.0f;
+    bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
+    bool const needsDrink = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
+
+    if (needsFood && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+        return { "eat", "recover health out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, playerbot::PvpClassSpellContext::TargetMode::Self };
+
+    if (needsDrink && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+        return { "drink", "recover mana out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
+
+    if (!player->IsOutdoors())
+        return decision;
+
+    if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+        return { "mount", "mount while outside and out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
+
+    if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
+        return { "mount", "mount while outside and out of combat", knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+
+    return decision;
 }
 
 bool HasHostileTarget(Player const* player, Unit const* target)
@@ -1341,6 +1399,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (!player)
         return decision;
 
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     Unit const* activeTarget = SelectCombatTarget(player);
     if (!HasHostileTarget(player, activeTarget))
         return decision;
@@ -1409,6 +1470,9 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     if (!player)
         return decision;
 
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, 8.0f);
     float const manaPct = player->GetPowerPct(POWER_MANA);
@@ -1460,6 +1524,9 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     SpellDecision decision;
     if (!player)
         return decision;
+
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
 
     if (profileSelection.profile == ClassicClassProfile::PrimaryClassic)
     {
@@ -1521,6 +1588,9 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     if (IsSpellReady(player, 29166))
         if (Unit const* lowManaAlly = SelectFriendlyLowManaTarget(player, 40.0f, 10.0f))
             if (!lowManaAlly->HasAura(29166))
@@ -1569,6 +1639,9 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     if (player->HealthBelowPct(20) && IsSpellReady(player, 1020))
         return { "paladin divine shield", "emergency immunity under lethal pressure", 1020, playerbot::PvpClassSpellContext::TargetMode::Self };
     if (!player->HasAura(19746) && IsSpellReady(player, 19746))
@@ -1609,6 +1682,12 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
 SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
 {
     SpellDecision decision;
+    if (!player)
+        return decision;
+
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     if (!HasHostileTarget(player, target))
         return decision;
 
@@ -1654,6 +1733,12 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
 SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
 {
     SpellDecision decision;
+    if (!player)
+        return decision;
+
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     if (!HasHostileTarget(player, target))
         return decision;
 
@@ -1707,6 +1792,12 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
 SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
 {
     SpellDecision decision;
+    if (!player)
+        return decision;
+
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     if (!HasHostileTarget(player, target))
         return decision;
 
@@ -1748,6 +1839,12 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
 SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
 {
     SpellDecision decision;
+    if (!player)
+        return decision;
+
+    if (SpellDecision const utilityDecision = SelectOutOfCombatEatDrinkOrMountSpell(player); utilityDecision.spellId)
+        return utilityDecision;
+
     if (!HasHostileTarget(player, target))
         return decision;
 
