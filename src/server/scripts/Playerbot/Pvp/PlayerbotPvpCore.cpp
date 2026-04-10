@@ -303,6 +303,16 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
     bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
 
+    // Recovery auras should naturally break on movement and should not linger
+    // once the corresponding resource has fully recovered.
+    if (Player* mutablePlayer = const_cast<Player*>(player))
+    {
+        if (hasEatAura && (mutablePlayer->isMoving() || !needsFood))
+            mutablePlayer->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+        if (hasDrinkAura && (mutablePlayer->isMoving() || !needsDrink))
+            mutablePlayer->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+    }
+
     // When both health and mana are missing, mirror real player behavior:
     // apply both food and drink so recovery happens in parallel.
     if (needsFood && needsDrink)

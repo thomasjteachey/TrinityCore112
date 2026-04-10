@@ -62,8 +62,8 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
-constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 22734;
-constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
+constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 
 bool IsRecoveringByEatingOrDrinking(Player const* player)
 {
