@@ -86,7 +86,7 @@ void ForcePlayerbotDismount(Player* player)
     player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK);
     player->RemoveAurasByType(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED);
     player->RemoveAurasByType(SPELL_AURA_MOD_MOUNTED_FLIGHT_SPEED_ALWAYS);
-    player->RemoveAurasByType(SPELL_AURA_MOD_FLIGHT_SPEED_MOUNTED_NOT_STACKING);
+    player->RemoveAurasByType(SPELL_AURA_MOD_FLIGHT_SPEED_NOT_STACK);
 
     player->UpdateSpeed(MOVE_RUN);
     player->UpdateSpeed(MOVE_SWIM);
