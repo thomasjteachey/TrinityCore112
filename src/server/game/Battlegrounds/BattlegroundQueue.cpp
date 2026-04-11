@@ -28,7 +28,55 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "WorldSession.h"
 #include "World.h"
+
+namespace
+{
+bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
+{
+    if (!ginfo)
+        return false;
+
+    for (auto const& playerEntry : ginfo->Players)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
+        if (!player)
+            continue;
+
+        WorldSession* session = player->GetSession();
+        if (!session || !session->IsVirtualSession())
+            return true;
+    }
+
+    return false;
+}
+
+bool RemoveOneVirtualPlayerFromTeam(Battleground* battleground, uint32 team)
+{
+    if (!battleground)
+        return false;
+
+    for (auto const& [memberGuid, bgPlayer] : battleground->GetPlayers())
+    {
+        if (bgPlayer.Team != team)
+            continue;
+
+        Player* candidate = ObjectAccessor::FindConnectedPlayer(memberGuid);
+        if (!candidate)
+            continue;
+
+        WorldSession* session = candidate->GetSession();
+        if (!session || !session->IsVirtualSession())
+            continue;
+
+        battleground->RemovePlayerAtLeave(memberGuid, true, true);
+        return true;
+    }
+
+    return false;
+}
+}
 
  /*********************************************************/
  /***            BATTLEGROUND QUEUE SYSTEM              ***/
@@ -449,6 +497,14 @@ bool BattlegroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, Battleground* bg,
     // set side if needed
     if (side)
         ginfo->Team = side;
+
+    // Let bots fully populate battlegrounds, but if a real player is now being invited
+    // and the target team is full, free exactly one slot by dropping a virtual-session actor.
+    if (bg && bg->isBattleground() && GroupHasRealPlayerInvitee(ginfo) && !bg->GetFreeSlotsForTeam(ginfo->Team))
+    {
+        if (!RemoveOneVirtualPlayerFromTeam(bg, ginfo->Team))
+            return false;
+    }
 
     if (!ginfo->IsInvitedToBGInstanceGUID)
     {
