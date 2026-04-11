@@ -654,6 +654,20 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
     {
+        if (!itemTarget && target && CanIssueFollowCommands(player))
+        {
+            if (castResult == SPELL_FAILED_OUT_OF_RANGE)
+            {
+                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            }
+            else if (castResult == SPELL_FAILED_TOO_CLOSE)
+            {
+                float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            }
+        }
+
         NotifySpellCastFailureToGameMasters(player, context, castResult);
         EnumText const reasonText = EnumUtils::ToString(castResult);
         failureReason = reasonText.Title;
