@@ -550,16 +550,18 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
-    if (!map)
-        return player->IsOutdoors();
+    // Keep mount checks aligned with reference behavior: require IsOutdoors and
+    // reject cases where the unit is clipping slightly below floor level (which
+    // can misreport outdoor state in battleground tunnels/bases).
+    if (!player->IsOutdoors())
+        return false;
 
-    PositionFullTerrainStatus terrainStatus;
-    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
-        terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    // Mount casts should be conservative: require both outdoor signals to avoid
-    // mounting in indoor edge locations where one check can be stale.
-    return player->IsOutdoors() && terrainStatus.outdoors;
+    float const posZ = player->GetPositionZ();
+    float const groundLevel = player->GetMapWaterOrGroundLevel(player->GetPositionX(), player->GetPositionY(), posZ);
+    if (!player->HasAuraType(SPELL_AURA_WATER_WALK) && posZ < groundLevel)
+        return false;
+
+    return true;
 }
 
 bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
@@ -571,7 +573,7 @@ bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
     if (!map)
         return false;
 
-    float const checkDistance = std::max(maxDistance, player->GetVisibilityRange());
+    float const checkDistance = std::max(maxDistance, 0.0f);
     for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
     {
         Player* candidate = itr->GetSource();
