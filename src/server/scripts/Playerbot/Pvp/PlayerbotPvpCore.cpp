@@ -653,10 +653,9 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     bool const inArenaMap = player->InArena();
     bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
 
-    // Mounting while an active PvP round is running creates behavior that
-    // diverges from reference check-mount-state logic. Keep recovery spells,
-    // but suppress new mount decisions in these contexts.
-    if (inActiveBattleground || inArenaMap || inActiveDuel)
+    // Keep arena and duel behavior conservative; battleground out-of-combat
+    // mounting is intentionally allowed for parity with reference bots.
+    if (inArenaMap || inActiveDuel)
         return decision;
 
     if (inBattlegroundPreparation)
@@ -2607,11 +2606,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         ResetCombatNoTargetTicks(player);
     }
 
-    if (player->IsMounted() && (player->IsInCombat() || inActiveBattleground))
+    // Reference parity: allow mounted travel in active battlegrounds when
+    // out of combat; only force mount-state correction while in combat.
+    if (player->IsMounted() && player->IsInCombat())
     {
         context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
         context.actionName = "check mount state";
-        context.reason = "mounted in combat context";
+        context.reason = "mounted in combat";
         context.shouldExecute = true;
         return context;
     }
