@@ -146,6 +146,7 @@ bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo);
 bool IsHardControlled(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
+bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance);
 
 float GetConfiguredSpellRange() { return g_PvpCoreConfig.spellRange; }
 float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
@@ -561,6 +562,31 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     return player->IsOutdoors() && terrainStatus.outdoors;
 }
 
+bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return false;
+
+    float const checkDistance = std::max(maxDistance, player->GetVisibilityRange());
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || candidate == player || !candidate->IsAlive())
+            continue;
+        if (!player->IsWithinDistInMap(candidate, checkDistance))
+            continue;
+        if (!player->IsValidAttackTarget(candidate))
+            continue;
+        return true;
+    }
+
+    return false;
+}
+
 bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
 {
     if (!player || !mountSpellInfo)
@@ -700,6 +726,11 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
         return decision;
 
     if (!IsStrictlyOutdoorsForMount(player))
+        return decision;
+
+    // Keep pressure logic responsive: don't choose an out-of-combat mount
+    // action while hostile players are already within practical engage range.
+    if (HasNearbyAttackableEnemyPlayer(player, 45.0f))
         return decision;
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
