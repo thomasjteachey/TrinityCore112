@@ -2483,11 +2483,26 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    Unit const* target = SelectCombatTarget(player);
-    bool const hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
+    Unit const* selectedTarget = SelectCombatTarget(player);
+    ObjectGuid const selectedTargetGuid = selectedTarget ? selectedTarget->GetGUID() : ObjectGuid::Empty;
+    auto resolveTargetByGuid = [&](ObjectGuid const& guid) -> Unit const*
+    {
+        if (guid.IsEmpty())
+            return nullptr;
+
+        Unit const* resolved = ObjectAccessor::GetUnit(*player, guid);
+        if (!resolved || !resolved->IsAlive() || resolved->GetGUID() == player->GetGUID())
+            return nullptr;
+
+        return resolved;
+    };
+    Unit const* target = resolveTargetByGuid(selectedTargetGuid);
+    bool const hasValidTarget = target != nullptr;
 
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
-    Unit const* allyTarget = SelectAllyTarget(player);
+    Unit const* selectedAllyTarget = SelectAllyTarget(player);
+    ObjectGuid const selectedAllyGuid = selectedAllyTarget ? selectedAllyTarget->GetGUID() : ObjectGuid::Empty;
+    Unit const* allyTarget = resolveTargetByGuid(selectedAllyGuid);
     if (player->GetClass() == CLASS_HUNTER)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
@@ -2500,14 +2515,20 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     SpellDecision decision;
     {
         DecisionEvaluationScope decisionScope(player, 0);
-        decision = SelectClassOrUtilitySpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+        Unit const* decisionTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* decisionAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+        decision = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
     }
 
-    if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, hasValidTarget ? target : nullptr, allyTarget))
+    Unit const* immediateCastTarget = resolveTargetByGuid(selectedTargetGuid);
+    Unit const* immediateCastAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+    if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, immediateCastTarget, immediateCastAllyTarget))
     {
         uint32 const initialDecisionSpellId = decision.spellId;
         DecisionEvaluationScope fallbackScope(player, decision.spellId);
-        SpellDecision const fallbackDecision = SelectClassOrUtilitySpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+        Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* fallbackAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+        SpellDecision const fallbackDecision = SelectClassOrUtilitySpell(player, fallbackTarget, fallbackAllyTarget, profileSelection);
         if (fallbackDecision.spellId)
         {
             decision = fallbackDecision;
