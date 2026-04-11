@@ -47,6 +47,7 @@
 #include "WorldSession.h"
 #include "Util.h"
 #include "Containers.h"
+#include "CommonHelpers.h"
 
 #include <cstring>
 #include <cmath>
@@ -1244,6 +1245,18 @@ CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
 {
     if (!player)
         return {};
+
+    if (Trinity::Helpers::Entity::IsPlayerHealer(player))
+    {
+        switch (player->GetClass())
+        {
+            case CLASS_PRIEST: return { 0.0f, 25.0f, 34.0f, true, false, false, "priest-healer" };
+            case CLASS_SHAMAN: return { 0.0f, 20.0f, 30.0f, true, false, true, "shaman-healer" };
+            case CLASS_DRUID: return { 0.0f, 18.0f, 28.0f, true, false, true, "druid-healer" };
+            case CLASS_PALADIN: return { 0.0f, 16.0f, 26.0f, true, false, true, "paladin-healer" };
+            default: break;
+        }
+    }
 
     switch (player->GetClass())
     {
