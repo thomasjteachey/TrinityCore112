@@ -2608,13 +2608,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         ResetCombatNoTargetTicks(player);
     }
 
-    // Reference parity: allow mounted travel in active battlegrounds when
-    // out of combat; only force mount-state correction while in combat.
-    if (player->IsMounted() && player->IsInCombat())
+    // Reference parity guard: never allow mounted state indoors. In addition,
+    // while in combat always force mount-state correction immediately.
+    if (player->IsMounted() && (!player->IsOutdoors() || player->IsInCombat()))
     {
         context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
         context.actionName = "check mount state";
-        context.reason = "mounted in combat";
+        context.reason = player->IsOutdoors() ? "mounted in combat" : "mounted indoors";
         context.shouldExecute = true;
         return context;
     }

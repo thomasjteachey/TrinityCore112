@@ -305,6 +305,22 @@ bool CanIssueFollowCommands(Player const* player)
     return true;
 }
 
+void ClearActiveMovementForControlLoss(Player* player)
+{
+    if (!player)
+        return;
+
+    player->StopMoving();
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    {
+        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        player->SendMovementFlagUpdate();
+    }
+}
+
 Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& context)
 {
     if (!player)
@@ -801,7 +817,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             return false;
 
         if (directiveNeedsTarget && !CanIssueFollowCommands(player))
+        {
+            if (IsCrowdControlledForAction(player))
+                ClearActiveMovementForControlLoss(player);
             return false;
+        }
 
         switch (context.movementDirective)
         {
