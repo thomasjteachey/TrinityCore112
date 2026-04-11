@@ -2448,6 +2448,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (!inActiveBattleground && !inBattlegroundPreparation && !inActiveDuel)
         return context;
 
+    // Safety guard: class-spell automation is temporarily disabled in active battleground combat
+    // while stabilizing crashes in target-selection/evaluation paths.
+    if (inActiveBattleground)
+        return context;
+
     if (inBattlegroundPreparation)
     {
         SpellDecision const prepDecision = SelectPreparationBuffSpell(player);
