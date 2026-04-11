@@ -87,6 +87,11 @@ void ClearActiveMovementForControlLoss(Player* player)
 
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
+    // Preserve server-owned confused movement (e.g. polymorph drift). Clearing
+    // active movement while confused pins the unit in place.
+    if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+        return;
+
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 }
@@ -110,25 +115,9 @@ bool g_StartupRevivePending = false;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
-    if (!player || !player->InBattleground())
-        return;
-
-    static std::unordered_map<uint64, uint32> nextEmitMsByGuid;
-    uint64 const botGuid = player->GetGUID().GetRawValue();
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    uint32& nextEmitMs = nextEmitMsByGuid[botGuid];
-    if (nowMs < nextEmitMs)
-        return;
-
-    nextEmitMs = nowMs + throttleMs;
-
-    std::ostringstream os;
-    os << "[PBDBG lifecycle] bot=" << player->GetName()
-       << " guid=" << player->GetGUID().ToString()
-       << " bgId=" << player->GetBattlegroundId()
-       << " detail=" << detail;
-    std::string const message = os.str();
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
+    (void)player;
+    (void)detail;
+    (void)throttleMs;
 }
 
 enum class LifecycleObservationReason : uint8
@@ -247,13 +236,15 @@ void ObserveLifecycleReason(LifecycleObservationReason reason, ObjectGuid const&
             break;
     }
 
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "Playerbot PvP lifecycle observation: reason={} guid={} count={}.",
-        reasonLabel, guid.ToString(), total);
+    (void)reasonLabel;
+    (void)guid;
+    (void)total;
 }
 
 void LogLifecycleBranchSummary(ObjectGuid const& guid, char const* branchLabel)
 {
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "Playerbot PvP lifecycle branch: guid={} branch={}.", guid.ToString(), branchLabel);
+    (void)guid;
+    (void)branchLabel;
 }
 
 bool CanProcessPlayerLifecycle(Player const* player)
