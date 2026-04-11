@@ -557,9 +557,10 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    // Mount casts should be conservative: require both outdoor signals to avoid
-    // mounting in indoor edge locations where one check can be stale.
-    return player->IsOutdoors() && terrainStatus.outdoors;
+    // Prefer permissive outdoor detection in battleground flow. Requiring both
+    // signals can incorrectly block valid WSG field mounts when one source
+    // briefly desynchronizes near terrain seams.
+    return player->IsOutdoors() || terrainStatus.outdoors;
 }
 
 bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
@@ -571,7 +572,7 @@ bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
     if (!map)
         return false;
 
-    float const checkDistance = std::max(maxDistance, player->GetVisibilityRange());
+    float const checkDistance = std::max(maxDistance, 0.0f);
     for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -730,7 +731,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 
     // Keep pressure logic responsive: don't choose an out-of-combat mount
     // action while hostile players are already within practical engage range.
-    if (HasNearbyAttackableEnemyPlayer(player, 45.0f))
+    if (!player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
         return decision;
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
