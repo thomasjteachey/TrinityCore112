@@ -2180,6 +2180,9 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
         return utilityDecision;
 
+    if (!HasHostileTarget(player, target) && !allyTarget)
+        return {};
+
     return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
 }
 
