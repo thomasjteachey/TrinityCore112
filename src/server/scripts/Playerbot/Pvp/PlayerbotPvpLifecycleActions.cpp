@@ -2186,6 +2186,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
 bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
+    (void)context;
+
     if (!player || !player->InBattleground())
         return false;
 
@@ -2204,8 +2206,8 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
-    if (context.movement != BattlegroundMovementPrimitive::None || context.objective.type != BattlegroundObjectiveType::None)
-        return true;
+    if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
+        return MoveTowardUnit(player, nearestEnemy, 20.0f);
 
     return false;
 }
