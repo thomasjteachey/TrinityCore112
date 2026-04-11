@@ -103,6 +103,29 @@ bool IsCrowdControlledForAction(Player const* player)
     return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
+bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !target->IsAlive())
+        return false;
+
+    if (target == player)
+        return true;
+
+    if (player->IsValidAssistTarget(target, spellInfo))
+        return true;
+
+    Player const* targetPlayer = target->ToPlayer();
+    if (!targetPlayer || !player->InBattleground() || !targetPlayer->InBattleground())
+        return false;
+
+    if (player->GetBattlegroundId() != targetPlayer->GetBattlegroundId())
+        return false;
+
+    uint32 const playerTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    uint32 const targetTeam = targetPlayer->GetBGTeam() ? targetPlayer->GetBGTeam() : targetPlayer->GetTeam();
+    return playerTeam == targetTeam;
+}
+
 struct WarlockCurseCooldownKey
 {
     ObjectGuid casterGuid;
@@ -285,7 +308,10 @@ void FinalizeVirtualNearTeleport(Player* player)
         return;
 
     uint32 const oldZone = player->GetZoneId();
-    WorldLocation const& dest = player->GetTeleportDest();
+    WorldLocation dest = player->GetTeleportDest();
+    float safeDestZ = dest.GetPositionZ();
+    player->UpdateAllowedPositionZ(dest.GetPositionX(), dest.GetPositionY(), safeDestZ);
+    dest.Relocate(dest.GetPositionX(), dest.GetPositionY(), safeDestZ, dest.GetOrientation());
 
     player->SetSemaphoreTeleportNear(false);
     player->UpdatePosition(dest, true);
@@ -522,7 +548,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
-        if (!player->IsValidAssistTarget(target, spellInfo))
+        if (!IsFriendlySupportTarget(player, target, spellInfo))
         {
             failureReason = "invalid_ally_target";
             return false;
@@ -654,6 +680,20 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
     {
+        if (!itemTarget && target && CanIssueFollowCommands(player))
+        {
+            if (castResult == SPELL_FAILED_OUT_OF_RANGE)
+            {
+                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            }
+            else if (castResult == SPELL_FAILED_TOO_CLOSE)
+            {
+                float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            }
+        }
+
         NotifySpellCastFailureToGameMasters(player, context, castResult);
         EnumText const reasonText = EnumUtils::ToString(castResult);
         failureReason = reasonText.Title;

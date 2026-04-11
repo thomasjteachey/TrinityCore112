@@ -105,7 +105,7 @@ bool IsLifecycleGateEnabled()
 using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
-constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
+constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(1500);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
@@ -406,7 +406,10 @@ void TryFinalizePendingVirtualBotTeleport(Player* player)
         if (player->IsBeingTeleportedNear())
         {
             uint32 const oldZone = player->GetZoneId();
-            WorldLocation const& dest = player->GetTeleportDest();
+            WorldLocation dest = player->GetTeleportDest();
+            float safeDestZ = dest.GetPositionZ();
+            player->UpdateAllowedPositionZ(dest.GetPositionX(), dest.GetPositionY(), safeDestZ);
+            dest.Relocate(dest.GetPositionX(), dest.GetPositionY(), safeDestZ, dest.GetOrientation());
             player->SetSemaphoreTeleportNear(false);
             player->UpdatePosition(dest, true);
             player->SetFallInformation(0, player->GetPositionZ());
