@@ -1331,7 +1331,27 @@ uint32 Battleground::GetFreeSlotsForTeam(uint32 Team) const
 
 bool Battleground::HasFreeSlots() const
 {
-    return GetPlayersSize() < GetMaxPlayers();
+    if (GetPlayersSize() < GetMaxPlayers())
+        return true;
+
+    // Treat virtual-session participants as replaceable occupancy for battlegrounds:
+    // this keeps full bot-populated matches in the free-slot queue so queued real
+    // players can displace one virtual actor on invite.
+    if (!isBattleground())
+        return false;
+
+    for (auto const& playerEntry : m_Players)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
+        if (!player)
+            continue;
+
+        WorldSession* session = player->GetSession();
+        if (session && session->IsVirtualSession())
+            return true;
+    }
+
+    return false;
 }
 
 void Battleground::BuildPvPLogDataPacket(WorldPacket& data)

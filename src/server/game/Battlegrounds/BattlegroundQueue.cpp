@@ -52,6 +52,30 @@ bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
     return false;
 }
 
+bool HasVirtualPlayerOnTeam(Battleground* battleground, uint32 team)
+{
+    if (!battleground)
+        return false;
+
+    for (auto const& [memberGuid, bgPlayer] : battleground->GetPlayers())
+    {
+        if (bgPlayer.Team != team)
+            continue;
+
+        Player* candidate = ObjectAccessor::FindConnectedPlayer(memberGuid);
+        if (!candidate)
+            continue;
+
+        WorldSession* session = candidate->GetSession();
+        if (!session || !session->IsVirtualSession())
+            continue;
+
+        return true;
+    }
+
+    return false;
+}
+
 bool RemoveOneVirtualPlayerFromTeam(Battleground* battleground, uint32 team)
 {
     if (!battleground)
@@ -596,12 +620,20 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
 
         if (addToHorde)
         {
-            if(!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeFree, TEAM_HORDE))
+            uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
+            if (!hordeDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
+                hordeDesired = 1;
+
+            if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeDesired, TEAM_HORDE))
                 break;
         }
         else
         {
-            if(!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), aliFree, TEAM_ALLIANCE))
+            uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
+            if (!allianceDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
+                allianceDesired = 1;
+
+            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), allianceDesired, TEAM_ALLIANCE))
                 break;
         }
         ++Ali_itr;
@@ -621,12 +653,20 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
 
         if (addToHorde)
         {
-            if(!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeFree, TEAM_HORDE))
+            uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
+            if (!hordeDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
+                hordeDesired = 1;
+
+            if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeDesired, TEAM_HORDE))
                 break;
         }
         else
         {
-            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), aliFree, TEAM_ALLIANCE))
+            uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
+            if (!allianceDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
+                allianceDesired = 1;
+
+            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), allianceDesired, TEAM_ALLIANCE))
                 break;
         }
         ++Horde_itr;
