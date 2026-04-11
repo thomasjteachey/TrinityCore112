@@ -502,9 +502,6 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
     std::string const message = oss.str();
 
     TC_LOG_WARN("playerbots.pvp.lifecycle", "{}", message);
-
-    if (WorldSession* session = player->GetSession())
-        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
@@ -535,8 +532,6 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     std::string const message = os.str();
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
-    if (WorldSession* session = bot->GetSession())
-        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
@@ -633,7 +628,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     else if (!botCurrentlyMoving && player->InBattleground() &&
         currentMovement != IDLE_MOTION_TYPE &&
         currentMovement != CHASE_MOTION_TYPE &&
-        currentMovement != POINT_MOTION_TYPE)
+        currentMovement != POINT_MOTION_TYPE &&
+        currentMovement != CONFUSED_MOTION_TYPE)
     {
         // Some stale movement generators can block new MovePoint while actor is
         // stationary. Clear them before reissuing battleground movement.
@@ -2072,6 +2068,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         case CHASE_MOTION_TYPE:
         case POINT_MOTION_TYPE:
         case FOLLOW_MOTION_TYPE:
+        case CONFUSED_MOTION_TYPE:
             break;
         default:
         {
