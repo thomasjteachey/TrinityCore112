@@ -145,6 +145,7 @@ playerbot::PvpCoreConfig g_PvpCoreConfig;
 bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo);
 bool IsHardControlled(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
+bool IsStrictlyOutdoorsForMount(Player const* player);
 
 float GetConfiguredSpellRange() { return g_PvpCoreConfig.spellRange; }
 float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
@@ -538,7 +539,26 @@ bool IsEffectivelyOutdoors(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    return terrainStatus.outdoors;
+    // Travel-state checks should tolerate brief map flag flickers around
+    // battleground ramps/fences, so treat either signal as outdoors.
+    return player->IsOutdoors() || terrainStatus.outdoors;
+}
+
+bool IsStrictlyOutdoorsForMount(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return player->IsOutdoors();
+
+    PositionFullTerrainStatus terrainStatus;
+    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
+    // Mount casts should be conservative: require both outdoor signals to avoid
+    // mounting in indoor edge locations where one check can be stale.
+    return player->IsOutdoors() && terrainStatus.outdoors;
 }
 
 bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
@@ -679,7 +699,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (inBattlegroundPreparation)
         return decision;
 
-    if (!IsEffectivelyOutdoors(player))
+    if (!IsStrictlyOutdoorsForMount(player))
         return decision;
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
