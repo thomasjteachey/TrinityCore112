@@ -1362,9 +1362,6 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
         return !dispelList.empty();
     };
 
-    if (hasDispellableCurse(player))
-        return player;
-
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
     Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
@@ -1388,7 +1385,10 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
         }
     }
 
-    return best;
+    if (best)
+        return best;
+
+    return hasDispellableCurse(player) ? player : nullptr;
 }
 
 Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
@@ -1533,6 +1533,7 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
         return nullptr;
 
     Unit const* best = nullptr;
+    Unit const* selfCandidate = nullptr;
     float bestHealth = 101.0f;
     float bestDistance = std::numeric_limits<float>::max();
 
@@ -1550,6 +1551,12 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
             return;
 
         float const distance = player->GetDistance(candidate);
+        if (candidate == player)
+        {
+            selfCandidate = player;
+            return;
+        }
+
         if (healthPct < bestHealth || (std::abs(healthPct - bestHealth) < 0.1f && distance < bestDistance))
         {
             best = candidate;
@@ -1564,7 +1571,7 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         evaluateCandidate(itr->GetSource());
 
-    return best;
+    return best ? best : selfCandidate;
 }
 
 Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelType, float maxDistance)
@@ -1581,9 +1588,6 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
         target->GetDispellableAuraList(player, (1 << dispelType), dispelList);
         return !dispelList.empty();
     };
-
-    if (hasDispellableAura(player))
-        return player;
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
@@ -1608,7 +1612,10 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
         }
     }
 
-    return best;
+    if (best)
+        return best;
+
+    return hasDispellableAura(player) ? player : nullptr;
 }
 
 Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, float maxDistance)
@@ -2824,7 +2831,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.allyTargetGuid = hasValidAllyTarget ? selectedAllyGuid : ObjectGuid::Empty;
     if (!decision.targetGuid.IsEmpty())
         context.targetGuid = decision.targetGuid;
-    if (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+    if (context.targetMode == PvpClassSpellContext::TargetMode::Ally && context.targetGuid.IsEmpty())
         context.targetGuid = context.allyTargetGuid;
     else if (context.targetMode == PvpClassSpellContext::TargetMode::Self)
         context.targetGuid = player->GetGUID();
