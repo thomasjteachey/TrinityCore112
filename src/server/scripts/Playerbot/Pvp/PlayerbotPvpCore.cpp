@@ -558,7 +558,7 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
 
     float const posZ = player->GetPositionZ();
     float const groundLevel = player->GetMapWaterOrGroundLevel(player->GetPositionX(), player->GetPositionY(), posZ);
-    if (!player->HasWaterWalkAura() && posZ < groundLevel)
+    if (!player->HasAuraType(SPELL_AURA_WATER_WALK) && posZ < groundLevel)
         return false;
 
     return true;
