@@ -60,10 +60,6 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    bool const hasControlledMovement = motionMaster &&
-        motionMaster->GetMotionSlotType(MOTION_SLOT_CONTROLLED) != NULL_MOTION_TYPE;
-
     return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
@@ -823,7 +819,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 Position destination = player->GetPosition();
                 float const fleeDistance = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : PvpCore::GetConfig().closeRange);
-                float const angleToTarget = player->GetAngle(movementTarget);
+                float const angleToTarget = player->GetAbsoluteAngle(movementTarget->GetPosition());
                 destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * fleeDistance,
                     std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
                 player->GetMotionMaster()->MovePoint(0, destination, true);

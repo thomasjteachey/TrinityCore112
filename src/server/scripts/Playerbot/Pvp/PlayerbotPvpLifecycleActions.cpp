@@ -189,10 +189,6 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    bool const hasControlledMovement = motionMaster &&
-        motionMaster->GetMotionSlotType(MOTION_SLOT_CONTROLLED) != NULL_MOTION_TYPE;
-
     return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
