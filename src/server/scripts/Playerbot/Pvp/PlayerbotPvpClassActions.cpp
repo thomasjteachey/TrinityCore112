@@ -308,7 +308,10 @@ void FinalizeVirtualNearTeleport(Player* player)
         return;
 
     uint32 const oldZone = player->GetZoneId();
-    WorldLocation const& dest = player->GetTeleportDest();
+    WorldLocation dest = player->GetTeleportDest();
+    float safeDestZ = dest.GetPositionZ();
+    player->UpdateAllowedPositionZ(dest.GetPositionX(), dest.GetPositionY(), safeDestZ);
+    dest.Relocate(dest.GetPositionX(), dest.GetPositionY(), safeDestZ, dest.GetOrientation());
 
     player->SetSemaphoreTeleportNear(false);
     player->UpdatePosition(dest, true);
