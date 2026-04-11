@@ -804,12 +804,20 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
             if (!shareDamageTarget)
                 continue;
             SpellInfo const* spell = (*i)->GetSpellInfo();
+            SpellSchoolMask const redirectedSchoolMask = (*i)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID ? SPELL_SCHOOL_MASK_NORMAL : spell->GetSchoolMask();
 
             uint32 share = CalculatePct(damage, (*i)->GetAmount());
 
+            // Allow ally mitigation/copy behavior while preventing redirected damage on immune targets.
+            if (shareDamageTarget->IsImmunedToDamage(redirectedSchoolMask))
+            {
+                victim->SendSpellMiss(shareDamageTarget, spell->Id, SPELL_MISS_IMMUNE);
+                continue;
+            }
+
             /// @todo check packets if damage is done by victim, or by attacker of victim
             Unit::DealDamageMods(shareDamageTarget, share, nullptr);
-            Unit::DealDamage(attacker, shareDamageTarget, share, nullptr, NODAMAGE, spell->GetSchoolMask(), spell, false);
+            Unit::DealDamage(attacker, shareDamageTarget, share, nullptr, NODAMAGE, redirectedSchoolMask, spell, false);
         }
     }
 
@@ -2013,8 +2021,10 @@ void Unit::HandleEmoteCommand(Emote emoteId)
 
             damageInfo.AbsorbDamage(splitDamage);
 
-            // check if caster is immune to damage
-            if (caster->IsImmunedToDamage(damageInfo.GetSchoolMask()))
+            SpellSchoolMask const redirectedSchoolMask = (*itr)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID ? SPELL_SCHOOL_MASK_NORMAL : damageInfo.GetSchoolMask();
+
+            // check if caster is immune to redirected damage
+            if (caster->IsImmunedToDamage(redirectedSchoolMask))
             {
                 damageInfo.GetVictim()->SendSpellMiss(caster, (*itr)->GetSpellInfo()->Id, SPELL_MISS_IMMUNE);
                 continue;
@@ -2025,10 +2035,10 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             Unit::DealDamageMods(caster, splitted, &splitted_absorb);
 
             if (Unit* attacker = damageInfo.GetAttacker())
-                attacker->SendSpellNonMeleeDamageLog(caster, (*itr)->GetSpellInfo()->Id, splitted, damageInfo.GetSchoolMask(), splitted_absorb, 0, damageInfo.GetDamageType() == DOT, 0, false, true);
+                attacker->SendSpellNonMeleeDamageLog(caster, (*itr)->GetSpellInfo()->Id, splitted, redirectedSchoolMask, splitted_absorb, 0, damageInfo.GetDamageType() == DOT, 0, false, true);
 
             CleanDamage cleanDamage = CleanDamage(splitted, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
-            Unit::DealDamage(damageInfo.GetAttacker(), caster, splitted, &cleanDamage, DIRECT_DAMAGE, damageInfo.GetSchoolMask(), (*itr)->GetSpellInfo(), false);
+            Unit::DealDamage(damageInfo.GetAttacker(), caster, splitted, &cleanDamage, DIRECT_DAMAGE, redirectedSchoolMask, (*itr)->GetSpellInfo(), false);
         }
 
         // We're going to call functions which can modify content of the list during iteration over it's elements
@@ -2063,8 +2073,10 @@ void Unit::HandleEmoteCommand(Emote emoteId)
 
             damageInfo.AbsorbDamage(splitDamage);
 
-            // check if caster is immune to damage
-            if (caster->IsImmunedToDamage(damageInfo.GetSchoolMask()))
+            SpellSchoolMask const redirectedSchoolMask = (*itr)->GetId() == PARTY_DAMAGE_REDIRECT_SPELL_ID ? SPELL_SCHOOL_MASK_NORMAL : damageInfo.GetSchoolMask();
+
+            // check if caster is immune to redirected damage
+            if (caster->IsImmunedToDamage(redirectedSchoolMask))
             {
                 damageInfo.GetVictim()->SendSpellMiss(caster, (*itr)->GetSpellInfo()->Id, SPELL_MISS_IMMUNE);
                 continue;
@@ -2074,10 +2086,10 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             Unit::DealDamageMods(caster, splitDamage, &split_absorb);
 
             if (Unit* attacker = damageInfo.GetAttacker())
-                attacker->SendSpellNonMeleeDamageLog(caster, (*itr)->GetSpellInfo()->Id, splitDamage, damageInfo.GetSchoolMask(), split_absorb, 0, damageInfo.GetDamageType() == DOT, 0, false, true);
+                attacker->SendSpellNonMeleeDamageLog(caster, (*itr)->GetSpellInfo()->Id, splitDamage, redirectedSchoolMask, split_absorb, 0, damageInfo.GetDamageType() == DOT, 0, false, true);
 
             CleanDamage cleanDamage = CleanDamage(splitDamage, 0, BASE_ATTACK, MELEE_HIT_NORMAL);
-            Unit::DealDamage(damageInfo.GetAttacker(), caster, splitDamage, &cleanDamage, DIRECT_DAMAGE, damageInfo.GetSchoolMask(), (*itr)->GetSpellInfo(), false);
+            Unit::DealDamage(damageInfo.GetAttacker(), caster, splitDamage, &cleanDamage, DIRECT_DAMAGE, redirectedSchoolMask, (*itr)->GetSpellInfo(), false);
 
             // break 'Fear' and similar auras
             Unit::ProcSkillsAndAuras(damageInfo.GetAttacker(), caster, PROC_FLAG_NONE, PROC_FLAG_TAKEN_SPELL_MAGIC_DMG_CLASS_NEG, PROC_SPELL_TYPE_DAMAGE, PROC_SPELL_PHASE_HIT, PROC_HIT_NONE, nullptr, &damageInfo, nullptr);
