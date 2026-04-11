@@ -60,12 +60,18 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    bool const hasControlledMovement = motionMaster &&
+        motionMaster->GetMotionSlotType(MOTION_SLOT_CONTROLLED) != NULL_MOTION_TYPE;
+
+    return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
         player->HasAuraWithMechanic(ccMechanicMask) ||
-        player->IsPolymorphed();
+        player->IsPolymorphed() ||
+        hasControlledMovement;
 }
 
 struct WarlockCurseCooldownKey
@@ -290,7 +296,8 @@ bool CanIssueFollowCommands(Player const* player)
     if (!player || !player->IsAlive())
         return false;
 
-    if (player->HasUnitState(UNIT_STATE_ROOT) ||
+    if (IsCrowdControlledForAction(player) ||
+        player->HasUnitState(UNIT_STATE_ROOT) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING))
@@ -812,10 +819,16 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     player->GetFollowAngle());
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
-                player->GetMotionMaster()->MoveFollow(movementTarget, std::max(1.0f,
-                    context.movementFollowRange > 0.0f ? context.movementFollowRange : PvpCore::GetConfig().closeRange),
-                    player->GetFollowAngle());
+            {
+                Position destination = player->GetPosition();
+                float const fleeDistance = std::max(1.0f,
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : PvpCore::GetConfig().closeRange);
+                float const angleToTarget = player->GetAngle(movementTarget);
+                destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * fleeDistance,
+                    std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
+                player->GetMotionMaster()->MovePoint(0, destination, true);
                 break;
+            }
             case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
                 player->SetFacingToObject(movementTarget);
                 player->SetInFront(movementTarget);
@@ -840,7 +853,9 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
 
         TC_LOG_DEBUG("playerbots.pvp.class",
             "Playerbot PvP movement directive executed: action={} target_guid={} directive={}.",
-            context.actionName ? context.actionName : "none", movementTarget->GetGUID().ToString(), static_cast<uint8>(context.movementDirective));
+            context.actionName ? context.actionName : "none",
+            movementTarget ? movementTarget->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+            static_cast<uint8>(context.movementDirective));
         return true;
     }
 
