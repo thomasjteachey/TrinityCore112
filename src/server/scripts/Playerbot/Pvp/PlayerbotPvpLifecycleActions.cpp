@@ -103,6 +103,31 @@ bool IsEffectivelyOutdoors(Player const* player)
     return player->IsOutdoors() || terrainStatus.outdoors;
 }
 
+bool ShouldForceIndoorDismount(Player const* player, bool outdoors, uint32 lingerMs = 1500)
+{
+    if (!player)
+        return false;
+
+    static std::unordered_map<uint64, uint32> indoorSinceMsByGuid;
+    uint64 const guid = player->GetGUID().GetRawValue();
+
+    if (outdoors)
+    {
+        indoorSinceMsByGuid.erase(guid);
+        return false;
+    }
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    auto itr = indoorSinceMsByGuid.find(guid);
+    if (itr == indoorSinceMsByGuid.end())
+    {
+        indoorSinceMsByGuid.emplace(guid, nowMs);
+        return false;
+    }
+
+    return nowMs >= itr->second + lingerMs;
+}
+
 bool IsRecoveringByEatingOrDrinking(Player const* player)
 {
     if (!player || !player->IsAlive() || player->IsInCombat())
@@ -2042,7 +2067,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->IsMounted() && !IsEffectivelyOutdoors(player))
+    bool const outdoors = IsEffectivelyOutdoors(player);
+    if (player->IsMounted() && ShouldForceIndoorDismount(player, outdoors))
         ForcePlayerbotDismount(player);
 
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())

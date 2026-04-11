@@ -564,6 +564,31 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     return true;
 }
 
+bool ShouldForceIndoorDismount(Player const* player, bool outdoors, uint32 lingerMs = 1500)
+{
+    if (!player)
+        return false;
+
+    static std::unordered_map<uint64, uint32> indoorSinceMsByGuid;
+    uint64 const guid = player->GetGUID().GetRawValue();
+
+    if (outdoors)
+    {
+        indoorSinceMsByGuid.erase(guid);
+        return false;
+    }
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    auto itr = indoorSinceMsByGuid.find(guid);
+    if (itr == indoorSinceMsByGuid.end())
+    {
+        indoorSinceMsByGuid.emplace(guid, nowMs);
+        return false;
+    }
+
+    return nowMs >= itr->second + lingerMs;
+}
+
 bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
 {
     if (!player || !player->IsInWorld())
@@ -2680,11 +2705,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // Reference parity guard: never allow mounted state indoors. In addition,
     // while in combat always force mount-state correction immediately.
     bool const outdoors = IsEffectivelyOutdoors(player);
-    if (player->IsMounted() && (!outdoors || player->IsInCombat()))
+    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
+    if (player->IsMounted() && (sustainedIndoorMounted || player->IsInCombat()))
     {
         context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
         context.actionName = "check mount state";
-        context.reason = outdoors ? "mounted in combat" : "mounted indoors";
+        context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
         context.shouldExecute = true;
         return context;
     }
