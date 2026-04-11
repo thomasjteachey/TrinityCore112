@@ -52,6 +52,8 @@ bool HasHostileTarget(Player const* player, Unit const* target);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
+constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
+constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -2606,13 +2608,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         ResetCombatNoTargetTicks(player);
     }
 
-    // Reference parity: allow mounted travel in active battlegrounds when
-    // out of combat; only force mount-state correction while in combat.
-    if (player->IsMounted() && player->IsInCombat())
+    // Reference parity guard: never allow mounted state indoors. In addition,
+    // while in combat always force mount-state correction immediately.
+    if (player->IsMounted() && (!player->IsOutdoors() || player->IsInCombat()))
     {
         context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
         context.actionName = "check mount state";
-        context.reason = "mounted in combat";
+        context.reason = player->IsOutdoors() ? "mounted in combat" : "mounted indoors";
         context.shouldExecute = true;
         return context;
     }
@@ -2765,7 +2767,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             float const distance = player->GetDistance(spacingTarget);
             float const maxRange = spellInfo->GetMaxRange(false);
             float const minRange = spellInfo->GetMinRange(false);
-            if (maxRange > 0.0f && distance > maxRange)
+            if (maxRange > 0.0f && distance > (maxRange + kRangedSpacingEnterOutOfRangeBuffer))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
                     std::max(1.0f, maxRange - 1.0f), "reach spell", "selected spell out of range", 84.0f);
@@ -2775,7 +2777,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 context.targetGuid = ObjectGuid::Empty;
                 context.selfCast = false;
             }
-            else if (minRange > 0.0f && distance < minRange)
+            else if (minRange > 0.0f && distance < std::max(0.0f, minRange - kRangedSpacingEnterTooCloseBuffer))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
                     std::max(1.0f, GetConfiguredCloseRange()), "flee", "selected spell minimum range violation", 84.0f);
@@ -2797,12 +2799,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (movementTarget)
         {
             float const distance = player->GetDistance(movementTarget);
-            if (distance > GetConfiguredSpellRange())
+            if (distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
                     std::max(1.0f, GetConfiguredSpellRange() - 1.0f), "reach spell", "enemy out of spell range", 70.0f);
             }
-            else if (distance < GetConfiguredMeleeRange())
+            else if (distance < std::max(0.0f, GetConfiguredMeleeRange() - kRangedSpacingEnterTooCloseBuffer))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, movementTarget->GetGUID(),
                     std::max(1.0f, GetConfiguredCloseRange()), "flee", "enemy too close for spell", 71.0f);
