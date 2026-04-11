@@ -168,7 +168,7 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, ui
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
 bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
-bool CanIssueBotMovement(Player const* player);
+bool CanIssueBotMovement(Player* player);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
 
@@ -189,12 +189,15 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+    bool const hasLostControlState = player->HasUnitState(UNIT_STATE_LOST_CONTROL);
+    bool const hasHardCcState = player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
-        player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasUnitState(UNIT_STATE_FLEEING);
+    bool const hasCcAura = player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
         player->HasAuraWithMechanic(ccMechanicMask) ||
         player->IsPolymorphed();
+
+    return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
@@ -521,12 +524,32 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
         ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
 }
 
-bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
+bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
 {
     if (!player)
         return false;
 
+    static std::unordered_map<uint64, uint32> nextAllowedMoveCommandMsByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& nextAllowedMs = nextAllowedMoveCommandMsByGuid[botGuid];
+    if (nowMs < nextAllowedMs)
+        return false;
+
+    nextAllowedMs = nowMs + cooldownMs;
+    return true;
+}
+
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
+{
+    if (!player)
+        return false;
+    if (!CanIssueMovementCommand(player, 500))
+        return false;
+
     ClearEatDrinkAurasForMovement(player);
+
+    minReissueMs = std::max<uint32>(minReissueMs, 2000);
 
     if (IsWarsongGulch(player))
         minReissueMs = std::max<uint32>(minReissueMs, 2000);
@@ -1097,13 +1120,34 @@ bool IsTacticalAction(char const* actionName, char const* expected)
     return actionName && expected && std::strcmp(actionName, expected) == 0;
 }
 
-bool CanIssueBotMovement(Player const* player)
+void ClearActiveMovementForControlLoss(Player* player)
+{
+    if (!player)
+        return;
+
+    player->StopMoving();
+    player->AttackStop();
+    player->SetSelection(ObjectGuid::Empty);
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    {
+        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        player->SendMovementFlagUpdate();
+    }
+}
+
+bool CanIssueBotMovement(Player* player)
 {
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
     if (IsCrowdControlledForAction(player))
+    {
+        ClearActiveMovementForControlLoss(player);
         return false;
+    }
 
     if (player->HasUnitState(UNIT_STATE_ROOT) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
@@ -1199,6 +1243,8 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
 {
     if (!player || !target || !CanIssueBotMovement(player))
         return false;
+    if (!CanIssueMovementCommand(player, 500))
+        return false;
 
     float const angleAway = target->GetAbsoluteAngle(player);
     float const currentDistance = player->GetDistance(target);
@@ -1214,6 +1260,8 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
 bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
 {
     if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
+        return false;
+    if (!CanIssueMovementCommand(player, 500))
         return false;
 
     if (player->IsWithinLOSInMap(target))
@@ -1313,6 +1361,8 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
         target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
         player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
     {
+        if (!CanIssueMovementCommand(player, 500))
+            return false;
         ClearEatDrinkAurasForMovement(player);
         player->GetMotionMaster()->MovePoint(0, target->GetPosition(), false);
         return true;
@@ -1320,6 +1370,8 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
     {
+        if (!CanIssueMovementCommand(player, 500))
+            return false;
         ClearEatDrinkAurasForMovement(player);
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
     }
@@ -1588,6 +1640,8 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
         if (distance > profile.preferredMaxPressureRange)
         {
+            if (!CanIssueMovementCommand(player, 500))
+                return true;
             player->GetMotionMaster()->MoveFollow(target, profile.preferredIdealRange, player->GetFollowAngle());
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP distance band: bot={} profile={} decision=close-distance distance={} min={} ideal={} max={}.",
@@ -1615,6 +1669,8 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
     if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
     {
+        if (!CanIssueMovementCommand(player, 500))
+            return true;
         player->GetMotionMaster()->MoveChase(target);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={}.",
