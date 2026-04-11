@@ -54,6 +54,8 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
+std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
+std::mutex g_CombatNoTargetTicksByBotLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
@@ -113,6 +115,26 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
             player->GetGUID().ToString(), target->GetGUID().ToString(), previousRangedMode ? "ranged" : "melee",
             rangedMode ? "ranged" : "melee", distance, target->GetVictim() == player ? 1 : 0);
     }
+}
+
+uint8 IncrementCombatNoTargetTicks(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    std::lock_guard<std::mutex> lock(g_CombatNoTargetTicksByBotLock);
+    uint8& ticks = g_CombatNoTargetTicksByBot[player->GetGUID()];
+    ticks = std::min<uint8>(static_cast<uint8>(ticks + 1), static_cast<uint8>(20));
+    return ticks;
+}
+
+void ResetCombatNoTargetTicks(Player const* player)
+{
+    if (!player)
+        return;
+
+    std::lock_guard<std::mutex> lock(g_CombatNoTargetTicksByBotLock);
+    g_CombatNoTargetTicksByBot.erase(player->GetGUID());
 }
 
 SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget);
@@ -205,6 +227,7 @@ struct SpellDecision
     playerbot::PvpClassSpellContext::TargetMode targetMode = playerbot::PvpClassSpellContext::TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;
     uint32 itemEntry = 0;
+    char const* triggerName = nullptr;
 };
 
 struct PrioritizedSpellDecision
@@ -212,6 +235,10 @@ struct PrioritizedSpellDecision
     float priority = 0.0f;
     SpellDecision decision;
 };
+
+bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& decision, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget);
+SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpellDecision>& candidates, Player const* player,
+    Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget);
 
 SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget)
 {
@@ -258,7 +285,33 @@ void AddDecisionCandidate(std::vector<PrioritizedSpellDecision>& candidates, boo
     candidates.push_back({ priority, decision });
 }
 
-SpellDecision SelectHighestPriorityDecision(std::vector<PrioritizedSpellDecision>& candidates)
+struct SpellTriggerRule
+{
+    char const* triggerName = nullptr;
+    bool condition = false;
+    float priority = 0.0f;
+    SpellDecision decision;
+};
+
+SpellDecision SelectFromTriggerGraph(Player const* player, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget,
+    std::initializer_list<SpellTriggerRule> rules)
+{
+    std::vector<PrioritizedSpellDecision> candidates;
+    candidates.reserve(rules.size());
+
+    for (SpellTriggerRule const& rule : rules)
+    {
+        SpellDecision decision = rule.decision;
+        if (!decision.triggerName)
+            decision.triggerName = rule.triggerName;
+        AddDecisionCandidate(candidates, rule.condition, rule.priority, decision);
+    }
+
+    return SelectHighestPriorityCastableDecision(candidates, player, defaultEnemyTarget, defaultAllyTarget);
+}
+
+SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpellDecision>& candidates, Player const* player,
+    Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget)
 {
     if (candidates.empty())
         return {};
@@ -268,6 +321,14 @@ SpellDecision SelectHighestPriorityDecision(std::vector<PrioritizedSpellDecision
         return left.priority > right.priority;
     });
 
+    if (!player)
+        return candidates.front().decision;
+
+    for (PrioritizedSpellDecision const& candidate : candidates)
+        if (IsDecisionImmediatelyCastable(player, candidate.decision, defaultEnemyTarget, defaultAllyTarget))
+            return candidate.decision;
+
+    // Preserve highest-priority fallback so execution can still drive movement/range correction.
     return candidates.front().decision;
 }
 
@@ -1752,7 +1813,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     AddDecisionCandidate(candidates, enemyOnTop && closeMeleeThreat && !IsSpellReady(player, 19503) && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19263), 13.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
 SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inMelee)
@@ -1769,41 +1830,41 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     Unit const* polymorphTarget =
         (IsSpellReady(player, 12826) && !AnyEnemyPolymorphed(player, 40.0f)) ? SelectPolymorphTarget(player, target, 30.0f) : nullptr;
 
-    std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
-        { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, closePressure && IsSpellReady(player, 1953), 45.0f,
-        { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, castingTarget && IsSpellReady(player, 2139), 44.0f,
-        { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget ? castingTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, closePressure && IsSpellReady(player, 10230), 43.0f,
-        { "mage frost nova", "close defensive peel", 10230, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, closePressure && target && IsMeleeClass(target) && IsSpellReady(player, 10161), 42.0f,
-        { "mage cone of cold", "defensive snare versus nearby melee", 10161, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, manaPct < 25.0f && IsSpellReady(player, 12051), 41.0f,
-        { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, manaPct < 50.0f && player->HasItemCount(8008), 40.0f,
-        { "use mana ruby", "consume mana ruby below 50 percent mana", 22044, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 8008 });
-    AddDecisionCandidate(candidates, cursedTarget, 39.0f,
-        { "remove lesser curse", "dispel curse from friendly target", 475, (cursedTarget == player) ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 13033) && IsSpellReady(player, 13033), 35.0f,
-        { "mage ice barrier", "maintain defensive absorb shield", 13033, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && target->HealthBelowPct(20) && IsSpellReady(player, 10199), 30.0f,
-        { "mage fire blast", "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, polymorphTarget, 29.0f,
-        { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, hasHostileTarget && IsSpellReady(player, 25304), 18.0f,
-        { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157), 10.0f,
-        { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
-        { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
-        { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
-        { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self });
-
-    return SelectHighestPriorityDecision(candidates);
+    return SelectFromTriggerGraph(player, target, nullptr,
+    {
+        { "critical health", player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
+            { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
+            { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
+            { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget ? castingTarget->GetGUID() : ObjectGuid::Empty } },
+        { "enemy too close for spell", closePressure && IsSpellReady(player, 10230), 43.0f,
+            { "mage frost nova", "close defensive peel", 10230, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "enemy too close for spell", closePressure && target && IsMeleeClass(target) && IsSpellReady(player, 10161), 42.0f,
+            { "mage cone of cold", "defensive snare versus nearby melee", 10161, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "low mana", manaPct < 25.0f && IsSpellReady(player, 12051), 41.0f,
+            { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "high mana", manaPct < 50.0f && player->HasItemCount(8008), 40.0f,
+            { "use mana ruby", "consume mana ruby below 50 percent mana", 22044, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 8008 } },
+        { "remove curse", cursedTarget, 39.0f,
+            { "remove lesser curse", "dispel curse from friendly target", 475, (cursedTarget == player) ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty } },
+        { "ice barrier", !HasAuraFromSpellChain(player, 13033) && IsSpellReady(player, 13033), 35.0f,
+            { "mage ice barrier", "maintain defensive absorb shield", 13033, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "enemy low health", hasHostileTarget && target && target->HealthBelowPct(20) && IsSpellReady(player, 10199), 30.0f,
+            { "mage fire blast", "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "polymorph", polymorphTarget, 29.0f,
+            { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
+        { "default ranged", hasHostileTarget && IsSpellReady(player, 25304), 18.0f,
+            { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157), 10.0f,
+            { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
+            { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mana gem missing", IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
+            { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "defensive reset", !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
+            { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self } }
+    });
 }
 
 SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
@@ -1858,7 +1919,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     AddDecisionCandidate(candidates, IsSpellReady(player, 10917) && player->HealthBelowPct(85), 17.0f,
         { "priest flash heal", "fallback self-healing while under pressure", 10917, playerbot::PvpClassSpellContext::TargetMode::Self });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
 }
 
 SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
@@ -1902,7 +1963,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates, player->HasAura(5487) && meleeThreat && IsSpellReady(player, 16979), 28.0f,
         { "druid feral charge", "charge away from melee pressure in bear form", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
 SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
@@ -1945,7 +2006,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(25898) && IsSpellReady(player, 25898), 19.0f,
         { "paladin greater blessing of kings", "maintain kings out of combat", 25898, playerbot::PvpClassSpellContext::TargetMode::Self });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
 SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
@@ -1999,7 +2060,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates, IsSpellReady(player, 25307), 19.0f,
         { "warlock shadow bolt", "default ranged pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
 SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
@@ -2058,7 +2119,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 1680), 36.0f,
         { "warrior whirlwind", "fallback aoe melee pressure", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget->GetGUID() });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, activeTarget, nullptr);
 }
 
 SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
@@ -2097,7 +2158,7 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates, IsSpellReady(player, 16511), 20.0f,
         { "rogue hemorrhage", "default subtlety combo point builder", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
 SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
@@ -2136,7 +2197,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates, IsSpellReady(player, 15208), 39.0f,
         { "shaman lightning bolt", "fallback ranged damage cast", 15208, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
-    return SelectHighestPriorityDecision(candidates);
+    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
 SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
@@ -2208,6 +2269,65 @@ char const* GetClassLabel(uint8 classId)
         case CLASS_DEATH_KNIGHT: return "DeathKnight";
         default: return "UnknownClass";
     }
+}
+
+bool IsPrimaryRangedClassForSpacing(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_HUNTER:
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+        case CLASS_SHAMAN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool CanUseHealRangeSpacing(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_PRIEST:
+        case CLASS_PALADIN:
+        case CLASS_DRUID:
+        case CLASS_SHAMAN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsPrimaryMeleeClassForSpacing(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+        case CLASS_PALADIN:
+        case CLASS_DRUID:
+        case CLASS_DEATH_KNIGHT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void ConsiderMovementDirective(playerbot::PvpClassSpellContext& context, playerbot::PvpClassSpellContext::MovementDirective directive,
+    ObjectGuid targetGuid, float followRange, char const* actionName, char const* reason, float priority)
+{
+    if (priority < context.movementPriority)
+        return;
+
+    context.movementDirective = directive;
+    context.movementTargetGuid = targetGuid;
+    context.movementFollowRange = followRange;
+    context.actionName = actionName;
+    context.reason = reason;
+    context.shouldExecute = true;
+    context.movementPriority = priority;
 }
 
 TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, playerbot::PvpValues const& values)
@@ -2448,11 +2568,6 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (!inActiveBattleground && !inBattlegroundPreparation && !inActiveDuel)
         return context;
 
-    // Safety guard: class-spell automation is temporarily disabled in active battleground combat
-    // while stabilizing crashes in target-selection/evaluation paths.
-    if (inActiveBattleground)
-        return context;
-
     if (inBattlegroundPreparation)
     {
         SpellDecision const prepDecision = SelectPreparationBuffSpell(player);
@@ -2483,11 +2598,50 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return resolved;
     };
     bool const hasValidTarget = resolveTargetByGuid(selectedTargetGuid) != nullptr;
-
-    ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+    Unit const* selectedTargetByGuid = resolveTargetByGuid(selectedTargetGuid);
+    bool const hasInvalidSelectedTarget = !selectedTargetGuid.IsEmpty() &&
+        (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     Unit const* selectedAllyTarget = SelectAllyTarget(player);
     ObjectGuid const selectedAllyGuid = selectedAllyTarget ? selectedAllyTarget->GetGUID() : ObjectGuid::Empty;
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
+
+    if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
+    {
+        if (IncrementCombatNoTargetTicks(player) >= 3)
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::ResetCombatState;
+            context.actionName = "reset";
+            context.reason = "combat stuck";
+            context.shouldExecute = true;
+            ResetCombatNoTargetTicks(player);
+            return context;
+        }
+    }
+    else
+    {
+        ResetCombatNoTargetTicks(player);
+    }
+
+    if (player->IsMounted() && (player->IsInCombat() || inActiveBattleground))
+    {
+        context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
+        context.actionName = "check mount state";
+        context.reason = "mounted in combat context";
+        context.shouldExecute = true;
+        return context;
+    }
+
+    if (hasInvalidSelectedTarget)
+    {
+        context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
+        context.actionName = "drop target";
+        context.reason = "invalid target";
+        context.shouldExecute = true;
+        context.movementTargetGuid = selectedTargetGuid;
+        return context;
+    }
+
+    ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     if (player->GetClass() == CLASS_HUNTER)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
@@ -2498,31 +2652,44 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     }
 
     SpellDecision decision;
+    SpellDecision firstDecision;
+    uint32 suppressedSpellId = 0;
+    uint32 attempts = 0;
+    constexpr uint32 kMaxDecisionAttempts = 8;
+    while (attempts++ < kMaxDecisionAttempts)
     {
-        DecisionEvaluationScope decisionScope(player, 0);
+        DecisionEvaluationScope decisionScope(player, suppressedSpellId);
         Unit const* decisionTarget = resolveTargetByGuid(selectedTargetGuid);
         Unit const* decisionAllyTarget = resolveTargetByGuid(selectedAllyGuid);
-        decision = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
+        SpellDecision const candidate = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
+        if (!candidate.spellId)
+            break;
+
+        if (!firstDecision.spellId)
+            firstDecision = candidate;
+
+        Unit const* immediateCastTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* immediateCastAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+        if (IsDecisionImmediatelyCastable(player, candidate, immediateCastTarget, immediateCastAllyTarget))
+        {
+            decision = candidate;
+            if (suppressedSpellId != 0)
+            {
+                TC_LOG_DEBUG("playerbots.pvp.classspell",
+                    "Class spell fallback chain selected castable spell: botGuid={} fallbackSpell={} suppressedSeed={} attempts={} targetGuid={} allyGuid={}.",
+                    player->GetGUID().ToString(), candidate.spellId, suppressedSpellId, attempts,
+                    hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
+            }
+            break;
+        }
+
+        suppressedSpellId = candidate.spellId;
     }
 
-    Unit const* immediateCastTarget = resolveTargetByGuid(selectedTargetGuid);
-    Unit const* immediateCastAllyTarget = resolveTargetByGuid(selectedAllyGuid);
-    if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, immediateCastTarget, immediateCastAllyTarget))
-    {
-        uint32 const initialDecisionSpellId = decision.spellId;
-        DecisionEvaluationScope fallbackScope(player, decision.spellId);
-        Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
-        Unit const* fallbackAllyTarget = resolveTargetByGuid(selectedAllyGuid);
-        SpellDecision const fallbackDecision = SelectClassOrUtilitySpell(player, fallbackTarget, fallbackAllyTarget, profileSelection);
-        if (fallbackDecision.spellId)
-        {
-            decision = fallbackDecision;
-            TC_LOG_DEBUG("playerbots.pvp.classspell",
-                "Class spell fallback used: botGuid={} initialSpell={} fallbackSpell={} targetGuid={} allyGuid={}.",
-                player->GetGUID().ToString(), initialDecisionSpellId, fallbackDecision.spellId,
-                hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
-        }
-    }
+    // If no immediately castable spell was found, keep the first decision so execution
+    // can still drive movement/position correction (for example out-of-range follow).
+    if (!decision.spellId)
+        decision = firstDecision;
 
     context.actionName = decision.actionName;
     context.reason = decision.reason;
@@ -2553,6 +2720,136 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         context.targetGuid = context.allyTargetGuid;
     else if (context.targetMode == PvpClassSpellContext::TargetMode::Self)
         context.targetGuid = player->GetGUID();
+
+    if (context.spellId &&
+        (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
+    {
+        Unit const* facingTarget = resolveTargetByGuid(context.targetGuid);
+        if (facingTarget && !player->HasInArc(static_cast<float>(M_PI), facingTarget))
+        {
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FaceSpellTarget, facingTarget->GetGUID(), 0.0f,
+                "set facing", "not facing target", 92.0f);
+            context.spellId = 0;
+            context.itemEntry = 0;
+            context.targetMode = PvpClassSpellContext::TargetMode::None;
+            context.targetGuid = ObjectGuid::Empty;
+            context.selfCast = false;
+        }
+    }
+
+    if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && IsPrimaryMeleeClassForSpacing(player->GetClass()))
+    {
+        Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
+        if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget))
+        {
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),
+                std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 85.0f);
+            context.spellId = 0;
+            context.itemEntry = 0;
+            context.targetMode = PvpClassSpellContext::TargetMode::None;
+            context.targetGuid = ObjectGuid::Empty;
+            context.selfCast = false;
+        }
+    }
+
+    if (!context.spellId && hasValidTarget)
+    {
+        Unit const* facingFallbackTarget = resolveTargetByGuid(selectedTargetGuid);
+        if (facingFallbackTarget && !player->HasInArc(static_cast<float>(M_PI), facingFallbackTarget))
+        {
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FaceSpellTarget, facingFallbackTarget->GetGUID(), 0.0f,
+                "set facing", "not facing target", 72.0f);
+        }
+    }
+
+    // If the selected spell is not immediately castable due spacing, switch this
+    // tick into movement-directive execution to mirror reference trigger flow.
+    if (context.spellId && IsPrimaryRangedClassForSpacing(player->GetClass()))
+    {
+        Unit const* spacingTarget = nullptr;
+        if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy ||
+            context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+        {
+            spacingTarget = resolveTargetByGuid(context.targetGuid);
+        }
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(context.spellId);
+        if (spellInfo && spacingTarget)
+        {
+            float const distance = player->GetDistance(spacingTarget);
+            float const maxRange = spellInfo->GetMaxRange(false);
+            float const minRange = spellInfo->GetMinRange(false);
+            if (maxRange > 0.0f && distance > maxRange)
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
+                    std::max(1.0f, maxRange - 1.0f), "reach spell", "selected spell out of range", 84.0f);
+                context.spellId = 0;
+                context.itemEntry = 0;
+                context.targetMode = PvpClassSpellContext::TargetMode::None;
+                context.targetGuid = ObjectGuid::Empty;
+                context.selfCast = false;
+            }
+            else if (minRange > 0.0f && distance < minRange)
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredCloseRange()), "flee", "selected spell minimum range violation", 84.0f);
+                context.spellId = 0;
+                context.itemEntry = 0;
+                context.targetMode = PvpClassSpellContext::TargetMode::None;
+                context.targetGuid = ObjectGuid::Empty;
+                context.selfCast = false;
+            }
+        }
+    }
+
+    // Reference parity bridge: provide trigger-like movement directives even
+    // when we do not have a castable spell yet ("enemy out of spell" / "enemy
+    // too close for spell"). Keep classic spell IDs untouched.
+    if (!context.spellId && hasValidTarget && IsPrimaryRangedClassForSpacing(player->GetClass()))
+    {
+        Unit const* movementTarget = resolveTargetByGuid(selectedTargetGuid);
+        if (movementTarget)
+        {
+            float const distance = player->GetDistance(movementTarget);
+            if (distance > GetConfiguredSpellRange())
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredSpellRange() - 1.0f), "reach spell", "enemy out of spell range", 70.0f);
+            }
+            else if (distance < GetConfiguredMeleeRange())
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, movementTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredCloseRange()), "flee", "enemy too close for spell", 71.0f);
+            }
+        }
+    }
+
+    if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        hasValidTarget && IsPrimaryMeleeClassForSpacing(player->GetClass()))
+    {
+        Unit const* meleeMovementTarget = resolveTargetByGuid(selectedTargetGuid);
+        if (meleeMovementTarget && !player->IsWithinMeleeRange(meleeMovementTarget))
+        {
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeMovementTarget->GetGUID(),
+                std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 69.0f);
+        }
+    }
+
+    if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        hasValidAllyTarget && CanUseHealRangeSpacing(player->GetClass()))
+    {
+        Unit const* allyMovementTarget = resolveTargetByGuid(selectedAllyGuid);
+        if (allyMovementTarget)
+        {
+            float const distance = player->GetDistance(allyMovementTarget);
+            if (distance > GetConfiguredHealRange())
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, allyMovementTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredHealRange() - 1.0f), "reach party member to heal", "party member to heal out of spell range", 68.0f);
+            }
+        }
+    }
+
     if (player->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_ROOT)))
     {
         if (IsSpellReady(player, 42292))
@@ -2581,7 +2878,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    context.shouldExecute = context.spellId != 0;
+    context.shouldExecute = context.shouldExecute || context.spellId != 0;
 
     char const* targetModeLabel = "none";
     switch (context.targetMode)

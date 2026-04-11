@@ -92,8 +92,35 @@ struct WarlockCurseCooldownKeyHash
 };
 
 std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
+struct LastDirectiveState
+{
+    playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
+    ObjectGuid targetGuid = ObjectGuid::Empty;
+    std::chrono::steady_clock::time_point timestamp = std::chrono::steady_clock::time_point::min();
+};
+std::unordered_map<ObjectGuid, LastDirectiveState> g_LastDirectiveByBot;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
+
+bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellContext const& context)
+{
+    if (!player || context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::None)
+        return false;
+
+    auto& state = g_LastDirectiveByBot[player->GetGUID()];
+    std::chrono::steady_clock::time_point const now = GameTime::Now();
+    if (state.directive == context.movementDirective &&
+        state.targetGuid == context.movementTargetGuid &&
+        now - state.timestamp < std::chrono::milliseconds(500))
+    {
+        return true;
+    }
+
+    state.directive = context.movementDirective;
+    state.targetGuid = context.movementTargetGuid;
+    state.timestamp = now;
+    return false;
+}
 
 void ForcePlayerbotDismount(Player* player)
 {
@@ -483,6 +510,18 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const minRange = spellInfo->GetMinRange(false);
     if (!itemTarget && minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
     {
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+        if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+
+        // Mirror reference-style spacing control for ranged casts: when too close,
+        // immediately re-establish spell distance instead of repeatedly failing.
+        if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, minRange + 1.0f), player->GetFollowAngle());
+        else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
+            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, minRange + 1.0f), player->GetFollowAngle());
+
         failureReason = "too_close";
         return false;
     }
@@ -742,6 +781,68 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
+
+    if (context.movementDirective != PvpClassSpellContext::MovementDirective::None)
+    {
+        if (ShouldThrottleDirective(player, context))
+            return true;
+
+        Unit* movementTarget = context.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*player, context.movementTargetGuid);
+        bool const directiveNeedsTarget =
+            context.movementDirective == PvpClassSpellContext::MovementDirective::ReachMeleeRange ||
+            context.movementDirective == PvpClassSpellContext::MovementDirective::ReachSpellRange ||
+            context.movementDirective == PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell ||
+            context.movementDirective == PvpClassSpellContext::MovementDirective::FaceSpellTarget;
+        if (directiveNeedsTarget && (!movementTarget || !movementTarget->IsAlive()))
+            return false;
+
+        if (directiveNeedsTarget && !CanIssueFollowCommands(player))
+            return false;
+
+        switch (context.movementDirective)
+        {
+            case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
+                player->GetMotionMaster()->MoveFollow(movementTarget, std::max(1.0f,
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().meleeRange - 1.0f)),
+                    player->GetFollowAngle());
+                break;
+            case PvpClassSpellContext::MovementDirective::ReachSpellRange:
+                player->GetMotionMaster()->MoveFollow(movementTarget, std::max(1.0f,
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f)),
+                    player->GetFollowAngle());
+                break;
+            case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
+                player->GetMotionMaster()->MoveFollow(movementTarget, std::max(1.0f,
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : PvpCore::GetConfig().closeRange),
+                    player->GetFollowAngle());
+                break;
+            case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
+                player->SetFacingToObject(movementTarget);
+                player->SetInFront(movementTarget);
+                break;
+            case PvpClassSpellContext::MovementDirective::DropInvalidTarget:
+                player->SetSelection(ObjectGuid::Empty);
+                player->AttackStop();
+                break;
+            case PvpClassSpellContext::MovementDirective::CheckMountState:
+                if (player->IsMounted())
+                    ForcePlayerbotDismount(player);
+                break;
+            case PvpClassSpellContext::MovementDirective::ResetCombatState:
+                player->SetSelection(ObjectGuid::Empty);
+                player->AttackStop();
+                player->CombatStop(true);
+                break;
+            case PvpClassSpellContext::MovementDirective::None:
+            default:
+                break;
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.class",
+            "Playerbot PvP movement directive executed: action={} target_guid={} directive={}.",
+            context.actionName ? context.actionName : "none", movementTarget->GetGUID().ToString(), static_cast<uint8>(context.movementDirective));
+        return true;
+    }
 
     std::string failureReason;
     bool casted = false;
