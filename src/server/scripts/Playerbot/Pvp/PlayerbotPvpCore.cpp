@@ -227,6 +227,7 @@ struct SpellDecision
     playerbot::PvpClassSpellContext::TargetMode targetMode = playerbot::PvpClassSpellContext::TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;
     uint32 itemEntry = 0;
+    char const* triggerName = nullptr;
 };
 
 struct PrioritizedSpellDecision
@@ -236,6 +237,8 @@ struct PrioritizedSpellDecision
 };
 
 bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& decision, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget);
+SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpellDecision>& candidates, Player const* player,
+    Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget);
 
 SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget)
 {
@@ -280,6 +283,31 @@ void AddDecisionCandidate(std::vector<PrioritizedSpellDecision>& candidates, boo
         return;
 
     candidates.push_back({ priority, decision });
+}
+
+struct SpellTriggerRule
+{
+    char const* triggerName = nullptr;
+    bool condition = false;
+    float priority = 0.0f;
+    SpellDecision decision;
+};
+
+SpellDecision SelectFromTriggerGraph(Player const* player, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget,
+    std::initializer_list<SpellTriggerRule> rules)
+{
+    std::vector<PrioritizedSpellDecision> candidates;
+    candidates.reserve(rules.size());
+
+    for (SpellTriggerRule const& rule : rules)
+    {
+        SpellDecision decision = rule.decision;
+        if (!decision.triggerName)
+            decision.triggerName = rule.triggerName;
+        AddDecisionCandidate(candidates, rule.condition, rule.priority, decision);
+    }
+
+    return SelectHighestPriorityCastableDecision(candidates, player, defaultEnemyTarget, defaultAllyTarget);
 }
 
 SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpellDecision>& candidates, Player const* player,
@@ -1802,41 +1830,41 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     Unit const* polymorphTarget =
         (IsSpellReady(player, 12826) && !AnyEnemyPolymorphed(player, 40.0f)) ? SelectPolymorphTarget(player, target, 30.0f) : nullptr;
 
-    std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
-        { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, closePressure && IsSpellReady(player, 1953), 45.0f,
-        { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, castingTarget && IsSpellReady(player, 2139), 44.0f,
-        { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget ? castingTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, closePressure && IsSpellReady(player, 10230), 43.0f,
-        { "mage frost nova", "close defensive peel", 10230, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, closePressure && target && IsMeleeClass(target) && IsSpellReady(player, 10161), 42.0f,
-        { "mage cone of cold", "defensive snare versus nearby melee", 10161, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, manaPct < 25.0f && IsSpellReady(player, 12051), 41.0f,
-        { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, manaPct < 50.0f && player->HasItemCount(8008), 40.0f,
-        { "use mana ruby", "consume mana ruby below 50 percent mana", 22044, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 8008 });
-    AddDecisionCandidate(candidates, cursedTarget, 39.0f,
-        { "remove lesser curse", "dispel curse from friendly target", 475, (cursedTarget == player) ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 13033) && IsSpellReady(player, 13033), 35.0f,
-        { "mage ice barrier", "maintain defensive absorb shield", 13033, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && target->HealthBelowPct(20) && IsSpellReady(player, 10199), 30.0f,
-        { "mage fire blast", "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, polymorphTarget, 29.0f,
-        { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, hasHostileTarget && IsSpellReady(player, 25304), 18.0f,
-        { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157), 10.0f,
-        { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
-        { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
-        { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
-        { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self });
-
-    return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
+    return SelectFromTriggerGraph(player, target, nullptr,
+    {
+        { "critical health", player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
+            { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
+            { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
+            { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget ? castingTarget->GetGUID() : ObjectGuid::Empty } },
+        { "enemy too close for spell", closePressure && IsSpellReady(player, 10230), 43.0f,
+            { "mage frost nova", "close defensive peel", 10230, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "enemy too close for spell", closePressure && target && IsMeleeClass(target) && IsSpellReady(player, 10161), 42.0f,
+            { "mage cone of cold", "defensive snare versus nearby melee", 10161, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "low mana", manaPct < 25.0f && IsSpellReady(player, 12051), 41.0f,
+            { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "high mana", manaPct < 50.0f && player->HasItemCount(8008), 40.0f,
+            { "use mana ruby", "consume mana ruby below 50 percent mana", 22044, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 8008 } },
+        { "remove curse", cursedTarget, 39.0f,
+            { "remove lesser curse", "dispel curse from friendly target", 475, (cursedTarget == player) ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty } },
+        { "ice barrier", !HasAuraFromSpellChain(player, 13033) && IsSpellReady(player, 13033), 35.0f,
+            { "mage ice barrier", "maintain defensive absorb shield", 13033, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "enemy low health", hasHostileTarget && target && target->HealthBelowPct(20) && IsSpellReady(player, 10199), 30.0f,
+            { "mage fire blast", "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "polymorph", polymorphTarget, 29.0f,
+            { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
+        { "default ranged", hasHostileTarget && IsSpellReady(player, 25304), 18.0f,
+            { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
+        { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157), 10.0f,
+            { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
+            { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mana gem missing", IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
+            { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "defensive reset", !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
+            { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self } }
+    });
 }
 
 SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
