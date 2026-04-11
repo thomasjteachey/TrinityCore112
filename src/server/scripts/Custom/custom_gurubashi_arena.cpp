@@ -69,8 +69,12 @@ char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 
 Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
 char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
+char const* const GURUBASHI_LATE_ENTRY_RULE_WHISPER = "You were not part of this chest battle. Entering the Battle Ring now is forbidden.";
 
 void ClearChestDeathLockouts();
+void ClearChestParticipants();
+void MarkChestParticipants(std::vector<ObjectGuid> const& participantGuids);
+bool IsChestParticipant(ObjectGuid guid);
 
 uint32 GetChestMarkRewardCount()
 {
@@ -297,6 +301,7 @@ Position BuildRandomBattleRingPosition(Player* player)
 void TeleportStranglethornPlayersToBattleRing()
 {
     std::vector<ObjectGuid> playersToTeleport;
+    std::vector<ObjectGuid> teleportedPlayers;
 
     {
         std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
@@ -319,6 +324,9 @@ void TeleportStranglethornPlayersToBattleRing()
         if (!player || !player->IsInWorld() || player->IsBeingTeleported() || !player->IsAlive())
             continue;
 
+        if (player->GetGroup())
+            player->RemoveFromGroup();
+
         player->CastSpell(player, TELEPORT_VISUAL_SPELL, TRIGGERED_FULL_MASK);
         Position const destination = BuildRandomBattleRingPosition(player);
         player->NearTeleportTo(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), destination.GetOrientation(), true);
@@ -328,7 +336,10 @@ void TeleportStranglethornPlayersToBattleRing()
                 player->SetPower(powerType, maxPower);
         player->RemoveArenaSpellCooldowns(true);
         player->CastSpell(player, TELEPORT_VISUAL_SPELL, TRIGGERED_FULL_MASK);
+        teleportedPlayers.push_back(guid);
     }
+
+    MarkChestParticipants(teleportedPlayers);
 }
 bool IsChestGuidActiveInWorld(ObjectGuid chestGuid)
 {
@@ -385,6 +396,7 @@ public:
 
             _rewardGranted = true;
             ClearChestDeathLockouts();
+            ClearChestParticipants();
             me->DespawnOrUnsummon();
         }
 
@@ -434,6 +446,7 @@ public:
         _lastEligibleCount = 0;
         _chestActive = false;
         ClearChestDeathLockouts();
+        ClearChestParticipants();
     }
 
     void OnUpdate(uint32 diff) override
@@ -445,6 +458,7 @@ public:
             _currentChestGuid.Clear();
             _chestActive = false;
             ClearChestDeathLockouts();
+            ClearChestParticipants();
         }
     }
 
@@ -541,6 +555,7 @@ private:
             _currentChestGuid.Clear();
             _chestActive = false;
             ClearChestDeathLockouts();
+            ClearChestParticipants();
         }
 
         if (GameObject* chest = summoner->SummonGameObject(GURUBASHI_CHEST_ENTRY, ChestSpawnPosition, QuaternionData::fromEulerAnglesZYX(ChestSpawnPosition.GetOrientation(), 0.f, 0.f), CHEST_DESPAWN_TIME))
@@ -576,6 +591,7 @@ namespace
 std::mutex g_GurubashiTrackedPlayersMutex;
 std::unordered_set<ObjectGuid> g_GurubashiTrackedPlayers;
 std::unordered_set<ObjectGuid> g_GurubashiChestDeathLockouts;
+std::unordered_set<ObjectGuid> g_GurubashiChestParticipants;
 
 bool IsChestDeathLockoutActive(ObjectGuid guid)
 {
@@ -593,6 +609,27 @@ void ClearChestDeathLockouts()
 {
     std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
     g_GurubashiChestDeathLockouts.clear();
+}
+
+void ClearChestParticipants()
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    g_GurubashiChestParticipants.clear();
+}
+
+void MarkChestParticipants(std::vector<ObjectGuid> const& participantGuids)
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    g_GurubashiChestParticipants.clear();
+
+    for (ObjectGuid const& guid : participantGuids)
+        g_GurubashiChestParticipants.insert(guid);
+}
+
+bool IsChestParticipant(ObjectGuid guid)
+{
+    std::lock_guard<std::mutex> lock(g_GurubashiTrackedPlayersMutex);
+    return g_GurubashiChestParticipants.find(guid) != g_GurubashiChestParticipants.end();
 }
 
 
@@ -734,6 +771,13 @@ public:
                 Unit::Kill(player, player);
                 WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
             }
+            else if (chestActive && currentState == GurubashiAreaState::BattleRing && player->IsAlive() && !player->IsGameMaster() && !IsChestParticipant(guid))
+            {
+                PlayForcedDeathStarfireVisual(player);
+                Unit::Kill(player, player);
+                WhisperFromChromi(player, GURUBASHI_LATE_ENTRY_RULE_WHISPER);
+                MarkChestDeathLockout(guid);
+            }
 
             if (tracked.HasPosition)
             {
@@ -747,6 +791,7 @@ public:
                 {
                     PlayForcedDeathStarfireVisual(player);
                     Unit::Kill(player, player);
+                    MarkChestDeathLockout(guid);
 
                     WhisperRandomExitKillLineFromChromie(player);
                 }
