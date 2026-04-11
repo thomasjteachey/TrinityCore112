@@ -42,6 +42,22 @@ namespace
 {
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
+bool IsEffectivelyOutdoors(Player const* player);
+
+bool IsEffectivelyOutdoors(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return player->IsOutdoors();
+
+    PositionFullTerrainStatus terrainStatus;
+    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
+    return terrainStatus.outdoors;
+}
 
 bool IsCrowdControlledForAction(Player const* player)
 {
@@ -559,7 +575,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "controlled_cannot_mount";
         return false;
     }
-    if (isMountSpell && !player->IsOutdoors())
+    if (isMountSpell && !IsEffectivelyOutdoors(player))
     {
         // Enforce indoor mount denial server-side for virtual bot casters.
         // Mount selection already prefers outdoors, but execution must also

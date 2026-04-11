@@ -358,6 +358,13 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
         return;
 
+    if (IsCrowdControlledForLifecyclePause(player))
+    {
+        ClearActiveMovementForControlLoss(player);
+        EmitLifecycleGmDebug(player, "bg-fasttick paused crowd-controlled", 1000);
+        return;
+    }
+
     playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
     playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
     bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);

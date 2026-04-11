@@ -144,6 +144,7 @@ SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileT
 playerbot::PvpCoreConfig g_PvpCoreConfig;
 bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo);
 bool IsHardControlled(Player const* player);
+bool IsEffectivelyOutdoors(Player const* player);
 
 float GetConfiguredSpellRange() { return g_PvpCoreConfig.spellRange; }
 float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
@@ -525,6 +526,21 @@ bool IsSpellReady(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
+bool IsEffectivelyOutdoors(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return player->IsOutdoors();
+
+    PositionFullTerrainStatus terrainStatus;
+    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
+    return terrainStatus.outdoors;
+}
+
 bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
 {
     if (!player || !mountSpellInfo)
@@ -663,7 +679,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (inBattlegroundPreparation)
         return decision;
 
-    if (!player->IsOutdoors())
+    if (!IsEffectivelyOutdoors(player))
         return decision;
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
@@ -2610,11 +2626,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     // Reference parity guard: never allow mounted state indoors. In addition,
     // while in combat always force mount-state correction immediately.
-    if (player->IsMounted() && (!player->IsOutdoors() || player->IsInCombat()))
+    bool const outdoors = IsEffectivelyOutdoors(player);
+    if (player->IsMounted() && (!outdoors || player->IsInCombat()))
     {
         context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
         context.actionName = "check mount state";
-        context.reason = player->IsOutdoors() ? "mounted in combat" : "mounted indoors";
+        context.reason = outdoors ? "mounted in combat" : "mounted indoors";
         context.shouldExecute = true;
         return context;
     }
