@@ -114,11 +114,16 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
     if (owner->HasUnitState(UNIT_STATE_NOT_MOVE) || owner->IsMovementPreventedByCasting() || HasLostTarget(owner, target))
     {
         owner->StopMoving();
+        if (owner->GetTypeId() == TYPEID_PLAYER)
+            owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
         _lastTargetPosition.reset();
         if (Creature* cOwner = owner->ToCreature())
             cOwner->SetCannotReachTarget(false);
         return true;
     }
+
+    if (owner->GetTypeId() == TYPEID_PLAYER)
+        owner->SetUnitFlag(UNIT_FLAG_FLEEING);
 
     bool const mutualChase = IsMutualChase(owner, target);
     float const hitboxSum = owner->GetCombatReach() + target->GetCombatReach();
