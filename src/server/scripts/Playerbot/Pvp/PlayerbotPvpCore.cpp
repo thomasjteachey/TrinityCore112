@@ -617,7 +617,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 
 bool HasHostileTarget(Player const* player, Unit const* target)
 {
-    return player && target && target->IsAlive() && target->GetGUID() != player->GetGUID() && player->IsValidAttackTarget(target);
+    return player && target && target != player && target->IsAlive() && player->IsValidAttackTarget(target);
 }
 
 bool HasAnyAura(Unit const* unit, std::initializer_list<uint32> spellIds)
@@ -2483,38 +2483,58 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    Unit const* target = SelectCombatTarget(player);
-    bool const hasValidTarget = target && target->IsAlive() && target->GetGUID() != player->GetGUID();
+    Unit const* selectedTarget = SelectCombatTarget(player);
+    ObjectGuid const selectedTargetGuid = selectedTarget ? selectedTarget->GetGUID() : ObjectGuid::Empty;
+    auto resolveTargetByGuid = [&](ObjectGuid const& guid) -> Unit const*
+    {
+        if (guid.IsEmpty() || guid == player->GetGUID())
+            return nullptr;
+
+        Unit const* resolved = ObjectAccessor::GetUnit(*player, guid);
+        if (!resolved || !resolved->IsAlive())
+            return nullptr;
+
+        return resolved;
+    };
+    bool const hasValidTarget = resolveTargetByGuid(selectedTargetGuid) != nullptr;
 
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
-    Unit const* allyTarget = SelectAllyTarget(player);
+    Unit const* selectedAllyTarget = SelectAllyTarget(player);
+    ObjectGuid const selectedAllyGuid = selectedAllyTarget ? selectedAllyTarget->GetGUID() : ObjectGuid::Empty;
+    bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
     if (player->GetClass() == CLASS_HUNTER)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "BuildClassSpellContext snapshot: botGuid={} inBg={} bgActive={} inPrep={} inDuel={} hasValidTarget={} targetGuid={} allyGuid={}.",
             player->GetGUID().ToString(), values.inBattleground ? 1 : 0, IsTriggerActive(PvpTrigger::BgActive, values) ? 1 : 0,
             inBattlegroundPreparation ? 1 : 0, inActiveDuel ? 1 : 0, hasValidTarget ? 1 : 0,
-            hasValidTarget ? target->GetGUID().ToString() : "none", allyTarget ? allyTarget->GetGUID().ToString() : "none");
+            hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
     }
 
     SpellDecision decision;
     {
         DecisionEvaluationScope decisionScope(player, 0);
-        decision = SelectClassOrUtilitySpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+        Unit const* decisionTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* decisionAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+        decision = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
     }
 
-    if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, hasValidTarget ? target : nullptr, allyTarget))
+    Unit const* immediateCastTarget = resolveTargetByGuid(selectedTargetGuid);
+    Unit const* immediateCastAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+    if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, immediateCastTarget, immediateCastAllyTarget))
     {
         uint32 const initialDecisionSpellId = decision.spellId;
         DecisionEvaluationScope fallbackScope(player, decision.spellId);
-        SpellDecision const fallbackDecision = SelectClassOrUtilitySpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
+        Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* fallbackAllyTarget = resolveTargetByGuid(selectedAllyGuid);
+        SpellDecision const fallbackDecision = SelectClassOrUtilitySpell(player, fallbackTarget, fallbackAllyTarget, profileSelection);
         if (fallbackDecision.spellId)
         {
             decision = fallbackDecision;
             TC_LOG_DEBUG("playerbots.pvp.classspell",
                 "Class spell fallback used: botGuid={} initialSpell={} fallbackSpell={} targetGuid={} allyGuid={}.",
                 player->GetGUID().ToString(), initialDecisionSpellId, fallbackDecision.spellId,
-                hasValidTarget ? target->GetGUID().ToString() : "none", allyTarget ? allyTarget->GetGUID().ToString() : "none");
+                hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
         }
     }
 
@@ -2539,8 +2559,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.targetMode = decision.targetMode;
     context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
     context.itemEntry = decision.itemEntry;
-    context.targetGuid = hasValidTarget ? target->GetGUID() : ObjectGuid::Empty;
-    context.allyTargetGuid = allyTarget ? allyTarget->GetGUID() : ObjectGuid::Empty;
+    context.targetGuid = hasValidTarget ? selectedTargetGuid : ObjectGuid::Empty;
+    context.allyTargetGuid = hasValidAllyTarget ? selectedAllyGuid : ObjectGuid::Empty;
     if (!decision.targetGuid.IsEmpty())
         context.targetGuid = decision.targetGuid;
     if (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
@@ -2597,7 +2617,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP class context: class={} profile={} fallback={} unsupported={} has_enemy_target={} enemy_target_guid={} ally_target_guid={} target_mode={} spell={} action={} reason={}.",
         GetClassLabel(player->GetClass()), profileSelection.profileLabel, profileSelection.usedFallback,
-        profileSelection.unsupportedClass, hasValidTarget, hasValidTarget ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+        profileSelection.unsupportedClass, hasValidTarget, hasValidTarget ? selectedTargetGuid.ToString() : ObjectGuid::Empty.ToString(),
         context.allyTargetGuid.ToString(), targetModeLabel, context.spellId, context.actionName ? context.actionName : "none",
         context.reason ? context.reason : "none");
     return context;
