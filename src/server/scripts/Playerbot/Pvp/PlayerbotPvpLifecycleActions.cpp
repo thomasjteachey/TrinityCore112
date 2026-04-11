@@ -1145,7 +1145,11 @@ void ClearActiveMovementForControlLoss(Player* player)
     // Preserve server-side confused wander (e.g. polymorph/sheep). Clearing
     // the active movement slot repeatedly can freeze the expected drifting.
     if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+    {
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->MoveConfused();
         return;
+    }
 
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);

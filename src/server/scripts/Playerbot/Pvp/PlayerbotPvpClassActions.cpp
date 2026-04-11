@@ -35,7 +35,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <sstream>
 #include <unordered_map>
 
 namespace
@@ -72,7 +71,10 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    return player->IsOutdoors() && terrainStatus.outdoors;
+    // Mount checks should tolerate occasional outdoor-flag desync at ramps,
+    // bridges, and battleground geometry seams. Accept either outdoors signal
+    // so valid outdoor positions do not get stuck in a permanent no-mount loop.
+    return player->IsOutdoors() || terrainStatus.outdoors;
 }
 
 bool IsCrowdControlledForAction(Player const* player)
@@ -249,36 +251,6 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         failureReason.empty() ? "none" : failureReason);
 }
 
-void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellContext const& context, SpellCastResult castResult)
-{
-    if (!bot || castResult == SPELL_CAST_OK || castResult == SPELL_FAILED_SPELL_IN_PROGRESS)
-        return;
-
-    Map* map = bot->GetMap();
-    if (!map)
-        return;
-
-    EnumText const resultText = EnumUtils::ToString(castResult);
-    std::ostringstream os;
-    os << "[Playerbot spell-fail] bot=" << bot->GetName()
-       << " guid=" << bot->GetGUID().ToString()
-       << " map=" << bot->GetMapId()
-       << " spell=" << context.spellId
-       << " action=" << (context.actionName ? context.actionName : "none")
-       << " target=" << GetTargetModeLabel(context.targetMode)
-       << " result=" << resultText.Title;
-    std::string const message = os.str();
-
-    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
-    {
-        Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
-            continue;
-
-        bot->Whisper(message, LANG_UNIVERSAL, observer);
-    }
-}
-
 void FinalizeVirtualNearTeleport(Player* player)
 {
     if (!player || !player->IsBeingTeleportedNear())
@@ -347,7 +319,11 @@ void ClearActiveMovementForControlLoss(Player* player)
     // Confused/polymorphed units need the server-driven wander movement to
     // remain intact. Clearing active movement each tick pins them in place.
     if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+    {
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->MoveConfused();
         return;
+    }
 
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
@@ -654,7 +630,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
     {
-        NotifySpellCastFailureToGameMasters(player, context, castResult);
         EnumText const reasonText = EnumUtils::ToString(castResult);
         failureReason = reasonText.Title;
         return false;

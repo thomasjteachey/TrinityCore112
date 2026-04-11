@@ -557,9 +557,9 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    // Mount casts should be conservative: require both outdoor signals to avoid
-    // mounting in indoor edge locations where one check can be stale.
-    return player->IsOutdoors() && terrainStatus.outdoors;
+    // Outdoor flags can briefly disagree around map seams/ramps. Accept either
+    // signal here so outdoor bots do not get permanently blocked from mounting.
+    return player->IsOutdoors() || terrainStatus.outdoors;
 }
 
 bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
