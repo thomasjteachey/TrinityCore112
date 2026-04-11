@@ -103,6 +103,29 @@ bool IsCrowdControlledForAction(Player const* player)
     return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
+bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo const* spellInfo)
+{
+    if (!player || !target || !target->IsAlive())
+        return false;
+
+    if (target == player)
+        return true;
+
+    if (player->IsValidAssistTarget(target, spellInfo))
+        return true;
+
+    Player const* targetPlayer = target->ToPlayer();
+    if (!targetPlayer || !player->InBattleground() || !targetPlayer->InBattleground())
+        return false;
+
+    if (player->GetBattlegroundId() != targetPlayer->GetBattlegroundId())
+        return false;
+
+    uint32 const playerTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    uint32 const targetTeam = targetPlayer->GetBGTeam() ? targetPlayer->GetBGTeam() : targetPlayer->GetTeam();
+    return playerTeam == targetTeam;
+}
+
 struct WarlockCurseCooldownKey
 {
     ObjectGuid casterGuid;
@@ -522,7 +545,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
-        if (!player->IsValidAssistTarget(target, spellInfo))
+        if (!IsFriendlySupportTarget(player, target, spellInfo))
         {
             failureReason = "invalid_ally_target";
             return false;
