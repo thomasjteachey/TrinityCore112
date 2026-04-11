@@ -1887,11 +1887,24 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (!player->InBattleground())
         return false;
 
-    if (Battleground* battleground = player->GetBattleground())
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
-        if (battleground->GetStatus() != STATUS_IN_PROGRESS)
+        if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
             return false;
+
+        player->LeaveBattleground();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}.",
+            player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
+        return true;
     }
+
+    if (battleground->GetStatus() != STATUS_IN_PROGRESS)
+        return false;
 
     if (HandleBattlegroundDeathState(player))
         return true;
