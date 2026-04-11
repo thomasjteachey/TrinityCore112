@@ -88,6 +88,21 @@ void ForcePlayerbotDismount(Player* player)
     player->UpdateSpeed(MOVE_FLIGHT);
 }
 
+bool IsEffectivelyOutdoors(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->GetMap();
+    if (!map)
+        return player->IsOutdoors();
+
+    PositionFullTerrainStatus terrainStatus;
+    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
+    return player->IsOutdoors() || terrainStatus.outdoors;
+}
+
 bool IsRecoveringByEatingOrDrinking(Player const* player)
 {
     if (!player || !player->IsAlive() || player->IsInCombat())
@@ -1127,6 +1142,11 @@ void ClearActiveMovementForControlLoss(Player* player)
 
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
+    // Preserve server-side confused wander (e.g. polymorph/sheep). Clearing
+    // the active movement slot repeatedly can freeze the expected drifting.
+    if (player->HasUnitState(UNIT_STATE_CONFUSED) || player->HasAuraType(SPELL_AURA_MOD_CONFUSE) || player->IsPolymorphed())
+        return;
+
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 }
@@ -2043,7 +2063,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (player->IsMounted() && !player->IsOutdoors())
+    if (player->IsMounted() && !IsEffectivelyOutdoors(player))
         ForcePlayerbotDismount(player);
 
     switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
