@@ -1126,6 +1126,8 @@ void ClearActiveMovementForControlLoss(Player* player)
         return;
 
     player->StopMoving();
+    player->AttackStop();
+    player->SetSelection(ObjectGuid::Empty);
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
