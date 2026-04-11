@@ -546,6 +546,18 @@ bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
     return true;
 }
 
+Position BuildCollisionSafeDestination(Player const* player, Position const& destination)
+{
+    if (!player)
+        return destination;
+
+    Position adjustedDestination = destination;
+    float adjustedZ = adjustedDestination.GetPositionZ();
+    player->UpdateAllowedPositionZ(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ);
+    adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
+    return adjustedDestination;
+}
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
 {
     if (!player)
@@ -634,20 +646,21 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
     // Battleground long-range movement pathfinder:
     // build a navmesh path toward the true destination, then issue movement
     // toward the furthest available point on that segment. This chains
     // truncated navmesh paths into full-map traversal without disabling
     // collision/pathing entirely.
-    Position issuedDestination = destination;
+    Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
         PathGenerator path(player);
         // Explicitly cap each navmesh solve to a medium segment so very long
         // cross-map targets still yield incremental path points immediately.
         path.SetPathLengthLimit(90.0f);
-        bool const pathOk = path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true);
+        bool const pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
         G3D::Vector3 actualEnd = path.GetActualEndPosition();
@@ -656,7 +669,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         {
             PathGenerator retryPath(player);
             retryPath.SetPathLengthLimit(90.0f);
-            bool const retryOk = retryPath.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), false);
+            bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0 && retryPath.GetPath().size() > 1)
             {
@@ -671,7 +684,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         if (points.size() > 1)
         {
             G3D::Vector3 const& lastPoint = points.back();
-            Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, destination.GetOrientation());
+            Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+            segmentDestination = BuildCollisionSafeDestination(player, segmentDestination);
             float const segmentDistance = player->GetDistance(segmentDestination);
             bool const suspiciousLongSegment = (pathType & PATHFIND_SHORTCUT) != 0 && segmentDistance > 160.0f;
             if (suspiciousLongSegment)
@@ -688,7 +702,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                         player->GetPositionX() + dx * cappedRatio,
                         player->GetPositionY() + dy * cappedRatio,
                         player->GetPositionZ() + dz * cappedRatio,
-                        destination.GetOrientation());
+                        safeDestination.GetOrientation());
+                    cappedSegmentDestination = BuildCollisionSafeDestination(player, cappedSegmentDestination);
                     motionMaster->MovePoint(0, cappedSegmentDestination, true);
                     issuedDestination = cappedSegmentDestination;
                     EmitBattlegroundGmDebug(player,
@@ -719,8 +734,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         }
         else
         {
-            float const destinationDistance = player->GetDistance(destination);
-            Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, destination.GetOrientation());
+            float const destinationDistance = player->GetDistance(safeDestination);
+            Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
+            actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
             float const actualEndDistance = player->GetDistance(actualEndDestination);
             if (actualEndDistance > 3.0f && actualEndDistance + 5.0f < destinationDistance)
             {
@@ -740,9 +756,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
             if (destinationDistance > 120.0f)
             {
-                float const dx = destination.GetPositionX() - player->GetPositionX();
-                float const dy = destination.GetPositionY() - player->GetPositionY();
-                float const dz = destination.GetPositionZ() - player->GetPositionZ();
+                float const dx = safeDestination.GetPositionX() - player->GetPositionX();
+                float const dy = safeDestination.GetPositionY() - player->GetPositionY();
+                float const dz = safeDestination.GetPositionZ() - player->GetPositionZ();
                 float const planarLength = std::sqrt(dx * dx + dy * dy);
                 if (planarLength > 0.001f)
                 {
@@ -752,7 +768,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                         player->GetPositionX() + dx * stepRatio,
                         player->GetPositionY() + dy * stepRatio,
                         player->GetPositionZ() + dz * stepRatio,
-                        destination.GetOrientation());
+                        safeDestination.GetOrientation());
+                    intermediateDestination = BuildCollisionSafeDestination(player, intermediateDestination);
 
                     motionMaster->MovePoint(0, intermediateDestination, true);
                     issuedDestination = intermediateDestination;
@@ -769,8 +786,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
                 }
             }
 
-            motionMaster->MovePoint(0, destination, true);
-            issuedDestination = destination;
+            motionMaster->MovePoint(0, safeDestination, true);
+            issuedDestination = safeDestination;
             EmitBattlegroundGmDebug(player,
                 "movepoint=fallback-direct pathOk=" + std::to_string(pathOk ? 1 : 0) +
                 " pathType=" + std::to_string(uint32(pathType)) +
@@ -780,8 +797,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
     else
     {
-        motionMaster->MovePoint(0, destination, generatePath);
-        issuedDestination = destination;
+        motionMaster->MovePoint(0, safeDestination, generatePath);
+        issuedDestination = safeDestination;
     }
 
     state.lastDestination = issuedDestination;
