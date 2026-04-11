@@ -617,7 +617,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 
 bool HasHostileTarget(Player const* player, Unit const* target)
 {
-    return player && target && target->IsAlive() && target->GetGUID() != player->GetGUID() && player->IsValidAttackTarget(target);
+    return player && target && target != player && target->IsAlive() && player->IsValidAttackTarget(target);
 }
 
 bool HasAnyAura(Unit const* unit, std::initializer_list<uint32> spellIds)
@@ -2487,11 +2487,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     ObjectGuid const selectedTargetGuid = selectedTarget ? selectedTarget->GetGUID() : ObjectGuid::Empty;
     auto resolveTargetByGuid = [&](ObjectGuid const& guid) -> Unit const*
     {
-        if (guid.IsEmpty())
+        if (guid.IsEmpty() || guid == player->GetGUID())
             return nullptr;
 
         Unit const* resolved = ObjectAccessor::GetUnit(*player, guid);
-        if (!resolved || !resolved->IsAlive() || resolved->GetGUID() == player->GetGUID())
+        if (!resolved || !resolved->IsAlive())
             return nullptr;
 
         return resolved;
