@@ -41,6 +41,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -52,6 +53,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
+std::mutex g_HunterRangedModeByBotLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
@@ -60,6 +62,7 @@ bool IsHunterInRangedMode(Player const* player)
     if (!player)
         return true;
 
+    std::lock_guard<std::mutex> lock(g_HunterRangedModeByBotLock);
     auto itr = g_HunterRangedModeByBot.find(player->GetGUID());
     if (itr == g_HunterRangedModeByBot.end())
         return true;
@@ -75,11 +78,18 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
     bool rangedMode = IsHunterInRangedMode(player);
     if (!target || !target->IsAlive())
     {
-        g_HunterRangedModeByBot[player->GetGUID()] = true;
+        {
+            std::lock_guard<std::mutex> lock(g_HunterRangedModeByBotLock);
+            g_HunterRangedModeByBot[player->GetGUID()] = true;
+        }
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Hunter mode reset to ranged: botGuid={} reason=no-valid-target.",
+            player->GetGUID().ToString());
         return;
     }
 
     float const distance = player->GetDistance(target);
+    bool const previousRangedMode = rangedMode;
     if (rangedMode)
     {
         if (target->GetVictim() == player && distance <= kReferenceHunterSwitchDistance)
@@ -91,7 +101,18 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
             rangedMode = true;
     }
 
-    g_HunterRangedModeByBot[player->GetGUID()] = rangedMode;
+    {
+        std::lock_guard<std::mutex> lock(g_HunterRangedModeByBotLock);
+        g_HunterRangedModeByBot[player->GetGUID()] = rangedMode;
+    }
+
+    if (previousRangedMode != rangedMode)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Hunter mode switch: botGuid={} targetGuid={} previousMode={} newMode={} distance={} targetVictimIsBot={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), previousRangedMode ? "ranged" : "melee",
+            rangedMode ? "ranged" : "melee", distance, target->GetVictim() == player ? 1 : 0);
+    }
 }
 
 SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileTarget);
@@ -2467,6 +2488,15 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     Unit const* allyTarget = SelectAllyTarget(player);
+    if (player->GetClass() == CLASS_HUNTER)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "BuildClassSpellContext snapshot: botGuid={} inBg={} bgActive={} inPrep={} inDuel={} hasValidTarget={} targetGuid={} allyGuid={}.",
+            player->GetGUID().ToString(), values.inBattleground ? 1 : 0, IsTriggerActive(PvpTrigger::BgActive, values) ? 1 : 0,
+            inBattlegroundPreparation ? 1 : 0, inActiveDuel ? 1 : 0, hasValidTarget ? 1 : 0,
+            hasValidTarget ? target->GetGUID().ToString() : "none", allyTarget ? allyTarget->GetGUID().ToString() : "none");
+    }
+
     SpellDecision decision;
     {
         DecisionEvaluationScope decisionScope(player, 0);
@@ -2475,10 +2505,17 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     if (decision.spellId && !IsDecisionImmediatelyCastable(player, decision, hasValidTarget ? target : nullptr, allyTarget))
     {
+        uint32 const initialDecisionSpellId = decision.spellId;
         DecisionEvaluationScope fallbackScope(player, decision.spellId);
         SpellDecision const fallbackDecision = SelectClassOrUtilitySpell(player, hasValidTarget ? target : nullptr, allyTarget, profileSelection);
         if (fallbackDecision.spellId)
+        {
             decision = fallbackDecision;
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "Class spell fallback used: botGuid={} initialSpell={} fallbackSpell={} targetGuid={} allyGuid={}.",
+                player->GetGUID().ToString(), initialDecisionSpellId, fallbackDecision.spellId,
+                hasValidTarget ? target->GetGUID().ToString() : "none", allyTarget ? allyTarget->GetGUID().ToString() : "none");
+        }
     }
 
     context.actionName = decision.actionName;
