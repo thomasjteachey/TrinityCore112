@@ -1697,51 +1697,44 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
     return count;
 }
 
-Unit const* SelectCombatTarget(Player const* player)
+ObjectGuid SelectCombatTargetGuid(Player const* player)
 {
     if (!player)
-        return nullptr;
-
-    auto isTargetUsable = [&](Unit const* candidate)
-    {
-        if (!HasHostileTarget(player, candidate))
-            return false;
-        if (IsTargetInvalidByImmunity(player, candidate))
-            return false;
-        return true;
-    };
+        return ObjectGuid::Empty;
 
     if (ObjectGuid const selectedGuid = player->GetTarget(); !selectedGuid.IsEmpty())
-        if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); isTargetUsable(selectedTarget))
-            return selectedTarget;
+        if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); HasHostileTarget(player, selectedTarget) && !IsTargetInvalidByImmunity(player, selectedTarget))
+            return selectedGuid;
 
-    Unit const* victimTarget = player->GetVictim();
-    if (isTargetUsable(victimTarget))
-        return victimTarget;
+    if (Unit const* victimTarget = player->GetVictim(); HasHostileTarget(player, victimTarget) && !IsTargetInvalidByImmunity(player, victimTarget))
+        return victimTarget->GetGUID();
 
-    return SelectClosestEnemyTarget(player, true);
+    if (Unit const* closestTarget = SelectClosestEnemyTarget(player, true))
+        return closestTarget->GetGUID();
+
+    return ObjectGuid::Empty;
 }
 
-Unit const* SelectAllyTarget(Player const* player)
+ObjectGuid SelectAllyTargetGuid(Player const* player)
 {
     if (!player)
-        return nullptr;
+        return ObjectGuid::Empty;
 
     ObjectGuid const selectedGuid = player->GetTarget();
     if (selectedGuid.IsEmpty() || selectedGuid == player->GetGUID())
-        return nullptr;
+        return ObjectGuid::Empty;
 
     Unit const* selected = ObjectAccessor::GetUnit(*player, selectedGuid);
     if (!selected || !selected->IsAlive())
-        return nullptr;
+        return ObjectGuid::Empty;
 
     if (!player->IsValidAssistTarget(selected))
-        return nullptr;
+        return ObjectGuid::Empty;
 
     if (!player->IsWithinLOSInMap(selected) || !player->IsWithinDistInMap(selected, GetConfiguredHealRange()))
-        return nullptr;
+        return ObjectGuid::Empty;
 
-    return selected;
+    return selectedGuid;
 }
 
 SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool inMelee)
@@ -2584,8 +2577,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    Unit const* selectedTarget = SelectCombatTarget(player);
-    ObjectGuid const selectedTargetGuid = selectedTarget ? selectedTarget->GetGUID() : ObjectGuid::Empty;
+    ObjectGuid const selectedTargetGuid = SelectCombatTargetGuid(player);
     auto resolveTargetByGuid = [&](ObjectGuid const& guid) -> Unit const*
     {
         if (guid.IsEmpty() || guid == player->GetGUID())
@@ -2601,8 +2593,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     Unit const* selectedTargetByGuid = resolveTargetByGuid(selectedTargetGuid);
     bool const hasInvalidSelectedTarget = !selectedTargetGuid.IsEmpty() &&
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
-    Unit const* selectedAllyTarget = SelectAllyTarget(player);
-    ObjectGuid const selectedAllyGuid = selectedAllyTarget ? selectedAllyTarget->GetGUID() : ObjectGuid::Empty;
+    ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
 
     if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
