@@ -105,7 +105,7 @@ bool IsLifecycleGateEnabled()
 using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
-constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(2000);
+constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(1500);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;

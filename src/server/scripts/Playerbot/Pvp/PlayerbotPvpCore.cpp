@@ -2698,6 +2698,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     }
 
     ObjectGuid const selectedTargetGuid = SelectCombatTargetGuid(player);
+    ObjectGuid activeTargetGuid = selectedTargetGuid;
+    if (activeTargetGuid.IsEmpty())
+        if (Unit const* fallbackTarget = SelectClosestEnemyTarget(player, true))
+            activeTargetGuid = fallbackTarget->GetGUID();
+
     auto resolveTargetByGuid = [&](ObjectGuid const& guid) -> Unit const*
     {
         if (guid.IsEmpty() || guid == player->GetGUID())
@@ -2709,8 +2714,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
         return resolved;
     };
-    bool const hasValidTarget = resolveTargetByGuid(selectedTargetGuid) != nullptr;
-    Unit const* selectedTargetByGuid = resolveTargetByGuid(selectedTargetGuid);
+    bool const hasValidTarget = resolveTargetByGuid(activeTargetGuid) != nullptr;
+    Unit const* selectedTargetByGuid = resolveTargetByGuid(activeTargetGuid);
     bool const hasInvalidSelectedTarget = !selectedTargetGuid.IsEmpty() &&
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
@@ -2774,7 +2779,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     while (attempts++ < kMaxDecisionAttempts)
     {
         DecisionEvaluationScope decisionScope(player, suppressedSpellId);
-        Unit const* decisionTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* decisionTarget = resolveTargetByGuid(activeTargetGuid);
         Unit const* decisionAllyTarget = resolveTargetByGuid(selectedAllyGuid);
         SpellDecision const candidate = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
         if (!candidate.spellId)
@@ -2783,7 +2788,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (!firstDecision.spellId)
             firstDecision = candidate;
 
-        Unit const* immediateCastTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* immediateCastTarget = resolveTargetByGuid(activeTargetGuid);
         Unit const* immediateCastAllyTarget = resolveTargetByGuid(selectedAllyGuid);
         if (IsDecisionImmediatelyCastable(player, candidate, immediateCastTarget, immediateCastAllyTarget))
         {
@@ -2827,7 +2832,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.targetMode = decision.targetMode;
     context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
     context.itemEntry = decision.itemEntry;
-    context.targetGuid = hasValidTarget ? selectedTargetGuid : ObjectGuid::Empty;
+    context.targetGuid = hasValidTarget ? activeTargetGuid : ObjectGuid::Empty;
     context.allyTargetGuid = hasValidAllyTarget ? selectedAllyGuid : ObjectGuid::Empty;
     if (!decision.targetGuid.IsEmpty())
         context.targetGuid = decision.targetGuid;
@@ -2869,7 +2874,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     if (!context.spellId && hasValidTarget)
     {
-        Unit const* facingFallbackTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* facingFallbackTarget = resolveTargetByGuid(activeTargetGuid);
         if (facingFallbackTarget && !player->HasInArc(static_cast<float>(M_PI), facingFallbackTarget))
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FaceSpellTarget, facingFallbackTarget->GetGUID(), 0.0f,
@@ -2922,7 +2927,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // too close for spell"). Keep classic spell IDs untouched.
     if (!context.spellId && hasValidTarget && IsPrimaryRangedClassForSpacing(player->GetClass()))
     {
-        Unit const* movementTarget = resolveTargetByGuid(selectedTargetGuid);
+        Unit const* movementTarget = resolveTargetByGuid(activeTargetGuid);
         if (movementTarget)
         {
             float const distance = player->GetDistance(movementTarget);
