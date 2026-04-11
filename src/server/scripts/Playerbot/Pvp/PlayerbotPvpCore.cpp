@@ -49,6 +49,7 @@ namespace
 {
 struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
+bool IsFriendlySupportTarget(Player const* player, Unit const* target);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
@@ -372,7 +373,7 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
 
     if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && !player->IsValidAttackTarget(resolvedTarget, spellInfo))
         return false;
-    if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && !player->IsValidAssistTarget(resolvedTarget, spellInfo))
+    if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && !IsFriendlySupportTarget(player, resolvedTarget))
         return false;
 
     if (!player->IsWithinLOSInMap(resolvedTarget))
@@ -776,6 +777,29 @@ bool HasHostileTarget(Player const* player, Unit const* target)
     return player && target && target != player && target->IsAlive() && player->IsValidAttackTarget(target);
 }
 
+bool IsFriendlySupportTarget(Player const* player, Unit const* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return false;
+
+    if (target == player)
+        return true;
+
+    if (player->IsValidAssistTarget(target))
+        return true;
+
+    Player const* targetPlayer = target->ToPlayer();
+    if (!targetPlayer || !player->InBattleground() || !targetPlayer->InBattleground())
+        return false;
+
+    if (player->GetBattlegroundId() != targetPlayer->GetBattlegroundId())
+        return false;
+
+    uint32 const playerTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    uint32 const targetTeam = targetPlayer->GetBGTeam() ? targetPlayer->GetBGTeam() : targetPlayer->GetTeam();
+    return playerTeam == targetTeam;
+}
+
 bool HasAnyAura(Unit const* unit, std::initializer_list<uint32> spellIds)
 {
     if (!unit)
@@ -846,7 +870,7 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
     {
         if (!candidate || !candidate->IsAlive())
             return false;
-        if (candidate != player && !player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             return false;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             return false;
@@ -1349,7 +1373,7 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!candidate || candidate == player || !candidate->IsAlive())
             continue;
-        if (!player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             continue;
@@ -1516,7 +1540,7 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
     {
         if (!candidate || !candidate->IsAlive())
             return;
-        if (candidate != player && !player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             return;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             return;
@@ -1569,7 +1593,7 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
         Player* candidate = itr->GetSource();
         if (!candidate || candidate == player || !candidate->IsAlive())
             continue;
-        if (!player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             continue;
@@ -1681,7 +1705,7 @@ Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance,
     {
         if (!candidate || !candidate->IsAlive())
             return;
-        if (candidate != player && !player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             return;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             return;
@@ -1730,7 +1754,7 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!candidate || !candidate->IsAlive())
             continue;
-        if (!player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             continue;
@@ -1782,7 +1806,7 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!candidate || !candidate->IsAlive())
             continue;
-        if (candidate != player && !player->IsValidAssistTarget(candidate))
+        if (!IsFriendlySupportTarget(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             continue;
@@ -1817,7 +1841,7 @@ ObjectGuid SelectAllyTargetGuid(Player const* player)
     if (!selected || !selected->IsAlive())
         return ObjectGuid::Empty;
 
-    if (!player->IsValidAssistTarget(selected))
+    if (!IsFriendlySupportTarget(player, selected))
         return ObjectGuid::Empty;
 
     if (!player->IsWithinLOSInMap(selected) || !player->IsWithinDistInMap(selected, GetConfiguredHealRange()))
