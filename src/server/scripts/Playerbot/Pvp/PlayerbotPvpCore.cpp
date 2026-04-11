@@ -2453,8 +2453,6 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
     bool const lowMana = player->GetPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 25.0f;
     bool const bgActive = values.battlegroundState == playerbot::BattlegroundState::Active;
     bool const bgWaiting = values.battlegroundState == playerbot::BattlegroundState::WaitingToStart;
-    bool const periodicRefresh = bgActive;
-    bool const often = bgActive;
 
     struct TacticalRule
     {
@@ -2464,17 +2462,12 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
         float priority;
     };
 
-    // Preserve Warsong/Battleground trigger intent as an explicit ordered chain:
-    // highest-priority emergency handling first, then raid/bg pressure, then sustain.
-    std::array<TacticalRule, 9> const rules =
+    // Blind pressure model for battlegrounds: once active, always drive toward
+    // enemy players rather than objective-specific behavior.
+    std::array<TacticalRule, 4> const rules =
     {{
-        { "player has flag", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::PlayerHasFlag, values) && !values.battlegroundTeamHasHumans, "bg move to objective", 90.0f },
-        { "enemy flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::EnemyFlagCarrierNear, values), "attack enemy flag carrier", 70.0f },
-        { "team flagcarrier near", playerbot::PvpCore::IsTriggerActive(playerbot::PvpTrigger::TeamFlagCarrierNear, values), "bg protect fc", 65.0f },
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
-        { "bg active", bgActive, "bg move to objective", 50.0f },
-        { "often", often, "bg check objective", 51.0f },
-        { "timer bg", periodicRefresh, "bg reset objective force", 80.0f },
+        { "bg active", bgActive, "bg check objective", 60.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
         { "low mana", lowMana, "bg use buff", 45.0f }
     }};
