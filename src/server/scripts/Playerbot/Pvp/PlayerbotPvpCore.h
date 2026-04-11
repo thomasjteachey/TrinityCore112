@@ -145,6 +145,18 @@ enum class ArenaTeamInteractionType : uint8
 
 struct PvpClassSpellContext
 {
+    enum class MovementDirective : uint8
+    {
+        None = 0,
+        ReachMeleeRange,
+        ReachSpellRange,
+        FleeTooCloseForSpell,
+        FaceSpellTarget,
+        DropInvalidTarget,
+        CheckMountState,
+        ResetCombatState
+    };
+
     bool classSpellsEnabled = false;
     bool shouldExecute = false;
     char const* actionName = nullptr;
@@ -161,6 +173,10 @@ struct PvpClassSpellContext
     TargetMode targetMode = TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;
     ObjectGuid allyTargetGuid = ObjectGuid::Empty;
+    MovementDirective movementDirective = MovementDirective::None;
+    ObjectGuid movementTargetGuid = ObjectGuid::Empty;
+    float movementFollowRange = 0.0f;
+    float movementPriority = 0.0f;
     uint32 itemEntry = 0;
 };
 
