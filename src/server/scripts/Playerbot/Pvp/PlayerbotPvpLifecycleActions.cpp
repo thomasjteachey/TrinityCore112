@@ -189,12 +189,15 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+    bool const hasLostControlState = player->HasUnitState(UNIT_STATE_LOST_CONTROL);
+    bool const hasHardCcState = player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
-        player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasUnitState(UNIT_STATE_FLEEING);
+    bool const hasCcAura = player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
         player->HasAuraWithMechanic(ccMechanicMask) ||
         player->IsPolymorphed();
+
+    return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
