@@ -757,7 +757,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 
     // Keep pressure logic responsive: don't choose an out-of-combat mount
     // action while hostile players are already within practical engage range.
-    if (HasNearbyAttackableEnemyPlayer(player, 45.0f))
+    if (!player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
         return decision;
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
@@ -3127,7 +3127,10 @@ InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(Pvp
 
 bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
 {
-    return values.battlegroundState == BattlegroundState::Active;
+    // Keep lifecycle handling active for bots that are still flagged in a battleground,
+    // including STATUS_WAIT_LEAVE so they can execute LeaveBattleground() and return
+    // to their recorded queue entry point.
+    return values.inBattleground;
 }
 
 QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& values)
