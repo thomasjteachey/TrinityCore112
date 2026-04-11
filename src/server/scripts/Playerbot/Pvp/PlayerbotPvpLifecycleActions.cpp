@@ -195,7 +195,8 @@ bool IsCrowdControlledForAction(Player const* player)
         player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
         player->HasAuraWithMechanic(ccMechanicMask) ||
-        player->IsPolymorphed();
+        player->IsPolymorphed() ||
+        hasControlledMovement;
 }
 
 bool TryPursueNearestEnemyInWarsong(Player* player)
