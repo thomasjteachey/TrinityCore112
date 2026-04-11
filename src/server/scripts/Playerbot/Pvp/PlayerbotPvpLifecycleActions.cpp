@@ -531,6 +531,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     ClearEatDrinkAurasForMovement(player);
 
+    minReissueMs = std::max<uint32>(minReissueMs, 2000);
+
     if (IsWarsongGulch(player))
         minReissueMs = std::max<uint32>(minReissueMs, 2000);
 
