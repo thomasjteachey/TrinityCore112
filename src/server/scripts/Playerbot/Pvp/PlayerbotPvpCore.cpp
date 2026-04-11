@@ -2617,7 +2617,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP class context: class={} profile={} fallback={} unsupported={} has_enemy_target={} enemy_target_guid={} ally_target_guid={} target_mode={} spell={} action={} reason={}.",
         GetClassLabel(player->GetClass()), profileSelection.profileLabel, profileSelection.usedFallback,
-        profileSelection.unsupportedClass, hasValidTarget, hasValidTarget ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+        profileSelection.unsupportedClass, hasValidTarget, hasValidTarget ? selectedTargetGuid.ToString() : ObjectGuid::Empty.ToString(),
         context.allyTargetGuid.ToString(), targetModeLabel, context.spellId, context.actionName ? context.actionName : "none",
         context.reason ? context.reason : "none");
     return context;
