@@ -493,50 +493,16 @@ std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
 
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
 {
-    if (!player || !phase)
-        return;
-
-    std::ostringstream oss;
-    oss << "[Playerbot PvP][" << phase << "] bot=" << player->GetName() << " guid=" << player->GetGUID().ToString()
-        << " map=" << player->GetMapId() << " detail=" << detail;
-    std::string const message = oss.str();
-
-    TC_LOG_WARN("playerbots.pvp.lifecycle", "{}", message);
-
-    if (WorldSession* session = player->GetSession())
-        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
+    (void)player;
+    (void)phase;
+    (void)detail;
 }
 
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
 {
-    if (!bot || !bot->InBattleground())
-        return;
-
-    if (throttleMs > 0)
-    {
-        static std::unordered_map<uint64, uint32> nextEmitTimeByBotGuid;
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint64 const botGuid = bot->GetGUID().GetRawValue();
-        uint32& nextEmitMs = nextEmitTimeByBotGuid[botGuid];
-        if (nowMs < nextEmitMs)
-            return;
-
-        nextEmitMs = nowMs + throttleMs;
-    }
-
-    if (!bot->GetMap())
-        return;
-
-    std::ostringstream os;
-    os << "[PBDBG movepoint] bot=" << bot->GetName()
-       << " guid=" << bot->GetGUID().ToString()
-       << " bgId=" << bot->GetBattlegroundId()
-       << " detail=" << detail;
-    std::string const message = os.str();
-
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
-    if (WorldSession* session = bot->GetSession())
-        ChatHandler(session).SendGlobalGMSysMessage(message.c_str());
+    (void)bot;
+    (void)detail;
+    (void)throttleMs;
 }
 
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
