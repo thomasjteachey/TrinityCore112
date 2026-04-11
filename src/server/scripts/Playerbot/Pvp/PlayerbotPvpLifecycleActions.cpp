@@ -189,7 +189,8 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    return player->HasUnitState(UNIT_STATE_STUNNED) ||
+    return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
