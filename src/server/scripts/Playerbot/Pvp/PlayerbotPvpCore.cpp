@@ -2496,20 +2496,19 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
         return resolved;
     };
-    Unit const* target = resolveTargetByGuid(selectedTargetGuid);
-    bool const hasValidTarget = target != nullptr;
+    bool const hasValidTarget = resolveTargetByGuid(selectedTargetGuid) != nullptr;
 
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     Unit const* selectedAllyTarget = SelectAllyTarget(player);
     ObjectGuid const selectedAllyGuid = selectedAllyTarget ? selectedAllyTarget->GetGUID() : ObjectGuid::Empty;
-    Unit const* allyTarget = resolveTargetByGuid(selectedAllyGuid);
+    bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
     if (player->GetClass() == CLASS_HUNTER)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "BuildClassSpellContext snapshot: botGuid={} inBg={} bgActive={} inPrep={} inDuel={} hasValidTarget={} targetGuid={} allyGuid={}.",
             player->GetGUID().ToString(), values.inBattleground ? 1 : 0, IsTriggerActive(PvpTrigger::BgActive, values) ? 1 : 0,
             inBattlegroundPreparation ? 1 : 0, inActiveDuel ? 1 : 0, hasValidTarget ? 1 : 0,
-            hasValidTarget ? target->GetGUID().ToString() : "none", allyTarget ? allyTarget->GetGUID().ToString() : "none");
+            hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
     }
 
     SpellDecision decision;
@@ -2535,7 +2534,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             TC_LOG_DEBUG("playerbots.pvp.classspell",
                 "Class spell fallback used: botGuid={} initialSpell={} fallbackSpell={} targetGuid={} allyGuid={}.",
                 player->GetGUID().ToString(), initialDecisionSpellId, fallbackDecision.spellId,
-                hasValidTarget ? target->GetGUID().ToString() : "none", allyTarget ? allyTarget->GetGUID().ToString() : "none");
+                hasValidTarget ? selectedTargetGuid.ToString() : "none", hasValidAllyTarget ? selectedAllyGuid.ToString() : "none");
         }
     }
 
@@ -2560,8 +2559,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     context.targetMode = decision.targetMode;
     context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
     context.itemEntry = decision.itemEntry;
-    context.targetGuid = hasValidTarget ? target->GetGUID() : ObjectGuid::Empty;
-    context.allyTargetGuid = allyTarget ? allyTarget->GetGUID() : ObjectGuid::Empty;
+    context.targetGuid = hasValidTarget ? selectedTargetGuid : ObjectGuid::Empty;
+    context.allyTargetGuid = hasValidAllyTarget ? selectedAllyGuid : ObjectGuid::Empty;
     if (!decision.targetGuid.IsEmpty())
         context.targetGuid = decision.targetGuid;
     if (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
