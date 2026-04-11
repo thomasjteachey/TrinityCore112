@@ -3101,7 +3101,10 @@ InvitationResponseType PvpCore::SelectBattlegroundInvitationResponseSkeleton(Pvp
 
 bool PvpCore::ShouldHandleBattlegroundInProgressStatusSkeleton(PvpValues const& values)
 {
-    return values.battlegroundState == BattlegroundState::Active;
+    // Keep lifecycle handling active for bots that are still flagged in a battleground,
+    // including STATUS_WAIT_LEAVE so they can execute LeaveBattleground() and return
+    // to their recorded queue entry point.
+    return values.inBattleground;
 }
 
 QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& values)
