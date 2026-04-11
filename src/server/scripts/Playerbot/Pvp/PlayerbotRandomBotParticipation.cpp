@@ -55,6 +55,47 @@
 
 namespace
 {
+bool IsCrowdControlledForLifecyclePause(Player const* player)
+{
+    if (!player)
+        return false;
+
+    constexpr uint32 ccMechanicMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(ccMechanicMask) ||
+        player->IsPolymorphed();
+}
+
+void ClearActiveMovementForControlLoss(Player* player)
+{
+    if (!player)
+        return;
+
+    player->StopMoving();
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    {
+        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        player->SendMovementFlagUpdate();
+    }
+}
+
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -1054,6 +1095,15 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     {
         LogLifecycleBranchSummary(guid, "gate-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        return;
+    }
+
+    if (IsCrowdControlledForLifecyclePause(player))
+    {
+        ClearActiveMovementForControlLoss(player);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle paused due to crowd control: guid={}.",
+            guid.ToString());
         return;
     }
 
