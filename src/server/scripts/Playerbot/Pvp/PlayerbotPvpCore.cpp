@@ -550,17 +550,18 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
-    if (!map)
-        return player->IsOutdoors();
+    // Keep mount checks aligned with reference behavior: require IsOutdoors and
+    // reject cases where the unit is clipping slightly below floor level (which
+    // can misreport outdoor state in battleground tunnels/bases).
+    if (!player->IsOutdoors())
+        return false;
 
-    PositionFullTerrainStatus terrainStatus;
-    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
-        terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    // Prefer permissive outdoor detection in battleground flow. Requiring both
-    // signals can incorrectly block valid WSG field mounts when one source
-    // briefly desynchronizes near terrain seams.
-    return player->IsOutdoors() || terrainStatus.outdoors;
+    float const posZ = player->GetPositionZ();
+    float const groundLevel = player->GetMapWaterOrGroundLevel(player->GetPositionX(), player->GetPositionY(), posZ);
+    if (!player->HasWaterWalkAura() && posZ < groundLevel)
+        return false;
+
+    return true;
 }
 
 bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
