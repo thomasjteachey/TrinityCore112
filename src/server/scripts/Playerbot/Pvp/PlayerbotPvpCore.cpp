@@ -783,17 +783,6 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
     return decision;
 }
 
-bool HasTemporaryWeaponImbue(Player const* player)
-{
-    if (!player)
-        return false;
-
-    Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
-    Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
-    return (mainHand && mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT)) ||
-        (offHand && offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT));
-}
-
 bool IsCasterClass(Unit const* unit)
 {
     Player const* player = unit ? unit->ToPlayer() : nullptr;
@@ -2084,15 +2073,8 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
     Unit const* blindTarget = IsSpellReady(player, 2094) ? SelectRogueBlindTarget(player, target, 15.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    if (!player->IsInCombat() && IsSpellReady(player, 11202))
-    {
-        Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
-        Item* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
-        bool const mainHandMissingPoison = mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
-        bool const offHandMissingPoison = offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
-        AddDecisionCandidate(candidates, mainHandMissingPoison || offHandMissingPoison, 25.0f,
-            { "rogue crippling poison", "apply crippling poison to unpoisoned weapons out of combat", 11202, playerbot::PvpClassSpellContext::TargetMode::Self });
-    }
+    // Disabled: weapon-poison automation from PvP decision loop.
+    // This avoids touching weapon-enchant mutation paths while investigating combat-time crashes.
 
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 1784) && IsSpellReady(player, 1784), 50.0f,
         { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -2128,8 +2110,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
         return decision;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, !player->IsInCombat() && !HasTemporaryWeaponImbue(player) && IsSpellReady(player, 8232), 35.0f,
-        { "shaman windfury weapon", "maintain weapon imbue out of combat", 8232, playerbot::PvpClassSpellContext::TargetMode::Self });
+    // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432), 34.0f,
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 10414), 60.0f,
