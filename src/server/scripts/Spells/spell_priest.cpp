@@ -640,10 +640,23 @@ class spell_pri_lightwell : public SpellScript
                 return;
         }
 
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        if (target->HasAura(lightwellRenew) ||
+            target->HasAura(SPELL_PRIEST_LIGHTWELL_RENEW_R1) ||
+            target->HasAura(SPELL_PRIEST_LIGHTWELL_RENEW_R2) ||
+            target->HasAura(SPELL_PRIEST_LIGHTWELL_RENEW_R3) ||
+            target->HasAura(SPELL_PRIEST_LIGHTWELL_RENEW_R4) ||
+            target->HasAura(SPELL_PRIEST_LIGHTWELL_RENEW_R5) ||
+            target->HasAura(SPELL_PRIEST_LIGHTWELL_RENEW_R6))
+            return;
+
         // proc a spellcast
         if (Aura* chargesAura = caster->GetAura(SPELL_PRIEST_LIGHTWELL_CHARGES))
         {
-            caster->CastSpell(GetHitUnit(), lightwellRenew, caster->ToTempSummon()->GetSummonerGUID());
+            caster->CastSpell(target, lightwellRenew, caster->ToTempSummon()->GetSummonerGUID());
             if (chargesAura->ModCharges(-1))
                 caster->ToTempSummon()->UnSummon();
         }
