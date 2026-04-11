@@ -1706,12 +1706,6 @@ ObjectGuid SelectCombatTargetGuid(Player const* player)
         if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); HasHostileTarget(player, selectedTarget) && !IsTargetInvalidByImmunity(player, selectedTarget))
             return selectedGuid;
 
-    if (Unit const* victimTarget = player->GetVictim(); HasHostileTarget(player, victimTarget) && !IsTargetInvalidByImmunity(player, victimTarget))
-        return victimTarget->GetGUID();
-
-    if (Unit const* closestTarget = SelectClosestEnemyTarget(player, true))
-        return closestTarget->GetGUID();
-
     return ObjectGuid::Empty;
 }
 
