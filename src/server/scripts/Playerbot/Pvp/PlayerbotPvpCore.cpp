@@ -1640,13 +1640,13 @@ Unit const* SelectCombatTarget(Player const* player)
         return true;
     };
 
-    Unit const* target = player->GetVictim();
-    if (isTargetUsable(target))
-        return target;
+    if (ObjectGuid const selectedGuid = player->GetTarget(); !selectedGuid.IsEmpty())
+        if (Unit const* selectedTarget = ObjectAccessor::GetUnit(*player, selectedGuid); isTargetUsable(selectedTarget))
+            return selectedTarget;
 
-    target = player->GetSelectedUnit();
-    if (isTargetUsable(target))
-        return target;
+    Unit const* victimTarget = player->GetVictim();
+    if (isTargetUsable(victimTarget))
+        return victimTarget;
 
     return SelectClosestEnemyTarget(player, true);
 }
@@ -1656,8 +1656,12 @@ Unit const* SelectAllyTarget(Player const* player)
     if (!player)
         return nullptr;
 
-    Unit const* selected = player->GetSelectedUnit();
-    if (!selected || !selected->IsAlive() || selected->GetGUID() == player->GetGUID())
+    ObjectGuid const selectedGuid = player->GetTarget();
+    if (selectedGuid.IsEmpty() || selectedGuid == player->GetGUID())
+        return nullptr;
+
+    Unit const* selected = ObjectAccessor::GetUnit(*player, selectedGuid);
+    if (!selected || !selected->IsAlive())
         return nullptr;
 
     if (!player->IsValidAssistTarget(selected))
