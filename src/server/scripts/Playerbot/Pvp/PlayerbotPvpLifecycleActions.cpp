@@ -1125,17 +1125,10 @@ void ClearActiveMovementForControlLoss(Player* player)
     if (!player)
         return;
 
-    player->StopMoving();
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-    {
-        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-        player->SendMovementFlagUpdate();
-    }
 }
 
 bool CanIssueBotMovement(Player* player)
