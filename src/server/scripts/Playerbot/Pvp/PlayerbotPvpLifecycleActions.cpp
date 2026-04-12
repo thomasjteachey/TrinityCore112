@@ -50,9 +50,12 @@
 #include "CommonHelpers.h"
 
 #include <cstring>
+#include <cstdint>
 #include <cmath>
 #include <chrono>
 #include <limits>
+#include <functional>
+#include <string_view>
 #include <sstream>
 #include <unordered_map>
 #include <array>
@@ -64,9 +67,13 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
+constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
+constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
+constexpr uint32 SPELL_DESERTER = 26013;
 
 void ForcePlayerbotDismount(Player* player)
 {
@@ -517,11 +524,81 @@ std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
     return battlegroundTypes;
 }
 
+
+std::string BuildQueueDebugSummary(Player* player)
+{
+    if (!player)
+        return "queue=none";
+
+    std::ostringstream summary;
+    summary << "queue_slots=[";
+    bool first = true;
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const queueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        if (!first)
+            summary << ',';
+        first = false;
+        summary << uint32(queueTypeId) << ":inv=" << (player->IsInvitedForBattlegroundQueueType(queueTypeId) ? 1 : 0);
+    }
+
+    if (first)
+        summary << "none";
+
+    summary << "] invitedArenaTeamId=" << player->GetArenaTeamIdInvited();
+    return summary.str();
+}
+
+void WhisperLifecycleDiagnosticToObserver(Player* sourceBot, std::string const& message, char const* phase)
+{
+    if (!sourceBot || message.empty())
+        return;
+
+    Player* observer = ObjectAccessor::FindPlayerByName("Elgrom");
+    if (!observer)
+        return;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    static std::unordered_map<uint64, uint32> nextWhisperMsByKey;
+    std::size_t phaseHash = std::hash<std::string_view>{}(phase ? std::string_view(phase) : std::string_view("none"));
+    uint64 const throttleKey = sourceBot->GetGUID().GetRawValue() ^ (uint64(phaseHash) << 1);
+    uint32& nextAllowedMs = nextWhisperMsByKey[throttleKey];
+    if (nowMs < nextAllowedMs)
+        return;
+
+    nextAllowedMs = nowMs + 1500;
+
+    if (observer == sourceBot)
+    {
+        if (WorldSession* session = observer->GetSession())
+            ChatHandler(session).PSendSysMessage("[PB lifecycle] %s", message.c_str());
+        return;
+    }
+
+    sourceBot->Whisper(message, LANG_UNIVERSAL, observer);
+}
+
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
 {
-    (void)player;
-    (void)phase;
-    (void)detail;
+    if (!player)
+        return;
+
+    TC_LOG_INFO("playerbots.pvp.lifecycle",
+        "Playerbot lifecycle diagnostic: guid={} phase={} inBg={} bgId={} inQueue={} deserter={} {} detail={}",
+        player->GetGUID().ToString(), phase ? phase : "none", player->InBattleground() ? 1 : 0, player->GetBattlegroundId(),
+        player->InBattlegroundQueue() ? 1 : 0, player->HasAura(SPELL_DESERTER) ? 1 : 0, BuildQueueDebugSummary(player), detail);
+
+    std::ostringstream whisper;
+    whisper << "phase=" << (phase ? phase : "none")
+            << " inBg=" << (player->InBattleground() ? 1 : 0)
+            << " inQueue=" << (player->InBattlegroundQueue() ? 1 : 0)
+            << " deserter=" << (player->HasAura(SPELL_DESERTER) ? 1 : 0)
+            << " " << BuildQueueDebugSummary(player)
+            << " detail=" << detail;
+    WhisperLifecycleDiagnosticToObserver(player, whisper.str(), phase);
 }
 
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
@@ -1460,7 +1537,9 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
     return false;
 }
 
-bool BattlegroundHasAnyHumanPlayers(Player const* player)
+
+
+bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
 {
     if (!player || !player->InBattleground() || !player->GetMap())
         return false;
@@ -1473,13 +1552,71 @@ bool BattlegroundHasAnyHumanPlayers(Player const* player)
         if (!participant || participant->GetBattlegroundId() != battlegroundId)
             continue;
 
-        WorldSession const* participantSession = participant->GetSession();
-        bool const isVirtualBotSession = participantSession && participantSession->IsVirtualSession();
-        if (!isVirtualBotSession && !playerbot::IsManagedRandomBot(participant))
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (!isVirtualSession && !playerbot::IsManagedRandomBot(participant))
             return true;
     }
 
     return false;
+}
+
+void FinalizeVirtualBotTeleportIfPending(Player* player)
+{
+    if (!player)
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session || !session->IsVirtualSession())
+        return;
+
+    if (player->IsBeingTeleportedFar())
+        session->HandleMoveWorldportAck();
+
+    if (!player->IsBeingTeleportedNear())
+        return;
+
+    WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+    teleportAck << player->GetPackGUID();
+    teleportAck << uint32(0);
+    teleportAck << uint32(0);
+    session->HandleMoveTeleportAck(teleportAck);
+
+    if (!player->IsBeingTeleportedNear())
+        return;
+
+    uint32 const oldZone = player->GetZoneId();
+    WorldLocation destination = player->GetTeleportDest();
+    float safeDestinationZ = destination.GetPositionZ();
+    player->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), safeDestinationZ);
+    destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), safeDestinationZ, destination.GetOrientation());
+    player->SetSemaphoreTeleportNear(false);
+    player->UpdatePosition(destination, true);
+    player->SetFallInformation(0, player->GetPositionZ());
+
+    uint32 newZone = 0;
+    uint32 newArea = 0;
+    player->GetZoneAndAreaId(newZone, newArea);
+    player->UpdateZone(newZone, newArea);
+
+    if (oldZone != newZone)
+    {
+        if (player->pvpInfo.IsHostile)
+            player->CastSpell(player, 2479, true);
+        else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+            player->UpdatePvP(false, false);
+    }
+
+    player->ResummonPetTemporaryUnSummonedIfAny();
+    player->ProcessDelayedOperations();
+}
+
+uint64 BuildBattlegroundInstanceKey(Battleground const* battleground)
+{
+    if (!battleground)
+        return 0;
+
+    return (uint64(battleground->GetMapId()) << 32) | uint64(battleground->GetInstanceID());
 }
 
 bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
@@ -1490,8 +1627,11 @@ bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
     if (!player->IsBeingTeleportedFar() && !player->IsBeingTeleportedNear())
         return false;
 
-    // Virtual-session bots can retain stale near/far teleport semaphores inside
+    // Managed bots can retain stale near/far teleport semaphores inside
     // battleground instances; do not deadlock leave/end cleanup on those flags.
+    if (player->InBattleground() && playerbot::IsManagedRandomBot(player))
+        return false;
+
     WorldSession const* session = player->GetSession();
     if (session && session->IsVirtualSession() && player->InBattleground())
         return false;
@@ -1986,32 +2126,82 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (!battleground)
         return false;
 
+    if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+    {
+        uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
+        if (!BattlegroundHasAnyRealHumanPlayers(player))
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+            if (!noHumanSinceMs)
+                noHumanSinceMs = nowMs;
+
+            if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
+            {
+                battleground->EndBattleground(PVP_TEAM_NEUTRAL);
+                g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                    "Playerbot PvP lifecycle wait-join end due to no real humans: guid={} bgTypeId={} instanceId={}.",
+                    player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
+                return true;
+            }
+        }
+        else
+            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+
+        return false;
+    }
+
     if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
+        g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+
         if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
 
         player->LeaveBattleground();
+        FinalizeVirtualBotTeleportIfPending(player);
+        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        RemoveMatchingQueues(player, false, false, true);
+        RemoveMatchingQueues(player, true, false, false);
+        player->SetArenaTeamIdInvited(0);
+        EmitLifecycleDiagnostic(player, "wait-leave-cleanup", "Post-leave cleanup complete before returning to scheduler flow.");
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}.",
+            "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
         return true;
     }
 
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
-        return false;
-
-    if (!BattlegroundHasAnyHumanPlayers(player))
     {
-        if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
-            return false;
-
-        battleground->EndBattleground(0);
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle forced battleground end due to no human participants: guid={} bgTypeId={} instanceId={}.",
-            player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
-        return true;
+        g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+        return false;
     }
+
+    // Secondary guard for non-virtual managed bot accounts: core battleground
+    // shutdown treats any non-virtual session as human, so these matches can
+    // persist indefinitely after real humans leave.
+    uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
+    if (!BattlegroundHasAnyRealHumanPlayers(player))
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+        if (!noHumanSinceMs)
+            noHumanSinceMs = nowMs;
+
+        if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
+        {
+            battleground->EndBattleground(PVP_TEAM_NEUTRAL);
+            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP lifecycle end due to no real human participants: guid={} bgTypeId={} instanceId={}.",
+                player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
+            return true;
+        }
+    }
+    else
+        g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
     if (HandleBattlegroundDeathState(player))
         return true;
