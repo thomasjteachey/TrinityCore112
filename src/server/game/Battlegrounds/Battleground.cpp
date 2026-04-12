@@ -220,15 +220,6 @@ void Battleground::Update(uint32 diff)
     switch (GetStatus())
     {
         case STATUS_WAIT_JOIN:
-            if (isBattleground() && GetPlayersSize() && !HasAnyNonVirtualHumanParticipant(this))
-            {
-                TC_LOG_INFO("bg.battleground",
-                    "Battleground::Update ending map={} instance={} during preparation because no non-virtual participants remain.",
-                    GetMapId(), GetInstanceID());
-                EndNow();
-                return;
-            }
-
             if (GetPlayersSize())
             {
                 _ProcessJoin(diff);
