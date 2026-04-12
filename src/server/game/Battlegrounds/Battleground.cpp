@@ -269,6 +269,15 @@ void Battleground::Update(uint32 diff)
             }
             break;
         case STATUS_IN_PROGRESS:
+            if (isBattleground() && !HasAnyNonVirtualHumanParticipant(this))
+            {
+                TC_LOG_INFO("bg.battleground",
+                    "Battleground::Update ending map={} instance={} because no non-virtual participants remain.",
+                    GetMapId(), GetInstanceID());
+                EndNow();
+                return;
+            }
+
             _ProcessOfflineQueue();
             // after 20 minutes without one team losing, the arena closes with no winner and no rating change
             if (isArena())
