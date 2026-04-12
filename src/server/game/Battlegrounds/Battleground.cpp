@@ -57,7 +57,7 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
     for (auto const& [participantGuid, participantData] : battleground->GetPlayers())
     {
         (void)participantData;
-        Player const* participant = ObjectAccessor::FindPlayer(participantGuid);
+        Player const* participant = ObjectAccessor::FindConnectedPlayer(participantGuid);
         if (!participant)
             continue;
 
