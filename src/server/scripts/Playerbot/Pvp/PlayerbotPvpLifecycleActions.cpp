@@ -64,6 +64,8 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
+constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -1460,6 +1462,14 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
     return false;
 }
 
+uint64 BuildBattlegroundInstanceKey(Battleground const* battleground)
+{
+    if (!battleground)
+        return 0;
+
+    return (uint64(battleground->GetMapId()) << 32) | uint64(battleground->GetInstanceID());
+}
+
 bool BattlegroundHasAnyHumanPlayers(Player const* player)
 {
     if (!player || !player->InBattleground() || !player->GetMap())
@@ -2001,17 +2011,34 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         return false;
 
+    uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
+
     if (!BattlegroundHasAnyHumanPlayers(player))
     {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+        if (!noHumanSinceMs)
+        {
+            noHumanSinceMs = nowMs;
+            return false;
+        }
+
+        if (nowMs < noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS)
+            return false;
+
         if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
 
         battleground->EndBattleground(0);
+        player->LeaveBattleground();
+        g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle forced battleground end due to no human participants: guid={} bgTypeId={} instanceId={}.",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
         return true;
     }
+
+    g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
     if (HandleBattlegroundDeathState(player))
         return true;
