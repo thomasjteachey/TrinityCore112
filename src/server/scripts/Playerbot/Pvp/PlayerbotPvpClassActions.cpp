@@ -529,9 +529,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (preserveStealthForOpener)
         {
             // While stealthed, keep auto-attack disabled so we do not break
-            // stealth early, but keep chase active for Cheap Shot opener so
-            // rogues do not idle in place waiting for an exact cast snapshot.
-            if (context.spellId == 1833 && CanIssueFollowCommands(player))
+            // stealth early, but keep chase active so rogues continue
+            // closing distance instead of idling in place during openers.
+            if (CanIssueFollowCommands(player))
                 player->GetMotionMaster()->MoveChase(target);
 
             player->AttackStop();
