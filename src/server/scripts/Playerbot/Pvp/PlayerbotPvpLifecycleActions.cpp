@@ -54,6 +54,8 @@
 #include <cmath>
 #include <chrono>
 #include <limits>
+#include <functional>
+#include <string_view>
 #include <sstream>
 #include <unordered_map>
 #include <array>
@@ -550,6 +552,35 @@ std::string BuildQueueDebugSummary(Player* player)
     return summary.str();
 }
 
+void WhisperLifecycleDiagnosticToObserver(Player* sourceBot, std::string const& message, char const* phase)
+{
+    if (!sourceBot || message.empty())
+        return;
+
+    Player* observer = ObjectAccessor::FindPlayerByName("Elgrom");
+    if (!observer)
+        return;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    static std::unordered_map<uint64, uint32> nextWhisperMsByKey;
+    std::size_t phaseHash = std::hash<std::string_view>{}(phase ? std::string_view(phase) : std::string_view("none"));
+    uint64 const throttleKey = sourceBot->GetGUID().GetRawValue() ^ (uint64(phaseHash) << 1);
+    uint32& nextAllowedMs = nextWhisperMsByKey[throttleKey];
+    if (nowMs < nextAllowedMs)
+        return;
+
+    nextAllowedMs = nowMs + 1500;
+
+    if (observer == sourceBot)
+    {
+        if (WorldSession* session = observer->GetSession())
+            ChatHandler(session).PSendSysMessage("[PB lifecycle] %s", message.c_str());
+        return;
+    }
+
+    sourceBot->Whisper(message, LANG_UNIVERSAL, observer);
+}
+
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
 {
     if (!player)
@@ -559,6 +590,15 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
         "Playerbot lifecycle diagnostic: guid={} phase={} inBg={} bgId={} inQueue={} deserter={} {} detail={}",
         player->GetGUID().ToString(), phase ? phase : "none", player->InBattleground() ? 1 : 0, player->GetBattlegroundId(),
         player->InBattlegroundQueue() ? 1 : 0, player->HasAura(SPELL_DESERTER) ? 1 : 0, BuildQueueDebugSummary(player), detail);
+
+    std::ostringstream whisper;
+    whisper << "phase=" << (phase ? phase : "none")
+            << " inBg=" << (player->InBattleground() ? 1 : 0)
+            << " inQueue=" << (player->InBattlegroundQueue() ? 1 : 0)
+            << " deserter=" << (player->HasAura(SPELL_DESERTER) ? 1 : 0)
+            << " " << BuildQueueDebugSummary(player)
+            << " detail=" << detail;
+    WhisperLifecycleDiagnosticToObserver(player, whisper.str(), phase);
 }
 
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
