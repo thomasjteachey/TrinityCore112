@@ -49,6 +49,8 @@
 
 namespace
 {
+constexpr uint32 NO_NON_VIRTUAL_HUMAN_END_DELAY_MS = 15000;
+
 bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
 {
     if (!battleground)
@@ -115,6 +117,7 @@ Battleground::Battleground()
     m_IsRated           = false;
     m_BuffChange        = false;
     m_HasEverHadNonVirtualHumanParticipant = false;
+    m_NoNonVirtualHumanElapsed = 0;
     m_IsRandom          = false;
     m_IsReplay          = false;
     m_ReplayId          = 0;
@@ -233,13 +236,18 @@ void Battleground::Update(uint32 diff)
             }
             break;
         case STATUS_IN_PROGRESS:
-            if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant && !HasAnyNonVirtualHumanParticipant(this))
+            if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant)
             {
-                TC_LOG_INFO("bg.battleground",
-                    "Battleground::Update ending map={} instance={} because no non-virtual participants remain.",
-                    GetMapId(), GetInstanceID());
-                EndNow();
-                return;
+                if (HasAnyNonVirtualHumanParticipant(this))
+                    m_NoNonVirtualHumanElapsed = 0;
+                else if ((m_NoNonVirtualHumanElapsed += diff) >= NO_NON_VIRTUAL_HUMAN_END_DELAY_MS)
+                {
+                    TC_LOG_INFO("bg.battleground",
+                        "Battleground::Update ending map={} instance={} because no non-virtual participants remained for {} ms.",
+                        GetMapId(), GetInstanceID(), NO_NON_VIRTUAL_HUMAN_END_DELAY_MS);
+                    EndNow();
+                    return;
+                }
             }
 
             _ProcessOfflineQueue();
@@ -920,6 +928,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
     RemovePlayerFromResurrectQueue(guid);
 
     Player* player = ObjectAccessor::FindPlayer(guid);
+    bool const removedNonVirtualHuman = player && player->GetSession() && !player->GetSession()->IsVirtualSession();
 
     if (player)
     {
@@ -991,7 +1000,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         sBattlegroundMgr->BuildPlayerLeftBattlegroundPacket(&data, guid);
         SendPacketToTeam(team, &data, player, false);
 
-        if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant &&
+        if (isBattleground() && removedNonVirtualHuman && m_HasEverHadNonVirtualHumanParticipant &&
             (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN) &&
             !HasAnyNonVirtualHumanParticipant(this))
         {
@@ -1039,6 +1048,7 @@ void Battleground::Reset()
     m_InvitedHorde = 0;
     m_InBGFreeSlotQueue = false;
     m_HasEverHadNonVirtualHumanParticipant = false;
+    m_NoNonVirtualHumanElapsed = 0;
 
     m_Players.clear();
 
@@ -1187,7 +1197,10 @@ void Battleground::AddPlayer(Player* player)
         UpdatePlayersCountByTeam(team, false);                  // +1 player
 
     if (WorldSession const* session = player->GetSession(); session && !session->IsVirtualSession())
+    {
         m_HasEverHadNonVirtualHumanParticipant = true;
+        m_NoNonVirtualHumanElapsed = 0;
+    }
 
     WorldPacket data;
     sBattlegroundMgr->BuildPlayerJoinedBattlegroundPacket(&data, player);
