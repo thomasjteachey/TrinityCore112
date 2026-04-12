@@ -1482,6 +1482,23 @@ bool BattlegroundHasAnyHumanPlayers(Player const* player)
     return false;
 }
 
+bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
+{
+    if (!player)
+        return false;
+
+    if (!player->IsBeingTeleportedFar() && !player->IsBeingTeleportedNear())
+        return false;
+
+    // Virtual-session bots can retain stale near/far teleport semaphores inside
+    // battleground instances; do not deadlock leave/end cleanup on those flags.
+    WorldSession const* session = player->GetSession();
+    if (session && session->IsVirtualSession() && player->InBattleground())
+        return false;
+
+    return true;
+}
+
 bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 {
     if (!player || !player->InBattleground())
@@ -1971,7 +1988,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
     if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
-        if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
 
         player->LeaveBattleground();
@@ -1986,7 +2003,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
     if (!BattlegroundHasAnyHumanPlayers(player))
     {
-        if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
 
         battleground->EndBattleground(0);
