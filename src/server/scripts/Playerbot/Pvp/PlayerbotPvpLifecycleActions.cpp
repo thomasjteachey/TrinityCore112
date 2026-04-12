@@ -1725,12 +1725,13 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
     if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
     {
-        if (!CanIssueMovementCommand(player, 500))
+        bool const forceStealthRogueChase = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
+        if (!forceStealthRogueChase && !CanIssueMovementCommand(player, 500))
             return true;
         player->GetMotionMaster()->MoveChase(target);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={}.",
-            player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);
+            "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={} forceStealthRogueChase={}.",
+            player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange, forceStealthRogueChase ? 1 : 0);
         return true;
     }
 
