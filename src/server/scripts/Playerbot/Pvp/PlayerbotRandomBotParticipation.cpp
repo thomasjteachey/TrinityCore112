@@ -115,9 +115,33 @@ bool g_StartupRevivePending = false;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
-    (void)player;
-    (void)detail;
-    (void)throttleMs;
+    if (!player || detail.empty())
+        return;
+
+    Player* observer = ObjectAccessor::FindPlayerByName("Elgrom");
+    if (!observer)
+        return;
+
+    static std::unordered_map<uint64, uint32> nextWhisperMsByGuid;
+    uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& nextAllowedMs = nextWhisperMsByGuid[botGuidRaw];
+    if (nowMs < nextAllowedMs)
+        return;
+
+    nextAllowedMs = nowMs + std::max<uint32>(throttleMs, 250);
+
+    std::ostringstream message;
+    message << "[PB lifecycle] " << player->GetGUID().ToString() << ' ' << detail;
+
+    if (observer == player)
+    {
+        if (WorldSession* session = observer->GetSession())
+            ChatHandler(session).PSendSysMessage("%s", message.str().c_str());
+        return;
+    }
+
+    const_cast<Player*>(player)->Whisper(message.str(), LANG_UNIVERSAL, observer);
 }
 
 enum class LifecycleObservationReason : uint8
