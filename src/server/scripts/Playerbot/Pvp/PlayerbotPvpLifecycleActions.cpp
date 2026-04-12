@@ -1460,6 +1460,28 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
     return false;
 }
 
+bool BattlegroundHasAnyHumanPlayers(Player const* player)
+{
+    if (!player || !player->InBattleground() || !player->GetMap())
+        return false;
+
+    uint32 const battlegroundId = player->GetBattlegroundId();
+    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player const* participant = itr->GetSource();
+        if (!participant || participant->GetBattlegroundId() != battlegroundId)
+            continue;
+
+        WorldSession const* participantSession = participant->GetSession();
+        bool const isVirtualBotSession = participantSession && participantSession->IsVirtualSession();
+        if (!isVirtualBotSession && !playerbot::IsManagedRandomBot(participant))
+            return true;
+    }
+
+    return false;
+}
+
 bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 {
     if (!player || !player->InBattleground())
@@ -1960,6 +1982,18 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         return false;
+
+    if (!BattlegroundHasAnyHumanPlayers(player))
+    {
+        if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+            return false;
+
+        battleground->EndBattleground(0);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle forced battleground end due to no human participants: guid={} bgTypeId={} instanceId={}.",
+            player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
+        return true;
+    }
 
     if (HandleBattlegroundDeathState(player))
         return true;
