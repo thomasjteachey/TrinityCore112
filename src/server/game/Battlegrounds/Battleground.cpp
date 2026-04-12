@@ -114,6 +114,7 @@ Battleground::Battleground()
     m_StartDelayTime    = 0;
     m_IsRated           = false;
     m_BuffChange        = false;
+    m_HasEverHadNonVirtualHumanParticipant = false;
     m_IsRandom          = false;
     m_IsReplay          = false;
     m_ReplayId          = 0;
@@ -232,7 +233,7 @@ void Battleground::Update(uint32 diff)
             }
             break;
         case STATUS_IN_PROGRESS:
-            if (isBattleground() && !HasAnyNonVirtualHumanParticipant(this))
+            if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant && !HasAnyNonVirtualHumanParticipant(this))
             {
                 TC_LOG_INFO("bg.battleground",
                     "Battleground::Update ending map={} instance={} because no non-virtual participants remain.",
@@ -990,7 +991,9 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         sBattlegroundMgr->BuildPlayerLeftBattlegroundPacket(&data, guid);
         SendPacketToTeam(team, &data, player, false);
 
-        if (isBattleground() && (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN) && !HasAnyNonVirtualHumanParticipant(this))
+        if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant &&
+            (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN) &&
+            !HasAnyNonVirtualHumanParticipant(this))
         {
             TC_LOG_DEBUG("bg.battleground",
                 "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants remain.",
@@ -1035,6 +1038,7 @@ void Battleground::Reset()
     m_InvitedAlliance = 0;
     m_InvitedHorde = 0;
     m_InBGFreeSlotQueue = false;
+    m_HasEverHadNonVirtualHumanParticipant = false;
 
     m_Players.clear();
 
@@ -1181,6 +1185,9 @@ void Battleground::AddPlayer(Player* player)
 
     if (!isInBattleground)
         UpdatePlayersCountByTeam(team, false);                  // +1 player
+
+    if (WorldSession const* session = player->GetSession(); session && !session->IsVirtualSession())
+        m_HasEverHadNonVirtualHumanParticipant = true;
 
     WorldPacket data;
     sBattlegroundMgr->BuildPlayerJoinedBattlegroundPacket(&data, player);

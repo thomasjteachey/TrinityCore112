@@ -592,6 +592,7 @@ class TC_GAME_API Battleground
         int32  m_StartDelayTime;
         bool   m_IsRated;                                   // is this battle rated?
         bool   m_PrematureCountDown;
+        bool   m_HasEverHadNonVirtualHumanParticipant;
         bool   m_IsReplay;
         uint32 m_ReplayId;
         uint32 m_FightId;
