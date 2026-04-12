@@ -468,20 +468,20 @@ uint32 ResolvePlayerAccountId(Player const* player)
 
 bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts)
 {
-    if (!player || botAccounts.empty())
+    if (!player)
+        return false;
+
+    if (WorldSession const* session = player->GetSession(); session && session->IsVirtualSession())
+        return true;
+
+    if (botAccounts.empty())
         return false;
 
     uint32 const accountId = ResolvePlayerAccountId(player);
     if (!accountId || botAccounts.find(accountId) == botAccounts.end())
         return false;
 
-    if (WorldSession const* session = player->GetSession())
-    {
-        // BotAccountIds is an explicit allow-list; treat listed accounts as
-        // managed bots even when their virtual session is marked connected.
-        return true;
-    }
-
+    // BotAccountIds remains an explicit allow-list for non-virtual sessions.
     return true;
 }
 
