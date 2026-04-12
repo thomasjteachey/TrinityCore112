@@ -1495,8 +1495,11 @@ bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
     if (!player->IsBeingTeleportedFar() && !player->IsBeingTeleportedNear())
         return false;
 
-    // Virtual-session bots can retain stale near/far teleport semaphores inside
+    // Managed bots can retain stale near/far teleport semaphores inside
     // battleground instances; do not deadlock leave/end cleanup on those flags.
+    if (player->InBattleground() && playerbot::IsManagedRandomBot(player))
+        return false;
+
     WorldSession const* session = player->GetSession();
     if (session && session->IsVirtualSession() && player->InBattleground())
         return false;
