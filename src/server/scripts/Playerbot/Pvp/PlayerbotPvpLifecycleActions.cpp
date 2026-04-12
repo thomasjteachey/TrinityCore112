@@ -2057,11 +2057,10 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
             if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
             {
-                player->LeaveBattleground();
-                FinalizeVirtualBotTeleportIfPending(player);
+                battleground->EndBattleground(PVP_TEAM_NEUTRAL);
                 g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP lifecycle wait-join leave due to no real humans: guid={} bgTypeId={} instanceId={}.",
+                    "Playerbot PvP lifecycle wait-join end due to no real humans: guid={} bgTypeId={} instanceId={}.",
                     player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
                 return true;
             }
@@ -2106,11 +2105,10 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
         if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
         {
-            player->LeaveBattleground();
-            FinalizeVirtualBotTeleportIfPending(player);
+            battleground->EndBattleground(PVP_TEAM_NEUTRAL);
             g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                "Playerbot PvP lifecycle leave due to no real human participants: guid={} bgTypeId={} instanceId={}.",
+                "Playerbot PvP lifecycle end due to no real human participants: guid={} bgTypeId={} instanceId={}.",
                 player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
             return true;
         }
