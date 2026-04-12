@@ -212,19 +212,27 @@ void MapManager::Update(uint32 diff)
     if (!i_timer.Passed())
         return;
 
-    MapMapType::iterator iter = i_maps.begin();
-    for (; iter != i_maps.end(); ++iter)
+    std::vector<Map*> maps;
+    {
+        std::lock_guard<std::mutex> lock(_mapsLock);
+        maps.reserve(i_maps.size());
+        for (auto const& mapPair : i_maps)
+            maps.push_back(mapPair.second);
+    }
+
+    for (Map* map : maps)
     {
         if (m_updater.activated())
-            m_updater.schedule_update(*iter->second, uint32(i_timer.GetCurrent()));
+            m_updater.schedule_update(*map, uint32(i_timer.GetCurrent()));
         else
-            iter->second->Update(uint32(i_timer.GetCurrent()));
+            map->Update(uint32(i_timer.GetCurrent()));
     }
+
     if (m_updater.activated())
         m_updater.wait();
 
-    for (iter = i_maps.begin(); iter != i_maps.end(); ++iter)
-        iter->second->DelayedUpdate(uint32(i_timer.GetCurrent()));
+    for (Map* map : maps)
+        map->DelayedUpdate(uint32(i_timer.GetCurrent()));
 
     i_timer.SetCurrent(0);
 }
