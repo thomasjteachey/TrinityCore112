@@ -415,13 +415,20 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 {
     failureReason.clear();
 
-    if (!player || !context.spellId || !player->HasSpell(context.spellId))
+    if (!player || !context.spellId)
     {
         failureReason = "missing_spell";
         return false;
     }
 
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(context.spellId);
+    uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    if (!resolvedSpellId)
+    {
+        failureReason = "missing_spell";
+        return false;
+    }
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(resolvedSpellId);
     if (!spellInfo)
     {
         failureReason = "spell_info_missing";
@@ -446,7 +453,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
-    if (player->GetSpellHistory()->HasCooldown(context.spellId) ||
+    if (player->GetSpellHistory()->HasCooldown(resolvedSpellId) ||
         player->GetSpellHistory()->HasGlobalCooldown(spellInfo) ||
         player->IsNonMeleeSpellCast(false, false, true))
     {
@@ -464,7 +471,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }();
 
     Item* itemTarget = nullptr;
-    if (context.spellId == 11202 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    if (resolvedSpellId == 11202 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
         Item* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
         if (mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
@@ -648,7 +655,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
-    bool const isFoodOrDrinkSpell = context.spellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || context.spellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
+    bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
     if (spellInfo->CalcCastTime() > 0 || isFoodOrDrinkSpell)
     {
         player->StopMoving();
@@ -668,15 +675,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         FaceTargetForInstantCast(player, target, spellInfo);
 
     SpellCastResult castResult = SPELL_FAILED_ERROR;
-    if (context.spellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
-        castResult = player->CastSpell(CastSpellTargetArg(dest), context.spellId);
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (itemTarget)
-        castResult = player->CastSpell(CastSpellTargetArg(itemTarget), context.spellId);
+        castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
     else
-        castResult = player->CastSpell(target, context.spellId, false);
+        castResult = player->CastSpell(target, resolvedSpellId, false);
 
     if (castResult != SPELL_CAST_OK)
     {
@@ -778,7 +785,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             TC_LOG_DEBUG("playerbots.pvp.class",
                 "Playerbot PvP teleport ACK synthesized: guid={} spell={} map={} x={} y={} z={}.",
-                player->GetGUID().ToString(), context.spellId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+                player->GetGUID().ToString(), resolvedSpellId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
             WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
             teleportAck << player->GetPackGUID();
             teleportAck << uint32(0);
