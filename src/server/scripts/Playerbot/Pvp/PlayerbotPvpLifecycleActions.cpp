@@ -1488,6 +1488,56 @@ bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
     return false;
 }
 
+void FinalizeVirtualBotTeleportIfPending(Player* player)
+{
+    if (!player)
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session || !session->IsVirtualSession())
+        return;
+
+    if (player->IsBeingTeleportedFar())
+        session->HandleMoveWorldportAck();
+
+    if (!player->IsBeingTeleportedNear())
+        return;
+
+    WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+    teleportAck << player->GetPackGUID();
+    teleportAck << uint32(0);
+    teleportAck << uint32(0);
+    session->HandleMoveTeleportAck(teleportAck);
+
+    if (!player->IsBeingTeleportedNear())
+        return;
+
+    uint32 const oldZone = player->GetZoneId();
+    WorldLocation destination = player->GetTeleportDest();
+    float safeDestinationZ = destination.GetPositionZ();
+    player->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), safeDestinationZ);
+    destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), safeDestinationZ, destination.GetOrientation());
+    player->SetSemaphoreTeleportNear(false);
+    player->UpdatePosition(destination, true);
+    player->SetFallInformation(0, player->GetPositionZ());
+
+    uint32 newZone = 0;
+    uint32 newArea = 0;
+    player->GetZoneAndAreaId(newZone, newArea);
+    player->UpdateZone(newZone, newArea);
+
+    if (oldZone != newZone)
+    {
+        if (player->pvpInfo.IsHostile)
+            player->CastSpell(player, 2479, true);
+        else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+            player->UpdatePvP(false, false);
+    }
+
+    player->ResummonPetTemporaryUnSummonedIfAny();
+    player->ProcessDelayedOperations();
+}
+
 bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
 {
     if (!player)
@@ -2008,6 +2058,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
             {
                 player->LeaveBattleground();
+                FinalizeVirtualBotTeleportIfPending(player);
                 g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                     "Playerbot PvP lifecycle wait-join leave due to no real humans: guid={} bgTypeId={} instanceId={}.",
@@ -2029,6 +2080,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return false;
 
         player->LeaveBattleground();
+        FinalizeVirtualBotTeleportIfPending(player);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}.",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -2055,6 +2107,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
         {
             player->LeaveBattleground();
+            FinalizeVirtualBotTeleportIfPending(player);
             g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP lifecycle leave due to no real human participants: guid={} bgTypeId={} instanceId={}.",
