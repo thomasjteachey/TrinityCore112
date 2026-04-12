@@ -46,6 +46,29 @@
 #include "Item.h"
 #include <cstdarg>
 
+namespace
+{
+bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
+{
+    if (!battleground)
+        return false;
+
+    for (auto const& [participantGuid, participantData] : battleground->GetPlayers())
+    {
+        (void)participantData;
+        Player const* participant = ObjectAccessor::FindPlayer(participantGuid);
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        if (session && !session->IsVirtualSession())
+            return true;
+    }
+
+    return false;
+}
+}
+
 void BattlegroundScore::AppendToPacket(WorldPacket& data)
 {
     data << uint64(PlayerGuid);
@@ -946,6 +969,14 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         WorldPacket data;
         sBattlegroundMgr->BuildPlayerLeftBattlegroundPacket(&data, guid);
         SendPacketToTeam(team, &data, player, false);
+
+        if (isBattleground() && GetStatus() == STATUS_IN_PROGRESS && !HasAnyNonVirtualHumanParticipant(this))
+        {
+            TC_LOG_DEBUG("bg.battleground",
+                "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants remain.",
+                GetMapId(), GetInstanceID());
+            EndBattleground(PVP_TEAM_NEUTRAL);
+        }
     }
 
     if (player)
