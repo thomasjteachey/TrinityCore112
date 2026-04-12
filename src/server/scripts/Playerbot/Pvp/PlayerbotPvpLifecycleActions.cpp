@@ -2083,6 +2083,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         FinalizeVirtualBotTeleportIfPending(player);
         player->RemoveAurasDueToSpell(SPELL_DESERTER);
         RemoveMatchingQueues(player, false, false, true);
+        RemoveMatchingQueues(player, true, false, false);
+        player->SetArenaTeamIdInvited(0);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}.",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
