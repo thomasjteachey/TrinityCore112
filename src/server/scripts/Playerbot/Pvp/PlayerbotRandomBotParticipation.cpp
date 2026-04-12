@@ -115,9 +115,33 @@ bool g_StartupRevivePending = false;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
-    (void)player;
-    (void)detail;
-    (void)throttleMs;
+    if (!player || detail.empty())
+        return;
+
+    Player* observer = ObjectAccessor::FindPlayerByName("Elgrom");
+    if (!observer)
+        return;
+
+    static std::unordered_map<uint64, uint32> nextWhisperMsByGuid;
+    uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& nextAllowedMs = nextWhisperMsByGuid[botGuidRaw];
+    if (nowMs < nextAllowedMs)
+        return;
+
+    nextAllowedMs = nowMs + std::max<uint32>(throttleMs, 250);
+
+    std::ostringstream message;
+    message << "[PB lifecycle] " << player->GetGUID().ToString() << ' ' << detail;
+
+    if (observer == player)
+    {
+        if (WorldSession* session = observer->GetSession())
+            ChatHandler(session).PSendSysMessage("%s", message.str().c_str());
+        return;
+    }
+
+    const_cast<Player*>(player)->Whisper(message.str(), LANG_UNIVERSAL, observer);
 }
 
 enum class LifecycleObservationReason : uint8
@@ -280,21 +304,19 @@ bool CanProcessPlayerLifecycle(Player const* player)
 
     if (player->IsBeingTeleported())
     {
-        // Managed random bots can occasionally retain the generic teleport flag
-        // after a battleground transition (especially when start countdowns are
-        // skipped). If near/far teleport semaphores are clear and the bot is
-        // already placed in a battleground map, continue lifecycle processing so
-        // tactical movement does not deadlock at match start.
+        // Managed random bots can occasionally retain a stale generic teleport
+        // flag after battleground transitions. Only block lifecycle when actual
+        // near/far teleport acknowledgements are still pending.
         bool const hasPendingTeleportAck = player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear();
-        if (hasPendingTeleportAck || !player->InBattleground())
+        if (hasPendingTeleportAck)
         {
             ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
             return false;
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot lifecycle pre-check tolerated stale teleport flag: guid={} battlegroundId={}.",
-            guid.ToString(), player->GetBattlegroundId());
+            "Playerbot lifecycle pre-check tolerated stale teleport flag: guid={} battlegroundId={} inBattleground={}",
+            guid.ToString(), player->GetBattlegroundId(), player->InBattleground() ? 1 : 0);
     }
 
     uint64 const playerGuid = guid.GetRawValue();
@@ -468,20 +490,20 @@ uint32 ResolvePlayerAccountId(Player const* player)
 
 bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts)
 {
-    if (!player || botAccounts.empty())
+    if (!player)
+        return false;
+
+    if (WorldSession const* session = player->GetSession(); session && session->IsVirtualSession())
+        return true;
+
+    if (botAccounts.empty())
         return false;
 
     uint32 const accountId = ResolvePlayerAccountId(player);
     if (!accountId || botAccounts.find(accountId) == botAccounts.end())
         return false;
 
-    if (WorldSession const* session = player->GetSession())
-    {
-        // BotAccountIds is an explicit allow-list; treat listed accounts as
-        // managed bots even when their virtual session is marked connected.
-        return true;
-    }
-
+    // BotAccountIds remains an explicit allow-list for non-virtual sessions.
     return true;
 }
 
