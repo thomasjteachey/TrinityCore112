@@ -65,7 +65,7 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
-std::unordered_map<uintptr_t, uint32> g_BattlegroundNoHumanSinceMsByPointer;
+std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
@@ -1540,6 +1540,14 @@ void FinalizeVirtualBotTeleportIfPending(Player* player)
     player->ProcessDelayedOperations();
 }
 
+uint64 BuildBattlegroundInstanceKey(Battleground const* battleground)
+{
+    if (!battleground)
+        return 0;
+
+    return (uint64(battleground->GetMapId()) << 32) | uint64(battleground->GetInstanceID());
+}
+
 bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
 {
     if (!player)
@@ -2049,18 +2057,18 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
     if (battleground->GetStatus() == STATUS_WAIT_JOIN)
     {
-        uintptr_t const battlegroundPointerKey = reinterpret_cast<uintptr_t>(battleground);
+        uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
         if (!BattlegroundHasAnyRealHumanPlayers(player))
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByPointer[battlegroundPointerKey];
+            uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
             if (!noHumanSinceMs)
                 noHumanSinceMs = nowMs;
 
             if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
             {
                 battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+                g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                     "Playerbot PvP lifecycle wait-join end due to no real humans: guid={} bgTypeId={} instanceId={}.",
                     player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -2068,14 +2076,14 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             }
         }
         else
-            g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
         return false;
     }
 
     if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
-        g_BattlegroundNoHumanSinceMsByPointer.erase(reinterpret_cast<uintptr_t>(battleground));
+        g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
 
         if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
@@ -2095,25 +2103,25 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
     {
-        g_BattlegroundNoHumanSinceMsByPointer.erase(reinterpret_cast<uintptr_t>(battleground));
+        g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
         return false;
     }
 
     // Secondary guard for non-virtual managed bot accounts: core battleground
     // shutdown treats any non-virtual session as human, so these matches can
     // persist indefinitely after real humans leave.
-    uintptr_t const battlegroundPointerKey = reinterpret_cast<uintptr_t>(battleground);
+    uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
     if (!BattlegroundHasAnyRealHumanPlayers(player))
     {
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByPointer[battlegroundPointerKey];
+        uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
         if (!noHumanSinceMs)
             noHumanSinceMs = nowMs;
 
         if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
         {
             battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-            g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP lifecycle end due to no real human participants: guid={} bgTypeId={} instanceId={}.",
                 player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -2121,7 +2129,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         }
     }
     else
-        g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+        g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
     if (HandleBattlegroundDeathState(player))
         return true;
