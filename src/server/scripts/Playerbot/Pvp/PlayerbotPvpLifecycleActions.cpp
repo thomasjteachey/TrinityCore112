@@ -523,11 +523,42 @@ std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
 }
 
 
+std::string BuildQueueDebugSummary(Player* player)
+{
+    if (!player)
+        return "queue=none";
+
+    std::ostringstream summary;
+    summary << "queue_slots=[";
+    bool first = true;
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const queueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        if (!first)
+            summary << ',';
+        first = false;
+        summary << uint32(queueTypeId) << ":inv=" << (player->IsInvitedForBattlegroundQueueType(queueTypeId) ? 1 : 0);
+    }
+
+    if (first)
+        summary << "none";
+
+    summary << "] invitedArenaTeamId=" << player->GetArenaTeamIdInvited();
+    return summary.str();
+}
+
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
 {
-    (void)player;
-    (void)phase;
-    (void)detail;
+    if (!player)
+        return;
+
+    TC_LOG_INFO("playerbots.pvp.lifecycle",
+        "Playerbot lifecycle diagnostic: guid={} phase={} inBg={} bgId={} inQueue={} deserter={} {} detail={}",
+        player->GetGUID().ToString(), phase ? phase : "none", player->InBattleground() ? 1 : 0, player->GetBattlegroundId(),
+        player->InBattlegroundQueue() ? 1 : 0, player->HasAura(SPELL_DESERTER) ? 1 : 0, BuildQueueDebugSummary(player), detail);
 }
 
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
@@ -2094,6 +2125,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         RemoveMatchingQueues(player, false, false, true);
         RemoveMatchingQueues(player, true, false, false);
         player->SetArenaTeamIdInvited(0);
+        EmitLifecycleDiagnostic(player, "wait-leave-cleanup", "Post-leave cleanup complete before returning to scheduler flow.");
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}",
