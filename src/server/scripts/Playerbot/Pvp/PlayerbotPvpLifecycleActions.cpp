@@ -1462,35 +1462,6 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
     return false;
 }
 
-uint64 BuildBattlegroundInstanceKey(Battleground const* battleground)
-{
-    if (!battleground)
-        return 0;
-
-    return (uint64(battleground->GetMapId()) << 32) | uint64(battleground->GetInstanceID());
-}
-
-bool BattlegroundHasAnyHumanPlayers(Player const* player)
-{
-    if (!player || !player->InBattleground() || !player->GetMap())
-        return false;
-
-    uint32 const battlegroundId = player->GetBattlegroundId();
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
-    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-    {
-        Player const* participant = itr->GetSource();
-        if (!participant || participant->GetBattlegroundId() != battlegroundId)
-            continue;
-
-        WorldSession const* participantSession = participant->GetSession();
-        bool const isVirtualBotSession = participantSession && participantSession->IsVirtualSession();
-        if (!isVirtualBotSession && !playerbot::IsManagedRandomBot(participant))
-            return true;
-    }
-
-    return false;
-}
 
 bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
 {
@@ -2011,32 +1982,10 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         return false;
 
-    uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
-
-    if (!BattlegroundHasAnyHumanPlayers(player))
-    {
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
-        if (!noHumanSinceMs)
-        {
-            noHumanSinceMs = nowMs;
-            return false;
-        }
-
-        if (nowMs < noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS)
-            return false;
-
-        if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
-            return false;
-
-        battleground->EndBattleground(0);
-        player->LeaveBattleground();
-        g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle forced battleground end due to no human participants: guid={} bgTypeId={} instanceId={}.",
-            player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
-        return true;
-    }
+    // Battleground core already owns no-human participant shutdown (with a
+    // non-virtual human grace window and join/leave edge-case handling).
+    // Duplicating that logic here can race invites and eject newly joining
+    // humans before they fully enter the battleground instance.
 
     g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
