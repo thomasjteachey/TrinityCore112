@@ -26,6 +26,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "WorldPacket.h"
+#include "WorldSession.h"
 #include "WorldStatePackets.h"
 #include "World.h"
 #include <iomanip>
@@ -211,6 +212,27 @@ void BattlegroundWS::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
+        bool hasHumanPlayer = false;
+        for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
+        {
+            Player* player = ObjectAccessor::FindPlayer(itr->first);
+            if (!player)
+                continue;
+
+            WorldSession* session = player->GetSession();
+            if (!session || session->IsVirtualSession())
+                continue;
+
+            hasHumanPlayer = true;
+            break;
+        }
+
+        if (!hasHumanPlayer)
+        {
+            TC_LOG_INFO("bg.warsong", "BattlegroundWS::PostUpdateImpl: Ending WSG instance {} because no human players remain.", GetInstanceID());
+            EndNow();
+            return;
+        }
 
         if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_WAIT_RESPAWN)
         {

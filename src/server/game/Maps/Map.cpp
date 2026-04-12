@@ -3859,6 +3859,11 @@ Map::EnterState InstanceMap::CannotEnter(Player* player)
 
     // cannot enter if the instance is full (player cap), GMs don't count
     uint32 maxPlayers = GetMaxPlayers();
+    // Stockades PvPvE custom mode supports three 2-player teams (6 total),
+    // while the base Stockades map cap is five players.
+    if (GetId() == 34 && GetScriptName() == "instance_the_stockade_pvpve")
+        maxPlayers = std::max<uint32>(maxPlayers, 6u);
+
     if (GetPlayersCountExceptGMs() >= maxPlayers)
     {
         TC_LOG_WARN("maps", "MAP: Instance '{}' of map '{}' cannot have more than '{}' players. Player '{}' rejected", GetInstanceId(), GetMapName(), maxPlayers, player->GetName());

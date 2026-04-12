@@ -1,0 +1,140 @@
+# This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 2 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+# more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program. If not, see <http://www.gnu.org/licenses/>.
+
+###################################################################################################
+# PLAYERBOT CONFIG
+###################################################################################################
+
+[worldserver]
+
+#    Playerbot.Enable
+#        Description: Enables Playerbot systems.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.Enable = 0
+
+#    Playerbot.PvpCore.Enable
+#        Description: Enables Playerbot PvP core trigger/value scaffolding and battleground state detection.
+#                     This phase only wires infrastructure and does not execute class spell logic.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PvpCore.Enable = 0
+
+#    Playerbot.PvpTactics.Enable
+#        Description: Enables battleground tactical trigger/action selection plus primitive execution
+#                     for waiting/active/often/low-health/low-mana/timer-bg flows, including
+#                     objective-state flag-carrier pursuit/protection movement in WSG/EotS contexts.
+#                     This remains default OFF and does not change queue policy or class rotation logic.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PvpTactics.Enable = 0
+
+#    Playerbot.PvpLifecycle.Enable
+#        Description: Enables battleground/arena queue participation lifecycle scaffolding and random-bot
+#                     participation hooks. Real players are always excluded from these hooks.
+#                     Battleground queue primitive currently targets Warsong Gulch.
+#                     This phase wires lifecycle entry points only and does not
+#                     include class spell logic, queue cadence tuning, or SQL payloads.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PvpLifecycle.Enable = 0
+
+#    Playerbot.PvpClassSpells.Enable
+#        Description: Enables Phase-4 class/spec PvP spell decision slices.
+#                     Current implementation provides reference-aligned trigger/action vocabulary
+#                     plus explicit ordered fallback alternates and strict cast-point validation
+#                     (known rank, cooldown/GCD/cast state, resource cost, range/LOS, target validity).
+#                     Feature remains default OFF.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.PvpClassSpells.Enable = 0
+
+#    Playerbot.RandomPopulation.Enable
+#        Description: Enables random-bot population manager orchestration. When enabled and runtime started,
+#                     periodic rebalance ticks evaluate online random-bot count (bots are always identified as
+#                     explicit managed bot accounts from Playerbot.RandomPopulation.BotAccountIds and attempt
+#                     server-side login/logout orchestration for those accounts/characters only.
+#                     Real players are hard-excluded from all lifecycle and population automation.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+Playerbot.RandomPopulation.Enable = 0
+
+#    Playerbot.RandomPopulation.TargetMin
+#        Description: Minimum target number of online random bots maintained by the population manager.
+#        Default:     0
+
+Playerbot.RandomPopulation.TargetMin = 0
+
+#    Playerbot.RandomPopulation.TargetMax
+#        Description: Maximum target number of online random bots maintained by the population manager.
+#                     If greater than TargetMin, rebalance deterministically rotates target in range.
+#        Default:     0
+
+Playerbot.RandomPopulation.TargetMax = 0
+
+#    Playerbot.RandomPopulation.RebalanceIntervalMs
+#        Description: Rebalance cadence for population manager ticks in milliseconds.
+#        Default:     15000 (15 seconds)
+
+Playerbot.RandomPopulation.RebalanceIntervalMs = 15000
+
+#    Playerbot.RandomPopulation.BotAccountIds
+#        Description: Comma-separated account IDs reserved for random population bot pool selection.
+#                     Only characters from these accounts are considered for offline pool candidate picks.
+#                     This list is also the explicit managed identity boundary for lifecycle/login/logout:
+#                     characters outside this list are always treated as real-player safety scope.
+#                     Keep this list strictly bot-only to prevent selecting real-player characters.
+#        Default:     "" (empty, no pool)
+
+Playerbot.RandomPopulation.BotAccountIds =
+
+#    Playerbot.RandomPopulation.MinLevel
+#        Description: Minimum character level for offline pool selection.
+#        Default:     10
+
+Playerbot.RandomPopulation.MinLevel = 10
+
+#    Playerbot.RandomPopulation.MaxLevel
+#        Description: Maximum character level for offline pool selection.
+#        Default:     80
+
+Playerbot.RandomPopulation.MaxLevel = 80
+
+#    Playerbot.RandomPopulation.AllianceRatioPercent
+#        Description: Soft alliance percentage target used while selecting login candidates.
+#                     50 means roughly even faction split over time.
+#        Default:     50
+
+Playerbot.RandomPopulation.AllianceRatioPercent = 50
+
+#    Playerbot.RandomPopulation.MaxOnlineBotsPerAccount
+#        Description: Maximum random bots allowed online at once per account during candidate selection.
+#                     Set to 0 to disable the cap (allows multiple bots per account without manager-side limit).
+#        Default:     0
+
+Playerbot.RandomPopulation.MaxOnlineBotsPerAccount = 0
+
+#    Playerbot.RandomPopulation.SelectionHistorySize
+#        Description: Number of recently selected offline bot guids to deprioritize during deterministic
+#                     candidate ordering to reduce immediate repeats while preserving reproducibility.
+#        Default:     48
+
+Playerbot.RandomPopulation.SelectionHistorySize = 48

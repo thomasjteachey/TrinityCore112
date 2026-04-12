@@ -20,6 +20,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundScore.h"
 #include "ChatTextBuilder.h"
+#include "Configuration/Config.h"
 #include "Creature.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
@@ -41,10 +42,35 @@
 #include "Util.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
-#include "CharacterCache.h"
 #include "WorldSession.h"
 #include "Item.h"
+#include <algorithm>
 #include <cstdarg>
+
+namespace
+{
+constexpr uint32 NO_NON_VIRTUAL_HUMAN_END_DELAY_MS = 15000;
+
+bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
+{
+    if (!battleground)
+        return false;
+
+    for (auto const& [participantGuid, participantData] : battleground->GetPlayers())
+    {
+        (void)participantData;
+        Player const* participant = ObjectAccessor::FindConnectedPlayer(participantGuid);
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        if (session && !session->IsVirtualSession())
+            return true;
+    }
+
+    return false;
+}
+}
 
 void BattlegroundScore::AppendToPacket(WorldPacket& data)
 {
@@ -90,6 +116,8 @@ Battleground::Battleground()
     m_StartDelayTime    = 0;
     m_IsRated           = false;
     m_BuffChange        = false;
+    m_HasEverHadNonVirtualHumanParticipant = false;
+    m_NoNonVirtualHumanElapsed = 0;
     m_IsRandom          = false;
     m_IsReplay          = false;
     m_ReplayId          = 0;
@@ -199,6 +227,20 @@ void Battleground::Update(uint32 diff)
             }
             break;
         case STATUS_IN_PROGRESS:
+            if (isBattleground() && m_HasEverHadNonVirtualHumanParticipant)
+            {
+                if (HasAnyNonVirtualHumanParticipant(this))
+                    m_NoNonVirtualHumanElapsed = 0;
+                else if ((m_NoNonVirtualHumanElapsed += diff) >= NO_NON_VIRTUAL_HUMAN_END_DELAY_MS)
+                {
+                    TC_LOG_INFO("bg.battleground",
+                        "Battleground::Update ending map={} instance={} because no non-virtual participants remained for {} ms.",
+                        GetMapId(), GetInstanceID(), NO_NON_VIRTUAL_HUMAN_END_DELAY_MS);
+                    EndNow();
+                    return;
+                }
+            }
+
             _ProcessOfflineQueue();
             // after 20 minutes without one team losing, the arena closes with no winner and no rating change
             if (isArena())
@@ -308,7 +350,7 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                 Creature* sh = nullptr;
                 for (GuidVector::const_iterator itr2 = (itr->second).begin(); itr2 != (itr->second).end(); ++itr2)
                 {
-                    Player* player = ObjectAccessor::FindPlayer(*itr2);
+                    Player* player = ObjectAccessor::FindConnectedPlayer(*itr2);
                     if (!player)
                         continue;
 
@@ -325,6 +367,26 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
                     player->CastSpell(player, SPELL_RESURRECTION_VISUAL, true);
                     m_ResurrectQueue.push_back(*itr2);
                 }
+
+                // Hard override for managed playerbot avatars (virtual sessions):
+                // when a spirit guide resurrection wave happens, include every dead
+                // playerbot in this battleground, regardless of graveyard location.
+                for (BattlegroundPlayerMap::const_iterator bgPlayerItr = m_Players.begin(); bgPlayerItr != m_Players.end(); ++bgPlayerItr)
+                {
+                    Player* botPlayer = ObjectAccessor::FindConnectedPlayer(bgPlayerItr->first);
+                    if (!botPlayer || botPlayer->IsAlive() || !botPlayer->IsInWorld())
+                        continue;
+
+                    WorldSession* session = botPlayer->GetSession();
+                    if (!session || !session->IsVirtualSession())
+                        continue;
+
+                    if (std::find(m_ResurrectQueue.begin(), m_ResurrectQueue.end(), botPlayer->GetGUID()) != m_ResurrectQueue.end())
+                        continue;
+
+                    botPlayer->CastSpell(botPlayer, SPELL_RESURRECTION_VISUAL, true);
+                    m_ResurrectQueue.push_back(botPlayer->GetGUID());
+                }
                 (itr->second).clear();
             }
 
@@ -339,7 +401,7 @@ inline void Battleground::_ProcessResurrect(uint32 diff)
     {
         for (GuidVector::const_iterator itr = m_ResurrectQueue.begin(); itr != m_ResurrectQueue.end(); ++itr)
         {
-            Player* player = ObjectAccessor::FindPlayer(*itr);
+            Player* player = ObjectAccessor::FindConnectedPlayer(*itr);
             if (!player)
                 continue;
             player->ResurrectPlayer(1.0f);
@@ -462,8 +524,7 @@ inline void Battleground::_ProcessLeave(uint32 diff)
     // ***           BATTLEGROUND ENDING SYSTEM              ***
     // *********************************************************
     // remove all players from battleground after 2 minutes
-    m_EndTime -= diff;
-    if (m_EndTime <= 0)
+    if (m_EndTime <= diff)
     {
         m_EndTime = 0;
         BattlegroundPlayerMap::iterator itr, next;
@@ -476,6 +537,8 @@ inline void Battleground::_ProcessLeave(uint32 diff)
             // do not change any battleground's private variables
         }
     }
+    else
+        m_EndTime -= diff;
 }
 
 Player* Battleground::_GetPlayer(ObjectGuid guid, bool offlineRemove, char const* context) const
@@ -856,6 +919,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
     RemovePlayerFromResurrectQueue(guid);
 
     Player* player = ObjectAccessor::FindPlayer(guid);
+    bool const removedNonVirtualHuman = player && player->GetSession() && !player->GetSession()->IsVirtualSession();
 
     if (player)
     {
@@ -926,6 +990,16 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         WorldPacket data;
         sBattlegroundMgr->BuildPlayerLeftBattlegroundPacket(&data, guid);
         SendPacketToTeam(team, &data, player, false);
+
+        if (isBattleground() && removedNonVirtualHuman && m_HasEverHadNonVirtualHumanParticipant &&
+            (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN) &&
+            !HasAnyNonVirtualHumanParticipant(this))
+        {
+            TC_LOG_DEBUG("bg.battleground",
+                "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants remain.",
+                GetMapId(), GetInstanceID());
+            EndBattleground(PVP_TEAM_NEUTRAL);
+        }
     }
 
     if (player)
@@ -964,6 +1038,8 @@ void Battleground::Reset()
     m_InvitedAlliance = 0;
     m_InvitedHorde = 0;
     m_InBGFreeSlotQueue = false;
+    m_HasEverHadNonVirtualHumanParticipant = false;
+    m_NoNonVirtualHumanElapsed = 0;
 
     m_Players.clear();
 
@@ -1110,6 +1186,12 @@ void Battleground::AddPlayer(Player* player)
 
     if (!isInBattleground)
         UpdatePlayersCountByTeam(team, false);                  // +1 player
+
+    if (WorldSession const* session = player->GetSession(); session && !session->IsVirtualSession())
+    {
+        m_HasEverHadNonVirtualHumanParticipant = true;
+        m_NoNonVirtualHumanElapsed = 0;
+    }
 
     WorldPacket data;
     sBattlegroundMgr->BuildPlayerJoinedBattlegroundPacket(&data, player);
@@ -1311,7 +1393,27 @@ uint32 Battleground::GetFreeSlotsForTeam(uint32 Team) const
 
 bool Battleground::HasFreeSlots() const
 {
-    return GetPlayersSize() < GetMaxPlayers();
+    if (GetPlayersSize() < GetMaxPlayers())
+        return true;
+
+    // Treat virtual-session participants as replaceable occupancy for battlegrounds:
+    // this keeps full bot-populated matches in the free-slot queue so queued real
+    // players can displace one virtual actor on invite.
+    if (!isBattleground())
+        return false;
+
+    for (auto const& playerEntry : m_Players)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
+        if (!player)
+            continue;
+
+        WorldSession* session = player->GetSession();
+        if (session && session->IsVirtualSession())
+            return true;
+    }
+
+    return false;
 }
 
 void Battleground::BuildPvPLogDataPacket(WorldPacket& data)

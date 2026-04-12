@@ -547,6 +547,44 @@ bool Group::RemoveMember(ObjectGuid guid, RemoveMethod const& method /*= GROUP_R
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
     if (player)
     {
+        // If group composition changes while this player is queued with other group members,
+        // remove this player from those battleground/arena queues to avoid stale queue groups.
+        if (!isBGGroup() && !isBFGroup())
+        {
+            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+            {
+                BattlegroundQueueTypeId bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+                if (!bgQueueTypeId)
+                    continue;
+
+                BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+                GroupQueueInfo ginfo;
+                if (!bgQueue.GetPlayerGroupInfoData(guid, &ginfo))
+                    continue;
+
+                // Keep solo queues intact; only remove entries that still represent a grouped queue.
+                if (ginfo.Players.size() <= 1)
+                    continue;
+
+                uint32 queueSlot = player->GetBattlegroundQueueIndex(bgQueueTypeId);
+                player->RemoveBattlegroundQueueId(bgQueueTypeId);
+                bgQueue.RemovePlayer(guid, true);
+
+                if (Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(ginfo.BgTypeId))
+                {
+                    WorldPacket data;
+                    sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_NONE, 0, 0, 0, 0);
+                    player->SendDirectMessage(&data);
+
+                    if (!ginfo.ArenaType)
+                    {
+                        if (PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bg->GetMapId(), player->GetLevel()))
+                            sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, ginfo.BgTypeId, bracketEntry->GetBracketId());
+                    }
+                }
+            }
+        }
+
         for (GroupReference* itr = GetFirstMember(); itr != nullptr; itr = itr->next())
         {
             if (Player* groupMember = itr->GetSource())

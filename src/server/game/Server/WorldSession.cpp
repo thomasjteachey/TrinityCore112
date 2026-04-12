@@ -115,8 +115,10 @@ WorldSession::WorldSession(uint32 id, std::string&& name, std::shared_ptr<WorldS
     m_GUIDLow(0),
     _player(nullptr),
     m_Socket(std::move(sock)),
+    m_virtualSession(!m_Socket),
     _security(sec),
     _accountId(id),
+    m_sessionMapKey(id),
     _accountName(std::move(name)),
     m_expansion(expansion),
     _logoutTime(0),
@@ -283,8 +285,10 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     ///- Before we process anything:
     /// If necessary, kick the player because the client didn't send anything for too long
     /// (or they've been idling in character select)
-    if (IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
+    if (m_Socket && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
+    {
         m_Socket->CloseSocket();
+    }
 
     ///- Retrieve packets from the receive queue and call the appropriate handlers
     /// not process packets if socket already closed
@@ -478,7 +482,14 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
         }
 
         if (!m_Socket)
+        {
+            // Virtual (socketless) sessions are server-driven actors (for example managed bots)
+            // and must not be culled by the disconnected-client path.
+            if (m_virtualSession && !forceExit)
+                return true;
+
             return false;                                       //Will remove this session from the world session map
+        }
     }
 
     return true;

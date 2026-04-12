@@ -1100,6 +1100,7 @@ void Player::Update(uint32 p_time)
     SetCanDelayTeleport(true);
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
+    sScriptMgr->OnPlayerUpdate(this, p_time);
 
     UpdateStarfireSnare();
     VerifyStarfireSnare();
@@ -18680,8 +18681,21 @@ void Player::_LoadInventory(PreparedQueryResult result, uint32 timeDiff)
                     item->SetState(ITEM_UNCHANGED, this);
                 else
                 {
-                    TC_LOG_ERROR("entities.player", "Player::_LoadInventory: Player '{}' ({}) has item ({}, entry: {}) which can't be loaded into inventory (Bag {}, slot: {}) by reason {}. Item will be sent by mail.",
-                        GetName(), GetGUID().ToString(), item->GetGUID().ToString(), item->GetEntry(), bagGuid, slot, uint32(err));
+                    char const* slotType = "unknown";
+                    if (!bagGuid)
+                    {
+                        if (IsEquipmentPos(INVENTORY_SLOT_BAG_0, slot))
+                            slotType = "equipment";
+                        else if (IsInventoryPos(INVENTORY_SLOT_BAG_0, slot))
+                            slotType = "inventory";
+                        else if (IsBankPos(INVENTORY_SLOT_BAG_0, slot))
+                            slotType = "bank";
+                    }
+                    else
+                        slotType = "bag";
+
+                    TC_LOG_ERROR("entities.player", "Player::_LoadInventory: Player '{}' ({}) has item ({}, entry: {}) which can't be loaded (BagGuid {}, slot {}, slot type {}). InventoryResult {}. Item will be sent by mail.",
+                        GetName(), GetGUID().ToString(), item->GetGUID().ToString(), item->GetEntry(), bagGuid, slot, slotType, uint32(err));
                     item->DeleteFromInventoryDB(trans);
                     problematicItems.push_back(item);
                 }
@@ -18816,9 +18830,11 @@ Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint3
         }
         else
         {
-            TC_LOG_ERROR("entities.player", "Player::_LoadInventory: player ({}, name: '{}') has a broken item (GUID: {}, entry: {}) in inventory. Deleting item.",
+            TC_LOG_ERROR("entities.player", "Player::_LoadInventory: player ({}, name: '{}') has a broken item (GUID: {}, entry: {}) in inventory. Item is kept in DB for recovery and skipped during load.",
                 GetGUID().ToString(), GetName(), itemGuid, itemEntry);
-            remove = true;
+            delete item;
+            item = nullptr;
+            return nullptr;
         }
         // Remove item from inventory if necessary
         if (remove)
@@ -18831,10 +18847,8 @@ Item* Player::_LoadItem(CharacterDatabaseTransaction trans, uint32 zoneId, uint3
     }
     else
     {
-        TC_LOG_ERROR("entities.player", "Player::_LoadInventory: player ({}, name: '{}') has an unknown item (entry: {}) in inventory. Deleting item.",
-            GetGUID().ToString(), GetName(), itemEntry);
-        Item::DeleteFromInventoryDB(trans, itemGuid);
-        Item::DeleteFromDB(trans, itemGuid);
+        TC_LOG_ERROR("entities.player", "Player::_LoadInventory: player ({}, name: '{}') has an unknown item (entry: {}, guid: {}) in inventory. Item is kept in DB for recovery and skipped during load.",
+            GetGUID().ToString(), GetName(), itemEntry, itemGuid);
     }
     return item;
 }
@@ -22969,12 +22983,9 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
             {
                 //lets check if player was teleported from BG and schedule delayed Deserter spell cast
                 if (IsBeingTeleportedFar())
-                {
                     ScheduleDelayedOperation(DELAYED_SPELL_CAST_DESERTER);
-                    return;
-                }
-
-                CastSpell(this, 26013, true);               // Deserter
+                else
+                    CastSpell(this, 26013, true);               // Deserter
             }
         }
 

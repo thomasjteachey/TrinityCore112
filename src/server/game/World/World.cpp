@@ -324,22 +324,28 @@ void World::AddSession_(WorldSession* s)
 
     //NOTE - Still there is race condition in WorldSession* being used in the Sockets
 
-    ///- kick already loaded player with same account (if any) and remove session
-    ///- if player is in loading and want to load again, return
-    if (!RemoveSession(s->GetAccountId()))
+    uint32 const sessionMapKey = s->GetSessionMapKey();
+
+    // kick already loaded player with same account (if any) and remove session
+    // if player is in loading and want to load again, return
+    // Virtual sessions use dedicated map keys and intentionally bypass account-wide singleton replacement.
+    if (!s->IsVirtualSession())
     {
-        s->KickPlayer("World::AddSession_ Couldn't remove the other session while on loading screen");
-        delete s;                                           // session not added yet in session list, so not listed in queue
-        return;
+        if (!RemoveSession(s->GetAccountId()))
+        {
+            s->KickPlayer("World::AddSession_ Couldn't remove the other session while on loading screen");
+            delete s;                                           // session not added yet in session list, so not listed in queue
+            return;
+        }
     }
 
     // decrease session counts only at not reconnection case
     bool decrease_session = true;
 
-    // if session already exist, prepare to it deleting at next world update
+    // if session key already exists, prepare it for deleting at next world update
     // NOTE - KickPlayer() should be called on "old" in RemoveSession()
     {
-        SessionMap::const_iterator old = m_sessions.find(s->GetAccountId());
+        SessionMap::const_iterator old = m_sessions.find(sessionMapKey);
 
         if (old != m_sessions.end())
         {
@@ -351,7 +357,7 @@ void World::AddSession_(WorldSession* s)
         }
     }
 
-    m_sessions[s->GetAccountId()] = s;
+    m_sessions[sessionMapKey] = s;
 
     uint32 Sessions = GetActiveAndQueuedSessionCount();
     uint32 pLimit = GetPlayerAmountLimit();

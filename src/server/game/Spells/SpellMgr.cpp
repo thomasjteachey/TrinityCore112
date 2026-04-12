@@ -3625,6 +3625,17 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->Stances = UI64LIT(1) << (FORM_CAT - 1);
     });
 
+    // Sweeping Strikes should remain active after switching stances,
+    // but still only be castable in its original required stance.
+    ApplySpellFix({
+        12328, // Sweeping Strikes (Rank 1)
+        18765, // Sweeping Strikes (Rank 2)
+        35429  // Sweeping Strikes (Rank 3)
+    }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Attributes |= SPELL_ATTR0_NOT_SHAPESHIFT;
+    });
+
     ApplySpellFix({ 48421 }, [](SpellInfo* spellInfo)
     {
         spellInfo->Stances = UI64LIT(1) << (FORM_MOONKIN - 1);
@@ -3911,6 +3922,13 @@ void SpellMgr::LoadSpellInfoCorrections()
     {
         // Interrupt flags copied from aura which this aura is linked with
         spellInfo->AuraInterruptFlags = AURA_INTERRUPT_FLAG_HITBYSPELL | AURA_INTERRUPT_FLAG_TAKE_DAMAGE;
+    });
+
+    // Rogue - Stealth (all ranks)
+    ApplySpellFix({ 1784, 1785, 1786, 1787, 1788, 1789 }, [](SpellInfo* spellInfo)
+    {
+        // Break stealth when hit by hostile spells even if incoming damage is fully absorbed.
+        spellInfo->AuraInterruptFlags |= AURA_INTERRUPT_FLAG_HITBYSPELL;
     });
 
     // Death Knight T10 Tank 2P Bonus
@@ -5005,6 +5023,21 @@ void SpellMgr::LoadSpellInfoCorrections()
     ApplySpellFix({ 53659 }, [](SpellInfo* spellInfo)
     {
         spellInfo->RangeEntry = sSpellRangeStore.LookupEntry(5); // 40yd
+    });
+
+    // Intimidating Shout / Demoralizing Shout / Demoralizing Roar / Psychic Scream (Classic ranks)
+    // should not miss hit checks (still can be resisted)
+    ApplySpellFix({
+        5246,                   // Intimidating Shout
+        1160, 6190, 11554,      // Demoralizing Shout (Ranks 1-3)
+        11555, 11556, 25202,    // Demoralizing Shout (Ranks 4-6)
+        25203,                  // Demoralizing Shout (Rank 7)
+        99, 1735, 9490,         // Demoralizing Roar (Ranks 1-3)
+        9747, 9898,             // Demoralizing Roar (Ranks 4-5)
+        8122, 8124, 10888, 10890// Psychic Scream (Ranks 1-4)
+    }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->AttributesEx3 |= SPELL_ATTR3_IGNORE_HIT_RESULT;
     });
 
     for (uint32 i = 0; i < GetSpellInfoStoreSize(); ++i)

@@ -28,7 +28,79 @@
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
+#include "WorldSession.h"
 #include "World.h"
+
+namespace
+{
+bool GroupHasRealPlayerInvitee(GroupQueueInfo const* ginfo)
+{
+    if (!ginfo)
+        return false;
+
+    for (auto const& playerEntry : ginfo->Players)
+    {
+        Player* player = ObjectAccessor::FindConnectedPlayer(playerEntry.first);
+        if (!player)
+            continue;
+
+        WorldSession* session = player->GetSession();
+        if (!session || !session->IsVirtualSession())
+            return true;
+    }
+
+    return false;
+}
+
+bool HasVirtualPlayerOnTeam(Battleground* battleground, uint32 team)
+{
+    if (!battleground)
+        return false;
+
+    for (auto const& [memberGuid, bgPlayer] : battleground->GetPlayers())
+    {
+        if (bgPlayer.Team != team)
+            continue;
+
+        Player* candidate = ObjectAccessor::FindConnectedPlayer(memberGuid);
+        if (!candidate)
+            continue;
+
+        WorldSession* session = candidate->GetSession();
+        if (!session || !session->IsVirtualSession())
+            continue;
+
+        return true;
+    }
+
+    return false;
+}
+
+bool RemoveOneVirtualPlayerFromTeam(Battleground* battleground, uint32 team)
+{
+    if (!battleground)
+        return false;
+
+    for (auto const& [memberGuid, bgPlayer] : battleground->GetPlayers())
+    {
+        if (bgPlayer.Team != team)
+            continue;
+
+        Player* candidate = ObjectAccessor::FindConnectedPlayer(memberGuid);
+        if (!candidate)
+            continue;
+
+        WorldSession* session = candidate->GetSession();
+        if (!session || !session->IsVirtualSession())
+            continue;
+
+        battleground->RemovePlayerAtLeave(memberGuid, true, true);
+        return true;
+    }
+
+    return false;
+}
+}
 
  /*********************************************************/
  /***            BATTLEGROUND QUEUE SYSTEM              ***/
@@ -450,6 +522,14 @@ bool BattlegroundQueue::InviteGroupToBG(GroupQueueInfo* ginfo, Battleground* bg,
     if (side)
         ginfo->Team = side;
 
+    // Let bots fully populate battlegrounds, but if a real player is now being invited
+    // and the target team is full, free exactly one slot by dropping a virtual-session actor.
+    if (bg && bg->isBattleground() && GroupHasRealPlayerInvitee(ginfo) && !bg->GetFreeSlotsForTeam(ginfo->Team))
+    {
+        if (!RemoveOneVirtualPlayerFromTeam(bg, ginfo->Team))
+            return false;
+    }
+
     if (!ginfo->IsInvitedToBGInstanceGUID)
     {
         // not yet invited
@@ -540,12 +620,20 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
 
         if (addToHorde)
         {
-            if(!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeFree, TEAM_HORDE))
+            uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
+            if (!hordeDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
+                hordeDesired = 1;
+
+            if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeDesired, TEAM_HORDE))
                 break;
         }
         else
         {
-            if(!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), aliFree, TEAM_ALLIANCE))
+            uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
+            if (!allianceDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
+                allianceDesired = 1;
+
+            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), allianceDesired, TEAM_ALLIANCE))
                 break;
         }
         ++Ali_itr;
@@ -565,12 +653,20 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
 
         if (addToHorde)
         {
-            if(!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeFree, TEAM_HORDE))
+            uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
+            if (!hordeDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
+                hordeDesired = 1;
+
+            if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeDesired, TEAM_HORDE))
                 break;
         }
         else
         {
-            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), aliFree, TEAM_ALLIANCE))
+            uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
+            if (!allianceDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
+                allianceDesired = 1;
+
+            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), allianceDesired, TEAM_ALLIANCE))
                 break;
         }
         ++Horde_itr;

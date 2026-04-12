@@ -214,6 +214,10 @@ public:
 
             std::string plNameLink = handler->GetNameLink(player);
 
+            if (player->IsBeingTeleportedFar())
+                if (WorldSession* playerSession = player->GetSession(); playerSession && playerSession->IsVirtualSession())
+                    playerSession->HandleMoveWorldportAck();
+
             if (player->IsBeingTeleported())
             {
                 handler->PSendSysMessage(LANG_IS_TELEPORTED, plNameLink.c_str());

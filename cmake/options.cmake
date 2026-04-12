@@ -9,6 +9,7 @@
 # implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 option(SERVERS          "Build worldserver and authserver"                            1)
+option(PLAYERBOT        "Build Playerbot infrastructure module"                       0)
 
 set(SCRIPTS_AVAILABLE_OPTIONS none static dynamic minimal-static minimal-dynamic)
 
@@ -29,7 +30,15 @@ set_property(CACHE SCRIPTS PROPERTY STRINGS ${SCRIPTS_AVAILABLE_OPTIONS})
 GetScriptModuleList(SCRIPT_MODULE_LIST)
 foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
   ScriptModuleNameToVariable(${SCRIPT_MODULE} SCRIPT_MODULE_VARIABLE)
-  set(${SCRIPT_MODULE_VARIABLE} "default" CACHE STRING "Build type of the ${SCRIPT_MODULE} module.")
+  set(SCRIPT_MODULE_DEFAULT_LINKAGE "default")
+  if(SCRIPT_MODULE STREQUAL "Playerbot")
+    if(PLAYERBOT)
+      set(SCRIPT_MODULE_DEFAULT_LINKAGE "static")
+    else()
+      set(SCRIPT_MODULE_DEFAULT_LINKAGE "disabled")
+    endif()
+  endif()
+  set(${SCRIPT_MODULE_VARIABLE} "${SCRIPT_MODULE_DEFAULT_LINKAGE}" CACHE STRING "Build type of the ${SCRIPT_MODULE} module.")
   set_property(CACHE ${SCRIPT_MODULE_VARIABLE} PROPERTY STRINGS default disabled static dynamic)
 endforeach()
 

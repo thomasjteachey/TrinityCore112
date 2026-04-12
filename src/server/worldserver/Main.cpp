@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
@@ -197,6 +197,16 @@ extern int main(int argc, char** argv)
     {
         printf("Error in config file: %s\n", configError.c_str());
         return 1;
+    }
+
+    fs::path playerbotConfig = configFile.parent_path() / "playerbots.conf";
+    if (fs::exists(playerbotConfig))
+    {
+        if (!sConfigMgr->LoadAdditionalFile(playerbotConfig.generic_string(), true, configError))
+        {
+            printf("Error in additional config file: %s\n", configError.c_str());
+            return 1;
+        }
     }
 
     std::vector<std::string> overriddenKeys = sConfigMgr->OverrideWithEnvVariablesIfAny();
