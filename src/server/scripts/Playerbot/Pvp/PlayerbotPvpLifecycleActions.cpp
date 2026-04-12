@@ -50,6 +50,7 @@
 #include "CommonHelpers.h"
 
 #include <cstring>
+#include <cstdint>
 #include <cmath>
 #include <chrono>
 #include <limits>
@@ -64,8 +65,8 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
-std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
-constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 15000;
+std::unordered_map<uintptr_t, uint32> g_BattlegroundNoHumanSinceMsByPointer;
+constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -1463,6 +1464,29 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
 }
 
 
+
+bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
+{
+    if (!player || !player->InBattleground() || !player->GetMap())
+        return false;
+
+    uint32 const battlegroundId = player->GetBattlegroundId();
+    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
+    {
+        Player const* participant = itr->GetSource();
+        if (!participant || participant->GetBattlegroundId() != battlegroundId)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (!isVirtualSession && !playerbot::IsManagedRandomBot(participant))
+            return true;
+    }
+
+    return false;
+}
+
 bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
 {
     if (!player)
@@ -1969,6 +1993,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
     if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
+        g_BattlegroundNoHumanSinceMsByPointer.erase(reinterpret_cast<uintptr_t>(battleground));
+
         if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
 
@@ -1980,14 +2006,34 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
 
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
+    {
+        g_BattlegroundNoHumanSinceMsByPointer.erase(reinterpret_cast<uintptr_t>(battleground));
         return false;
+    }
 
-    // Battleground core already owns no-human participant shutdown (with a
-    // non-virtual human grace window and join/leave edge-case handling).
-    // Duplicating that logic here can race invites and eject newly joining
-    // humans before they fully enter the battleground instance.
+    // Secondary guard for non-virtual managed bot accounts: core battleground
+    // shutdown treats any non-virtual session as human, so these matches can
+    // persist indefinitely after real humans leave.
+    uintptr_t const battlegroundPointerKey = reinterpret_cast<uintptr_t>(battleground);
+    if (!BattlegroundHasAnyRealHumanPlayers(player))
+    {
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByPointer[battlegroundPointerKey];
+        if (!noHumanSinceMs)
+            noHumanSinceMs = nowMs;
 
-    g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+        if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
+        {
+            battleground->EndBattleground(PVP_TEAM_NEUTRAL);
+            g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP lifecycle forced battleground end due to no real human participants: guid={} bgTypeId={} instanceId={}.",
+                player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
+            return true;
+        }
+    }
+    else
+        g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
 
     if (HandleBattlegroundDeathState(player))
         return true;
