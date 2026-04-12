@@ -522,6 +522,7 @@ std::array<BattlegroundTypeId, 6> BuildRandomBattlegroundOrder()
     return battlegroundTypes;
 }
 
+
 void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string const& detail)
 {
     (void)player;
@@ -2085,8 +2086,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         RemoveMatchingQueues(player, false, false, true);
         RemoveMatchingQueues(player, true, false, false);
         player->SetArenaTeamIdInvited(0);
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}.",
+            "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
         return true;
     }
