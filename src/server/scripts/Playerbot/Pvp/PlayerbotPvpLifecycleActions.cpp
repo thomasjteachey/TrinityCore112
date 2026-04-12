@@ -64,6 +64,8 @@
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
+constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -1984,6 +1986,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     // non-virtual human grace window and join/leave edge-case handling).
     // Duplicating that logic here can race invites and eject newly joining
     // humans before they fully enter the battleground instance.
+
+    g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
     if (HandleBattlegroundDeathState(player))
         return true;
