@@ -1473,7 +1473,9 @@ bool BattlegroundHasAnyHumanPlayers(Player const* player)
         if (!participant || participant->GetBattlegroundId() != battlegroundId)
             continue;
 
-        if (!playerbot::IsManagedRandomBot(participant))
+        WorldSession const* participantSession = participant->GetSession();
+        bool const isVirtualBotSession = participantSession && participantSession->IsVirtualSession();
+        if (!isVirtualBotSession && !playerbot::IsManagedRandomBot(participant))
             return true;
     }
 
@@ -1987,9 +1989,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
             return false;
 
-        player->LeaveBattleground();
+        battleground->EndBattleground(0);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle leave due to no human battleground participants: guid={} bgTypeId={} instanceId={}.",
+            "Playerbot PvP lifecycle forced battleground end due to no human participants: guid={} bgTypeId={} instanceId={}.",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
         return true;
     }
