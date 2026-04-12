@@ -116,29 +116,6 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
 }
 }
 
-namespace
-{
-bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
-{
-    if (!battleground)
-        return false;
-
-    for (auto const& [participantGuid, participantData] : battleground->GetPlayers())
-    {
-        (void)participantData;
-        Player const* participant = ObjectAccessor::FindPlayer(participantGuid);
-        if (!participant)
-            continue;
-
-        WorldSession const* session = participant->GetSession();
-        if (session && !session->IsVirtualSession())
-            return true;
-    }
-
-    return false;
-}
-}
-
 void BattlegroundScore::AppendToPacket(WorldPacket& data)
 {
     data << uint64(PlayerGuid);
