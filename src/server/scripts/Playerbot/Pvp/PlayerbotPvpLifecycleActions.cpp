@@ -71,6 +71,7 @@ constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
+constexpr uint32 SPELL_DESERTER = 26013;
 
 void ForcePlayerbotDismount(Player* player)
 {
@@ -2080,6 +2081,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
         player->LeaveBattleground();
         FinalizeVirtualBotTeleportIfPending(player);
+        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        RemoveMatchingQueues(player, false, false, true);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle leave after battleground end: guid={} bgTypeId={} instanceId={}.",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
