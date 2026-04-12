@@ -35,7 +35,6 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ReputationMgr.h"
-#include "StringConvert.h"
 #include "Miscellaneous/DepletedMarks.h"
 #include "SpellAuras.h"
 #include "TemporarySummon.h"
@@ -43,57 +42,13 @@
 #include "Util.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
-#include "CharacterCache.h"
 #include "WorldSession.h"
 #include "Item.h"
 #include <algorithm>
-#include <cctype>
 #include <cstdarg>
-#include <sstream>
-#include <unordered_set>
 
 namespace
 {
-std::unordered_set<uint32> BuildConfiguredPlayerbotAccountSet()
-{
-    std::unordered_set<uint32> accountIds;
-    std::string const configured = sConfigMgr->GetStringDefault("Playerbot.RandomPopulation.BotAccountIds", "");
-    if (configured.empty())
-        return accountIds;
-
-    std::stringstream stream(configured);
-    std::string token;
-    while (std::getline(stream, token, ','))
-    {
-        token.erase(std::remove_if(token.begin(), token.end(), [](unsigned char ch) { return std::isspace(ch) != 0; }), token.end());
-        if (token.empty())
-            continue;
-
-        if (Optional<uint32> const accountId = Trinity::StringTo<uint32>(token))
-            accountIds.insert(*accountId);
-    }
-
-    return accountIds;
-}
-
-bool IsConfiguredPlayerbotAccount(Player const* participant)
-{
-    if (!participant)
-        return false;
-
-    static std::unordered_set<uint32> const botAccountIds = BuildConfiguredPlayerbotAccountSet();
-    if (botAccountIds.empty())
-        return false;
-
-    uint32 accountId = 0;
-    if (WorldSession const* session = participant->GetSession())
-        accountId = session->GetAccountId();
-    else
-        accountId = sCharacterCache->GetCharacterAccountIdByGuid(participant->GetGUID());
-
-    return accountId != 0 && botAccountIds.find(accountId) != botAccountIds.end();
-}
-
 bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
 {
     if (!battleground)
@@ -107,8 +62,7 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
             continue;
 
         WorldSession const* session = participant->GetSession();
-        bool const isVirtualSession = session && session->IsVirtualSession();
-        if (!isVirtualSession && !IsConfiguredPlayerbotAccount(participant))
+        if (session && !session->IsVirtualSession())
             return true;
     }
 
@@ -262,6 +216,15 @@ void Battleground::Update(uint32 diff)
     switch (GetStatus())
     {
         case STATUS_WAIT_JOIN:
+            if (isBattleground() && GetPlayersSize() && !HasAnyNonVirtualHumanParticipant(this))
+            {
+                TC_LOG_INFO("bg.battleground",
+                    "Battleground::Update ending map={} instance={} during preparation because no non-virtual participants remain.",
+                    GetMapId(), GetInstanceID());
+                EndNow();
+                return;
+            }
+
             if (GetPlayersSize())
             {
                 _ProcessJoin(diff);
@@ -269,6 +232,15 @@ void Battleground::Update(uint32 diff)
             }
             break;
         case STATUS_IN_PROGRESS:
+            if (isBattleground() && !HasAnyNonVirtualHumanParticipant(this))
+            {
+                TC_LOG_INFO("bg.battleground",
+                    "Battleground::Update ending map={} instance={} because no non-virtual participants remain.",
+                    GetMapId(), GetInstanceID());
+                EndNow();
+                return;
+            }
+
             _ProcessOfflineQueue();
             // after 20 minutes without one team losing, the arena closes with no winner and no rating change
             if (isArena())
