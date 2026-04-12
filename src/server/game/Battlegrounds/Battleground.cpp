@@ -524,8 +524,7 @@ inline void Battleground::_ProcessLeave(uint32 diff)
     // ***           BATTLEGROUND ENDING SYSTEM              ***
     // *********************************************************
     // remove all players from battleground after 2 minutes
-    m_EndTime -= diff;
-    if (m_EndTime <= 0)
+    if (m_EndTime <= diff)
     {
         m_EndTime = 0;
         BattlegroundPlayerMap::iterator itr, next;
@@ -538,6 +537,8 @@ inline void Battleground::_ProcessLeave(uint32 diff)
             // do not change any battleground's private variables
         }
     }
+    else
+        m_EndTime -= diff;
 }
 
 Player* Battleground::_GetPlayer(ObjectGuid guid, bool offlineRemove, char const* context) const
@@ -989,7 +990,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         sBattlegroundMgr->BuildPlayerLeftBattlegroundPacket(&data, guid);
         SendPacketToTeam(team, &data, player, false);
 
-        if (isBattleground() && GetStatus() == STATUS_IN_PROGRESS && !HasAnyNonVirtualHumanParticipant(this))
+        if (isBattleground() && (GetStatus() == STATUS_IN_PROGRESS || GetStatus() == STATUS_WAIT_JOIN) && !HasAnyNonVirtualHumanParticipant(this))
         {
             TC_LOG_DEBUG("bg.battleground",
                 "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants remain.",
