@@ -67,6 +67,7 @@ namespace
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 std::unordered_map<uintptr_t, uint32> g_BattlegroundNoHumanSinceMsByPointer;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
+constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -1993,6 +1994,29 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     Battleground* battleground = player->GetBattleground();
     if (!battleground)
         return false;
+
+    if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+    {
+        uintptr_t const battlegroundPointerKey = reinterpret_cast<uintptr_t>(battleground);
+        if (!BattlegroundHasAnyRealHumanPlayers(player))
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByPointer[battlegroundPointerKey];
+            if (!noHumanSinceMs)
+                noHumanSinceMs = nowMs;
+
+            if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
+            {
+                battleground->EndBattleground(PVP_TEAM_NEUTRAL);
+                g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+                return true;
+            }
+        }
+        else
+            g_BattlegroundNoHumanSinceMsByPointer.erase(battlegroundPointerKey);
+
+        return false;
+    }
 
     if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
