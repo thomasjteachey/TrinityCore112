@@ -897,32 +897,38 @@ bool RemovePlayerFromQueue(Player* player, BattlegroundQueueTypeId bgQueueTypeId
     if (!player || bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
         return false;
 
+    if (player->GetBattlegroundQueueIndex(bgQueueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES)
+        return false;
+
     BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(bgQueueTypeId);
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-    if (!bgTemplate)
-        return false;
-
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
-    GroupQueueInfo ginfo;
-    if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
-        return false;
 
-    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
-    if (!bracketEntry)
-        return false;
+    GroupQueueInfo ginfo{};
+    bool const haveGroupInfo = bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo);
 
+    // Always clear the player's local queue slot if it is still present.
     player->RemoveBattlegroundQueueId(bgQueueTypeId);
-    bgQueue.RemovePlayer(player->GetGUID(), true);
 
-    if (scheduleNonArenaUpdate && !ginfo.ArenaType)
+    if (haveGroupInfo)
+        bgQueue.RemovePlayer(player->GetGUID(), true);
+
+    if (scheduleNonArenaUpdate && haveGroupInfo && !ginfo.ArenaType && bgTemplate)
     {
-        sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId,
-            bracketEntry->GetBracketId());
+        if (PvPDifficultyEntry const* bracketEntry =
+            GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel()))
+        {
+            sBattlegroundMgr->ScheduleQueueUpdate(
+                ginfo.ArenaMatchmakerRating,
+                ginfo.ArenaType,
+                bgQueueTypeId,
+                bgTypeId,
+                bracketEntry->GetBracketId());
+        }
     }
 
     return true;
 }
-
 bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate)
 {
     if (!player || !player->InBattlegroundQueue())
