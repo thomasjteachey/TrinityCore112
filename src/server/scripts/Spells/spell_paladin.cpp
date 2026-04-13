@@ -870,6 +870,11 @@ class spell_pal_party_damage_redirect : public AuraScript
         // Original victim takes (damage - redirected); we absorb the redirected portion there
         dmgInfo.AbsorbDamage(redirected);
 
+        if (caster->IsImmunedToDamage(SPELL_SCHOOL_MASK_NORMAL))
+        {
+            return;
+        }
+
         CalcDamageInfo redirectInfo{};
         redirectInfo.Attacker = attacker ? attacker : caster;
         redirectInfo.Target = caster;
