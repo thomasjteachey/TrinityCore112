@@ -2041,13 +2041,7 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    for (BattlegroundTypeId bgTypeId : BuildRandomBattlegroundOrder())
-    {
-        if (QueuePlayer(player, bgTypeId, 0))
-            return true;
-    }
-
-    return false;
+    return QueuePlayer(player, BATTLEGROUND_WS, 0);
 }
 
 bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
