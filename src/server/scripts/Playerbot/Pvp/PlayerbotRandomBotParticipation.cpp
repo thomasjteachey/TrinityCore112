@@ -1002,6 +1002,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingVirtualBotTeleport(player);
+    playerbot::NormalizeLifecycleQueueState(player);
     ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))

@@ -85,7 +85,7 @@ uint32 GetChestMarkRewardCount()
 #else
     localtime_r(&now, &localTime);
 #endif
-    return localTime.tm_hour == 20 ? 3u : 1u;
+    return localTime.tm_hour == 21 ? 3u : 1u;
 }
 
 bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
