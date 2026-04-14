@@ -1,152 +1,247 @@
-/*
- * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
- */
-
 #include "BattlegroundSCM.h"
+
+#include "BattlegroundMgr.h"
 #include "DBCStores.h"
+#include "GameObject.h"
 #include "Log.h"
 #include "Player.h"
-#include "Util.h"
+#include "Random.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
 void BattlegroundSCMScore::BuildObjectivesBlock(WorldPacket& data)
 {
-    data << uint32(0);
+    data << uint32(0); // no extra custom scoreboard columns yet
 }
 
 BattlegroundSCM::BattlegroundSCM()
 {
+    BgObjects.resize(BG_SCM_OBJECT_MAX);
     BgCreatures.resize(BG_SCM_CREATURE_MAX);
+    _allianceKills = 0;
+    _hordeKills = 0;
+    m_BuffChange = true;
 }
 
 void BattlegroundSCM::AddPlayer(Player* player)
 {
-    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
-
-    if (!isInBattleground)
-        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundSCMScore(player->GetGUID());
+    PlayerScores[player->GetGUID()] = new BattlegroundSCMScore(player->GetGUID());
 }
 
 void BattlegroundSCM::Reset()
 {
     Battleground::Reset();
-
-    m_TeamScores[TEAM_ALLIANCE] = 0;
-    m_TeamScores[TEAM_HORDE] = 0;
+    _allianceKills = 0;
+    _hordeKills = 0;
 }
 
 bool BattlegroundSCM::SetupBattleground()
 {
-    struct SpiritSpawn
+    if (!AddObject(BG_SCM_OBJECT_STATUE_1, BG_SCM_OBJECT_STATUE_ENTRY,
+            863.768f, 1384.96f, 19.5695f, 1.5568f,
+            0.0f, 0.0f, -0.702142f, -0.712037f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_SCM_OBJECT_DOOR_ALLIANCE, BG_SCM_OBJECT_DOOR_ALLIANCE_ENTRY,
+            880.31f, 1399.26f, 18.6765f, 6.24168f,
+            0.0f, 0.0f, -0.020749f, 0.999785f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_SCM_OBJECT_DOOR_HORDE, BG_SCM_OBJECT_DOOR_HORDE_ENTRY,
+            1069.95f, 1399.14f, 30.7956f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.000001f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_SCM_OBJECT_STATUE_2, BG_SCM_OBJECT_STATUE_ENTRY,
+            1091.96f, 1398.61f, 30.3063f, 3.14726f,
+            0.0f, 0.0f, -0.999996f, 0.00283472f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_SCM_OBJECT_STATUE_3, BG_SCM_OBJECT_STATUE_ENTRY,
+            1095.32f, 1385.36f, 30.2991f, 1.59609f,
+            0.0f, 0.0f, -0.715992f, -0.698108f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_SCM_OBJECT_STATUE_4, BG_SCM_OBJECT_STATUE_ENTRY,
+            1095.3f, 1411.06f, 30.3003f, 4.69841f,
+            0.0f, 0.0f, -0.712033f, 0.702146f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_SCM_OBJECT_BUFF1_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
+            939.852112f, 1400.462524f, 18.339478f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_SCM_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_SCM_OBJECT_BUFF1_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
+            939.852112f, 1400.462524f, 18.339478f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_SCM_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_SCM_OBJECT_BUFF1_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+            939.852112f, 1400.462524f, 18.339478f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_SCM_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_SCM_OBJECT_BUFF2_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
+            997.415649f, 1399.062012f, 27.136366f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_SCM_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_SCM_OBJECT_BUFF2_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
+            997.415649f, 1399.062012f, 27.136366f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_SCM_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_SCM_OBJECT_BUFF2_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+            997.415649f, 1399.062012f, 27.136366f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_SCM_BUFF_RESPAWN_TIME))
     {
-        uint32 Type;
-        uint32 SafeLocId;
-        TeamId Team;
-        float Orientation;
-    };
-
-    SpiritSpawn const spawns[] =
-    {
-        { BG_SCM_SPIRIT_ALLIANCE_A, BG_SCM_GY_ALLIANCE_A, TEAM_ALLIANCE, 0.0f },
-        { BG_SCM_SPIRIT_ALLIANCE_B, BG_SCM_GY_ALLIANCE_B, TEAM_ALLIANCE, 0.0f },
-        { BG_SCM_SPIRIT_HORDE_A,    BG_SCM_GY_HORDE_A,    TEAM_HORDE,    3.1415927f },
-        { BG_SCM_SPIRIT_HORDE_B,    BG_SCM_GY_HORDE_B,    TEAM_HORDE,    3.1415927f }
-    };
-
-    for (SpiritSpawn const& spawn : spawns)
-    {
-        WorldSafeLocsEntry const* safeLoc = sWorldSafeLocsStore.LookupEntry(spawn.SafeLocId);
-        if (!safeLoc)
-        {
-            TC_LOG_ERROR("bg.battleground", "BattlegroundSCM: Missing WorldSafeLocs entry {}.", spawn.SafeLocId);
-            return false;
-        }
-
-        if (!AddSpiritGuide(spawn.Type, safeLoc->Loc.X, safeLoc->Loc.Y, safeLoc->Loc.Z, spawn.Orientation, spawn.Team))
-        {
-            TC_LOG_ERROR("bg.battleground", "BattlegroundSCM: Failed to spawn spirit guide {} at WorldSafeLocs {}.", spawn.Type, spawn.SafeLocId);
-            return false;
-        }
+        TC_LOG_ERROR("bg.battleground", "BattlegroundSCM::SetupBattleground: failed to spawn one or more Scarlet Chapel gameobjects.");
+        return false;
     }
 
+    WorldSafeLocsEntry const* allianceA = sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_A);
+    WorldSafeLocsEntry const* allianceB = sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_B);
+    WorldSafeLocsEntry const* hordeA = sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_A);
+    WorldSafeLocsEntry const* hordeB = sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_B);
+
+    if (!allianceA || !allianceB || !hordeA || !hordeB)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundSCM::SetupBattleground: one or more Scarlet Chapel graveyards are missing in WorldSafeLocs.");
+        return false;
+    }
+
+    if (!AddSpiritGuide(BG_SCM_SPIRIT_ALLIANCE_A, allianceA->Loc.X, allianceA->Loc.Y, allianceA->Loc.Z, 0.0f, TEAM_ALLIANCE))
+        return false;
+    if (!AddSpiritGuide(BG_SCM_SPIRIT_ALLIANCE_B, allianceB->Loc.X, allianceB->Loc.Y, allianceB->Loc.Z, 0.0f, TEAM_ALLIANCE))
+        return false;
+    if (!AddSpiritGuide(BG_SCM_SPIRIT_HORDE_A, hordeA->Loc.X, hordeA->Loc.Y, hordeA->Loc.Z, 0.0f, TEAM_HORDE))
+        return false;
+    if (!AddSpiritGuide(BG_SCM_SPIRIT_HORDE_B, hordeB->Loc.X, hordeB->Loc.Y, hordeB->Loc.Z, 0.0f, TEAM_HORDE))
+        return false;
+
+    ApplyNonInteractableObjectFlags();
     return true;
+}
+
+void BattlegroundSCM::ApplyNonInteractableObjectFlags()
+{
+    for (uint32 type = BG_SCM_OBJECT_STATUE_1; type <= BG_SCM_OBJECT_STATUE_4; ++type)
+        if (GameObject* statue = GetBGObject(type))
+            statue->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* allianceDoor = GetBGObject(BG_SCM_OBJECT_DOOR_ALLIANCE))
+        allianceDoor->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* hordeDoor = GetBGObject(BG_SCM_OBJECT_DOOR_HORDE))
+        hordeDoor->SetFlag(GO_FLAG_NOT_SELECTABLE);
+}
+
+void BattlegroundSCM::SpawnRandomBuffSet(uint32 speedTypeIndex)
+{
+    // Despawn all three buff variants at this node first.
+    SpawnBGObject(speedTypeIndex + 0, RESPAWN_ONE_DAY);
+    SpawnBGObject(speedTypeIndex + 1, RESPAWN_ONE_DAY);
+    SpawnBGObject(speedTypeIndex + 2, RESPAWN_ONE_DAY);
+
+    uint8 const buff = urand(0, 2);
+    SpawnBGObject(speedTypeIndex + buff, RESPAWN_IMMEDIATELY);
 }
 
 void BattlegroundSCM::StartingEventCloseDoors()
 {
+    for (uint32 type = BG_SCM_OBJECT_STATUE_1; type <= BG_SCM_OBJECT_STATUE_4; ++type)
+        SpawnBGObject(type, RESPAWN_IMMEDIATELY);
+
+    DoorClose(BG_SCM_OBJECT_DOOR_ALLIANCE);
+    DoorClose(BG_SCM_OBJECT_DOOR_HORDE);
+    SpawnBGObject(BG_SCM_OBJECT_DOOR_ALLIANCE, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_SCM_OBJECT_DOOR_HORDE, RESPAWN_IMMEDIATELY);
+
+    // Hide all buff variants until battle start.
+    for (uint32 type = BG_SCM_OBJECT_BUFF1_SPEED; type <= BG_SCM_OBJECT_BUFF2_BERSERK; ++type)
+        SpawnBGObject(type, RESPAWN_ONE_DAY);
+
+    ApplyNonInteractableObjectFlags();
 }
 
 void BattlegroundSCM::StartingEventOpenDoors()
 {
-}
+    DoorOpen(BG_SCM_OBJECT_DOOR_ALLIANCE);
+    DoorOpen(BG_SCM_OBJECT_DOOR_HORDE);
 
-void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
-{
-    if (GetStatus() != STATUS_IN_PROGRESS)
-        return;
+    SpawnRandomBuffSet(BG_SCM_OBJECT_BUFF1_SPEED);
+    SpawnRandomBuffSet(BG_SCM_OBJECT_BUFF2_SPEED);
 
-    Battleground::HandleKillPlayer(victim, killer);
-
-    if (!killer || killer == victim)
-        return;
-
-    if (killer->GetBGTeam() == victim->GetBGTeam())
-        return;
-
-    TeamId const killerTeamIndex = GetTeamIndexByTeamId(killer->GetBGTeam());
-    ++m_TeamScores[killerTeamIndex];
-
-    UpdateWorldState(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, m_TeamScores[TEAM_ALLIANCE]);
-    UpdateWorldState(BG_SCM_WORLDSTATE_HORDE_SCORE, m_TeamScores[TEAM_HORDE]);
-
-    if (m_TeamScores[killerTeamIndex] >= KillLimit)
-        EndBattleground(killer->GetBGTeam());
-}
-
-WorldSafeLocsEntry const* BattlegroundSCM::GetTeamStartLoc(TeamId teamId) const
-{
-    return sWorldSafeLocsStore.LookupEntry(teamId == TEAM_ALLIANCE ? BG_SCM_START_ALLIANCE : BG_SCM_START_HORDE);
+    ApplyNonInteractableObjectFlags();
 }
 
 WorldSafeLocsEntry const* BattlegroundSCM::GetRandomTeamGraveyard(TeamId teamId) const
 {
-    uint32 graveyardId = 0;
-
     if (teamId == TEAM_ALLIANCE)
-        graveyardId = urand(0, 1) == 0 ? BG_SCM_GY_ALLIANCE_A : BG_SCM_GY_ALLIANCE_B;
-    else
-        graveyardId = urand(0, 1) == 0 ? BG_SCM_GY_HORDE_A : BG_SCM_GY_HORDE_B;
+        return urand(0, 1) == 0 ? sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_A)
+                                 : sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_B);
 
-    if (WorldSafeLocsEntry const* graveyard = sWorldSafeLocsStore.LookupEntry(graveyardId))
-        return graveyard;
-
-    return GetTeamStartLoc(teamId);
+    return urand(0, 1) == 0 ? sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_A)
+                             : sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_B);
 }
 
 WorldSafeLocsEntry const* BattlegroundSCM::GetClosestGraveyard(Player* player)
 {
-    TeamId const teamId = GetTeamIndexByTeamId(player->GetBGTeam());
+    if (!player)
+        return nullptr;
 
-    if (GetStatus() != STATUS_IN_PROGRESS)
-        return GetTeamStartLoc(teamId);
+    if (player->GetTeam() == ALLIANCE)
+    {
+        if (GetStatus() == STATUS_IN_PROGRESS)
+            return GetRandomTeamGraveyard(TEAM_ALLIANCE);
 
-    return GetRandomTeamGraveyard(teamId);
+        return sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_START);
+    }
+
+    if (GetStatus() == STATUS_IN_PROGRESS)
+        return GetRandomTeamGraveyard(TEAM_HORDE);
+
+    return sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_START);
+}
+
+void BattlegroundSCM::UpdateTeamScoreWorldStates()
+{
+    UpdateWorldState(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
+    UpdateWorldState(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
+    UpdateWorldState(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
+}
+
+void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
+{
+    Battleground::HandleKillPlayer(victim, killer);
+
+    if (GetStatus() != STATUS_IN_PROGRESS || !victim || !killer || victim == killer)
+        return;
+
+    uint32 killerTeam = GetPlayerTeam(killer->GetGUID());
+    uint32 victimTeam = GetPlayerTeam(victim->GetGUID());
+
+    if (!killerTeam || !victimTeam || killerTeam == victimTeam)
+        return;
+
+    if (killerTeam == ALLIANCE)
+    {
+        ++_allianceKills;
+        m_TeamScores[TEAM_ALLIANCE] = _allianceKills;
+    }
+    else if (killerTeam == HORDE)
+    {
+        ++_hordeKills;
+        m_TeamScores[TEAM_HORDE] = _hordeKills;
+    }
+
+    UpdateTeamScoreWorldStates();
+
+    if (_allianceKills >= BG_SCM_KILL_LIMIT)
+        EndBattleground(ALLIANCE);
+    else if (_hordeKills >= BG_SCM_KILL_LIMIT)
+        EndBattleground(HORDE);
 }
 
 void BattlegroundSCM::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
-    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, m_TeamScores[TEAM_ALLIANCE]);
-    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_HORDE_SCORE, m_TeamScores[TEAM_HORDE]);
-    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_SCORE, KillLimit);
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER_ACTIVE, 0);
-    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER_VALUE, 0);
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER, 0);
 }
 
 bool BattlegroundSCM::HandlePlayerUnderMap(Player* player)
@@ -154,10 +249,21 @@ bool BattlegroundSCM::HandlePlayerUnderMap(Player* player)
     if (!player)
         return false;
 
-    WorldSafeLocsEntry const* safeLoc = GetClosestGraveyard(player);
+    WorldSafeLocsEntry const* safeLoc = nullptr;
+    if (player->GetTeam() == ALLIANCE)
+        safeLoc = sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_START);
+    else
+        safeLoc = sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_START);
+
     if (!safeLoc)
         return false;
 
-    player->TeleportTo(GetMapId(), safeLoc->Loc.X, safeLoc->Loc.Y, safeLoc->Loc.Z, player->GetOrientation());
+    player->TeleportTo(GetMapId(), safeLoc->Loc.X, safeLoc->Loc.Y, safeLoc->Loc.Z + 1.0f, player->GetOrientation());
     return true;
+}
+
+void BattlegroundSCM::EndBattleground(uint32 winner)
+{
+    UpdateTeamScoreWorldStates();
+    Battleground::EndBattleground(winner);
 }
