@@ -56,6 +56,7 @@
 #include <limits>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <array>
 #include <algorithm>
 #include <queue>
@@ -1605,6 +1606,90 @@ bool ShouldDeferBattlegroundLeaveForTeleportAck(Player const* player)
     return true;
 }
 
+std::unordered_set<uint64> g_WaitJoinLockedBots;
+
+void SetWaitJoinMovementLock(Player* player, bool locked)
+{
+    if (!player)
+        return;
+
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    bool const alreadyLocked = g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end();
+
+    if (!locked)
+    {
+        if (alreadyLocked)
+        {
+            player->SetControlled(false, UNIT_STATE_ROOT);
+            g_WaitJoinLockedBots.erase(botGuid);
+        }
+        return;
+    }
+
+    player->AttackStop();
+    player->SetSelection(ObjectGuid::Empty);
+
+    if (player->isMoving())
+        player->StopMoving();
+
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear();
+
+    if (!alreadyLocked)
+    {
+        player->SetControlled(true, UNIT_STATE_ROOT);
+        g_WaitJoinLockedBots.insert(botGuid);
+    }
+}
+
+bool ForceHoldPlayerAtStartDuringWaitJoin(Player* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+    {
+        SetWaitJoinMovementLock(player, false);
+        return false;
+    }
+
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
+    TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
+    Position const* start = battleground->GetTeamStartPosition(startTeam);
+    if (!start)
+        return false;
+
+    SetWaitJoinMovementLock(player, true);
+
+    float const dist = player->GetDistance(
+        start->GetPositionX(),
+        start->GetPositionY(),
+        start->GetPositionZ());
+
+    // Hard correction: they should not be moving at all before the battleground starts.
+    if (dist > 1.0f)
+    {
+        player->NearTeleportTo(
+            start->GetPositionX(),
+            start->GetPositionY(),
+            start->GetPositionZ(),
+            start->GetOrientation());
+    }
+
+    if (player->isMoving())
+        player->StopMoving();
+
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear();
+
+    return true;
+}
+
 bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 {
     if (!player || !player->InBattleground())
@@ -2086,8 +2171,13 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (!battleground)
         return false;
 
+    if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+        SetWaitJoinMovementLock(player, false);
+
     if (battleground->GetStatus() == STATUS_WAIT_JOIN)
     {
+        ForceHoldPlayerAtStartDuringWaitJoin(player);
+
         uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
         if (!BattlegroundHasAnyRealHumanPlayers(player))
         {
@@ -2109,11 +2199,12 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         else
             g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
-        return false;
+        return true;
     }
 
     if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
     {
+        SetWaitJoinMovementLock(player, false);
         g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
 
         if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
@@ -2229,78 +2320,7 @@ bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalCo
 
 bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
 {
-    if (!player || !player->InBattleground())
-        return false;
-
-    struct StartHoldState
-    {
-        Position destination;
-        uint32 battlegroundInstanceId = 0;
-    };
-
-    static std::unordered_map<uint64, StartHoldState> holdByGuid;
-    uint64 const botGuid = player->GetGUID().GetRawValue();
-
-    Battleground* battleground = player->GetBattleground();
-    if (!battleground || battleground->GetStatus() != STATUS_WAIT_JOIN)
-    {
-        holdByGuid.erase(botGuid);
-        return false;
-    }
-
-    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
-    TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
-    TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
-    Position const* start = battleground->GetTeamStartPosition(startTeam);
-    if (!start)
-        return false;
-
-    StartHoldState& hold = holdByGuid[botGuid];
-    if (hold.battlegroundInstanceId != battleground->GetInstanceID())
-    {
-        // Prep phase must anchor safely inside the spawn room, not at the tunnel/gate.
-        hold.destination = *start;
-        hold.destination.Relocate(
-            start->GetPositionX() + frand(-1.0f, 1.0f),
-            start->GetPositionY() + frand(-1.0f, 1.0f),
-            start->GetPositionZ(),
-            start->GetOrientation());
-        hold.battlegroundInstanceId = battleground->GetInstanceID();
-    }
-
-    float const dist = player->GetDistance(
-        hold.destination.GetPositionX(),
-        hold.destination.GetPositionY(),
-        hold.destination.GetPositionZ());
-
-    // Never preserve stale movement from a prior battleground while the gate is closed.
-    if (player->isMoving() && dist > 2.5f)
-    {
-        player->StopMoving();
-        player->GetMotionMaster()->Clear();
-    }
-
-    if (dist <= 2.5f)
-    {
-        if (player->isMoving())
-            player->StopMoving();
-
-        switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
-        {
-            case CHASE_MOTION_TYPE:
-            case FOLLOW_MOTION_TYPE:
-            case POINT_MOTION_TYPE:
-                player->GetMotionMaster()->Clear();
-                break;
-            default:
-                break;
-        }
-
-        return true;
-    }
-
-    IssueMovePointThrottled(player, hold.destination, 1.5f, 700);
-    return true;
+    return ForceHoldPlayerAtStartDuringWaitJoin(player);
 }
 
 bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
