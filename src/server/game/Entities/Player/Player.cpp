@@ -22974,24 +22974,30 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
 {
     if (Battleground* bg = GetBattleground())
     {
+        bool const shouldCastDeserter = bg->isBattleground() && !IsGameMaster() &&
+            sWorld->getBoolConfig(CONFIG_BATTLEGROUND_CAST_DESERTER) &&
+            (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN);
+
+        bool const shouldTrackDeserter = bg->isBattleground() &&
+            sWorld->getBoolConfig(CONFIG_BATTLEGROUND_TRACK_DESERTERS) &&
+            (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN);
+
         bg->RemovePlayerAtLeave(GetGUID(), teleportToEntryPoint, true);
 
-        // call after remove to be sure that player resurrected for correct cast
-        if (bg->isBattleground() && !IsGameMaster() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_CAST_DESERTER))
+        // Determine deserter eligibility before removing the player from the battleground.
+        // RemovePlayerAtLeave can transition the battleground into WAIT_LEAVE, which would
+        // otherwise suppress deserter on legitimate mid-match AFK/leaves.
+        if (shouldCastDeserter)
         {
-            if (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN)
-            {
-                //lets check if player was teleported from BG and schedule delayed Deserter spell cast
-                if (IsBeingTeleportedFar())
-                    ScheduleDelayedOperation(DELAYED_SPELL_CAST_DESERTER);
-                else
-                    CastSpell(this, 26013, true);               // Deserter
-            }
+            // lets check if player was teleported from BG and schedule delayed Deserter spell cast
+            if (IsBeingTeleportedFar())
+                ScheduleDelayedOperation(DELAYED_SPELL_CAST_DESERTER);
+            else
+                CastSpell(this, 26013, true);               // Deserter
         }
 
-        // track if player leaves the BG while inside it
-        if (bg->isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_TRACK_DESERTERS) &&
-            (bg->GetStatus() == STATUS_IN_PROGRESS || bg->GetStatus() == STATUS_WAIT_JOIN))
+        // Track deserters based on the pre-leave battleground state for the same reason.
+        if (shouldTrackDeserter)
         {
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_DESERTER_TRACK);
             stmt->setUInt32(0, GetGUID().GetCounter());
