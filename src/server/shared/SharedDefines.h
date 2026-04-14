@@ -3517,10 +3517,11 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_DS             = 10, // Dalaran Sewers
     BATTLEGROUND_RV             = 11, // Ring of Valor
     BATTLEGROUND_IC             = 30, // Isle of Conquest
-    BATTLEGROUND_RB             = 32  // Random Battleground
+    BATTLEGROUND_RB             = 32, // Random Battleground
+    BATTLEGROUND_SCM            = 100 // Scarlet Chapel
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 33
+#define MAX_BATTLEGROUND_TYPE_ID 101
 
 enum BattlefieldBattleId : uint8
 {
@@ -3680,6 +3681,7 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_3v3      = 9,
     BATTLEGROUND_QUEUE_4v4      = 10,
     BATTLEGROUND_QUEUE_5v5      = 11,
+    BATTLEGROUND_QUEUE_SCM      = 12,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

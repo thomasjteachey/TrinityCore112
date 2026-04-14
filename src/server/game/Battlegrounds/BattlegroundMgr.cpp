@@ -28,6 +28,7 @@
 #include "BattlegroundDS.h"
 #include "BattlegroundRV.h"
 #include "BattlegroundIC.h"
+#include "BattlegroundSCM.h"
 #include "Common.h"
 #include "Containers.h"
 #include "Chat.h"
@@ -398,6 +399,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_IC:
             bg = new BattlegroundIC(*(BattlegroundIC*)bg_template);
             break;
+        case BATTLEGROUND_SCM:
+            bg = new BattlegroundSCM(*(BattlegroundSCM*)bg_template);
+            break;
         case BATTLEGROUND_RB:
         case BATTLEGROUND_AA:
         default:
@@ -485,6 +489,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_IC:
                 bg = new BattlegroundIC();
+                break;
+            case BATTLEGROUND_SCM:
+                bg = new BattlegroundSCM();
                 break;
             case BATTLEGROUND_AA:
                 bg = new Battleground();
@@ -755,6 +762,8 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
             return BATTLEGROUND_QUEUE_SA;
         case BATTLEGROUND_WS:
             return BATTLEGROUND_QUEUE_WS;
+        case BATTLEGROUND_SCM:
+            return BATTLEGROUND_QUEUE_SCM;
         case BATTLEGROUND_AA:
         case BATTLEGROUND_BE:
         case BATTLEGROUND_DS:
@@ -797,6 +806,8 @@ BattlegroundTypeId BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId bgQueue
             return BATTLEGROUND_IC;
         case BATTLEGROUND_QUEUE_RB:
             return BATTLEGROUND_RB;
+        case BATTLEGROUND_QUEUE_SCM:
+            return BATTLEGROUND_SCM;
         case BATTLEGROUND_QUEUE_2v2:
         case BATTLEGROUND_QUEUE_3v3:
         case BATTLEGROUND_QUEUE_4v4:
