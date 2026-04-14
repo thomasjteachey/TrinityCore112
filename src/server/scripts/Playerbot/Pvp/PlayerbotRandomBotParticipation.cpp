@@ -260,6 +260,9 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!IsLifecycleGateEnabled())
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle blocked: guid={} reason=gate-disabled",
+            guid.ToString());
         EmitLifecycleGmDebug(player, "can-process=no gate-disabled");
         return false;
     }
@@ -267,6 +270,9 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!playerbot::IsManagedRandomBot(player))
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle blocked: guid={} reason=unmanaged-bot",
+            guid.ToString());
         EmitLifecycleGmDebug(player, "can-process=no unmanaged-bot");
         return false;
     }
@@ -274,24 +280,31 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!player->IsInWorld())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle blocked: guid={} reason=not-in-world",
+            guid.ToString());
         EmitLifecycleGmDebug(player, "can-process=no not-in-world");
         return false;
     }
 
     if (player->IsBeingTeleported())
     {
-        // Managed random bots can occasionally retain a stale generic teleport
-        // flag after battleground transitions. Only block lifecycle when actual
-        // near/far teleport acknowledgements are still pending.
         bool const hasPendingTeleportAck = player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear();
         if (hasPendingTeleportAck)
         {
             ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
+            TC_LOG_ERROR("playerbots.pvp.lifecycle",
+                "Lifecycle blocked: guid={} reason=pending-teleport far={} near={} bgId={} inBg={}",
+                guid.ToString(),
+                player->IsBeingTeleportedFar() ? 1 : 0,
+                player->IsBeingTeleportedNear() ? 1 : 0,
+                player->GetBattlegroundId(),
+                player->InBattleground() ? 1 : 0);
             return false;
         }
 
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot lifecycle pre-check tolerated stale teleport flag: guid={} battlegroundId={} inBattleground={}",
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle tolerated stale teleport flag: guid={} battlegroundId={} inBattleground={}",
             guid.ToString(), player->GetBattlegroundId(), player->InBattleground() ? 1 : 0);
     }
 
@@ -309,6 +322,9 @@ bool CanProcessPlayerLifecycle(Player const* player)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
         auto const waitRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(nextProcessTime - now).count();
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle blocked: guid={} reason=cadence-throttled waitMs={} cadenceMs={} bgActive={}",
+            guid.ToString(), waitRemainingMs, cadenceInterval.count(), inActiveBattleground ? 1 : 0);
         std::ostringstream cadenceDetail;
         cadenceDetail << "can-process=no cadence-throttled wait_ms=" << waitRemainingMs
                       << " cadence_ms=" << cadenceInterval.count()
@@ -319,6 +335,17 @@ bool CanProcessPlayerLifecycle(Player const* player)
     }
 
     nextProcessTime = now + cadenceInterval;
+
+    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        "Lifecycle allowed: guid={} inBg={} bgId={} inQueue={} teleport={} far={} near={}",
+        guid.ToString(),
+        player->InBattleground() ? 1 : 0,
+        player->GetBattlegroundId(),
+        player->InBattlegroundQueue() ? 1 : 0,
+        player->IsBeingTeleported() ? 1 : 0,
+        player->IsBeingTeleportedFar() ? 1 : 0,
+        player->IsBeingTeleportedNear() ? 1 : 0);
+
     return true;
 }
 
@@ -1002,7 +1029,6 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingVirtualBotTeleport(player);
-    playerbot::NormalizeLifecycleQueueState(player);
     ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
@@ -1096,21 +1122,39 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (IsCrowdControlledForLifecyclePause(player))
     {
         ClearActiveMovementForControlLoss(player);
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle paused due to crowd control: guid={}.",
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle paused: guid={} reason=crowd-control",
             guid.ToString());
         return;
     }
 
     PvpValues const values = PvpCore::CollectValues(player);
+
+    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        "Lifecycle values: guid={} inBg={} bgState={} inBgQueue={} hasBgQueue={} hasBgInvite={} hasArenaQueue={} hasArenaInvite={} hasArenaTeamInvite={} bgTypeId={} bgId={} queueSlot0={} queueSlot1={} queueSlot2={}",
+        guid.ToString(),
+        values.inBattleground ? 1 : 0,
+        static_cast<uint32>(values.battlegroundState),
+        values.inBattlegroundQueue ? 1 : 0,
+        values.hasBattlegroundQueue ? 1 : 0,
+        values.hasBattlegroundInvite ? 1 : 0,
+        values.hasArenaQueue ? 1 : 0,
+        values.hasArenaInvite ? 1 : 0,
+        values.hasArenaTeamInvite ? 1 : 0,
+        uint32(values.battlegroundTypeId),
+        player->GetBattlegroundId(),
+        uint32(player->GetBattlegroundQueueTypeId(0)),
+        uint32(player->GetBattlegroundQueueTypeId(1)),
+        uint32(player->GetBattlegroundQueueTypeId(2)));
+
     BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
     bool const didExecuteTactical = BattlegroundTacticalActions::Execute(player, tacticalContext);
     bool const didExecuteDuelTactical = DuelTacticalActions::Execute(player);
     PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
     if (didExecuteClassSpell &&
-        (classSpellContext.spellId == 16166 || // Elemental Mastery (off-GCD)
-         classSpellContext.spellId == 17116)) // Nature's Swiftness (off-GCD)
+        (classSpellContext.spellId == 16166 ||
+         classSpellContext.spellId == 17116))
     {
         std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
         g_NextRandomBotLifecycleProcessTimeByGuid[guid.GetRawValue()] = LifecycleCadenceClock::now();
@@ -1119,14 +1163,28 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
             guid.ToString(), classSpellContext.spellId);
     }
 
+    BattlegroundLifecycleContext const bgContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
+    ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
+
+    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        "Lifecycle contexts: guid={} bgQueueOp={} bgInviteResp={} bgInProgress={} arenaQueueOp={} arenaTeamInteraction={} bgHook={} arenaHook={}",
+        guid.ToString(),
+        static_cast<uint32>(bgContext.queueOperation),
+        static_cast<uint32>(bgContext.invitationResponse),
+        bgContext.shouldHandleInProgressStatus ? 1 : 0,
+        static_cast<uint32>(arenaContext.queueOperation),
+        static_cast<uint32>(arenaContext.teamInteraction),
+        hooks.battlegroundParticipationHook ? 1 : 0,
+        hooks.arenaParticipationHook ? 1 : 0);
+
     if (!hooks.lifecycleEnabled)
     {
         LogLifecycleBranchSummary(guid, "hooks-lifecycle-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
-            guid.ToString(), (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle exited: guid={} reason=hooks-lifecycle-disabled",
+            guid.ToString());
         return;
     }
 
@@ -1134,9 +1192,16 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     {
         LogLifecycleBranchSummary(guid, "no-lifecycle-hooks-active");
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground=0, didExecuteArena=0, didExecuteTactical={}, didExecuteClassSpell={}.",
-            guid.ToString(), (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle exited: guid={} reason=no-hooks inBg={} inBgQueue={} hasBgQueue={} hasBgInvite={} hasArenaQueue={} hasArenaInvite={} hasArenaTeamInvite={}",
+            guid.ToString(),
+            values.inBattleground ? 1 : 0,
+            values.inBattlegroundQueue ? 1 : 0,
+            values.hasBattlegroundQueue ? 1 : 0,
+            values.hasBattlegroundInvite ? 1 : 0,
+            values.hasArenaQueue ? 1 : 0,
+            values.hasArenaInvite ? 1 : 0,
+            values.hasArenaTeamInvite ? 1 : 0);
         return;
     }
 
@@ -1145,27 +1210,44 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     if (hooks.battlegroundParticipationHook)
     {
-        BattlegroundLifecycleContext const battlegroundContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
-        if (!IsNoOp(battlegroundContext))
-            didExecuteBattleground = BattlegroundLifecycleActions::Execute(player, battlegroundContext);
+        if (!IsNoOp(bgContext))
+        {
+            didExecuteBattleground = BattlegroundLifecycleActions::Execute(player, bgContext);
+            TC_LOG_ERROR("playerbots.pvp.lifecycle",
+                "Lifecycle battleground execute: guid={} executed={} queueOp={} inviteResp={} inProgress={}",
+                guid.ToString(),
+                didExecuteBattleground ? 1 : 0,
+                static_cast<uint32>(bgContext.queueOperation),
+                static_cast<uint32>(bgContext.invitationResponse),
+                bgContext.shouldHandleInProgressStatus ? 1 : 0);
+        }
     }
 
-    // Re-sample lifecycle values after battleground execution so arena decisions
-    // are based on current queue/invite state and do not operate on stale data.
     PvpValues const postBattlegroundValues = PvpCore::CollectValues(player);
+    ArenaLifecycleContext const postArenaContext = PvpCore::BuildArenaLifecycleContext(player, postBattlegroundValues);
     RandomBotParticipationHooks const postBattlegroundHooks = PvpCore::BuildRandomBotParticipationHooks(player, postBattlegroundValues);
+
     if (postBattlegroundHooks.arenaParticipationHook)
     {
-        ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, postBattlegroundValues);
-        if (!IsNoOp(arenaContext))
-            didExecuteArena = ArenaLifecycleActions::Execute(player, arenaContext);
+        if (!IsNoOp(postArenaContext))
+        {
+            didExecuteArena = ArenaLifecycleActions::Execute(player, postArenaContext);
+            TC_LOG_ERROR("playerbots.pvp.lifecycle",
+                "Lifecycle arena execute: guid={} executed={} queueOp={} teamInteraction={} hasArenaInvite={} hasArenaTeamInvite={}",
+                guid.ToString(),
+                didExecuteArena ? 1 : 0,
+                static_cast<uint32>(postArenaContext.queueOperation),
+                static_cast<uint32>(postArenaContext.teamInteraction),
+                postBattlegroundValues.hasArenaInvite ? 1 : 0,
+                postBattlegroundValues.hasArenaTeamInvite ? 1 : 0);
+        }
     }
 
     if (!didExecuteBattleground && !didExecuteArena)
     {
         LogLifecycleBranchSummary(guid, "active-hooks-no-op-context");
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle dispatcher no-op with active hooks: guid={}, bgHook={}, arenaHook={}.",
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "Lifecycle no-op with active hooks: guid={} bgHook={} arenaHook={}",
             guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
     }
 
@@ -1181,10 +1263,13 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ObserveLifecycleReason(LifecycleObservationReason::ArenaLifecycleExecuted, guid);
     }
 
-    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "Playerbot PvP lifecycle dispatcher complete: guid={}, didExecuteBattleground={}, didExecuteArena={}, didExecuteTactical={}, didExecuteClassSpell={}.",
-        guid.ToString(), didExecuteBattleground ? 1 : 0, didExecuteArena ? 1 : 0,
-        (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0, didExecuteClassSpell ? 1 : 0);
+    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        "Lifecycle complete: guid={} didBg={} didArena={} didTactical={} didClassSpell={}",
+        guid.ToString(),
+        didExecuteBattleground ? 1 : 0,
+        didExecuteArena ? 1 : 0,
+        (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0,
+        didExecuteClassSpell ? 1 : 0);
 }
 
 bool RandomBotParticipationLifecycle::ProcessBattlegroundLifecycleEntryPoint(Player* player, PvpValues const& values,

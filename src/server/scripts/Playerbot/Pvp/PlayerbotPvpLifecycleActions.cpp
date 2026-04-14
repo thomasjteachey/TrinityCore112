@@ -555,75 +555,10 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
     if (!player)
         return;
 
-    TC_LOG_INFO("playerbots.pvp.lifecycle",
+    TC_LOG_ERROR("playerbots.pvp.lifecycle",
         "Playerbot lifecycle diagnostic: guid={} phase={} inBg={} bgId={} inQueue={} deserter={} {} detail={}",
         player->GetGUID().ToString(), phase ? phase : "none", player->InBattleground() ? 1 : 0, player->GetBattlegroundId(),
         player->InBattlegroundQueue() ? 1 : 0, player->HasAura(SPELL_DESERTER) ? 1 : 0, BuildQueueDebugSummary(player), detail);
-}
-
-bool NormalizeLifecycleQueueStateImpl(Player* player)
-{
-    if (!player)
-        return false;
-
-    if (player->InBattleground() || player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
-        return false;
-
-    bool changed = false;
-    std::vector<BattlegroundQueueTypeId> orphanedQueueTypes;
-    orphanedQueueTypes.reserve(PLAYER_MAX_BATTLEGROUND_QUEUES);
-
-    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
-    {
-        BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
-        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
-            continue;
-
-        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
-        GroupQueueInfo ginfo{};
-        if (bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
-            continue;
-
-        orphanedQueueTypes.push_back(bgQueueTypeId);
-    }
-
-    for (BattlegroundQueueTypeId const bgQueueTypeId : orphanedQueueTypes)
-    {
-        player->RemoveBattlegroundQueueId(bgQueueTypeId);
-        changed = true;
-        EmitLifecycleDiagnostic(player, "queue-slot-resync",
-            "Removed orphaned queue slot queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
-    }
-
-    if (player->GetBattlegroundId() != 0)
-    {
-        player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
-        player->SetBGTeam(0);
-        changed = true;
-        EmitLifecycleDiagnostic(player, "bg-state-resync",
-            "Cleared stale battleground id/type while player was outside battleground.");
-    }
-
-    if (!player->InBattlegroundQueue())
-    {
-        if (player->GetArenaTeamIdInvited())
-        {
-            player->SetArenaTeamIdInvited(0);
-            changed = true;
-            EmitLifecycleDiagnostic(player, "arena-team-invite-resync",
-                "Cleared stale arena team invite while player had no queue slots.");
-        }
-
-        if (player->HasAura(SPELL_DESERTER))
-        {
-            player->RemoveAurasDueToSpell(SPELL_DESERTER);
-            changed = true;
-            EmitLifecycleDiagnostic(player, "deserter-resync",
-                "Removed deserter aura while player was idle outside battleground/queues.");
-        }
-    }
-
-    return changed;
 }
 
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
@@ -911,41 +846,88 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
-    if (!player || player->InBattleground())
+    if (!player)
+    {
+        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            "QueuePlayer failed: guid=empty reason=null-player bgTypeId={} arenaType={}",
+            uint32(bgTypeId), uint32(arenaType));
         return false;
+    }
 
-    // Allow managed bots to keep participating in queue/invite lifecycle even if
-    // they died in the open world. Battleground queue/port handlers can reject
-    // dead actors, so recover to alive before queueing.
+    if (player->InBattleground())
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=in-battleground bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
+        return false;
+    }
+
     if (!player->IsAlive())
         player->ResurrectPlayer(1.0f);
 
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bgTemplate)
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=no-bg-template bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
+    }
 
-    // Managed random bots can run on disconnected virtual sessions where RBAC
-    // battleground permissions are not always populated like live client sessions.
-    // Gate queue eligibility by battleground level + free queue slots instead.
-    if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
+    if (!player->GetBGAccessByLevel(bgTypeId))
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=no-bg-access level=" + std::to_string(uint32(player->GetLevel())) +
+            " bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
+    }
+
+    if (!player->HasFreeBattlegroundQueueId())
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=no-free-queue-slot bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
+        return false;
+    }
 
     BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
     if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=queue-type-none bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
+    }
 
     if (player->GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=already-has-queue-slot queueTypeId=" + std::to_string(uint32(bgQueueTypeId)) +
+            " bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
+    }
 
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
     if (!bracketEntry)
+    {
+        EmitLifecycleDiagnostic(player, "queue-add-blocked",
+            "reason=no-bracket-entry mapId=" + std::to_string(uint32(bgTemplate->GetMapId())) +
+            " level=" + std::to_string(uint32(player->GetLevel())) +
+            " bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
+    }
 
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
     if (!ginfo)
     {
-        EmitLifecycleDiagnostic(player, "queue-add-failed", "BattlegroundQueue::AddGroup returned null.");
+        EmitLifecycleDiagnostic(player, "queue-add-failed",
+            "reason=add-group-null bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+            " arenaType=" + std::to_string(uint32(arenaType)) +
+            " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
         return false;
     }
 
@@ -953,7 +935,9 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
         bracketEntry->GetBracketId());
     EmitLifecycleDiagnostic(player, "queue-add-success",
-        "Queued for bgTypeId=" + std::to_string(uint32(bgTypeId)) + " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
+        "Queued for bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+        " arenaType=" + std::to_string(uint32(arenaType)) +
+        " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
     return true;
 }
 
@@ -2056,11 +2040,6 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
 
 namespace playerbot
 {
-bool NormalizeLifecycleQueueState(Player* player)
-{
-    return NormalizeLifecycleQueueStateImpl(player);
-}
-
 bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycleContext const& context)
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
@@ -2195,7 +2174,6 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         RemoveMatchingQueues(player, false, false, true);
         RemoveMatchingQueues(player, true, false, false);
         player->SetArenaTeamIdInvited(0);
-        playerbot::NormalizeLifecycleQueueState(player);
         EmitLifecycleDiagnostic(player, "wait-leave-cleanup", "Post-leave cleanup complete before returning to scheduler flow.");
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
