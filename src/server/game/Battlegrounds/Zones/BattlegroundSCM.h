@@ -48,10 +48,7 @@ struct BattlegroundSCMScore final : public BattlegroundScore
     explicit BattlegroundSCMScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid) { }
 
 protected:
-    void BuildObjectivesBlock(WorldPacket& data) override
-    {
-        data << uint32(0);
-    }
+    void BuildObjectivesBlock(WorldPacket& data) override;
 };
 
 class BattlegroundSCM : public Battleground

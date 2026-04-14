@@ -12,7 +12,13 @@
 #include "Log.h"
 #include "Player.h"
 #include "Util.h"
+#include "WorldPacket.h"
 #include "WorldStatePackets.h"
+
+void BattlegroundSCMScore::BuildObjectivesBlock(WorldPacket& data)
+{
+    data << uint32(0);
+}
 
 BattlegroundSCM::BattlegroundSCM()
 {
