@@ -3035,15 +3035,10 @@ RandomBotParticipationHooks PvpCore::BuildRandomBotParticipationHooks(Player con
     BattlegroundLifecycleContext bgContext = BuildBattlegroundLifecycleContext(player, values);
     ArenaLifecycleContext arenaContext = BuildArenaLifecycleContext(player, values);
 
-    hooks.battlegroundParticipationHook =
-        (bgContext.queueOperation != QueueOperationType::None) ||
-        (bgContext.invitationResponse != InvitationResponseType::None) ||
-        bgContext.shouldHandleInProgressStatus;
-
-    hooks.arenaParticipationHook =
-        (arenaContext.queueOperation != QueueOperationType::None) ||
-        (arenaContext.teamInteraction != ArenaTeamInteractionType::None) ||
-        values.hasArenaInvite; // important
+    hooks.battlegroundParticipationHook = (bgContext.queueOperation != QueueOperationType::None) ||
+        (bgContext.invitationResponse != InvitationResponseType::None) || bgContext.shouldHandleInProgressStatus;
+    hooks.arenaParticipationHook = (arenaContext.queueOperation != QueueOperationType::None) ||
+        (arenaContext.teamInteraction != ArenaTeamInteractionType::None) || values.hasArenaInvite;
 
     return hooks;
 }

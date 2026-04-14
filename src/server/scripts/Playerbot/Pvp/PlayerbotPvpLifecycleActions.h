@@ -24,6 +24,8 @@ class Player;
 
 namespace playerbot
 {
+bool NormalizeLifecycleQueueState(Player* player);
+
 class BattlegroundLifecycleActions
 {
 public:

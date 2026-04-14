@@ -561,6 +561,71 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
         player->InBattlegroundQueue() ? 1 : 0, player->HasAura(SPELL_DESERTER) ? 1 : 0, BuildQueueDebugSummary(player), detail);
 }
 
+bool NormalizeLifecycleQueueStateImpl(Player* player)
+{
+    if (!player)
+        return false;
+
+    if (player->InBattleground() || player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    bool changed = false;
+    std::vector<BattlegroundQueueTypeId> orphanedQueueTypes;
+    orphanedQueueTypes.reserve(PLAYER_MAX_BATTLEGROUND_QUEUES);
+
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+        GroupQueueInfo ginfo{};
+        if (bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            continue;
+
+        orphanedQueueTypes.push_back(bgQueueTypeId);
+    }
+
+    for (BattlegroundQueueTypeId const bgQueueTypeId : orphanedQueueTypes)
+    {
+        player->RemoveBattlegroundQueueId(bgQueueTypeId);
+        changed = true;
+        EmitLifecycleDiagnostic(player, "queue-slot-resync",
+            "Removed orphaned queue slot queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
+    }
+
+    if (player->GetBattlegroundId() != 0)
+    {
+        player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+        player->SetBGTeam(0);
+        changed = true;
+        EmitLifecycleDiagnostic(player, "bg-state-resync",
+            "Cleared stale battleground id/type while player was outside battleground.");
+    }
+
+    if (!player->InBattlegroundQueue())
+    {
+        if (player->GetArenaTeamIdInvited())
+        {
+            player->SetArenaTeamIdInvited(0);
+            changed = true;
+            EmitLifecycleDiagnostic(player, "arena-team-invite-resync",
+                "Cleared stale arena team invite while player had no queue slots.");
+        }
+
+        if (player->HasAura(SPELL_DESERTER))
+        {
+            player->RemoveAurasDueToSpell(SPELL_DESERTER);
+            changed = true;
+            EmitLifecycleDiagnostic(player, "deserter-resync",
+                "Removed deserter aura while player was idle outside battleground/queues.");
+        }
+    }
+
+    return changed;
+}
+
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs = 3000)
 {
     (void)bot;
@@ -1991,6 +2056,11 @@ bool TryGetObjectivePosition(Battleground* battleground, Player* player, Positio
 
 namespace playerbot
 {
+bool NormalizeLifecycleQueueState(Player* player)
+{
+    return NormalizeLifecycleQueueStateImpl(player);
+}
+
 bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycleContext const& context)
 {
     if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())
@@ -2125,6 +2195,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         RemoveMatchingQueues(player, false, false, true);
         RemoveMatchingQueues(player, true, false, false);
         player->SetArenaTeamIdInvited(0);
+        playerbot::NormalizeLifecycleQueueState(player);
         EmitLifecycleDiagnostic(player, "wait-leave-cleanup", "Post-leave cleanup complete before returning to scheduler flow.");
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
