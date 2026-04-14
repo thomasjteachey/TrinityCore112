@@ -9367,6 +9367,17 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             packet.Worldstates.emplace_back(2339, 1); // alliance (0 - hide, 1 - flag ok, 2 - flag picked up (flashing), 3 - flag picked up (not flashing)
         }
         break;
+    case 30189: // Scarlet Chapel
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM)
+            battleground->FillInitialWorldStates(packet);
+        else
+        {
+            packet.Worldstates.emplace_back(9005, 0); // show
+            packet.Worldstates.emplace_back(9000, 0); // alliance score
+            packet.Worldstates.emplace_back(9001, 0); // horde score
+            packet.Worldstates.emplace_back(9002, 50); // max score
+        }
+        break;
     case 3358: // Arathi Basin
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_AB)
             battleground->FillInitialWorldStates(packet);
