@@ -198,6 +198,7 @@ WorldSafeLocsEntry const* BattlegroundSCM::GetClosestGraveyard(Player* player)
 
 void BattlegroundSCM::UpdateTeamScoreWorldStates()
 {
+    UpdateWorldState(BG_SCM_WORLDSTATE_SHOW, 1);
     UpdateWorldState(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
     UpdateWorldState(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
     UpdateWorldState(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
@@ -237,6 +238,7 @@ void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
 
 void BattlegroundSCM::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_SHOW, 1);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
