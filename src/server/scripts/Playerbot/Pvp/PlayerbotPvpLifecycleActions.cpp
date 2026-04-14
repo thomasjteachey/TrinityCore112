@@ -2258,35 +2258,59 @@ bool BattlegroundTacticalActions::MoveToStartPrimitive(Player* player)
     StartHoldState& hold = holdByGuid[botGuid];
     if (hold.battlegroundInstanceId != battleground->GetInstanceID())
     {
-        if (IsWarsongGulch(player))
-        {
-            // During prep, hard-stack at each side tunnel entrance with no random/role offset.
-            Position const wsHordeTunnelEntrance(933.484f, 1433.726f, 345.535f, 0.08f);
-            Position const wsAllianceTunnelEntrance(1519.530f, 1481.870f, 352.024f, 3.20f);
-            hold.destination = (startTeam == TEAM_HORDE) ? wsHordeTunnelEntrance : wsAllianceTunnelEntrance;
-        }
-        else
-        {
-            hold.destination = *start;
-            hold.destination.Relocate(
-                start->GetPositionX() + frand(-1.0f, 1.0f),
-                start->GetPositionY() + frand(-1.0f, 1.0f),
-                start->GetPositionZ(),
-                start->GetOrientation());
-        }
+        // Keep prep positioning safely inside the spawn room.
+        // Do not use tunnel-entrance anchors during WAIT_JOIN.
+        hold.destination = *start;
+
+        // Small spread so they do not all stand on one exact point,
+        // but keep it tight enough to stay well behind the gate.
+        hold.destination.Relocate(
+            start->GetPositionX() + frand(-1.5f, 1.5f),
+            start->GetPositionY() + frand(-1.5f, 1.5f),
+            start->GetPositionZ(),
+            start->GetOrientation());
 
         hold.battlegroundInstanceId = battleground->GetInstanceID();
     }
 
-    if (player->isMoving())
+    float const dist = player->GetDistance(hold.destination.GetPositionX(),
+        hold.destination.GetPositionY(),
+        hold.destination.GetPositionZ());
+
+    // Prep-phase rule: never keep stale movement from a previous battleground.
+    // If the bot is moving while WAIT_JOIN is active, stop and reset it unless
+    // it is already basically parked at the hold position.
+    if (player->isMoving() && dist > 2.5f)
+    {
+        player->StopMoving();
+        player->GetMotionMaster()->Clear();
+    }
+
+    // If already parked at the hold point, keep the bot still.
+    if (dist <= 2.5f)
+    {
+        if (player->isMoving())
+            player->StopMoving();
+
+        // Clear chase/point/follow leftovers so the bot does not drift forward
+        // into the gate while waiting for the match to start.
+        switch (player->GetMotionMaster()->GetCurrentMovementGeneratorType())
+        {
+        case CHASE_MOTION_TYPE:
+        case FOLLOW_MOTION_TYPE:
+        case POINT_MOTION_TYPE:
+            player->GetMotionMaster()->Clear();
+            break;
+        default:
+            break;
+        }
+
         return true;
+    }
 
-    if (!player->IsWithinDist3d(hold.destination.GetPositionX(), hold.destination.GetPositionY(), hold.destination.GetPositionZ(), 4.0f))
-        IssueMovePointThrottled(player, hold.destination, 3.0f, 1200);
-
+    IssueMovePointThrottled(player, hold.destination, 1.5f, 700);
     return true;
 }
-
 bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
 {
     if (!player || !player->InBattleground())
