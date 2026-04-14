@@ -555,7 +555,7 @@ void EmitLifecycleDiagnostic(Player* player, char const* phase, std::string cons
     if (!player)
         return;
 
-    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+    TC_LOG_INFO("playerbots.pvp.lifecycle",
         "Playerbot lifecycle diagnostic: guid={} phase={} inBg={} bgId={} inQueue={} deserter={} {} detail={}",
         player->GetGUID().ToString(), phase ? phase : "none", player->InBattleground() ? 1 : 0, player->GetBattlegroundId(),
         player->InBattlegroundQueue() ? 1 : 0, player->HasAura(SPELL_DESERTER) ? 1 : 0, BuildQueueDebugSummary(player), detail);
@@ -846,88 +846,41 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
-    if (!player)
-    {
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
-            "QueuePlayer failed: guid=empty reason=null-player bgTypeId={} arenaType={}",
-            uint32(bgTypeId), uint32(arenaType));
+    if (!player || player->InBattleground())
         return false;
-    }
 
-    if (player->InBattleground())
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=in-battleground bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
-        return false;
-    }
-
+    // Allow managed bots to keep participating in queue/invite lifecycle even if
+    // they died in the open world. Battleground queue/port handlers can reject
+    // dead actors, so recover to alive before queueing.
     if (!player->IsAlive())
         player->ResurrectPlayer(1.0f);
 
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bgTemplate)
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=no-bg-template bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
-    }
 
-    if (!player->GetBGAccessByLevel(bgTypeId))
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=no-bg-access level=" + std::to_string(uint32(player->GetLevel())) +
-            " bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
+    // Managed random bots can run on disconnected virtual sessions where RBAC
+    // battleground permissions are not always populated like live client sessions.
+    // Gate queue eligibility by battleground level + free queue slots instead.
+    if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
         return false;
-    }
-
-    if (!player->HasFreeBattlegroundQueueId())
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=no-free-queue-slot bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
-        return false;
-    }
 
     BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
     if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=queue-type-none bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
-    }
 
     if (player->GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=already-has-queue-slot queueTypeId=" + std::to_string(uint32(bgQueueTypeId)) +
-            " bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
-    }
 
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
     if (!bracketEntry)
-    {
-        EmitLifecycleDiagnostic(player, "queue-add-blocked",
-            "reason=no-bracket-entry mapId=" + std::to_string(uint32(bgTemplate->GetMapId())) +
-            " level=" + std::to_string(uint32(player->GetLevel())) +
-            " bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)));
         return false;
-    }
 
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
     if (!ginfo)
     {
-        EmitLifecycleDiagnostic(player, "queue-add-failed",
-            "reason=add-group-null bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-            " arenaType=" + std::to_string(uint32(arenaType)) +
-            " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
+        EmitLifecycleDiagnostic(player, "queue-add-failed", "BattlegroundQueue::AddGroup returned null.");
         return false;
     }
 
@@ -935,9 +888,7 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, bgQueueTypeId, bgTypeId,
         bracketEntry->GetBracketId());
     EmitLifecycleDiagnostic(player, "queue-add-success",
-        "Queued for bgTypeId=" + std::to_string(uint32(bgTypeId)) +
-        " arenaType=" + std::to_string(uint32(arenaType)) +
-        " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
+        "Queued for bgTypeId=" + std::to_string(uint32(bgTypeId)) + " queueTypeId=" + std::to_string(uint32(bgQueueTypeId)));
     return true;
 }
 
@@ -2559,24 +2510,13 @@ bool ArenaLifecycleActions::Execute(Player* player, ArenaLifecycleContext const&
             break;
     }
 
-    didExecute = AcceptMatchingInvite(player, true) || didExecute;
-
+    // Warsong-only managed bot policy: never auto-accept arena invitations.
     return didExecute;
 }
 
 bool ArenaLifecycleActions::JoinQueuePrimitive(Player* player)
 {
-    if (!player || !IsLifecycleGateEnabled())
-        return false;
-
-    std::array<uint8, 3> arenaTypes = { ARENA_TYPE_2v2, ARENA_TYPE_3v3, ARENA_TYPE_5v5 };
-    Trinity::Containers::RandomShuffle(arenaTypes);
-    for (uint8 arenaType : arenaTypes)
-    {
-        if (QueuePlayer(player, BATTLEGROUND_AA, arenaType))
-            return true;
-    }
-
+    (void)player;
     return false;
 }
 

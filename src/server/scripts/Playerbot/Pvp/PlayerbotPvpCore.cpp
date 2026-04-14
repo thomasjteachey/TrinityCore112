@@ -3038,7 +3038,7 @@ RandomBotParticipationHooks PvpCore::BuildRandomBotParticipationHooks(Player con
     hooks.battlegroundParticipationHook = (bgContext.queueOperation != QueueOperationType::None) ||
         (bgContext.invitationResponse != InvitationResponseType::None) || bgContext.shouldHandleInProgressStatus;
     hooks.arenaParticipationHook = (arenaContext.queueOperation != QueueOperationType::None) ||
-        (arenaContext.teamInteraction != ArenaTeamInteractionType::None) || values.hasArenaInvite;
+        (arenaContext.teamInteraction != ArenaTeamInteractionType::None);
 
     return hooks;
 }
@@ -3173,25 +3173,22 @@ QueueOperationType PvpCore::SelectArenaQueueOperationSkeleton(PvpValues const& v
     if (values.inBattleground)
         return QueueOperationType::None;
 
-    if (values.hasArenaQueue && values.hasBattlegroundInvite)
+    // Managed PvP lifecycle policy: never auto-fill arena. Any lingering arena
+    // queue or invite state should be actively removed so battleground
+    // participation can converge back to Warsong-only behavior.
+    if (values.hasArenaQueue || values.hasArenaInvite)
         return QueueOperationType::Leave;
-
-    if (!values.inBattlegroundQueue && !values.hasArenaQueue && !values.hasArenaInvite &&
-        !values.hasBattlegroundQueue && !values.hasBattlegroundInvite)
-        return QueueOperationType::Join;
 
     return QueueOperationType::None;
 }
 
 ArenaTeamInteractionType PvpCore::SelectArenaTeamInteractionSkeleton(PvpValues const& values)
 {
-    if (!values.hasArenaTeamInvite)
-        return ArenaTeamInteractionType::None;
-
-    if (values.inBattleground || values.inBattlegroundQueue)
+    // Managed PvP lifecycle policy: never join arena teams automatically.
+    // Decline any arena team invite regardless of current queue state.
+    if (values.hasArenaTeamInvite)
         return ArenaTeamInteractionType::DeclineInvite;
 
-    return ArenaTeamInteractionType::AcceptInvite;
-
+    return ArenaTeamInteractionType::None;
 }
 }
