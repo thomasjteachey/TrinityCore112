@@ -2212,7 +2212,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
         player->LeaveBattleground();
         FinalizeVirtualBotTeleportIfPending(player);
-        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        if (playerbot::IsManagedRandomBot(player))
+            player->RemoveAurasDueToSpell(SPELL_DESERTER);
         RemoveMatchingQueues(player, false, false, true);
         RemoveMatchingQueues(player, true, false, false);
         player->SetArenaTeamIdInvited(0);
