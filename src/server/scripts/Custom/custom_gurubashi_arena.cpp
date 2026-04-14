@@ -516,7 +516,7 @@ private:
 #else
         localtime_r(&now, &localTime);
 #endif
-        return localTime.tm_hour == 20;
+        return localTime.tm_hour == 21;
     }
 
     void ScheduleNextCheck(std::chrono::milliseconds delay)
