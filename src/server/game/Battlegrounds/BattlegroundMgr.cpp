@@ -995,10 +995,6 @@ bool BattlegroundMgr::IsBGWeekend(BattlegroundTypeId bgTypeId)
 
 BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
 {
-    // TEMP TEST OVERRIDE: force every arena selection onto Tiger's Peak.
-    if (IsArenaType(bgTypeId))
-        return BATTLEGROUND_TTP;
-
     if (BattlegroundTemplate const* bgTemplate = GetBattlegroundTemplateByTypeId(bgTypeId))
     {
         std::vector<BattlegroundTypeId> ids;
