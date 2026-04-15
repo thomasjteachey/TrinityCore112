@@ -298,41 +298,43 @@ public:
             ObjectGuid::LowType guidLow = handler->extractLowGuidFromLink((char*)args, guidHigh);
             if (!guidLow)
                 return false;
+
             switch (guidHigh)
             {
-                case HighGuid::Player:
+            case HighGuid::Player:
+            {
+                object = ObjectAccessor::FindPlayerByLowGUID(guidLow);
+                if (!object)
                 {
-                    object = ObjectAccessor::FindPlayerByLowGUID(guidLow);
-                    if (!object)
-                    {
-                        handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
-                        handler->SetSentErrorMessage(true);
-                    }
-                    break;
+                    handler->SendSysMessage(LANG_PLAYER_NOT_FOUND);
+                    handler->SetSentErrorMessage(true);
                 }
-                case HighGuid::Unit:
-                {
-                    object = handler->GetCreatureFromPlayerMapByDbGuid(guidLow);
-                    if (!object)
-                    {
-                        handler->SendSysMessage(LANG_COMMAND_NOCREATUREFOUND);
-                        handler->SetSentErrorMessage(true);
-                    }
-                    break;
-                }
-                case HighGuid::GameObject:
-                {
-                    object = handler->GetObjectFromPlayerMapByDbGuid(guidLow);
-                    if (!object)
-                    {
-                        handler->SendSysMessage(LANG_COMMAND_NOGAMEOBJECTFOUND);
-                        handler->SetSentErrorMessage(true);
-                    }
-                    break;
-                }
-                default:
-                    return false;
+                break;
             }
+            case HighGuid::Unit:
+            {
+                object = handler->GetCreatureFromPlayerMapByDbGuid(guidLow);
+                if (!object)
+                {
+                    handler->SendSysMessage(LANG_COMMAND_NOCREATUREFOUND);
+                    handler->SetSentErrorMessage(true);
+                }
+                break;
+            }
+            case HighGuid::GameObject:
+            {
+                object = handler->GetObjectFromPlayerMapByDbGuid(guidLow);
+                if (!object)
+                {
+                    handler->SendSysMessage(LANG_COMMAND_NOGAMEOBJECTFOUND);
+                    handler->SetSentErrorMessage(true);
+                }
+                break;
+            }
+            default:
+                return false;
+            }
+
             if (!object)
                 return false;
         }
@@ -360,7 +362,6 @@ public:
 
         float zoneX = object->GetPositionX();
         float zoneY = object->GetPositionY();
-
         Map2ZoneCoordinates(zoneX, zoneY, zoneId);
 
         Map const* map = object->GetMap();
@@ -374,7 +375,8 @@ public:
 
         uint32 haveMap = Map::ExistMap(mapId, gridX, gridY) ? 1 : 0;
         uint32 haveVMap = Map::ExistVMap(mapId, gridX, gridY) ? 1 : 0;
-        uint32 haveMMap = (DisableMgr::IsPathfindingEnabled(mapId) && MMAP::MMapFactory::createOrGetMMapManager()->GetNavMesh(handler->GetSession()->GetPlayer()->GetMapId())) ? 1 : 0;
+        uint32 haveMMap = (DisableMgr::IsPathfindingEnabled(mapId) &&
+            MMAP::MMapFactory::createOrGetMMapManager()->GetNavMesh(handler->GetSession()->GetPlayer()->GetMapId())) ? 1 : 0;
 
         if (haveVMap)
         {
@@ -394,10 +396,15 @@ public:
             areaId, (areaEntry ? areaEntry->AreaName[handler->GetSessionDbcLocale()] : unknown),
             object->GetPhaseMask(),
             object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), object->GetOrientation());
+
         if (Transport* transport = object->GetTransport())
+        {
             handler->PSendSysMessage(LANG_TRANSPORT_POSITION,
-                transport->GetGOInfo()->moTransport.mapID, object->GetTransOffsetX(), object->GetTransOffsetY(), object->GetTransOffsetZ(), object->GetTransOffsetO(),
+                transport->GetGOInfo()->moTransport.mapID,
+                object->GetTransOffsetX(), object->GetTransOffsetY(), object->GetTransOffsetZ(), object->GetTransOffsetO(),
                 transport->GetEntry(), transport->GetName().c_str());
+        }
+
         handler->PSendSysMessage(LANG_GRID_POSITION,
             cell.GridX(), cell.GridY(), cell.CellX(), cell.CellY(), object->GetInstanceId(),
             zoneX, zoneY, groundZ, floorZ, map->GetMinHeight(object->GetPositionX(), object->GetPositionY()), haveMap, haveVMap, haveMMap);
@@ -406,6 +413,41 @@ public:
         ZLiquidStatus status = map->GetLiquidStatus(object->GetPhaseMask(), object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), MAP_ALL_LIQUIDS, &liquidStatus, object->GetCollisionHeight());
         if (status)
             handler->PSendSysMessage(LANG_LIQUID_STATUS, liquidStatus.level, liquidStatus.depth_level, liquidStatus.entry, liquidStatus.type_flags, status);
+
+        uint32 mogpFlags = 0;
+        int32 adtId = -1;
+        int32 rootId = -1;
+        int32 groupId = -1;
+
+        bool hasAreaInfo = map->GetAreaInfo(object->GetPhaseMask(), object->GetPositionX(), object->GetPositionY(), object->GetPositionZ(), mogpFlags, adtId, rootId, groupId);
+
+        handler->PSendSysMessage(
+            "VMAP AreaInfo: ok=%u rootId(WMOID)=%d nameSetId=%d groupId=%d mogpFlags=%u",
+            hasAreaInfo ? 1u : 0u, rootId, adtId, groupId, mogpFlags);
+
+        if (hasAreaInfo)
+        {
+            if (WMOAreaTableEntry const* wmoEntry = GetWMOAreaTableEntryByTripple(rootId, adtId, groupId))
+            {
+                AreaTableEntry const* wmoAreaEntry = sAreaTableStore.LookupEntry(wmoEntry->AreaTableID);
+
+                handler->PSendSysMessage(
+                    "WMOAreaTable: id=%u wmoId=%d nameSetId=%d groupId=%d flags=%u areaTableId=%u areaName=%s",
+                    wmoEntry->ID,
+                    wmoEntry->WMOID,
+                    wmoEntry->NameSetID,
+                    wmoEntry->WMOGroupID,
+                    wmoEntry->Flags,
+                    wmoEntry->AreaTableID,
+                    wmoAreaEntry ? wmoAreaEntry->AreaName[handler->GetSessionDbcLocale()] : unknown);
+            }
+            else
+            {
+                handler->PSendSysMessage(
+                    "WMOAreaTable: no row found for wmoId=%d nameSetId=%d groupId=%d",
+                    rootId, adtId, groupId);
+            }
+        }
 
         return true;
     }
