@@ -24,6 +24,7 @@
 #include "Map.h"
 #include "MotionMaster.h"
 #include "Player.h"
+#include "Battleground.h"
 #include "PathGenerator.h"
 #include "Pet.h"
 #include "Protocol/Opcodes.h"
