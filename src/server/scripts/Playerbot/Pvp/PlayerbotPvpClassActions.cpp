@@ -35,6 +35,8 @@
 #include "Unit.h"
 #include "WorldSession.h"
 
+#include <array>
+#include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <sstream>
@@ -109,6 +111,114 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
     return BuildCollisionSafeDestination(player, destination);
 }
 
+bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desiredDestination, Position& segmentDestination)
+{
+    if (!player)
+        return false;
+
+    auto const tryResolveDestination = [&](Position const& requestedDestination, Position& resolvedDestination) -> bool
+    {
+        Position const safeDestination = BuildCollisionSafeDestination(player, requestedDestination);
+
+        PathGenerator path(player);
+        path.SetPathLengthLimit(90.0f);
+        bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
+        PathType pathType = path.GetPathType();
+        Movement::PointsArray points = path.GetPath();
+        G3D::Vector3 actualEnd = path.GetActualEndPosition();
+
+        if ((pathType & PATHFIND_SHORTCUT) != 0)
+        {
+            PathGenerator retryPath(player);
+            retryPath.SetPathLengthLimit(90.0f);
+            bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
+            PathType const retryType = retryPath.GetPathType();
+            if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
+            {
+                points = retryPath.GetPath();
+                pathType = retryType;
+                pathOk = true;
+                actualEnd = retryPath.GetActualEndPosition();
+            }
+        }
+
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        if (!pathOk || (pathType & forbiddenPathFlags) != 0)
+            return false;
+
+        bool haveResolvedDestination = false;
+        if (points.size() > 1)
+        {
+            G3D::Vector3 const& lastPoint = points.back();
+            resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+            haveResolvedDestination = true;
+        }
+        else
+        {
+            Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
+            float const destinationDistance = player->GetDistance(safeDestination);
+            float const actualEndDistance = player->GetDistance(actualEndDestination);
+            if (actualEndDistance > 1.5f && actualEndDistance + 1.0f < destinationDistance)
+            {
+                resolvedDestination = actualEndDestination;
+                haveResolvedDestination = true;
+            }
+        }
+
+        if (!haveResolvedDestination)
+            return false;
+
+        resolvedDestination = BuildCollisionSafeDestination(player, resolvedDestination);
+        float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
+        float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
+        float const planarDelta = std::sqrt(dx * dx + dy * dy);
+        float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
+        if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        return true;
+    };
+
+    if (tryResolveDestination(desiredDestination, segmentDestination))
+        return true;
+
+    float const dx = desiredDestination.GetPositionX() - player->GetPositionX();
+    float const dy = desiredDestination.GetPositionY() - player->GetPositionY();
+    float const dz = desiredDestination.GetPositionZ() - player->GetPositionZ();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 1.0f)
+        return false;
+
+    std::array<float, 6> const probeDistances =
+    {
+        24.0f,
+        18.0f,
+        12.0f,
+        8.0f,
+        5.0f,
+        3.0f
+    };
+
+    for (float probeDistance : probeDistances)
+    {
+        float const cappedDistance = std::min(planarDistance - 0.25f, probeDistance);
+        if (cappedDistance <= 0.5f)
+            continue;
+
+        float const fraction = cappedDistance / planarDistance;
+        Position probeDestination(
+            player->GetPositionX() + dx * fraction,
+            player->GetPositionY() + dy * fraction,
+            player->GetPositionZ() + dz * fraction,
+            desiredDestination.GetOrientation());
+
+        if (tryResolveDestination(probeDestination, segmentDestination))
+            return true;
+    }
+
+    return false;
+}
+
 bool IssueStrictHumanMove(Player* player, Position const& destination, float destinationChangeThreshold = 4.0f, uint32 minReissueMs = 350)
 {
     if (!player || !player->IsAlive())
@@ -139,63 +249,8 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     if (!motionMaster)
         return false;
 
-    Position const safeDestination = BuildCollisionSafeDestination(player, destination);
-
-    PathGenerator path(player);
-    path.SetPathLengthLimit(60.0f);
-    bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
-    PathType pathType = path.GetPathType();
-    Movement::PointsArray points = path.GetPath();
-    G3D::Vector3 actualEnd = path.GetActualEndPosition();
-
-    if ((pathType & PATHFIND_SHORTCUT) != 0)
-    {
-        PathGenerator retryPath(player);
-        retryPath.SetPathLengthLimit(60.0f);
-        bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
-        PathType const retryType = retryPath.GetPathType();
-        if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
-        {
-            points = retryPath.GetPath();
-            pathType = retryType;
-            pathOk = true;
-            actualEnd = retryPath.GetActualEndPosition();
-        }
-    }
-
-    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
-    bool const navBackedPath = pathOk && (pathType & forbiddenPathFlags) == 0;
-    if (!navBackedPath)
-        return false;
-
     Position segmentDestination;
-    bool haveSegmentDestination = false;
-    if (points.size() > 1)
-    {
-        G3D::Vector3 const& lastPoint = points.back();
-        segmentDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
-        haveSegmentDestination = true;
-    }
-    else
-    {
-        Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
-        float const destinationDistance = player->GetDistance(safeDestination);
-        float const actualEndDistance = player->GetDistance(actualEndDestination);
-        if (actualEndDistance > 1.5f && actualEndDistance + 2.0f < destinationDistance)
-        {
-            segmentDestination = actualEndDestination;
-            haveSegmentDestination = true;
-        }
-    }
-
-    if (!haveSegmentDestination)
-        return false;
-
-    segmentDestination = BuildCollisionSafeDestination(player, segmentDestination);
-    float const planarDelta = std::sqrt(std::pow(segmentDestination.GetPositionX() - player->GetPositionX(), 2.0f) +
-        std::pow(segmentDestination.GetPositionY() - player->GetPositionY(), 2.0f));
-    float const verticalDelta = std::fabs(segmentDestination.GetPositionZ() - player->GetPositionZ());
-    if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+    if (!TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
         return false;
 
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
