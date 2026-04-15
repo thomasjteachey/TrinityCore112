@@ -637,7 +637,7 @@ Position BuildCollisionSafeDestination(Player const* player, Position const& des
     return adjustedDestination;
 }
 
-bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000)
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
 {
     if (!player)
         return false;
@@ -761,16 +761,22 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
         }
 
-        bool const navPathUsable = pathOk && points.size() > 1 &&
-            (pathType & PATHFIND_NOT_USING_PATH) == 0 &&
-            (pathType & PATHFIND_SHORTCUT) == 0;
+        bool const unsafeNavPath = (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT | PATHFIND_NOPATH)) != 0;
+        bool const navPathUsable = points.size() > 1 && !unsafeNavPath;
+        float const destinationDistance = player->GetDistance(safeDestination);
+        Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
+        actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
+        float const actualEndDistance = player->GetDistance(actualEndDestination);
+        bool const navActualEndUsable = !unsafeNavPath && actualEndDistance > 3.0f && actualEndDistance + 1.0f < destinationDistance;
 
-        if (strictHumanPathing && !navPathUsable)
+        if (strictHumanPathing && !navPathUsable && !navActualEndUsable)
         {
             EmitBattlegroundGmDebug(player,
                 "movepoint=blocked-no-nav pathOk=" + std::to_string(pathOk ? 1 : 0) +
                 " pathType=" + std::to_string(uint32(pathType)) +
-                " points=" + std::to_string(points.size()), 1000);
+                " points=" + std::to_string(points.size()) +
+                " actualEndDist=" + std::to_string(int32(actualEndDistance)) +
+                " destDist=" + std::to_string(int32(destinationDistance)), 1000);
             return false;
         }
 
@@ -793,16 +799,20 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         {
             if (strictHumanPathing)
             {
+                motionMaster->MovePoint(0, actualEndDestination, true);
+                issuedDestination = actualEndDestination;
                 EmitBattlegroundGmDebug(player,
-                    "movepoint=blocked-insufficient-path pathType=" + std::to_string(uint32(pathType)) +
-                    " points=" + std::to_string(points.size()), 1000);
-                return false;
+                    "movepoint=nav-actual-end pathOk=" + std::to_string(pathOk ? 1 : 0) +
+                    " pathType=" + std::to_string(uint32(pathType)) +
+                    " points=" + std::to_string(points.size()) +
+                    " actualEndDist=" + std::to_string(int32(actualEndDistance)) +
+                    " destDist=" + std::to_string(int32(destinationDistance)), 0);
+
+                state.lastDestination = actualEndDestination;
+                state.lastIssueMs = nowMs;
+                return true;
             }
 
-            float const destinationDistance = player->GetDistance(safeDestination);
-            Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
-            actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
-            float const actualEndDistance = player->GetDistance(actualEndDestination);
             if (actualEndDistance > 3.0f && actualEndDistance + 5.0f < destinationDistance)
             {
                 motionMaster->MovePoint(0, actualEndDestination, true);

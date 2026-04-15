@@ -166,12 +166,26 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         }
     }
 
-    bool const navPathUsable = pathOk && points.size() > 1 &&
-        (pathType & PATHFIND_NOT_USING_PATH) == 0 &&
-        (pathType & PATHFIND_SHORTCUT) == 0;
+    bool const unsafeNavPath = (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT | PATHFIND_NOPATH)) != 0;
+    bool const navPathUsable = points.size() > 1 && !unsafeNavPath;
 
     if (!navPathUsable)
-        return false;
+    {
+        G3D::Vector3 actualEnd = path.GetActualEndPosition();
+        Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
+        actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
+        float const destinationDistance = player->GetDistance(safeDestination);
+        float const actualEndDistance = player->GetDistance(actualEndDestination);
+        if (unsafeNavPath || actualEndDistance <= 1.5f || actualEndDistance + 1.0f >= destinationDistance)
+            return false;
+
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        motionMaster->MovePoint(0, actualEndDestination, true);
+
+        state.lastDestination = actualEndDestination;
+        state.lastIssueMs = nowMs;
+        return true;
+    }
 
     G3D::Vector3 const& lastPoint = points.back();
     Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
