@@ -751,12 +751,13 @@ void BattlegroundMgr::SendAreaSpiritHealerQueryOpcode(Player* player, Battlegrou
 bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
 {
     return bgTypeId == BATTLEGROUND_AA
-            || bgTypeId == BATTLEGROUND_BE
-            || bgTypeId == BATTLEGROUND_NA
-            || bgTypeId == BATTLEGROUND_DS
-            || bgTypeId == BATTLEGROUND_RV
-            || bgTypeId == BATTLEGROUND_RL
-            || bgTypeId == BATTLEGROUND_TTP;
+        || bgTypeId == BATTLEGROUND_BE
+        || bgTypeId == BATTLEGROUND_NA
+        || bgTypeId == BATTLEGROUND_DS
+        || bgTypeId == BATTLEGROUND_RV
+        || bgTypeId == BATTLEGROUND_RL
+        || bgTypeId == BATTLEGROUND_TV
+        || bgTypeId == BATTLEGROUND_TTP;
 }
 
 BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgTypeId, uint8 arenaType)
