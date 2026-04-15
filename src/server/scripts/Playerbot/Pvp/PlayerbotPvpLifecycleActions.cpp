@@ -169,7 +169,7 @@ void ClearStaleWaitingForResurrectAura(Player* player)
 
 
 Position BuildCollisionSafeDestination(Player const* player, Position const& destination);
-bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
+bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 
 bool IsWarsongGulch(Player const* player)
 {
