@@ -867,6 +867,33 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     return true;
 }
 
+
+Position BuildDesiredFollowDestination(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return Position();
+
+    float x = target->GetPositionX();
+    float y = target->GetPositionY();
+    float z = target->GetPositionZ();
+
+    target->GetNearPoint(player, x, y, z, std::max(0.5f, desiredDistance), target->GetAbsoluteAngle(player));
+    Position destination(x, y, z, player->GetOrientation());
+    return BuildCollisionSafeDestination(player, destination);
+}
+
+bool IssueMoveTowardUnitThrottled(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 4.0f, uint32 minReissueMs = 750)
+{
+    if (!player || !target)
+        return false;
+
+    Position destination = target->GetPosition();
+    if (desiredDistance > 0.0f)
+        destination = BuildDesiredFollowDestination(player, target, desiredDistance);
+
+    return IssueMovePointThrottled(player, destination, destinationChangeThreshold, minReissueMs);
+}
+
 bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
     if (!player || player->InBattleground())
@@ -1475,6 +1502,8 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
         if (!CanIssueMovementCommand(player, 500))
             return false;
         ClearEatDrinkAurasForMovement(player);
+        if (RequiresStrictHumanPathing(player))
+            return IssueMoveTowardUnitThrottled(player, target, desiredDistance, 4.0f, 750) || player->isMoving();
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
     }
 
@@ -1899,7 +1928,12 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
                         if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, targetGuid))
                         {
                             if (resumedTarget->IsAlive())
-                                hunter->GetMotionMaster()->MoveFollow(resumedTarget, followDistance, followAngle);
+                            {
+                                if (RequiresStrictHumanPathing(hunter))
+                                    IssueMoveTowardUnitThrottled(hunter, resumedTarget, followDistance, 4.0f, 750);
+                                else
+                                    hunter->GetMotionMaster()->MoveFollow(resumedTarget, followDistance, followAngle);
+                            }
                         }
                     }, std::chrono::milliseconds(pauseDurationMs));
 
@@ -1930,6 +1964,8 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
         {
             if (!CanIssueMovementCommand(player, 500))
                 return true;
+            if (RequiresStrictHumanPathing(player))
+                return IssueMoveTowardUnitThrottled(player, target, profile.preferredIdealRange, 4.0f, 750) || player->isMoving();
             player->GetMotionMaster()->MoveFollow(target, profile.preferredIdealRange, player->GetFollowAngle());
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP distance band: bot={} profile={} decision=close-distance distance={} min={} ideal={} max={}.",
@@ -1960,6 +1996,8 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
         bool const forceStealthRogueChase = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
         if (!forceStealthRogueChase && !CanIssueMovementCommand(player, 500))
             return true;
+        if (RequiresStrictHumanPathing(player))
+            return IssueMoveTowardUnitThrottled(player, target, std::max(1.0f, profile.preferredIdealRange), 4.0f, 750) || player->isMoving();
         player->GetMotionMaster()->MoveChase(target);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={} forceStealthRogueChase={}.",

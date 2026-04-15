@@ -24,6 +24,7 @@
 #include "Map.h"
 #include "MotionMaster.h"
 #include "Player.h"
+#include "PathGenerator.h"
 #include "Pet.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
@@ -73,6 +74,121 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
     return player->IsOutdoors() && terrainStatus.outdoors;
+}
+
+bool RequiresStrictHumanPathing(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Battleground const* battleground = player->GetBattleground();
+    return battleground && battleground->GetTypeID() == BATTLEGROUND_SCM;
+}
+
+Position BuildCollisionSafeDestination(Player* player, Position const& destination)
+{
+    if (!player)
+        return destination;
+
+    Position adjustedDestination = destination;
+    float adjustedZ = adjustedDestination.GetPositionZ();
+    player->UpdateAllowedPositionZ(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ);
+    adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
+    return adjustedDestination;
+}
+
+Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return Position();
+
+    float x = target->GetPositionX();
+    float y = target->GetPositionY();
+    float z = target->GetPositionZ();
+    float const followDistance = std::max(0.5f, desiredDistance);
+
+    target->GetNearPoint(player, x, y, z, followDistance, target->GetAbsoluteAngle(player));
+    Position destination(x, y, z, player->GetOrientation());
+    return BuildCollisionSafeDestination(player, destination);
+}
+
+bool IssueStrictHumanMove(Player* player, Position const& destination, float destinationChangeThreshold = 4.0f, uint32 minReissueMs = 350)
+{
+    if (!player || !player->IsAlive())
+        return false;
+
+    if (!CanIssueFollowCommands(player))
+        return false;
+
+    struct MoveOrderState
+    {
+        Position lastDestination;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, MoveOrderState> stateByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    MoveOrderState& state = stateByGuid[botGuid];
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    bool const destinationChanged = state.lastIssueMs == 0 ||
+        state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
+    bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
+
+    if (!destinationChanged && !canReissueByTime)
+        return true;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    Position const safeDestination = BuildCollisionSafeDestination(player, destination);
+
+    PathGenerator path(player);
+    path.SetPathLengthLimit(60.0f);
+    bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
+    PathType pathType = path.GetPathType();
+    Movement::PointsArray points = path.GetPath();
+
+    if ((pathType & PATHFIND_SHORTCUT) != 0)
+    {
+        PathGenerator retryPath(player);
+        retryPath.SetPathLengthLimit(60.0f);
+        bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
+        PathType const retryType = retryPath.GetPathType();
+        if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0 && retryPath.GetPath().size() > 1)
+        {
+            points = retryPath.GetPath();
+            pathType = retryType;
+            pathOk = true;
+        }
+    }
+
+    bool const navPathUsable = pathOk && points.size() > 1 &&
+        (pathType & PATHFIND_NOT_USING_PATH) == 0 &&
+        (pathType & PATHFIND_SHORTCUT) == 0;
+
+    if (!navPathUsable)
+        return false;
+
+    G3D::Vector3 const& lastPoint = points.back();
+    Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+    segmentDestination = BuildCollisionSafeDestination(player, segmentDestination);
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->MovePoint(0, segmentDestination, true);
+
+    state.lastDestination = segmentDestination;
+    state.lastIssueMs = nowMs;
+    return true;
+}
+
+bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return false;
+
+    return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
 }
 
 bool IsCrowdControlledForAction(Player const* player)
@@ -539,7 +655,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // stealth early, but keep chase active so rogues continue
             // closing distance instead of idling in place during openers.
             if (CanIssueFollowCommands(player))
-                player->GetMotionMaster()->MoveChase(target);
+            {
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
+                else
+                    player->GetMotionMaster()->MoveChase(target);
+            }
 
             player->AttackStop();
         }
@@ -584,9 +705,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
-            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, maxRange - 1.0f), player->GetFollowAngle());
+        {
+            float const desiredRange = std::max(1.0f, maxRange - 1.0f);
+            if (RequiresStrictHumanPathing(player))
+                IssueStrictHumanFollow(player, target, desiredRange);
+            else
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+        }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
-            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, maxRange - 1.0f), player->GetFollowAngle());
+        {
+            float const desiredRange = std::max(1.0f, maxRange - 1.0f);
+            if (RequiresStrictHumanPathing(player))
+                IssueStrictHumanFollow(player, target, desiredRange);
+            else
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+        }
 
         failureReason = "out_of_range";
         return false;
@@ -603,9 +736,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Mirror reference-style spacing control for ranged casts: when too close,
         // immediately re-establish spell distance instead of repeatedly failing.
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
-            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, minRange + 1.0f), player->GetFollowAngle());
+        {
+            float const desiredRange = std::max(1.0f, minRange + 1.0f);
+            if (RequiresStrictHumanPathing(player))
+                IssueStrictHumanFollow(player, target, desiredRange);
+            else
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+        }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
-            player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, minRange + 1.0f), player->GetFollowAngle());
+        {
+            float const desiredRange = std::max(1.0f, minRange + 1.0f);
+            if (RequiresStrictHumanPathing(player))
+                IssueStrictHumanFollow(player, target, desiredRange);
+            else
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+        }
 
         failureReason = "too_close";
         return false;
@@ -692,12 +837,18 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
                 float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanFollow(player, target, desiredRange);
+                else
+                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
             }
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
                 float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanFollow(player, target, desiredRange);
+                else
+                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
             }
         }
 
@@ -905,14 +1056,24 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         switch (context.movementDirective)
         {
             case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
-                player->GetMotionMaster()->MoveFollow(movementTarget, std::max(1.0f,
-                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().meleeRange - 1.0f)),
-                    player->GetFollowAngle());
+            {
+                float const desiredRange = std::max(1.0f,
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().meleeRange - 1.0f));
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanFollow(player, movementTarget, desiredRange);
+                else
+                    player->GetMotionMaster()->MoveFollow(movementTarget, desiredRange, player->GetFollowAngle());
+            }
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
-                player->GetMotionMaster()->MoveFollow(movementTarget, std::max(1.0f,
-                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f)),
-                    player->GetFollowAngle());
+            {
+                float const desiredRange = std::max(1.0f,
+                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanFollow(player, movementTarget, desiredRange);
+                else
+                    player->GetMotionMaster()->MoveFollow(movementTarget, desiredRange, player->GetFollowAngle());
+            }
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
             {
@@ -922,7 +1083,10 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 float const angleToTarget = player->GetAbsoluteAngle(movementTarget->GetPosition());
                 destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * fleeDistance,
                     std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
-                player->GetMotionMaster()->MovePoint(0, destination, true);
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanMove(player, destination);
+                else
+                    player->GetMotionMaster()->MovePoint(0, destination, true);
                 break;
             }
             case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
