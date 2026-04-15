@@ -75,9 +75,6 @@ constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 constexpr uint32 SPELL_DESERTER = 26013;
 
-void SetWaitJoinMovementLock(Player* player, bool locked);
-extern std::unordered_set<uint64> g_WaitJoinLockedBots;
-
 void ForcePlayerbotDismount(Player* player)
 {
     if (!player)
@@ -1223,13 +1220,19 @@ bool CanIssueBotMovement(Player* player)
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    if (Battleground* battleground = player->GetBattleground())
+    // Wait-join start locks intentionally root bots before the battleground opens.
+    // If that lock lingers after the battleground transitions to in-progress,
+    // every later pursuit/pathing check fails even though movement is otherwise legal.
+    if (player->InBattleground())
     {
-        if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+        if (Battleground* battleground = player->GetBattleground())
         {
-            uint64 const botGuid = player->GetGUID().GetRawValue();
-            if (g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end())
-                SetWaitJoinMovementLock(player, false);
+            if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+            {
+                uint64 const botGuid = player->GetGUID().GetRawValue();
+                if (g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end())
+                    SetWaitJoinMovementLock(player, false);
+            }
         }
     }
 
