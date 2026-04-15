@@ -66,7 +66,7 @@
 
 namespace
 {
-std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
