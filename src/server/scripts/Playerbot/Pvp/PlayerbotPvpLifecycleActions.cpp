@@ -176,6 +176,15 @@ bool IsWarsongGulch(Player const* player)
     return battleground && battleground->GetMapId() == 489;
 }
 
+bool RequiresStrictHumanPathing(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Battleground const* battleground = player->GetBattleground();
+    return battleground && battleground->GetTypeID() == BATTLEGROUND_SCM;
+}
+
 TeamId ResolveTeamId(uint32 teamValue)
 {
     if (teamValue == TEAM_ALLIANCE || teamValue == ALLIANCE)
@@ -667,6 +676,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
+    bool const strictHumanPathing = RequiresStrictHumanPathing(player);
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
@@ -698,7 +708,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         PathGenerator path(player);
         // Explicitly cap each navmesh solve to a medium segment so very long
         // cross-map targets still yield incremental path points immediately.
-        path.SetPathLengthLimit(90.0f);
+        path.SetPathLengthLimit(strictHumanPathing ? 60.0f : 90.0f);
         bool const pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -707,7 +717,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(90.0f);
+            retryPath.SetPathLengthLimit(strictHumanPathing ? 60.0f : 90.0f);
             bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0 && retryPath.GetPath().size() > 1)
@@ -720,7 +730,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
         }
 
-        if (points.size() > 1)
+        bool const navPathUsable = pathOk && points.size() > 1 && (pathType & PATHFIND_NOT_USING_PATH) == 0 &&
+            (!strictHumanPathing || (pathType & PATHFIND_SHORTCUT) == 0);
+
+        if (navPathUsable)
         {
             G3D::Vector3 const& lastPoint = points.back();
             Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
@@ -773,6 +786,15 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         }
         else
         {
+            if (strictHumanPathing)
+            {
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=strict-nav-blocked pathOk=" + std::to_string(pathOk ? 1 : 0) +
+                    " pathType=" + std::to_string(uint32(pathType)) +
+                    " points=" + std::to_string(points.size()), 1000);
+                return false;
+            }
+
             float const destinationDistance = player->GetDistance(safeDestination);
             Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
             actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
@@ -1331,8 +1353,8 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
     Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
         player->GetPositionY() + std::sin(angleAway) * moveDistance,
         player->GetPositionZ(), player->GetOrientation());
-    player->GetMotionMaster()->MovePoint(0, destination);
-    return true;
+    destination = BuildCollisionSafeDestination(player, destination);
+    return IssueMovePointThrottled(player, destination, 4.0f, 750);
 }
 
 bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
@@ -1350,7 +1372,9 @@ bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfil
     Position reposition(target->GetPositionX() + std::cos(orbitAngle) * orbitRange,
         target->GetPositionY() + std::sin(orbitAngle) * orbitRange,
         target->GetPositionZ(), player->GetOrientation());
-    player->GetMotionMaster()->MovePoint(0, reposition);
+    reposition = BuildCollisionSafeDestination(player, reposition);
+    if (!IssueMovePointThrottled(player, reposition, 4.0f, 750))
+        return false;
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP LOS recovery: bot={} target={} profile={} reason={} orbitRange={}.",
@@ -1523,38 +1547,6 @@ bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
         bool const isVirtualSession = session && session->IsVirtualSession();
         if (!isVirtualSession && !playerbot::IsManagedRandomBot(participant))
             return true;
-    }
-
-    return false;
-}
-
-
-bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
-{
-    if (targetBgType == BATTLEGROUND_TYPE_NONE)
-        return false;
-
-    BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
-
-    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
-    for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
-    {
-        if (!participant)
-            continue;
-
-        WorldSession const* session = participant->GetSession();
-        bool const isVirtualSession = session && session->IsVirtualSession();
-        if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
-            continue;
-
-        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
-            return true;
-
-        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
-        {
-            if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
-                return true;
-        }
     }
 
     return false;
@@ -2164,17 +2156,7 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
-
-    if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground))
-    {
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle queue join suppressed due to no real human interest: guid={} bgTypeId={}.",
-            player->GetGUID().ToString(), uint32(kManagedBattleground));
-        return false;
-    }
-
-    return QueuePlayer(player, kManagedBattleground, 0);
+    return QueuePlayer(player, BATTLEGROUND_WS, 0);
 }
 
 bool BattlegroundLifecycleActions::LeaveQueuePrimitive(Player* player)
