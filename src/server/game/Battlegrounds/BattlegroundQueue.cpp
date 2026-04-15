@@ -226,17 +226,10 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     ginfo->OpponentsTeamRating = 0;
     ginfo->OpponentsMatchmakerRating = 0;
 
-    uint32 uHorde = 0;
-    uint32 uAlliance = 0;
-    GroupsQueueType::const_iterator itr;
-    for (itr = m_QueuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].begin(); itr != m_QueuedGroups[bracketId][BG_QUEUE_NORMAL_ALLIANCE].end(); ++itr)
-        if (!(*itr)->IsInvitedToBGInstanceGUID)
-            uAlliance += (*itr)->Players.size();
-    for (itr = m_QueuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].begin(); itr != m_QueuedGroups[bracketId][BG_QUEUE_NORMAL_HORDE].end(); ++itr)
-        if (!(*itr)->IsInvitedToBGInstanceGUID)
-            uHorde += (*itr)->Players.size();
-    bool addHorde = uAlliance > uHorde || (uAlliance == uHorde && roll_chance_i(50));
-    ginfo->Team = (addHorde) ? HORDE : ALLIANCE;
+    // Preserve the queue-side the group actually joined with.
+    // Premade-vs-premade matching relies on groups landing in the correct
+    // Alliance/Horde queue buckets here; cross-faction side assignment can
+    // still happen later when selection pools are built for a specific match.
     ginfo->Players.clear();
 
     //compute index (if group is premade or joined a rated match) to queues

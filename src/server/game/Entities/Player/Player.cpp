@@ -9623,6 +9623,26 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             packet.Worldstates.emplace_back(3610, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
         }
         break;
+    case 6296: // Tol'Viron Arena
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TV)
+            battleground->FillInitialWorldStates(packet);
+        else
+        {
+            packet.Worldstates.emplace_back(3601, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD
+            packet.Worldstates.emplace_back(3600, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN
+            packet.Worldstates.emplace_back(3610, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
+        }
+        break;
+    case 6732: // Tiger's Peak
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TTP)
+            battleground->FillInitialWorldStates(packet);
+        else
+        {
+            packet.Worldstates.emplace_back(3601, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD
+            packet.Worldstates.emplace_back(3600, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN
+            packet.Worldstates.emplace_back(3610, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
+        }
+        break;
     case 4384: // Strand of the Ancients
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SA)
             battleground->FillInitialWorldStates(packet);

@@ -30,6 +30,7 @@
 #include "BattlegroundIC.h"
 #include "BattlegroundSCM.h"
 #include "BattlegroundTTP.h"
+#include "BattlegroundTV.h"
 #include "Common.h"
 #include "Containers.h"
 #include "Chat.h"
@@ -403,6 +404,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_SCM:
             bg = new BattlegroundSCM(*(BattlegroundSCM*)bg_template);
             break;
+        case BATTLEGROUND_TV:
+            bg = new BattlegroundTV(*(BattlegroundTV*)bg_template);
+            break;
         case BATTLEGROUND_TTP:
             bg = new BattlegroundTTP(*(BattlegroundTTP*)bg_template);
             break;
@@ -496,6 +500,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_SCM:
                 bg = new BattlegroundSCM();
+                break;
+            case BATTLEGROUND_TV:
+                bg = new BattlegroundTV();
                 break;
             case BATTLEGROUND_TTP:
                 bg = new BattlegroundTTP();
@@ -778,6 +785,7 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
         case BATTLEGROUND_NA:
         case BATTLEGROUND_RL:
         case BATTLEGROUND_RV:
+        case BATTLEGROUND_TV:
         case BATTLEGROUND_TTP:
             switch (arenaType)
             {
