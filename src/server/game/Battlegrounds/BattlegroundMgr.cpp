@@ -29,6 +29,7 @@
 #include "BattlegroundRV.h"
 #include "BattlegroundIC.h"
 #include "BattlegroundSCM.h"
+#include "BattlegroundTTP.h"
 #include "Common.h"
 #include "Containers.h"
 #include "Chat.h"
@@ -402,6 +403,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_SCM:
             bg = new BattlegroundSCM(*(BattlegroundSCM*)bg_template);
             break;
+        case BATTLEGROUND_TTP:
+            bg = new BattlegroundTTP(*(BattlegroundTTP*)bg_template);
+            break;
         case BATTLEGROUND_RB:
         case BATTLEGROUND_AA:
         default:
@@ -492,6 +496,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_SCM:
                 bg = new BattlegroundSCM();
+                break;
+            case BATTLEGROUND_TTP:
+                bg = new BattlegroundTTP();
                 break;
             case BATTLEGROUND_AA:
                 bg = new Battleground();
@@ -741,7 +748,8 @@ bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
             || bgTypeId == BATTLEGROUND_NA
             || bgTypeId == BATTLEGROUND_DS
             || bgTypeId == BATTLEGROUND_RV
-            || bgTypeId == BATTLEGROUND_RL;
+            || bgTypeId == BATTLEGROUND_RL
+            || bgTypeId == BATTLEGROUND_TTP;
 }
 
 BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgTypeId, uint8 arenaType)
@@ -770,6 +778,7 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
         case BATTLEGROUND_NA:
         case BATTLEGROUND_RL:
         case BATTLEGROUND_RV:
+        case BATTLEGROUND_TTP:
             switch (arenaType)
             {
                 case ARENA_TYPE_2v2:
@@ -986,6 +995,10 @@ bool BattlegroundMgr::IsBGWeekend(BattlegroundTypeId bgTypeId)
 
 BattlegroundTypeId BattlegroundMgr::GetRandomBG(BattlegroundTypeId bgTypeId)
 {
+    // TEMP TEST OVERRIDE: force every arena selection onto Tiger's Peak.
+    if (IsArenaType(bgTypeId))
+        return BATTLEGROUND_TTP;
+
     if (BattlegroundTemplate const* bgTemplate = GetBattlegroundTemplateByTypeId(bgTypeId))
     {
         std::vector<BattlegroundTypeId> ids;

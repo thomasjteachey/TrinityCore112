@@ -3518,10 +3518,11 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_RV             = 11, // Ring of Valor
     BATTLEGROUND_IC             = 30, // Isle of Conquest
     BATTLEGROUND_RB             = 32, // Random Battleground
-    BATTLEGROUND_SCM            = 100 // Scarlet Chapel
+    BATTLEGROUND_SCM            = 100, // Scarlet Chapel
+    BATTLEGROUND_TTP            = 871 // Tiger's Peak
 };
 
-#define MAX_BATTLEGROUND_TYPE_ID 101
+#define MAX_BATTLEGROUND_TYPE_ID 872
 
 enum BattlefieldBattleId : uint8
 {
