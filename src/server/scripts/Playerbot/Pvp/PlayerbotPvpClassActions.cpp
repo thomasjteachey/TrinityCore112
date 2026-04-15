@@ -111,6 +111,34 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
     return BuildCollisionSafeDestination(player, destination);
 }
 
+bool IsAllowedShortLosDirectStrictMove(Player* player, Position const& requestedDestination, Position const& resolvedDestination, PathType pathType)
+{
+    if (!player)
+        return false;
+
+    if ((pathType & PATHFIND_NOT_USING_PATH) == 0)
+        return true;
+
+    float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
+    float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
+    float const planarDelta = std::sqrt(dx * dx + dy * dy);
+    float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
+    if (planarDelta < 0.5f || planarDelta > 12.0f)
+        return false;
+
+    if (verticalDelta > std::min(3.5f, planarDelta * 0.30f + 1.5f))
+        return false;
+
+    Position const collisionSafeRequested = BuildCollisionSafeDestination(player, requestedDestination);
+    if (!player->IsWithinLOS(collisionSafeRequested.GetPositionX(), collisionSafeRequested.GetPositionY(), collisionSafeRequested.GetPositionZ()))
+        return false;
+
+    if (!player->IsWithinLOS(resolvedDestination.GetPositionX(), resolvedDestination.GetPositionY(), resolvedDestination.GetPositionZ()))
+        return false;
+
+    return true;
+}
+
 bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desiredDestination, Position& segmentDestination)
 {
     if (!player)
@@ -142,7 +170,7 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
             }
         }
 
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOPATH;
         if (!pathOk || (pathType & forbiddenPathFlags) != 0)
             return false;
 
@@ -174,6 +202,9 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
         float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        if (!IsAllowedShortLosDirectStrictMove(player, safeDestination, resolvedDestination, pathType))
             return false;
 
         return true;

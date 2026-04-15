@@ -617,8 +617,36 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
 
 bool IsForbiddenBattlegroundPathType(PathType pathType)
 {
-    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOPATH;
     return (pathType & forbiddenPathFlags) != 0;
+}
+
+bool IsAllowedShortLosDirectBattlegroundMove(Player* player, Position const& requestedDestination, Position const& resolvedDestination, PathType pathType)
+{
+    if (!player)
+        return false;
+
+    if ((pathType & PATHFIND_NOT_USING_PATH) == 0)
+        return true;
+
+    float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
+    float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
+    float const planarDelta = std::sqrt(dx * dx + dy * dy);
+    float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
+    if (planarDelta < 0.5f || planarDelta > 12.0f)
+        return false;
+
+    if (verticalDelta > std::min(3.5f, planarDelta * 0.30f + 1.5f))
+        return false;
+
+    Position const collisionSafeRequested = BuildCollisionSafeDestination(player, requestedDestination);
+    if (!player->IsWithinLOS(collisionSafeRequested.GetPositionX(), collisionSafeRequested.GetPositionY(), collisionSafeRequested.GetPositionZ()))
+        return false;
+
+    if (!player->IsWithinLOS(resolvedDestination.GetPositionX(), resolvedDestination.GetPositionY(), resolvedDestination.GetPositionZ()))
+        return false;
+
+    return true;
 }
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
@@ -683,6 +711,9 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
         float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        if (!IsAllowedShortLosDirectBattlegroundMove(player, collisionSafeDestination, resolvedDestination, pathType))
             return false;
 
         if (outPathType)
@@ -1443,25 +1474,7 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
-    {
-        if (player->InBattleground())
-        {
-            float const noLosDistance = player->GetDistance(target);
-            float const pursueThreshold = std::max(desiredDistance + 5.0f, 25.0f);
-            if (noLosDistance > pursueThreshold)
-            {
-                bool const moved = IssueMovePointThrottled(player, target->GetPosition(), 12.0f, 500);
-                EmitBattlegroundGmDebug(player,
-                    "move-toward-unit mode=no-los-pursuit target=" + target->GetName() +
-                    " dist=" + std::to_string(int32(noLosDistance)) +
-                    " issued=" + std::to_string(moved ? 1 : 0), 1200);
-                if (moved || player->isMoving())
-                    return true;
-            }
-        }
-
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
-    }
 
     // WSG should not avoid fall damage while pursuing enemies.
     if (IsWarsongGulch(player) &&
