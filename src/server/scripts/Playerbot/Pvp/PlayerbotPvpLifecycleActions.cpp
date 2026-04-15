@@ -1220,22 +1220,6 @@ bool CanIssueBotMovement(Player* player)
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
-    // Wait-join start locks intentionally root bots before the battleground opens.
-    // If that lock lingers after the battleground transitions to in-progress,
-    // every later pursuit/pathing check fails even though movement is otherwise legal.
-    if (player->InBattleground())
-    {
-        if (Battleground* battleground = player->GetBattleground())
-        {
-            if (battleground->GetStatus() != STATUS_WAIT_JOIN)
-            {
-                uint64 const botGuid = player->GetGUID().GetRawValue();
-                if (g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end())
-                    SetWaitJoinMovementLock(player, false);
-            }
-        }
-    }
-
     if (IsCrowdControlledForAction(player))
     {
         ClearActiveMovementForControlLoss(player);
@@ -1459,7 +1443,25 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
+    {
+        if (player->InBattleground())
+        {
+            float const noLosDistance = player->GetDistance(target);
+            float const pursueThreshold = std::max(desiredDistance + 5.0f, 25.0f);
+            if (noLosDistance > pursueThreshold)
+            {
+                bool const moved = IssueMovePointThrottled(player, target->GetPosition(), 12.0f, 500);
+                EmitBattlegroundGmDebug(player,
+                    "move-toward-unit mode=no-los-pursuit target=" + target->GetName() +
+                    " dist=" + std::to_string(int32(noLosDistance)) +
+                    " issued=" + std::to_string(moved ? 1 : 0), 1200);
+                if (moved || player->isMoving())
+                    return true;
+            }
+        }
+
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
+    }
 
     // WSG should not avoid fall damage while pursuing enemies.
     if (IsWarsongGulch(player) &&
