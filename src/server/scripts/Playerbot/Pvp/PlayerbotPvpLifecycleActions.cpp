@@ -617,25 +617,8 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
 
 bool IsForbiddenBattlegroundPathType(PathType pathType)
 {
-    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOPATH;
+    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
     return (pathType & forbiddenPathFlags) != 0;
-}
-
-bool IsAllowedShortLosDirectBattlegroundMove(Player* player, Position const& destination)
-{
-    if (!player)
-        return false;
-
-    float const dx = destination.GetPositionX() - player->GetPositionX();
-    float const dy = destination.GetPositionY() - player->GetPositionY();
-    float const planarDelta = std::sqrt(dx * dx + dy * dy);
-    float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
-    if (planarDelta > 12.0f)
-        return false;
-    if (verticalDelta > std::max(4.0f, planarDelta * 0.5f + 1.0f))
-        return false;
-
-    return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
 }
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
@@ -672,16 +655,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if (!pathOk || IsForbiddenBattlegroundPathType(pathType))
             return false;
 
-        bool const directVisibleMove = (pathType & PATHFIND_NOT_USING_PATH) != 0 &&
-            IsAllowedShortLosDirectBattlegroundMove(player, collisionSafeDestination);
-
         bool haveResolvedDestination = false;
-        if (directVisibleMove)
-        {
-            resolvedDestination = collisionSafeDestination;
-            haveResolvedDestination = true;
-        }
-        else
         if (points.size() > 1)
         {
             G3D::Vector3 const& lastPoint = points.back();
@@ -779,10 +753,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     ClearEatDrinkAurasForMovement(player);
 
-    if (player->InBattleground())
-        minReissueMs = std::max<uint32>(minReissueMs, 250);
-    else
-        minReissueMs = std::max<uint32>(minReissueMs, 2000);
+    minReissueMs = std::max<uint32>(minReissueMs, 2000);
 
     if (IsWarsongGulch(player))
         minReissueMs = std::max<uint32>(minReissueMs, 2000);
@@ -1459,11 +1430,10 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     }
 
     float const distanceToTarget = player->GetDistance(target);
-    if (player->InBattleground() && distanceToTarget > desiredDistance)
+    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
     {
         Position destination = target->GetPosition();
-        bool const moved = IssueMovePointThrottled(player, destination, IsWarsongGulch(player) ? 30.0f : 2.0f,
-            IsWarsongGulch(player) ? 2000 : 250);
+        bool const moved = IssueMovePointThrottled(player, destination, 30.0f, 2000);
         EmitBattlegroundGmDebug(player,
             "move-toward-unit mode=segmented target=" + target->GetName() +
             " dist=" + std::to_string(int32(distanceToTarget)) +

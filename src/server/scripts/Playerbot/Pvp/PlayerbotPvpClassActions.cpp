@@ -142,23 +142,11 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
             }
         }
 
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
         if (!pathOk || (pathType & forbiddenPathFlags) != 0)
             return false;
 
-        bool const directVisibleMove = (pathType & PATHFIND_NOT_USING_PATH) != 0 &&
-            player->IsWithinLOS(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ()) &&
-            player->GetDistance2d(safeDestination.GetPositionX(), safeDestination.GetPositionY()) <= 12.0f &&
-            std::fabs(safeDestination.GetPositionZ() - player->GetPositionZ()) <=
-                std::max(4.0f, player->GetDistance2d(safeDestination.GetPositionX(), safeDestination.GetPositionY()) * 0.5f + 1.0f);
-
         bool haveResolvedDestination = false;
-        if (directVisibleMove)
-        {
-            resolvedDestination = safeDestination;
-            haveResolvedDestination = true;
-        }
-        else
         if (points.size() > 1)
         {
             G3D::Vector3 const& lastPoint = points.back();
