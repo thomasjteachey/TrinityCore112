@@ -79,12 +79,7 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
 
 bool RequiresStrictHumanPathing(Player const* player)
 {
-    if (!player)
-        return false;
-
-    // In battleground PvP, never allow raw chase/follow fallbacks that can
-    // cut through geometry. Require nav-backed segmented movement everywhere.
-    return player->InBattleground();
+    return player && player->InBattleground();
 }
 
 Position BuildCollisionSafeDestination(Player* player, Position const& destination)
@@ -151,6 +146,7 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
     PathType pathType = path.GetPathType();
     Movement::PointsArray points = path.GetPath();
+    G3D::Vector3 actualEnd = path.GetActualEndPosition();
 
     if ((pathType & PATHFIND_SHORTCUT) != 0)
     {
@@ -158,38 +154,49 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         retryPath.SetPathLengthLimit(60.0f);
         bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
         PathType const retryType = retryPath.GetPathType();
-        if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0 && retryPath.GetPath().size() > 1)
+        if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
         {
             points = retryPath.GetPath();
             pathType = retryType;
             pathOk = true;
+            actualEnd = retryPath.GetActualEndPosition();
         }
     }
 
-    bool const unsafeNavPath = (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT | PATHFIND_NOPATH)) != 0;
-    bool const navPathUsable = points.size() > 1 && !unsafeNavPath;
+    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+    bool const navBackedPath = pathOk && (pathType & forbiddenPathFlags) == 0;
+    if (!navBackedPath)
+        return false;
 
-    if (!navPathUsable)
+    Position segmentDestination;
+    bool haveSegmentDestination = false;
+    if (points.size() > 1)
     {
-        G3D::Vector3 actualEnd = path.GetActualEndPosition();
+        G3D::Vector3 const& lastPoint = points.back();
+        segmentDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+        haveSegmentDestination = true;
+    }
+    else
+    {
         Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
-        actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
         float const destinationDistance = player->GetDistance(safeDestination);
         float const actualEndDistance = player->GetDistance(actualEndDestination);
-        if (unsafeNavPath || actualEndDistance <= 1.5f || actualEndDistance + 1.0f >= destinationDistance)
-            return false;
-
-        motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        motionMaster->MovePoint(0, actualEndDestination, true);
-
-        state.lastDestination = actualEndDestination;
-        state.lastIssueMs = nowMs;
-        return true;
+        if (actualEndDistance > 1.5f && actualEndDistance + 2.0f < destinationDistance)
+        {
+            segmentDestination = actualEndDestination;
+            haveSegmentDestination = true;
+        }
     }
 
-    G3D::Vector3 const& lastPoint = points.back();
-    Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+    if (!haveSegmentDestination)
+        return false;
+
     segmentDestination = BuildCollisionSafeDestination(player, segmentDestination);
+    float const planarDelta = std::sqrt(std::pow(segmentDestination.GetPositionX() - player->GetPositionX(), 2.0f) +
+        std::pow(segmentDestination.GetPositionY() - player->GetPositionY(), 2.0f));
+    float const verticalDelta = std::fabs(segmentDestination.GetPositionZ() - player->GetPositionZ());
+    if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+        return false;
 
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
     motionMaster->MovePoint(0, segmentDestination, true);
