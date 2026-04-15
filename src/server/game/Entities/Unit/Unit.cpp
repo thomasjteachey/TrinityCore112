@@ -416,14 +416,11 @@ Unit::~Unit()
 
     m_Events.KillAllEvents(true);
 
-    // Cleanup should normally happen in CleanupsBeforeDelete. Keep a defensive
-    // fallback here so a partially cleaned unit does not crash during
-    // destruction (for example in exceptional shutdown paths).
-    if (!m_appliedAuras.empty() || !m_ownedAuras.empty() || !m_removedAuras.empty())
+    if (!m_appliedAuras.empty() || !m_ownedAuras.empty())
     {
-        TC_LOG_ERROR("entities.unit", "Unit::~Unit: forcing late aura cleanup for {} (applied: {}, owned: {}, removed: {})",
+        TC_LOG_ERROR("entities.unit",
+            "Unit::~Unit reached with live auras still attached to {} (applied: {}, owned: {}, removed: {})",
             GetGUID().ToString(), m_appliedAuras.size(), m_ownedAuras.size(), m_removedAuras.size());
-        RemoveAllAuras();
     }
 
     _DeleteRemovedAuras();
@@ -444,6 +441,49 @@ Unit::~Unit()
     ASSERT(m_gameObj.empty());
     ASSERT(m_dynObj.empty());
     ASSERT(!_gameClientMovingMe || _gameClientMovingMe->GetBasePlayer() == this);
+}
+
+void Unit::DefensiveCleanupAurasBeforeDelete()
+{
+    if (!m_removedAuras.empty())
+        _DeleteRemovedAuras();
+
+    if (m_appliedAuras.empty() && m_ownedAuras.empty())
+        return;
+
+    TC_LOG_ERROR("entities.unit",
+        "Unit::DefensiveCleanupAurasBeforeDelete: cleaning lingering auras for {} (applied: {}, owned: {}, removed: {})",
+        GetGUID().ToString(), m_appliedAuras.size(), m_ownedAuras.size(), m_removedAuras.size());
+
+    RemoveAllAuras();
+    _DeleteRemovedAuras();
+
+    if (!m_appliedAuras.empty() || !m_ownedAuras.empty() || !m_removedAuras.empty())
+    {
+        std::stringstream sstr;
+        sstr << "Unit::DefensiveCleanupAurasBeforeDelete failed for " << GetGUID().ToString()
+             << " with " << m_appliedAuras.size() << " applied, "
+             << m_ownedAuras.size() << " owned, and "
+             << m_removedAuras.size() << " removed auras still present.\n"
+             << GetDebugInfo() << "\n";
+
+        if (!m_appliedAuras.empty())
+        {
+            sstr << "m_appliedAuras:\n";
+            for (auto const& auraAppPair : m_appliedAuras)
+                sstr << auraAppPair.second->GetDebugInfo() << "\n";
+        }
+
+        if (!m_ownedAuras.empty())
+        {
+            sstr << "m_ownedAuras:\n";
+            for (auto const& auraPair : m_ownedAuras)
+                sstr << auraPair.second->GetDebugInfo() << "\n";
+        }
+
+        TC_LOG_ERROR("entities.unit", "{}", sstr.str());
+        ABORT_MSG("%s", sstr.str().c_str());
+    }
 }
 
 void Unit::Update(uint32 p_time)
@@ -9947,7 +9987,7 @@ void Unit::CleanupBeforeRemoveFromMap(bool finalCleanup)
 
     // A unit may be in removelist and not in world, but it is still in grid
     // and may have some references during delete
-    RemoveAllAuras();
+    DefensiveCleanupAurasBeforeDelete();
     RemoveAllGameObjects();
 
     if (finalCleanup)

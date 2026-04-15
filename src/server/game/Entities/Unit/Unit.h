@@ -1849,6 +1849,7 @@ class TC_GAME_API Unit : public WorldObject
         void BuildValuesUpdate(uint8 updatetype, ByteBuffer* data, Player const* target) const override;
 
         void _UpdateSpells(uint32 time);
+        void DefensiveCleanupAurasBeforeDelete();
         void _DeleteRemovedAuras();
 
         void _UpdateAutoRepeatSpell();
