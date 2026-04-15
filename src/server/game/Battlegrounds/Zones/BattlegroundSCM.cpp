@@ -25,8 +25,14 @@ BattlegroundSCM::BattlegroundSCM()
 
 void BattlegroundSCM::AddPlayer(Player* player)
 {
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
-    PlayerScores[player->GetGUID()] = new BattlegroundSCMScore(player->GetGUID());
+
+    if (!isInBattleground)
+    {
+        uint32 const scoreboardTeamMarker = (player->GetBGTeam() == HORDE) ? 1u : 0u;
+        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundSCMScore(player->GetGUID(), scoreboardTeamMarker);
+    }
 }
 
 void BattlegroundSCM::Reset()

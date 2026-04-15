@@ -77,7 +77,11 @@ enum BG_SCM_Constants
 
 struct BattlegroundSCMScore final : public BattlegroundScore
 {
-    explicit BattlegroundSCMScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid) { }
+    explicit BattlegroundSCMScore(ObjectGuid playerGuid, uint32 scoreboardTeamMarker = 0)
+        : BattlegroundScore(playerGuid)
+    {
+        BonusHonor = scoreboardTeamMarker;
+    }
 
 protected:
     void BuildObjectivesBlock(WorldPacket& data) final override;
