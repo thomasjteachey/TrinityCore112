@@ -67,8 +67,10 @@ namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
+std::unordered_map<uint64, uint32> g_BattlegroundRequeueNotBeforeMsByGuid;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
+constexpr uint32 PLAYERBOT_BG_REQUEUE_COOLDOWN_AFTER_LEAVE_MS = 60000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -166,6 +168,37 @@ void ClearStaleWaitingForResurrectAura(Player* player)
         player->RemoveAurasDueToSpell(SPELL_WAITING_FOR_RESURRECT);
 }
 
+
+void SetBattlegroundRequeueCooldown(Player const* player, uint32 cooldownMs, char const* reason = nullptr)
+{
+    if (!player)
+        return;
+
+    g_BattlegroundRequeueNotBeforeMsByGuid[player->GetGUID().GetRawValue()] = GameTime::GetGameTimeMS() + cooldownMs;
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP battleground requeue cooldown set: guid={} cooldownMs={} reason={}.",
+        player->GetGUID().ToString(), cooldownMs, reason ? reason : "none");
+}
+
+bool IsBattlegroundRequeueOnCooldown(Player const* player)
+{
+    if (!player)
+        return false;
+
+    auto itr = g_BattlegroundRequeueNotBeforeMsByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_BattlegroundRequeueNotBeforeMsByGuid.end())
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (nowMs >= itr->second)
+    {
+        g_BattlegroundRequeueNotBeforeMsByGuid.erase(itr);
+        return false;
+    }
+
+    return true;
+}
 
 bool IsWarsongGulch(Player const* player)
 {
@@ -2132,6 +2165,12 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
+    if (IsBattlegroundRequeueOnCooldown(player))
+    {
+        EmitLifecycleDiagnostic(player, "queue-join-deferred", "Battleground requeue cooldown still active.");
+        return false;
+    }
+
     return QueuePlayer(player, BATTLEGROUND_SCM, 0);
 }
 
@@ -2209,6 +2248,9 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
 
         if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
             return false;
+
+        if (playerbot::IsManagedRandomBot(player))
+            SetBattlegroundRequeueCooldown(player, PLAYERBOT_BG_REQUEUE_COOLDOWN_AFTER_LEAVE_MS, "wait-leave-cleanup");
 
         player->LeaveBattleground();
         FinalizeVirtualBotTeleportIfPending(player);
