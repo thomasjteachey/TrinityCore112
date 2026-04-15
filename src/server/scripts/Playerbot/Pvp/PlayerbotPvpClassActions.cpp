@@ -297,6 +297,14 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     if (!player || !target)
         return false;
 
+    if (player->InBattleground())
+    {
+        if (player->IsWithinDistInMap(target, desiredDistance))
+            return true;
+
+        return IssueStrictHumanMove(player, target->GetPosition(), 2.0f, 250);
+    }
+
     return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
 }
 

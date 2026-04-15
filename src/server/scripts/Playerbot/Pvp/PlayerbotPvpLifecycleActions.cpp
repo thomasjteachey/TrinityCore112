@@ -772,6 +772,14 @@ bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, f
     if (!player || !target)
         return false;
 
+    if (player->InBattleground())
+    {
+        if (player->IsWithinDistInMap(target, desiredDistance))
+            return true;
+
+        return IssueMovePointThrottled(player, target->GetPosition(), 2.0f, 250);
+    }
+
     return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
 }
 
@@ -784,7 +792,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     ClearEatDrinkAurasForMovement(player);
 
-    minReissueMs = std::max<uint32>(minReissueMs, 2000);
+    if (player->InBattleground())
+        minReissueMs = std::max<uint32>(minReissueMs, 250);
+    else
+        minReissueMs = std::max<uint32>(minReissueMs, 2000);
 
     if (IsWarsongGulch(player))
         minReissueMs = std::max<uint32>(minReissueMs, 2000);
@@ -1461,15 +1472,16 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     }
 
     float const distanceToTarget = player->GetDistance(target);
-    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    if (player->InBattleground() && distanceToTarget > desiredDistance)
     {
         Position destination = target->GetPosition();
-        bool const moved = IssueMovePointThrottled(player, destination, 30.0f, 2000);
+        bool const moved = IssueMovePointThrottled(player, destination, 2.0f, 250);
         EmitBattlegroundGmDebug(player,
-            "move-toward-unit mode=segmented target=" + target->GetName() +
+            "move-toward-unit mode=bg-segmented target=" + target->GetName() +
             " dist=" + std::to_string(int32(distanceToTarget)) +
             " issued=" + std::to_string(moved ? 1 : 0), 1200);
-        return moved || player->isMoving();
+        if (moved || player->isMoving())
+            return true;
     }
 
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
