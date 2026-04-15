@@ -111,6 +111,22 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
     return BuildCollisionSafeDestination(player, destination);
 }
 
+bool IsAllowedShortLosDirectStrictMove(Player* player, Position const& destination, PathType pathType)
+{
+    if (!player)
+        return false;
+
+    if ((pathType & PATHFIND_NOT_USING_PATH) == 0)
+        return true;
+
+    float const planarDistance = player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
+    float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
+    if (planarDistance > 12.0f || verticalDelta > 3.5f)
+        return false;
+
+    return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+}
+
 bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desiredDestination, Position& segmentDestination)
 {
     if (!player)
@@ -142,7 +158,7 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
             }
         }
 
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOPATH;
         if (!pathOk || (pathType & forbiddenPathFlags) != 0)
             return false;
 
@@ -169,6 +185,9 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
             return false;
 
         resolvedDestination = BuildCollisionSafeDestination(player, resolvedDestination);
+        if (!IsAllowedShortLosDirectStrictMove(player, resolvedDestination, pathType))
+            return false;
+
         float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
         float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
@@ -268,8 +287,7 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
 
     if (player->InBattleground())
     {
-        float const distanceToTarget = player->GetDistance(target);
-        if (distanceToTarget <= std::max(0.5f, desiredDistance) + 0.5f)
+        if (player->IsWithinDistInMap(target, desiredDistance))
             return true;
 
         return IssueStrictHumanMove(player, target->GetPosition(), 2.0f, 250);

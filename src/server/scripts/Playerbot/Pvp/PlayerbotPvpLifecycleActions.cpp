@@ -617,8 +617,24 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
 
 bool IsForbiddenBattlegroundPathType(PathType pathType)
 {
-    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOPATH;
     return (pathType & forbiddenPathFlags) != 0;
+}
+
+bool IsAllowedShortLosDirectBattlegroundMove(Player* player, Position const& destination, PathType pathType)
+{
+    if (!player)
+        return false;
+
+    if ((pathType & PATHFIND_NOT_USING_PATH) == 0)
+        return true;
+
+    float const planarDistance = player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
+    float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
+    if (planarDistance > 12.0f || verticalDelta > 3.5f)
+        return false;
+
+    return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
 }
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
@@ -678,6 +694,9 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
             return false;
 
         resolvedDestination = BuildCollisionSafeDestination(player, resolvedDestination);
+        if (!IsAllowedShortLosDirectBattlegroundMove(player, resolvedDestination, pathType))
+            return false;
+
         float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
         float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
@@ -743,11 +762,10 @@ bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, f
 
     if (player->InBattleground())
     {
-        float const distanceToTarget = player->GetDistance(target);
-        if (distanceToTarget <= std::max(0.5f, desiredDistance) + 0.5f)
+        if (player->IsWithinDistInMap(target, desiredDistance))
             return true;
 
-        return IssueMovePointThrottled(player, target->GetPosition(), 2.0f, std::min<uint32>(minReissueMs, 250));
+        return IssueMovePointThrottled(player, target->GetPosition(), 2.0f, 250);
     }
 
     return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
@@ -1357,6 +1375,32 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
     return IssueMovePointThrottled(player, destination, 4.0f, 500);
 }
 
+float GetBattlegroundPursuitDistance(Player const* player)
+{
+    if (!player)
+        return 3.5f;
+
+    switch (player->getClass())
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+            return 1.5f;
+        case CLASS_PALADIN:
+            return 3.0f;
+        case CLASS_HUNTER:
+            return 8.0f;
+        case CLASS_SHAMAN:
+        case CLASS_DRUID:
+            return 10.0f;
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+            return 12.0f;
+        default:
+            return 6.0f;
+    }
+}
+
 bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
 {
     if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
@@ -1442,13 +1486,17 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     }
 
     float const distanceToTarget = player->GetDistance(target);
-    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    if (player->InBattleground() && distanceToTarget > desiredDistance)
     {
-        Position destination = target->GetPosition();
-        bool const moved = IssueMovePointThrottled(player, destination, 30.0f, 2000);
+        if (!CanIssueMovementCommand(player, 500))
+            return false;
+
+        ClearEatDrinkAurasForMovement(player);
+        bool const moved = IssueMovePointThrottled(player, target->GetPosition(), 2.0f, IsWarsongGulch(player) ? 500 : 250);
         EmitBattlegroundGmDebug(player,
-            "move-toward-unit mode=segmented target=" + target->GetName() +
+            "move-toward-unit mode=bg-target-pos target=" + target->GetName() +
             " dist=" + std::to_string(int32(distanceToTarget)) +
+            " desired=" + std::to_string(int32(desiredDistance)) +
             " issued=" + std::to_string(moved ? 1 : 0), 1200);
         return moved || player->isMoving();
     }
@@ -2454,10 +2502,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 return true;
 
             if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
-            {
-                CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
-                return MoveTowardUnit(player, nearestEnemy, std::max(1.5f, profile.preferredIdealRange));
-            }
+                return MoveTowardUnit(player, nearestEnemy, GetBattlegroundPursuitDistance(player));
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -2475,7 +2520,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP objective support selected: guid={} directive={} target={}.",
                 player->GetGUID().ToString(), static_cast<uint8>(context.flagCarrierDirective), carrier->GetGUID().ToString());
-            return MoveTowardUnit(player, carrier, 20.0f);
+            return MoveTowardUnit(player, carrier, GetBattlegroundPursuitDistance(player));
         }
     }
 
@@ -2501,10 +2546,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                     return true;
 
                 if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
-                {
-                    CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
-                    return MoveTowardUnit(player, nearestEnemy, std::max(1.5f, profile.preferredIdealRange));
-                }
+                    return MoveTowardUnit(player, nearestEnemy, GetBattlegroundPursuitDistance(player));
             }
 
             return false;
@@ -2537,10 +2579,7 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
         return true;
 
     if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
-    {
-        CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
-        return MoveTowardUnit(player, nearestEnemy, std::max(1.5f, profile.preferredIdealRange));
-    }
+        return MoveTowardUnit(player, nearestEnemy, GetBattlegroundPursuitDistance(player));
 
     return false;
 }
