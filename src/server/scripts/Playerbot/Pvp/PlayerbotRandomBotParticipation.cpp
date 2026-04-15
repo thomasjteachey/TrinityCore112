@@ -260,7 +260,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!IsLifecycleGateEnabled())
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle blocked: guid={} reason=gate-disabled",
             guid.ToString());
         EmitLifecycleGmDebug(player, "can-process=no gate-disabled");
@@ -270,7 +270,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!playerbot::IsManagedRandomBot(player))
     {
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle blocked: guid={} reason=unmanaged-bot",
             guid.ToString());
         EmitLifecycleGmDebug(player, "can-process=no unmanaged-bot");
@@ -280,7 +280,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
     if (!player->IsInWorld())
     {
         ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle blocked: guid={} reason=not-in-world",
             guid.ToString());
         EmitLifecycleGmDebug(player, "can-process=no not-in-world");
@@ -293,7 +293,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
         if (hasPendingTeleportAck)
         {
             ObserveLifecycleReason(LifecycleObservationReason::InvalidPlayerState, guid);
-            TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Lifecycle blocked: guid={} reason=pending-teleport far={} near={} bgId={} inBg={}",
                 guid.ToString(),
                 player->IsBeingTeleportedFar() ? 1 : 0,
@@ -303,7 +303,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
             return false;
         }
 
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle tolerated stale teleport flag: guid={} battlegroundId={} inBattleground={}",
             guid.ToString(), player->GetBattlegroundId(), player->InBattleground() ? 1 : 0);
     }
@@ -322,7 +322,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
     {
         ObserveLifecycleReason(LifecycleObservationReason::CadenceThrottled, guid);
         auto const waitRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(nextProcessTime - now).count();
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle blocked: guid={} reason=cadence-throttled waitMs={} cadenceMs={} bgActive={}",
             guid.ToString(), waitRemainingMs, cadenceInterval.count(), inActiveBattleground ? 1 : 0);
         std::ostringstream cadenceDetail;
@@ -336,7 +336,7 @@ bool CanProcessPlayerLifecycle(Player const* player)
 
     nextProcessTime = now + cadenceInterval;
 
-    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle allowed: guid={} inBg={} bgId={} inQueue={} teleport={} far={} near={}",
         guid.ToString(),
         player->InBattleground() ? 1 : 0,
@@ -733,7 +733,7 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
 {
     if (!candidate.lowGuid || !candidate.account)
     {
-        TC_LOG_ERROR("playerbots.population", "Random bot login skipped due to invalid candidate payload (guidLow={}, account={}).",
+        TC_LOG_DEBUG("playerbots.population", "Random bot login skipped due to invalid candidate payload (guidLow={}, account={}).",
             candidate.lowGuid, candidate.account);
         return false;
     }
@@ -749,7 +749,7 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     std::string accountName;
     if (!sAccountMgr->GetName(candidate.account, accountName))
     {
-        TC_LOG_ERROR("playerbots.population", "Random bot login failed: unable to resolve account name for account {} (candidate guidLow={}).",
+        TC_LOG_DEBUG("playerbots.population", "Random bot login failed: unable to resolve account name for account {} (candidate guidLow={}).",
             candidate.account, candidate.lowGuid);
         return false;
     }
@@ -1122,7 +1122,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (IsCrowdControlledForLifecyclePause(player))
     {
         ClearActiveMovementForControlLoss(player);
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle paused: guid={} reason=crowd-control",
             guid.ToString());
         return;
@@ -1130,7 +1130,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     PvpValues const values = PvpCore::CollectValues(player);
 
-    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle values: guid={} inBg={} bgState={} inBgQueue={} hasBgQueue={} hasBgInvite={} hasArenaQueue={} hasArenaInvite={} hasArenaTeamInvite={} bgTypeId={} bgId={} queueSlot0={} queueSlot1={} queueSlot2={}",
         guid.ToString(),
         values.inBattleground ? 1 : 0,
@@ -1167,7 +1167,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     ArenaLifecycleContext const arenaContext = PvpCore::BuildArenaLifecycleContext(player, values);
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
 
-    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle contexts: guid={} bgQueueOp={} bgInviteResp={} bgInProgress={} arenaQueueOp={} arenaTeamInteraction={} bgHook={} arenaHook={}",
         guid.ToString(),
         static_cast<uint32>(bgContext.queueOperation),
@@ -1182,7 +1182,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     {
         LogLifecycleBranchSummary(guid, "hooks-lifecycle-disabled");
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle exited: guid={} reason=hooks-lifecycle-disabled",
             guid.ToString());
         return;
@@ -1192,7 +1192,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     {
         LogLifecycleBranchSummary(guid, "no-lifecycle-hooks-active");
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle exited: guid={} reason=no-hooks inBg={} inBgQueue={} hasBgQueue={} hasBgInvite={} hasArenaQueue={} hasArenaInvite={} hasArenaTeamInvite={}",
             guid.ToString(),
             values.inBattleground ? 1 : 0,
@@ -1213,7 +1213,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         if (!IsNoOp(bgContext))
         {
             didExecuteBattleground = BattlegroundLifecycleActions::Execute(player, bgContext);
-            TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Lifecycle battleground execute: guid={} executed={} queueOp={} inviteResp={} inProgress={}",
                 guid.ToString(),
                 didExecuteBattleground ? 1 : 0,
@@ -1232,7 +1232,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         if (!IsNoOp(postArenaContext))
         {
             didExecuteArena = ArenaLifecycleActions::Execute(player, postArenaContext);
-            TC_LOG_ERROR("playerbots.pvp.lifecycle",
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Lifecycle arena execute: guid={} executed={} queueOp={} teamInteraction={} hasArenaInvite={} hasArenaTeamInvite={}",
                 guid.ToString(),
                 didExecuteArena ? 1 : 0,
@@ -1246,7 +1246,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (!didExecuteBattleground && !didExecuteArena)
     {
         LogLifecycleBranchSummary(guid, "active-hooks-no-op-context");
-        TC_LOG_ERROR("playerbots.pvp.lifecycle",
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle no-op with active hooks: guid={} bgHook={} arenaHook={}",
             guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
     }
@@ -1263,7 +1263,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ObserveLifecycleReason(LifecycleObservationReason::ArenaLifecycleExecuted, guid);
     }
 
-    TC_LOG_ERROR("playerbots.pvp.lifecycle",
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle complete: guid={} didBg={} didArena={} didTactical={} didClassSpell={}",
         guid.ToString(),
         didExecuteBattleground ? 1 : 0,
