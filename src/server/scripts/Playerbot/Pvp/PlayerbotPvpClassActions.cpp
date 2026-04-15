@@ -82,8 +82,9 @@ bool RequiresStrictHumanPathing(Player const* player)
     if (!player)
         return false;
 
-    Battleground const* battleground = player->GetBattleground();
-    return battleground && battleground->GetTypeID() == BATTLEGROUND_SCM;
+    // In battleground PvP, never allow raw chase/follow fallbacks that can
+    // cut through geometry. Require nav-backed segmented movement everywhere.
+    return player->InBattleground();
 }
 
 Position BuildCollisionSafeDestination(Player* player, Position const& destination)

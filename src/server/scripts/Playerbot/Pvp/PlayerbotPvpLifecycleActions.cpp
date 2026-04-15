@@ -177,6 +177,41 @@ bool IsWarsongGulch(Player const* player)
     return battleground && battleground->GetMapId() == 489;
 }
 
+bool RequiresStrictHumanPathing(Player const* player)
+{
+    if (!player)
+        return false;
+
+    // In any battleground, bots must move only on nav-backed paths and must
+    // never fall back to raw chase/follow/direct point movement that can clip
+    // through walls or glide through the air.
+    return player->InBattleground();
+}
+
+Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return Position();
+
+    float x = target->GetPositionX();
+    float y = target->GetPositionY();
+    float z = target->GetPositionZ();
+    float const followDistance = std::max(0.5f, desiredDistance);
+
+    target->GetNearPoint(player, x, y, z, followDistance, target->GetAbsoluteAngle(player));
+
+    Position destination(x, y, z, player->GetOrientation());
+    return BuildCollisionSafeDestination(player, destination);
+}
+
+bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 4.0f, uint32 minReissueMs = 350)
+{
+    if (!player || !target)
+        return false;
+
+    return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
+}
+
 TeamId ResolveTeamId(uint32 teamValue)
 {
     if (teamValue == TEAM_ALLIANCE || teamValue == ALLIANCE)
@@ -217,6 +252,7 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
 bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
 bool CanIssueBotMovement(Player* player);
+Position BuildCollisionSafeDestination(Player const* player, Position const& destination);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
 
@@ -694,6 +730,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     // truncated navmesh paths into full-map traversal without disabling
     // collision/pathing entirely.
     Position issuedDestination = safeDestination;
+    bool const strictHumanPathing = RequiresStrictHumanPathing(player);
     if (generatePath && player->InBattleground())
     {
         PathGenerator path(player);
@@ -721,59 +758,44 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
         }
 
-        if (points.size() > 1)
+        bool const navPathUsable = pathOk && points.size() > 1 &&
+            (pathType & PATHFIND_NOT_USING_PATH) == 0 &&
+            (pathType & PATHFIND_SHORTCUT) == 0;
+
+        if (strictHumanPathing && !navPathUsable)
+        {
+            EmitBattlegroundGmDebug(player,
+                "movepoint=blocked-no-nav pathOk=" + std::to_string(pathOk ? 1 : 0) +
+                " pathType=" + std::to_string(uint32(pathType)) +
+                " points=" + std::to_string(points.size()), 1000);
+            return false;
+        }
+
+        if (navPathUsable)
         {
             G3D::Vector3 const& lastPoint = points.back();
             Position segmentDestination(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
             segmentDestination = BuildCollisionSafeDestination(player, segmentDestination);
             float const segmentDistance = player->GetDistance(segmentDestination);
-            bool const suspiciousLongSegment = (pathType & PATHFIND_SHORTCUT) != 0 && segmentDistance > 160.0f;
-            if (suspiciousLongSegment)
-            {
-                float const dx = segmentDestination.GetPositionX() - player->GetPositionX();
-                float const dy = segmentDestination.GetPositionY() - player->GetPositionY();
-                float const dz = segmentDestination.GetPositionZ() - player->GetPositionZ();
-                float const planarLength = std::sqrt(dx * dx + dy * dy);
-                if (planarLength > 0.001f)
-                {
-                    float const cappedStepDistance = 90.0f;
-                    float const cappedRatio = std::min(cappedStepDistance / planarLength, 1.0f);
-                    Position cappedSegmentDestination(
-                        player->GetPositionX() + dx * cappedRatio,
-                        player->GetPositionY() + dy * cappedRatio,
-                        player->GetPositionZ() + dz * cappedRatio,
-                        safeDestination.GetOrientation());
-                    cappedSegmentDestination = BuildCollisionSafeDestination(player, cappedSegmentDestination);
-                    motionMaster->MovePoint(0, cappedSegmentDestination, true);
-                    issuedDestination = cappedSegmentDestination;
-                    EmitBattlegroundGmDebug(player,
-                        "movepoint=segmented-capped pathType=" + std::to_string(uint32(pathType)) +
-                        " segDist=" + std::to_string(int32(segmentDistance)) +
-                        " cappedDist=" + std::to_string(int32(player->GetDistance(cappedSegmentDestination))), 0);
-                    state.lastDestination = issuedDestination;
-                    state.lastIssueMs = nowMs;
-                    return true;
-                }
-            }
 
-            bool const shortControlledDrop =
-                segmentDistance <= 45.0f &&
-                segmentDestination.GetPositionZ() + 7.0f < player->GetPositionZ() &&
-                player->IsWithinLOS(segmentDestination.GetPositionX(), segmentDestination.GetPositionY(), segmentDestination.GetPositionZ());
-
-            // Allow short, local drops (e.g. WSG graveyard/ramp exits) while
-            // keeping long traversal navmesh-driven.
-            motionMaster->MovePoint(0, segmentDestination, !shortControlledDrop);
+            motionMaster->MovePoint(0, segmentDestination, true);
             issuedDestination = segmentDestination;
 
             EmitBattlegroundGmDebug(player,
                 "movepoint=segmented pathType=" + std::to_string(uint32(pathType)) +
                 " points=" + std::to_string(points.size()) +
-                " segDist=" + std::to_string(int32(segmentDistance)) +
-                " shortDrop=" + std::to_string(shortControlledDrop ? 1 : 0), 0);
+                " segDist=" + std::to_string(int32(segmentDistance)), 0);
         }
         else
         {
+            if (strictHumanPathing)
+            {
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=blocked-insufficient-path pathType=" + std::to_string(uint32(pathType)) +
+                    " points=" + std::to_string(points.size()), 1000);
+                return false;
+            }
+
             float const destinationDistance = player->GetDistance(safeDestination);
             Position actualEndDestination(actualEnd.x, actualEnd.y, actualEnd.z, safeDestination.GetOrientation());
             actualEndDestination = BuildCollisionSafeDestination(player, actualEndDestination);
@@ -1332,8 +1354,7 @@ bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
     Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
         player->GetPositionY() + std::sin(angleAway) * moveDistance,
         player->GetPositionZ(), player->GetOrientation());
-    player->GetMotionMaster()->MovePoint(0, destination);
-    return true;
+    return IssueMovePointThrottled(player, destination, 4.0f, 500);
 }
 
 bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
@@ -1351,12 +1372,12 @@ bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfil
     Position reposition(target->GetPositionX() + std::cos(orbitAngle) * orbitRange,
         target->GetPositionY() + std::sin(orbitAngle) * orbitRange,
         target->GetPositionZ(), player->GetOrientation());
-    player->GetMotionMaster()->MovePoint(0, reposition);
+    bool const moved = IssueMovePointThrottled(player, reposition, 4.0f, 500);
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP LOS recovery: bot={} target={} profile={} reason={} orbitRange={}.",
         player->GetGUID().ToString(), target->GetGUID().ToString(), profile.label, reason ? reason : "unknown", orbitRange);
-    return true;
+    return moved;
 }
 
 Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)
@@ -1435,23 +1456,14 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
 
-    // WSG should not avoid fall damage while pursuing enemies.
-    if (IsWarsongGulch(player) &&
-        target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
-        player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
-    {
-        if (!CanIssueMovementCommand(player, 500))
-            return false;
-        ClearEatDrinkAurasForMovement(player);
-        player->GetMotionMaster()->MovePoint(0, target->GetPosition(), false);
-        return true;
-    }
-
     if (!player->IsWithinDistInMap(target, desiredDistance))
     {
         if (!CanIssueMovementCommand(player, 500))
             return false;
         ClearEatDrinkAurasForMovement(player);
+        if (RequiresStrictHumanPathing(player))
+            return IssueHumanLikeFollow(player, target, desiredDistance, 8.0f, 500) || player->isMoving();
+
         player->GetMotionMaster()->MoveFollow(target, desiredDistance, player->GetFollowAngle());
     }
 
@@ -1762,6 +1774,9 @@ bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 
     if (!player->IsWithinDistInMap(droppedFlag, 10.0f))
     {
+        if (RequiresStrictHumanPathing(player))
+            return IssueMovePointThrottled(player, droppedFlag->GetPosition(), 8.0f, 500);
+
         player->GetMotionMaster()->MovePoint(0, droppedFlag->GetPosition());
         return true;
     }
@@ -1890,7 +1905,6 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
                     ObjectGuid const hunterGuid = player->GetGUID();
                     ObjectGuid const targetGuid = target->GetGUID();
                     float const followDistance = profile.preferredIdealRange;
-                    float const followAngle = player->GetFollowAngle();
 
                     player->StopMoving();
                     if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
@@ -1899,7 +1913,7 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
                         player->SendMovementFlagUpdate();
                     }
 
-                    player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, followDistance, followAngle]()
+                    player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, followDistance]()
                     {
                         Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
                         if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
@@ -1907,8 +1921,13 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
                         if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, targetGuid))
                         {
-                            if (resumedTarget->IsAlive())
-                                hunter->GetMotionMaster()->MoveFollow(resumedTarget, followDistance, followAngle);
+                            if (!resumedTarget->IsAlive())
+                                return;
+
+                            if (RequiresStrictHumanPathing(hunter))
+                                IssueHumanLikeFollow(hunter, resumedTarget, followDistance, 8.0f, 500);
+                            else
+                                hunter->GetMotionMaster()->MoveFollow(resumedTarget, followDistance, hunter->GetFollowAngle());
                         }
                     }, std::chrono::milliseconds(pauseDurationMs));
 
@@ -1939,7 +1958,12 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
         {
             if (!CanIssueMovementCommand(player, 500))
                 return true;
-            player->GetMotionMaster()->MoveFollow(target, profile.preferredIdealRange, player->GetFollowAngle());
+
+            if (RequiresStrictHumanPathing(player))
+                IssueHumanLikeFollow(player, target, profile.preferredIdealRange, 8.0f, 500);
+            else
+                player->GetMotionMaster()->MoveFollow(target, profile.preferredIdealRange, player->GetFollowAngle());
+
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP distance band: bot={} profile={} decision=close-distance distance={} min={} ideal={} max={}.",
                 player->GetGUID().ToString(), profile.label, distance, profile.preferredMinRange, profile.preferredIdealRange,
@@ -1969,7 +1993,12 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
         bool const forceStealthRogueChase = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
         if (!forceStealthRogueChase && !CanIssueMovementCommand(player, 500))
             return true;
-        player->GetMotionMaster()->MoveChase(target);
+
+        if (RequiresStrictHumanPathing(player))
+            IssueHumanLikeFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f), 8.0f, 500);
+        else
+            player->GetMotionMaster()->MoveChase(target);
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={} forceStealthRogueChase={}.",
             player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange, forceStealthRogueChase ? 1 : 0);
