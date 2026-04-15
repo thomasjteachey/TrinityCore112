@@ -19,6 +19,7 @@
 #include "PlayerbotRandomBotParticipation.h"
 #include "SpellHistory.h"
 #include "BattlegroundMgr.h"
+#include "Battleground.h"
 #include "BattlegroundQueue.h"
 #include "BattlegroundEY.h"
 #include "BattlegroundWS.h"
