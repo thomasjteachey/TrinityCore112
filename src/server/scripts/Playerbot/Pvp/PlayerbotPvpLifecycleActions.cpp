@@ -1220,6 +1220,22 @@ bool CanIssueBotMovement(Player* player)
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         return false;
 
+    // Wait-join start locks intentionally root bots before the battleground opens.
+    // If that lock lingers after the battleground transitions to in-progress,
+    // every later pursuit/pathing check fails even though movement is otherwise legal.
+    if (player->InBattleground())
+    {
+        if (Battleground* battleground = player->GetBattleground())
+        {
+            if (battleground->GetStatus() != STATUS_WAIT_JOIN)
+            {
+                uint64 const botGuid = player->GetGUID().GetRawValue();
+                if (g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end())
+                    SetWaitJoinMovementLock(player, false);
+            }
+        }
+    }
+
     if (IsCrowdControlledForAction(player))
     {
         ClearActiveMovementForControlLoss(player);
