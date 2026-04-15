@@ -226,10 +226,51 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     ginfo->OpponentsTeamRating = 0;
     ginfo->OpponentsMatchmakerRating = 0;
 
-    // Preserve the queue-side the group actually joined with.
-    // Premade-vs-premade matching relies on groups landing in the correct
-    // Alliance/Horde queue buckets here; cross-faction side assignment can
-    // still happen later when selection pools are built for a specific match.
+    // For battlegrounds we use synthetic queue sides instead of the player's real faction.
+    // This keeps the first waiting team on one side and pushes the next waiting team to the
+    // opposite side so cross-faction queues can always produce a match.
+    if (!ArenaType)
+    {
+        uint32 alliancePlayers = 0;
+        uint32 hordePlayers = 0;
+        uint32 allianceGroups = 0;
+        uint32 hordeGroups = 0;
+        uint32 allianceIndex = isPremade ? BG_QUEUE_PREMADE_ALLIANCE : BG_QUEUE_NORMAL_ALLIANCE;
+        uint32 hordeIndex = isPremade ? BG_QUEUE_PREMADE_HORDE : BG_QUEUE_NORMAL_HORDE;
+
+        for (GroupsQueueType::const_iterator itr = m_QueuedGroups[bracketId][allianceIndex].begin(); itr != m_QueuedGroups[bracketId][allianceIndex].end(); ++itr)
+        {
+            if ((*itr)->IsInvitedToBGInstanceGUID)
+                continue;
+
+            alliancePlayers += (*itr)->Players.size();
+            ++allianceGroups;
+        }
+
+        for (GroupsQueueType::const_iterator itr = m_QueuedGroups[bracketId][hordeIndex].begin(); itr != m_QueuedGroups[bracketId][hordeIndex].end(); ++itr)
+        {
+            if ((*itr)->IsInvitedToBGInstanceGUID)
+                continue;
+
+            hordePlayers += (*itr)->Players.size();
+            ++hordeGroups;
+        }
+
+        bool addHorde = false;
+        if (!hordeGroups && allianceGroups)
+            addHorde = true;
+        else if (!allianceGroups && hordeGroups)
+            addHorde = false;
+        else if (alliancePlayers != hordePlayers)
+            addHorde = alliancePlayers > hordePlayers;
+        else if (allianceGroups != hordeGroups)
+            addHorde = allianceGroups > hordeGroups;
+        else
+            addHorde = roll_chance_i(50);
+
+        ginfo->Team = addHorde ? HORDE : ALLIANCE;
+    }
+
     ginfo->Players.clear();
 
     //compute index (if group is premade or joined a rated match) to queues
