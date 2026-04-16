@@ -49,6 +49,52 @@ void WorldSession::HandleMoveWorldportAckOpcode(WorldPacket & /*recvData*/)
     HandleMoveWorldportAck();
 }
 
+bool WorldSession::ResolvePendingTeleport(bool forceNearFallback /*= true*/)
+{
+    Player* player = GetPlayer();
+    if (!player || !player->IsBeingTeleported())
+        return true;
+
+    if (player->IsBeingTeleportedFar())
+        HandleMoveWorldportAck();
+
+    if (player->IsBeingTeleportedNear())
+    {
+        WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
+        teleportAck << player->GetPackGUID();
+        teleportAck << uint32(0);
+        teleportAck << uint32(0);
+        HandleMoveTeleportAck(teleportAck);
+
+        if (forceNearFallback && player->IsBeingTeleportedNear())
+        {
+            uint32 const oldZone = player->GetZoneId();
+            WorldLocation const& dest = player->GetTeleportDest();
+            player->SetSemaphoreTeleportNear(false);
+            player->UpdatePosition(dest, true);
+            player->SetFallInformation(0, player->GetPositionZ());
+
+            uint32 newZone = 0;
+            uint32 newArea = 0;
+            player->GetZoneAndAreaId(newZone, newArea);
+            player->UpdateZone(newZone, newArea);
+
+            if (oldZone != newZone)
+            {
+                if (player->pvpInfo.IsHostile)
+                    player->CastSpell(player, 2479, true);
+                else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
+                    player->UpdatePvP(false, false);
+            }
+
+            player->ResummonPetTemporaryUnSummonedIfAny();
+            player->ProcessDelayedOperations();
+        }
+    }
+
+    return !player->IsBeingTeleported();
+}
+
 void WorldSession::HandleMoveWorldportAck()
 {
     Player* player = GetPlayer();
@@ -308,9 +354,11 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
     Unit* mover = client->GetActivelyMovedUnit();
     Player* plrMover = mover->ToPlayer();
 
-    // ignore, waiting processing in WorldSession::HandleMoveWorldportAckOpcode and WorldSession::HandleMoveTeleportAck
+    // If teleport completion got stuck, try to resolve it and discard this packet.
+    // The next client movement packet will then re-sync against the completed teleport destination.
     if (plrMover && plrMover->IsBeingTeleported())
     {
+        ResolvePendingTeleport();
         recvData.rfinish();                     // prevent warnings spam
         return;
     }

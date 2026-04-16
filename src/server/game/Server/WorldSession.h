@@ -678,6 +678,7 @@ class TC_GAME_API WorldSession
         void HandleForceSpeedChangeAck(WorldPacket& recvData);
         void HandleMoveKnockBackAck(WorldPacket& recvPacket);
         void HandleMoveTeleportAck(WorldPacket& recvPacket);
+        bool ResolvePendingTeleport(bool forceNearFallback = true);
         void HandleMoveWaterWalkAck(WorldPacket& recvPacket);
         void HandleFeatherFallAck(WorldPacket& recvData);
         void HandleMoveHoverAck(WorldPacket& recvData);
