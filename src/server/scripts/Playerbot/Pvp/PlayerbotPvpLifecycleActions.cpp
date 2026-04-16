@@ -1663,6 +1663,37 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
     return false;
 }
 
+uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
+{
+    std::vector<ObjectGuid> managedBotGuids;
+    {
+        std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+        for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
+        {
+            if (!participant || !participant->IsInWorld())
+                continue;
+
+            if (!playerbot::IsManagedRandomBot(participant))
+                continue;
+
+            managedBotGuids.push_back(guid);
+        }
+    }
+
+    uint32 queuedCount = 0;
+    for (ObjectGuid const& guid : managedBotGuids)
+    {
+        Player* managedBot = ObjectAccessor::FindConnectedPlayer(guid);
+        if (!managedBot)
+            continue;
+
+        if (QueuePlayer(managedBot, bgTypeId, arenaType))
+            ++queuedCount;
+    }
+
+    return queuedCount;
+}
+
 void FinalizeVirtualBotTeleportIfPending(Player* player)
 {
     if (!player)
@@ -2293,6 +2324,13 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
             "Playerbot PvP lifecycle human-interest rebalance: guid={} bgTypeId={} triggered={}.",
             player->GetGUID().ToString(), uint32(kManagedBattleground), rebalanceTriggered ? 1 : 0);
     }
+
+    uint32 const massQueued = QueueEligibleManagedBotsForBattleground(kManagedBattleground, 0);
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP lifecycle mass queue attempt: guid={} bgTypeId={} queuedCount={}.",
+        player->GetGUID().ToString(), uint32(kManagedBattleground), massQueued);
+    if (massQueued > 0)
+        return true;
 
     return QueuePlayer(player, kManagedBattleground, 0);
 }
