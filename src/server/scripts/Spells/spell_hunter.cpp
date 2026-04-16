@@ -1046,6 +1046,8 @@ class spell_hun_readiness : public SpellScript
                 spellInfo->Id != SPELL_DRAENEI_GIFT_OF_THE_NAARU &&
                 spellInfo->GetRecoveryTime() > 0)
                 return true;
+            if (spellInfo->Id == 19577) //Intimidation
+                return true;
             return false;
         }, true);
     }
