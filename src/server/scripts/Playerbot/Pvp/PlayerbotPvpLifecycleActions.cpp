@@ -942,6 +942,26 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!bgTemplate)
         return false;
 
+    // Recover stale local queue slot state before evaluating queue eligibility.
+    // Managed bots can occasionally keep orphaned queue ids after lifecycle
+    // transitions, which blocks HasFreeBattlegroundQueueId() and prevents
+    // requeueing after subsequent battlegrounds.
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const existingQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (existingQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        BattlegroundQueue& existingQueue = sBattlegroundMgr->GetBattlegroundQueue(existingQueueTypeId);
+        GroupQueueInfo ginfo{};
+        if (existingQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            continue;
+
+        player->RemoveBattlegroundQueueId(existingQueueTypeId);
+        EmitLifecycleDiagnostic(player, "queue-prune-stale-slot",
+            "Removed stale queueTypeId=" + std::to_string(uint32(existingQueueTypeId)));
+    }
+
     // Managed random bots can run on disconnected virtual sessions where RBAC
     // battleground permissions are not always populated like live client sessions.
     // Gate queue eligibility by battleground level + free queue slots instead.
