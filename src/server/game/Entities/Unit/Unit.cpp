@@ -1711,6 +1711,22 @@ void Unit::HandleEmoteCommand(Emote emoteId)
                 armor = std::floor(AddPct(armor, -aurEff->GetAmount()));
         }
 
+        // Custom: if a warrior has aura 81413, Overpower bypasses all armor.
+        if (spellInfo && attacker->GetTypeId() == TYPEID_PLAYER && attacker->HasAura(81413))
+        {
+            switch (spellInfo->Id)
+            {
+                case 7384:   // Overpower (Rank 1)
+                case 7887:   // Overpower (Rank 2)
+                case 11584:  // Overpower (Rank 3)
+                case 11585:  // Overpower (Rank 4)
+                    armor = 0.0f;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         // Apply Player CR_ARMOR_PENETRATION rating and buffs from stances\specializations etc.
         if (attacker->GetTypeId() == TYPEID_PLAYER)
         {
