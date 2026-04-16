@@ -2434,13 +2434,11 @@ class spell_pal_hand_of_freedom : public AuraScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetTarget();
-        if (caster->HasAura(SPELL_PALADIN_IMP_HAND_OF_FREEDOM))
-        {
-            if (caster->GetGUID() != target->GetGUID())
-            {
-                caster->CastSpell(caster, SPELL_PALADIN_LESSER_HAND_OF_FREEDOM);
-            }
-        }
+        if (!caster || !target)
+            return;
+
+        if (caster->HasAura(SPELL_PALADIN_IMP_HAND_OF_FREEDOM) && caster->GetGUID() != target->GetGUID())
+            caster->CastSpell(caster, SPELL_PALADIN_LESSER_HAND_OF_FREEDOM);
     }
 
     void Register() override
