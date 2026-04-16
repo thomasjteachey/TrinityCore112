@@ -65,6 +65,34 @@ char const* ToString(playerbot::InvitationResponseType response)
     }
 }
 
+char const* ToString(playerbot::PvpClassSpellContext::MovementDirective directive)
+{
+    switch (directive)
+    {
+        case playerbot::PvpClassSpellContext::MovementDirective::ReachMeleeRange: return "reach_melee";
+        case playerbot::PvpClassSpellContext::MovementDirective::ReachSpellRange: return "reach_spell";
+        case playerbot::PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell: return "flee";
+        case playerbot::PvpClassSpellContext::MovementDirective::FaceSpellTarget: return "face_target";
+        case playerbot::PvpClassSpellContext::MovementDirective::DropInvalidTarget: return "drop_target";
+        case playerbot::PvpClassSpellContext::MovementDirective::CheckMountState: return "check_mount";
+        case playerbot::PvpClassSpellContext::MovementDirective::ResetCombatState: return "reset_combat";
+        case playerbot::PvpClassSpellContext::MovementDirective::None:
+        default: return "none";
+    }
+}
+
+char const* ToString(playerbot::PvpClassSpellContext::TargetMode mode)
+{
+    switch (mode)
+    {
+        case playerbot::PvpClassSpellContext::TargetMode::Enemy: return "enemy";
+        case playerbot::PvpClassSpellContext::TargetMode::Ally: return "ally";
+        case playerbot::PvpClassSpellContext::TargetMode::Self: return "self";
+        case playerbot::PvpClassSpellContext::TargetMode::None:
+        default: return "none";
+    }
+}
+
 std::string BuildManagedBotStatusLine(Player* bot)
 {
     if (!bot)
@@ -85,16 +113,35 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " class_action=" << (classContext.actionName ? classContext.actionName : "none")
            << " spell=" << classContext.spellId
            << " reason=" << (classContext.reason ? classContext.reason : "none")
+           << " target_mode=" << ToString(classContext.targetMode)
+           << " target_guid=" << classContext.targetGuid.ToString()
+           << " move_directive=" << ToString(classContext.movementDirective)
+           << " move_target=" << classContext.movementTargetGuid.ToString()
+           << " move_range=" << classContext.movementFollowRange
            << " lifecycle_q=" << ToString(lifecycleContext.queueOperation)
            << " lifecycle_invite=" << ToString(lifecycleContext.invitationResponse)
            << " hooks(bg=" << (hooks.battlegroundParticipationHook ? "on" : "off")
            << ",arena=" << (hooks.arenaParticipationHook ? "on" : "off") << ")"
-           << " motion=" << uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType());
+           << " motion=" << uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType())
+           << " pos=(" << bot->GetMapId() << ":" << bot->GetPositionX() << "," << bot->GetPositionY() << "," << bot->GetPositionZ() << ")"
+           << " o=" << bot->GetOrientation();
 
     if (Unit* victim = bot->GetVictim())
-        status << " victim=" << victim->GetName();
+        status << " victim=" << victim->GetName() << " victim_dist=" << bot->GetDistance(victim);
     else
         status << " victim=none";
+
+    if (Unit* selected = bot->GetSelectedUnit())
+    {
+        constexpr float kHalfCircleArc = 3.14159265358979323846f;
+        status << " selected=" << selected->GetName()
+               << " selected_dist=" << bot->GetDistance(selected)
+               << " in_front=" << (bot->HasInArc(kHalfCircleArc, selected) ? "yes" : "no");
+    }
+    else
+    {
+        status << " selected=none";
+    }
 
     return status.str();
 }
@@ -177,9 +224,12 @@ public:
         challenger->SendDuelCountdown(3000);
     }
 
-    void OnChat(Player* sender, uint32 /*type*/, uint32 lang, std::string& /*msg*/, Player* receiver) override
+    void OnChat(Player* sender, uint32 type, uint32 lang, std::string& /*msg*/, Player* receiver) override
     {
         if (!sender || !receiver)
+            return;
+
+        if (type != CHAT_MSG_WHISPER)
             return;
 
         if (lang == LANG_ADDON)

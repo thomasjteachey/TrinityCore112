@@ -269,6 +269,52 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
 }
 
+void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return;
+
+    float const safeDistance = std::max(1.0f, desiredDistance);
+    if (RequiresStrictHumanPathing(player))
+    {
+        IssueStrictHumanFollow(player, target, safeDistance);
+        return;
+    }
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target, safeDistance);
+    else
+        motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+}
+
+void IssueMeleeApproachMovement(Player* player, Unit* target)
+{
+    if (!player || !target)
+        return;
+
+    if (RequiresStrictHumanPathing(player))
+    {
+        // Keep melee bots close to contact range instead of orbiting around a
+        // larger follow radius (which can look like "running away" after
+        // melee openers and while continuously reissuing approach directives).
+        IssueStrictHumanFollow(player, target, 1.5f);
+        return;
+    }
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target);
+    else
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+}
+
 bool IsCrowdControlledForAction(Player const* player)
 {
     if (!player)
@@ -344,6 +390,29 @@ struct WarlockCurseCooldownKeyHash
 };
 
 std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
+
+struct CasterSpellCooldownKey
+{
+    ObjectGuid casterGuid;
+    uint32 spellId = 0;
+
+    bool operator==(CasterSpellCooldownKey const& other) const
+    {
+        return casterGuid == other.casterGuid && spellId == other.spellId;
+    }
+};
+
+struct CasterSpellCooldownKeyHash
+{
+    std::size_t operator()(CasterSpellCooldownKey const& key) const
+    {
+        std::size_t const casterHash = std::hash<uint64>{}(key.casterGuid.GetRawValue());
+        std::size_t const spellHash = std::hash<uint32>{}(key.spellId);
+        return casterHash ^ (spellHash << 1);
+    }
+};
+
+std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -772,10 +841,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (CanIssueFollowCommands(player))
         {
             float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            IssueRangedApproachMovement(player, target, desiredRange);
         }
 
         failureReason = "no_los";
@@ -794,10 +860,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             float const desiredRange = std::max(1.0f, maxRange - 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            IssueRangedApproachMovement(player, target, desiredRange);
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
         {
@@ -924,10 +987,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
                 float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, target, desiredRange);
             }
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
@@ -940,10 +1000,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
                 float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, target, desiredRange);
             }
         }
 
@@ -1060,6 +1117,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if ((context.spellId == 11719 || context.spellId == 11713) && target)
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
+    if (context.spellId == 6940)
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
 
     return true;
 }
@@ -1122,6 +1181,33 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
     g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
 }
 
+bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 spellId)
+{
+    if (!player || !spellId)
+        return false;
+
+    CasterSpellCooldownKey const key{ player->GetGUID(), spellId };
+    auto const itr = g_CasterSpellCooldowns.find(key);
+    if (itr == g_CasterSpellCooldowns.end())
+        return false;
+
+    if (GameTime::Now() >= itr->second)
+    {
+        g_CasterSpellCooldowns.erase(itr);
+        return false;
+    }
+
+    return true;
+}
+
+void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown)
+{
+    if (!player || !spellId || cooldown <= std::chrono::seconds::zero())
+        return;
+
+    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
@@ -1152,22 +1238,14 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         {
             case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
             {
-                float const desiredRange = std::max(1.0f,
-                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().meleeRange - 1.0f));
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, movementTarget, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(movementTarget, desiredRange, player->GetFollowAngle());
+                IssueMeleeApproachMovement(player, movementTarget);
             }
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
             {
                 float const desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, movementTarget, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(movementTarget, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, movementTarget, desiredRange);
             }
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
