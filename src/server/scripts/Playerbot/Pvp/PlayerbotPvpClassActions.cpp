@@ -291,6 +291,30 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
 }
 
+void IssueMeleeApproachMovement(Player* player, Unit* target)
+{
+    if (!player || !target)
+        return;
+
+    if (RequiresStrictHumanPathing(player))
+    {
+        // Keep melee bots close to contact range instead of orbiting around a
+        // larger follow radius (which can look like "running away" after
+        // melee openers and while continuously reissuing approach directives).
+        IssueStrictHumanFollow(player, target, 1.5f);
+        return;
+    }
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target);
+    else
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+}
+
 bool IsCrowdControlledForAction(Player const* player)
 {
     if (!player)
@@ -1214,9 +1238,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         {
             case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
             {
-                float const desiredRange = std::max(1.0f,
-                    context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().meleeRange - 1.0f));
-                IssueRangedApproachMovement(player, movementTarget, desiredRange);
+                IssueMeleeApproachMovement(player, movementTarget);
             }
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
