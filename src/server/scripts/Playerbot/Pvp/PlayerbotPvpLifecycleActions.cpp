@@ -74,12 +74,14 @@ constexpr uint32 PLAYERBOT_BG_OVERSTACK_MIN_DIFF = 2;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS = 30000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
+constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 constexpr uint32 SPELL_DESERTER = 26013;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
+uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
 
 uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
@@ -1661,6 +1663,37 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
     return false;
 }
 
+uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
+{
+    std::vector<ObjectGuid> managedBotGuids;
+    {
+        std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+        for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
+        {
+            if (!participant || !participant->IsInWorld())
+                continue;
+
+            if (!playerbot::IsManagedRandomBot(participant))
+                continue;
+
+            managedBotGuids.push_back(guid);
+        }
+    }
+
+    uint32 queuedCount = 0;
+    for (ObjectGuid const& guid : managedBotGuids)
+    {
+        Player* managedBot = ObjectAccessor::FindConnectedPlayer(guid);
+        if (!managedBot)
+            continue;
+
+        if (QueuePlayer(managedBot, bgTypeId, arenaType))
+            ++queuedCount;
+    }
+
+    return queuedCount;
+}
+
 void FinalizeVirtualBotTeleportIfPending(Player* player)
 {
     if (!player)
@@ -2270,6 +2303,7 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
         return false;
 
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
 
     if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground))
     {
@@ -2278,6 +2312,25 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
             player->GetGUID().ToString(), uint32(kManagedBattleground));
         return false;
     }
+
+    // When a real human queues (especially right after startup), force an
+    // immediate population rebalance so additional managed bots can log in and
+    // participate in SCM fill without waiting for the periodic rebalance tick.
+    if (nowMs >= g_LastHumanInterestPopulationRebalanceAttemptMs + PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS)
+    {
+        g_LastHumanInterestPopulationRebalanceAttemptMs = nowMs;
+        bool const rebalanceTriggered = RandomBotParticipationManager::TriggerImmediateRebalance();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle human-interest rebalance: guid={} bgTypeId={} triggered={}.",
+            player->GetGUID().ToString(), uint32(kManagedBattleground), rebalanceTriggered ? 1 : 0);
+    }
+
+    uint32 const massQueued = QueueEligibleManagedBotsForBattleground(kManagedBattleground, 0);
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP lifecycle mass queue attempt: guid={} bgTypeId={} queuedCount={}.",
+        player->GetGUID().ToString(), uint32(kManagedBattleground), massQueued);
+    if (massQueued > 0)
+        return true;
 
     return QueuePlayer(player, kManagedBattleground, 0);
 }
