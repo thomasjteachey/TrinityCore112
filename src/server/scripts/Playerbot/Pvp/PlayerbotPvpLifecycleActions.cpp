@@ -1378,6 +1378,17 @@ bool IsActivelyPressuringInMelee(Unit const* attacker, Player const* bot)
     return attacker->IsWithinMeleeRange(bot) || bot->IsWithinMeleeRange(attacker);
 }
 
+bool ShouldForceMeleeFallbackOnLowMana(Player const* player)
+{
+    if (!player || player->GetPowerType() != POWER_MANA)
+        return false;
+
+    if (player->GetClass() != CLASS_SHAMAN && player->GetClass() != CLASS_PALADIN)
+        return false;
+
+    return player->GetPowerPct(POWER_MANA) <= 10.0f || player->GetPower(POWER_MANA) < 250;
+}
+
 struct CombatPositioningProfile
 {
     float preferredMinRange = 0.0f;
@@ -1996,6 +2007,14 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
     if (profile.primarilyRanged)
     {
+        if (ShouldForceMeleeFallbackOnLowMana(player))
+        {
+            if (!CanIssueMovementCommand(player, 500))
+                return true;
+
+            return MoveTowardUnit(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
+        }
+
         if (player->GetClass() == CLASS_HUNTER)
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
