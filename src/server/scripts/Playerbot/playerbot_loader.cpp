@@ -19,7 +19,6 @@
 #include "Chat.h"
 #include "GameTime.h"
 #include "MotionMaster.h"
-#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
@@ -132,7 +131,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
     else
         status << " victim=none";
 
-    if (Unit* selected = ObjectAccessor::GetUnit(*bot, bot->GetSelection()))
+    if (Unit* selected = bot->GetSelectedUnit())
     {
         constexpr float kHalfCircleArc = 3.14159265358979323846f;
         status << " selected=" << selected->GetName()
