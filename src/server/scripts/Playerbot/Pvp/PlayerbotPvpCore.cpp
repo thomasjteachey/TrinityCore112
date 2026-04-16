@@ -2053,6 +2053,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         { "priest shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 10917) && player->HealthBelowPct(85), 17.0f,
         { "priest flash heal", "fallback self-healing while under pressure", 10917, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, hasHostileTarget && target && !HasBreakableCrowdControl(target) && HasWandEquipped(player) && IsSpellReady(player, 5019), 8.0f,
+        { "priest shoot wand", "default offensive fallback when no better priest action is available", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
 }
@@ -2204,6 +2206,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         { "warlock shadow bolt", "consume nightfall proc for instant pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 25307), 19.0f,
         { "warlock shadow bolt", "default ranged pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(target) && HasWandEquipped(player) && IsSpellReady(player, 5019), 8.0f,
+        { "warlock shoot wand", "default offensive fallback when no better warlock action is available", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
