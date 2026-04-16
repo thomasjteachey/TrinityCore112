@@ -2049,8 +2049,11 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
         bool const forceStealthRogueChase = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
         if (!forceStealthRogueChase && !CanIssueMovementCommand(player, 500))
             return true;
-        if (!IssueHumanLikeFollow(player, target, std::max(1.0f, profile.preferredIdealRange), 6.0f, 500))
-            return true;
+        // Use core chase movement for melee stickiness instead of repeatedly
+        // recomputing follow points around the target. This avoids oscillation
+        // where rogues can appear to peel away before re-engaging.
+        ClearEatDrinkAurasForMovement(player);
+        player->GetMotionMaster()->MoveChase(target);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={} forceStealthRogueChase={}.",
             player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange, forceStealthRogueChase ? 1 : 0);
