@@ -105,6 +105,7 @@ public:
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
+    uint32 GetBuffRespawnTime(uint32 type) const override;
 
 private:
     WorldSafeLocsEntry const* GetRandomTeamGraveyard(TeamId teamId) const;

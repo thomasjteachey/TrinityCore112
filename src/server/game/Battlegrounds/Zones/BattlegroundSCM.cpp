@@ -275,3 +275,8 @@ void BattlegroundSCM::EndBattleground(uint32 winner)
     UpdateTeamScoreWorldStates();
     Battleground::EndBattleground(winner);
 }
+
+uint32 BattlegroundSCM::GetBuffRespawnTime(uint32 /*type*/) const
+{
+    return BG_SCM_BUFF_RESPAWN_TIME;
+}
