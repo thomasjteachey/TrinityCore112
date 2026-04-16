@@ -70,10 +70,75 @@ std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_MIN_DIFF = 2;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS = 30000;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 constexpr uint32 SPELL_DESERTER = 26013;
+std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
+std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
+uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
+
+uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
+{
+    if (!player || !battleground)
+        return 0;
+
+    uint64 const mix = (player->GetGUID().GetRawValue() * 11400714819323198485ull) ^
+        (static_cast<uint64>(battleground->GetInstanceID()) * 7046029254386353131ull);
+    return static_cast<uint32>(mix % PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS);
+}
+
+bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battleground)
+{
+    if (!player || !battleground || !playerbot::IsManagedRandomBot(player))
+        return false;
+
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    if (assignedTeam != ALLIANCE && assignedTeam != HORDE)
+        return false;
+
+    uint32 const allianceCount = battleground->GetPlayersCountByTeam(ALLIANCE);
+    uint32 const hordeCount = battleground->GetPlayersCountByTeam(HORDE);
+    if (!allianceCount || !hordeCount)
+        return false;
+
+    uint32 const botTeamCount = assignedTeam == ALLIANCE ? allianceCount : hordeCount;
+    uint32 const otherTeamCount = assignedTeam == ALLIANCE ? hordeCount : allianceCount;
+    if (botTeamCount <= otherTeamCount)
+        return false;
+
+    uint32 const teamDiff = botTeamCount - otherTeamCount;
+    if (teamDiff < PLAYERBOT_BG_OVERSTACK_MIN_DIFF)
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+    uint32 const cooldownUntilMs = g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw];
+    if (cooldownUntilMs && nowMs < cooldownUntilMs)
+        return false;
+
+    uint64 const instanceKey = BuildBattlegroundInstanceKey(battleground);
+    uint32 const nextDepartureEarliestMs = g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey];
+    if (nextDepartureEarliestMs && nowMs < nextDepartureEarliestMs)
+        return false;
+
+    uint32 const jitterMs = ComputeOverstackDepartureJitterMs(player, battleground);
+    if (nowMs % PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS < jitterMs)
+        return false;
+
+    g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw] = nowMs + PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS;
+    g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey] = nowMs + PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS;
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP overstack rebalance trigger: guid={} bgTypeId={} instanceId={} assignedTeam={} teamCount={} otherTeamCount={} diff={}.",
+        player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID(), assignedTeam, botTeamCount,
+        otherTeamCount, teamDiff);
+    return true;
+}
 
 void ForcePlayerbotDismount(Player* player)
 {
@@ -2307,6 +2372,14 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
     else
         g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+
+    if (ShouldManagedBotLeaveForOverstack(player, battleground))
+    {
+        player->LeaveBattleground();
+        FinalizeVirtualBotTeleportIfPending(player);
+        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        return true;
+    }
 
     if (HandleBattlegroundDeathState(player))
         return true;
