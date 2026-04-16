@@ -766,13 +766,22 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    float const maxRange = spellInfo->GetMaxRange(false);
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
+        if (CanIssueFollowCommands(player))
+        {
+            float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+            if (RequiresStrictHumanPathing(player))
+                IssueStrictHumanFollow(player, target, desiredRange);
+            else
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+        }
+
         failureReason = "no_los";
         return false;
     }
 
-    float const maxRange = spellInfo->GetMaxRange(false);
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
@@ -923,6 +932,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
                 float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+                if (RequiresStrictHumanPathing(player))
+                    IssueStrictHumanFollow(player, target, desiredRange);
+                else
+                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            }
+            else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
+            {
+                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
                 if (RequiresStrictHumanPathing(player))
                     IssueStrictHumanFollow(player, target, desiredRange);
                 else
