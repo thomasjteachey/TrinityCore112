@@ -269,6 +269,28 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
 }
 
+void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance)
+{
+    if (!player || !target)
+        return;
+
+    float const safeDistance = std::max(1.0f, desiredDistance);
+    if (RequiresStrictHumanPathing(player))
+    {
+        IssueStrictHumanFollow(player, target, safeDistance);
+        return;
+    }
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target, safeDistance);
+    else
+        motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+}
+
 bool IsCrowdControlledForAction(Player const* player)
 {
     if (!player)
@@ -772,10 +794,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (CanIssueFollowCommands(player))
         {
             float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            IssueRangedApproachMovement(player, target, desiredRange);
         }
 
         failureReason = "no_los";
@@ -794,10 +813,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             float const desiredRange = std::max(1.0f, maxRange - 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            IssueRangedApproachMovement(player, target, desiredRange);
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
         {
@@ -924,10 +940,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
                 float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, target, desiredRange);
             }
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
@@ -940,10 +953,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
                 float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, target, desiredRange);
             }
         }
 
@@ -1154,20 +1164,14 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             {
                 float const desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().meleeRange - 1.0f));
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, movementTarget, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(movementTarget, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, movementTarget, desiredRange);
             }
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
             {
                 float const desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, movementTarget, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(movementTarget, desiredRange, player->GetFollowAngle());
+                IssueRangedApproachMovement(player, movementTarget, desiredRange);
             }
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
