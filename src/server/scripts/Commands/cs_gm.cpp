@@ -25,6 +25,8 @@ EndScriptData */
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
 #include "Battleground.h"
+#include "BattlegroundMgr.h"
+#include "DBCStores.h"
 #include "Chat.h"
 #include "DatabaseEnv.h"
 #include "Language.h"
@@ -52,6 +54,7 @@ public:
             { "list",       HandleGMListFullCommand,    rbac::RBAC_PERM_COMMAND_GM_LIST,        Console::Yes },
             { "visible",    HandleGMVisibleCommand,     rbac::RBAC_PERM_COMMAND_GM_VISIBLE,     Console::No },
             { "bgstart",    HandleGMBgStartCommand,     rbac::RBAC_PERM_COMMAND_GM,             Console::No },
+            { "bgtele",     HandleGMBgTeleportCommand,  rbac::RBAC_PERM_COMMAND_GM,             Console::No },
             { "on",         HandleGMOnCommand,          rbac::RBAC_PERM_COMMAND_GM,             Console::No },
             { "off",        HandleGMOffCommand,         rbac::RBAC_PERM_COMMAND_GM,             Console::No },
         };
@@ -259,6 +262,76 @@ public:
         }
 
         handler->SendSysMessage("Skipped the battleground or arena start countdown.");
+        return true;
+    }
+
+    static bool HandleGMBgTeleportCommand(ChatHandler* handler, uint32 battlegroundTypeId, Optional<uint32> arenaTypeArg)
+    {
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        BattlegroundTypeId bgTypeId = BattlegroundTypeId(battlegroundTypeId);
+        Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (!bgTemplate)
+        {
+            handler->PSendSysMessage("Battleground template %u was not found.", battlegroundTypeId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint8 arenaType = bgTemplate->isArena() ? ARENA_TYPE_2v2 : 0;
+        if (arenaTypeArg)
+            arenaType = uint8(*arenaTypeArg);
+
+        if (bgTemplate->isArena())
+        {
+            if (arenaType < ARENA_TYPE_2v2 || arenaType > ARENA_TYPE_5v5)
+            {
+                handler->SendSysMessage("Arena type must be between 2 and 5 for arena maps.");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+        }
+        else if (arenaType != 0)
+        {
+            handler->SendSysMessage("Arena type can only be set when teleporting to an arena map.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
+        if (!bracketEntry)
+        {
+            handler->PSendSysMessage("Could not find a PvP bracket for map %u at level %u.", bgTemplate->GetMapId(), player->GetLevel());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (player->InBattleground())
+            player->LeaveBattleground(false);
+        else
+            player->SetBattlegroundEntryPoint();
+
+        if (player->IsInFlight())
+            player->FinishTaxiFlight();
+
+        Battleground* battleground = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false);
+        if (!battleground)
+        {
+            handler->PSendSysMessage("Could not create a battleground instance for type %u.", battlegroundTypeId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        battleground->StartBattleground();
+
+        player->SetBattlegroundId(battleground->GetInstanceID(), battleground->GetTypeID());
+        player->SetBGTeam(player->GetTeam());
+
+        sBattlegroundMgr->SendToBattleground(player, battleground->GetInstanceID(), battleground->GetTypeID());
+
+        handler->PSendSysMessage("Teleported to battleground type %u (instance %u, map %u).", battlegroundTypeId, battleground->GetInstanceID(), battleground->GetMapId());
         return true;
     }
 
