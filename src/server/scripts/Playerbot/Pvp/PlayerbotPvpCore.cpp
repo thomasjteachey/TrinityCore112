@@ -2699,6 +2699,9 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     ObjectGuid const selectedTargetGuid = SelectCombatTargetGuid(player);
     ObjectGuid activeTargetGuid = selectedTargetGuid;
     if (activeTargetGuid.IsEmpty())
+        if (Unit const* combatVictim = player->GetVictim(); HasHostileTarget(player, combatVictim))
+            activeTargetGuid = combatVictim->GetGUID();
+    if (activeTargetGuid.IsEmpty())
         if (Unit const* fallbackTarget = SelectClosestEnemyTarget(player, true))
             activeTargetGuid = fallbackTarget->GetGUID();
 
@@ -2912,6 +2915,21 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
                     std::max(1.0f, GetConfiguredCloseRange()), "flee", "selected spell minimum range violation", 84.0f);
+                context.spellId = 0;
+                context.itemEntry = 0;
+                context.targetMode = PvpClassSpellContext::TargetMode::None;
+                context.targetGuid = ObjectGuid::Empty;
+                context.selfCast = false;
+            }
+            else if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
+                distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer))
+            {
+                // Some classic spell entries report atypical range metadata,
+                // which can leave ranged bots idling at ~35-40y while still
+                // selecting enemy casts. Keep a config-based engage floor so
+                // they always step in to practical casting distance.
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredSpellRange() - 1.0f), "reach spell", "enemy outside configured cast distance", 82.0f);
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
