@@ -70,10 +70,81 @@ std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
 std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_MIN_DIFF = 2;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS = 30000;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
+constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 constexpr uint32 SPELL_DESERTER = 26013;
+std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
+std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
+uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
+
+uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
+{
+    if (!player || !battleground)
+        return 0;
+
+    uint64 const mix = (player->GetGUID().GetRawValue() * 11400714819323198485ull) ^
+        (static_cast<uint64>(battleground->GetInstanceID()) * 7046029254386353131ull);
+    return static_cast<uint32>(mix % PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS);
+}
+
+bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battleground)
+{
+    if (!player || !battleground || !playerbot::IsManagedRandomBot(player))
+        return false;
+
+    uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+    if (assignedTeam != ALLIANCE && assignedTeam != HORDE)
+        return false;
+
+    uint32 const allianceCount = battleground->GetPlayersCountByTeam(ALLIANCE);
+    uint32 const hordeCount = battleground->GetPlayersCountByTeam(HORDE);
+    if (!allianceCount || !hordeCount)
+        return false;
+
+    // Never rebalance on a one-player gap. A departure on 9v8 would immediately
+    // flip (or re-flip) stack pressure and cause oscillation between teams.
+    uint32 const absoluteTeamDiff = (allianceCount > hordeCount) ? (allianceCount - hordeCount) : (hordeCount - allianceCount);
+    if (absoluteTeamDiff <= 1)
+        return false;
+
+    uint32 const botTeamCount = assignedTeam == ALLIANCE ? allianceCount : hordeCount;
+    uint32 const otherTeamCount = assignedTeam == ALLIANCE ? hordeCount : allianceCount;
+    if (botTeamCount <= otherTeamCount)
+        return false;
+
+    uint32 const teamDiff = botTeamCount - otherTeamCount;
+    if (teamDiff < PLAYERBOT_BG_OVERSTACK_MIN_DIFF)
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+    uint32 const cooldownUntilMs = g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw];
+    if (cooldownUntilMs && nowMs < cooldownUntilMs)
+        return false;
+
+    uint64 const instanceKey = BuildBattlegroundInstanceKey(battleground);
+    uint32 const nextDepartureEarliestMs = g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey];
+    if (nextDepartureEarliestMs && nowMs < nextDepartureEarliestMs)
+        return false;
+
+    uint32 const jitterMs = ComputeOverstackDepartureJitterMs(player, battleground);
+    if (nowMs % PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS < jitterMs)
+        return false;
+
+    g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw] = nowMs + PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS;
+    g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey] = nowMs + PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS;
+
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP overstack rebalance trigger: guid={} bgTypeId={} instanceId={} assignedTeam={} teamCount={} otherTeamCount={} diff={}.",
+        player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID(), assignedTeam, botTeamCount,
+        otherTeamCount, teamDiff);
+    return true;
+}
 
 void ForcePlayerbotDismount(Player* player)
 {
@@ -870,6 +941,26 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bgTemplate)
         return false;
+
+    // Recover stale local queue slot state before evaluating queue eligibility.
+    // Managed bots can occasionally keep orphaned queue ids after lifecycle
+    // transitions, which blocks HasFreeBattlegroundQueueId() and prevents
+    // requeueing after subsequent battlegrounds.
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const existingQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (existingQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        BattlegroundQueue& existingQueue = sBattlegroundMgr->GetBattlegroundQueue(existingQueueTypeId);
+        GroupQueueInfo ginfo{};
+        if (existingQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            continue;
+
+        player->RemoveBattlegroundQueueId(existingQueueTypeId);
+        EmitLifecycleDiagnostic(player, "queue-prune-stale-slot",
+            "Removed stale queueTypeId=" + std::to_string(uint32(existingQueueTypeId)));
+    }
 
     // Managed random bots can run on disconnected virtual sessions where RBAC
     // battleground permissions are not always populated like live client sessions.
@@ -1978,8 +2069,11 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
         bool const forceStealthRogueChase = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
         if (!forceStealthRogueChase && !CanIssueMovementCommand(player, 500))
             return true;
-        if (!IssueHumanLikeFollow(player, target, std::max(1.0f, profile.preferredIdealRange), 6.0f, 500))
-            return true;
+        // Use core chase movement for melee stickiness instead of repeatedly
+        // recomputing follow points around the target. This avoids oscillation
+        // where rogues can appear to peel away before re-engaging.
+        ClearEatDrinkAurasForMovement(player);
+        player->GetMotionMaster()->MoveChase(target);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={} forceStealthRogueChase={}.",
             player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange, forceStealthRogueChase ? 1 : 0);
@@ -2307,6 +2401,14 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
     else
         g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+
+    if (ShouldManagedBotLeaveForOverstack(player, battleground))
+    {
+        player->LeaveBattleground();
+        FinalizeVirtualBotTeleportIfPending(player);
+        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        return true;
+    }
 
     if (HandleBattlegroundDeathState(player))
         return true;
