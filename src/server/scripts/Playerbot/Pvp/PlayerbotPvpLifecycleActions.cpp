@@ -2323,19 +2323,19 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
 
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
     uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const hasHumanInterest = HasAnyRealHumanInterestInBattleground(kManagedBattleground);
 
-    if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground))
+    if (!hasHumanInterest)
     {
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle queue join suppressed due to no real human interest: guid={} bgTypeId={}.",
+            "Playerbot PvP lifecycle queue join proceeding without explicit real human interest: guid={} bgTypeId={}.",
             player->GetGUID().ToString(), uint32(kManagedBattleground));
-        return false;
     }
 
-    // When a real human queues (especially right after startup), force an
-    // immediate population rebalance so additional managed bots can log in and
-    // participate in SCM fill without waiting for the periodic rebalance tick.
-    if (nowMs >= g_LastHumanInterestPopulationRebalanceAttemptMs + PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS)
+    // When real human interest exists (especially right after startup), force
+    // an immediate population rebalance so additional managed bots can log in.
+    if (hasHumanInterest &&
+        nowMs >= g_LastHumanInterestPopulationRebalanceAttemptMs + PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS)
     {
         g_LastHumanInterestPopulationRebalanceAttemptMs = nowMs;
         bool const rebalanceTriggered = RandomBotParticipationManager::TriggerImmediateRebalance();
