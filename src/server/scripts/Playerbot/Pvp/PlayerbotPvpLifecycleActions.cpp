@@ -74,12 +74,14 @@ constexpr uint32 PLAYERBOT_BG_OVERSTACK_MIN_DIFF = 2;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS = 30000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
+constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 constexpr uint32 SPELL_DESERTER = 26013;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
+uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
 
 uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
@@ -941,6 +943,26 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bgTemplate)
         return false;
+
+    // Recover stale local queue slot state before evaluating queue eligibility.
+    // Managed bots can occasionally keep orphaned queue ids after lifecycle
+    // transitions, which blocks HasFreeBattlegroundQueueId() and prevents
+    // requeueing after subsequent battlegrounds.
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const existingQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (existingQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        BattlegroundQueue& existingQueue = sBattlegroundMgr->GetBattlegroundQueue(existingQueueTypeId);
+        GroupQueueInfo ginfo{};
+        if (existingQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            continue;
+
+        player->RemoveBattlegroundQueueId(existingQueueTypeId);
+        EmitLifecycleDiagnostic(player, "queue-prune-stale-slot",
+            "Removed stale queueTypeId=" + std::to_string(uint32(existingQueueTypeId)));
+    }
 
     // Managed random bots can run on disconnected virtual sessions where RBAC
     // battleground permissions are not always populated like live client sessions.
@@ -2250,6 +2272,7 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
         return false;
 
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    uint32 const nowMs = GameTime::GetGameTimeMS();
 
     if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground))
     {
@@ -2257,6 +2280,18 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
             "Playerbot PvP lifecycle queue join suppressed due to no real human interest: guid={} bgTypeId={}.",
             player->GetGUID().ToString(), uint32(kManagedBattleground));
         return false;
+    }
+
+    // When a real human queues (especially right after startup), force an
+    // immediate population rebalance so additional managed bots can log in and
+    // participate in SCM fill without waiting for the periodic rebalance tick.
+    if (nowMs >= g_LastHumanInterestPopulationRebalanceAttemptMs + PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS)
+    {
+        g_LastHumanInterestPopulationRebalanceAttemptMs = nowMs;
+        bool const rebalanceTriggered = RandomBotParticipationManager::TriggerImmediateRebalance();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP lifecycle human-interest rebalance: guid={} bgTypeId={} triggered={}.",
+            player->GetGUID().ToString(), uint32(kManagedBattleground), rebalanceTriggered ? 1 : 0);
     }
 
     return QueuePlayer(player, kManagedBattleground, 0);
