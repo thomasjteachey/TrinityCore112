@@ -366,6 +366,29 @@ struct WarlockCurseCooldownKeyHash
 };
 
 std::unordered_map<WarlockCurseCooldownKey, std::chrono::steady_clock::time_point, WarlockCurseCooldownKeyHash> g_WarlockCurseTargetCooldowns;
+
+struct CasterSpellCooldownKey
+{
+    ObjectGuid casterGuid;
+    uint32 spellId = 0;
+
+    bool operator==(CasterSpellCooldownKey const& other) const
+    {
+        return casterGuid == other.casterGuid && spellId == other.spellId;
+    }
+};
+
+struct CasterSpellCooldownKeyHash
+{
+    std::size_t operator()(CasterSpellCooldownKey const& key) const
+    {
+        std::size_t const casterHash = std::hash<uint64>{}(key.casterGuid.GetRawValue());
+        std::size_t const spellHash = std::hash<uint32>{}(key.spellId);
+        return casterHash ^ (spellHash << 1);
+    }
+};
+
+std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -1070,6 +1093,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if ((context.spellId == 11719 || context.spellId == 11713) && target)
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
+    if (context.spellId == 6940)
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
 
     return true;
 }
@@ -1130,6 +1155,33 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
         return;
 
     g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+}
+
+bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 spellId)
+{
+    if (!player || !spellId)
+        return false;
+
+    CasterSpellCooldownKey const key{ player->GetGUID(), spellId };
+    auto const itr = g_CasterSpellCooldowns.find(key);
+    if (itr == g_CasterSpellCooldowns.end())
+        return false;
+
+    if (GameTime::Now() >= itr->second)
+    {
+        g_CasterSpellCooldowns.erase(itr);
+        return false;
+    }
+
+    return true;
+}
+
+void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown)
+{
+    if (!player || !spellId || cooldown <= std::chrono::seconds::zero())
+        return;
+
+    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
 }
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
