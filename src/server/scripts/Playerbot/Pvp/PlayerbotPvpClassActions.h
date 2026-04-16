@@ -33,6 +33,8 @@ public:
     static bool Execute(Player* player, PvpClassSpellContext const& context);
     static bool IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId);
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);
+    static bool IsCasterSpellCooldownActive(Player const* player, uint32 spellId);
+    static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
 };
 }
 
