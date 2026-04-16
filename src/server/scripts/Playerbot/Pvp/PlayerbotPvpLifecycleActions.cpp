@@ -106,6 +106,12 @@ bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battlegroun
     if (!allianceCount || !hordeCount)
         return false;
 
+    // Never rebalance on a one-player gap. A departure on 9v8 would immediately
+    // flip (or re-flip) stack pressure and cause oscillation between teams.
+    uint32 const absoluteTeamDiff = (allianceCount > hordeCount) ? (allianceCount - hordeCount) : (hordeCount - allianceCount);
+    if (absoluteTeamDiff <= 1)
+        return false;
+
     uint32 const botTeamCount = assignedTeam == ALLIANCE ? allianceCount : hordeCount;
     uint32 const otherTeamCount = assignedTeam == ALLIANCE ? hordeCount : allianceCount;
     if (botTeamCount <= otherTeamCount)
