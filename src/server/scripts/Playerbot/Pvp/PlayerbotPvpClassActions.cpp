@@ -809,8 +809,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // closing distance instead of idling in place during openers.
             //
             // AttackStop can clear chase intent in some movement states, so
-            // disable melee swing first and then (re)issue the movement order.
-            player->AttackStop();
+            // only call it when we are actively swinging a victim and then
+            // (re)issue chase immediately afterwards.
+            if (player->GetVictim())
+                player->AttackStop();
 
             if (CanIssueFollowCommands(player))
             {
