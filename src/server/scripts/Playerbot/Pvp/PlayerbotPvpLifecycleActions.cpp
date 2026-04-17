@@ -1073,7 +1073,20 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
         return false;
 
     if (player->GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+    {
+        if (bgTypeId == BATTLEGROUND_SCM)
+        {
+            if (PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel()))
+            {
+                sBattlegroundMgr->ScheduleQueueUpdate(0, arenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
+                EmitLifecycleDiagnostic(player, "queue-refresh-existing",
+                    "Already queued for SCM; forced queue update refresh.");
+                return true;
+            }
+        }
+
         return false;
+    }
 
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
     if (!bracketEntry)
