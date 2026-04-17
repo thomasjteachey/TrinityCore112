@@ -18,12 +18,16 @@
 #include "Log.h"
 #include "Chat.h"
 #include "GameTime.h"
+#include "Item.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
+#include "SpellInfo.h"
+#include "SpellHistory.h"
+#include "SpellMgr.h"
 
 #include <sstream>
 
@@ -146,6 +150,72 @@ std::string BuildManagedBotStatusLine(Player* bot)
     return status.str();
 }
 
+bool IsManagedBotSpellKnownAndOffCooldown(Player const* bot, uint32 spellId)
+{
+    if (!bot || !spellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!baseSpellInfo)
+        return false;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+    {
+        if (bot->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+    }
+
+    if (!resolvedSpellId)
+        return false;
+
+    return !bot->GetSpellHistory()->HasCooldown(resolvedSpellId);
+}
+
+bool ManagedBotHasWandEquipped(Player const* bot)
+{
+    if (!bot)
+        return false;
+
+    Item const* ranged = bot->GetWeaponForAttack(RANGED_ATTACK, true);
+    if (!ranged || !ranged->GetTemplate())
+        return false;
+
+    return ranged->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_WAND;
+}
+
+std::string BuildManagedBotDiagnosticLine(Player* bot)
+{
+    if (!bot)
+        return "PB diag unavailable.";
+
+    float const manaPct = bot->GetPowerType() == POWER_MANA ? bot->GetPowerPct(POWER_MANA) : 0.0f;
+    uint32 const manaNow = bot->GetPowerType() == POWER_MANA ? bot->GetPower(POWER_MANA) : 0;
+    uint32 const manaMax = bot->GetPowerType() == POWER_MANA ? bot->GetMaxPower(POWER_MANA) : 0;
+    bool const wandReady = IsManagedBotSpellKnownAndOffCooldown(bot, 5019);
+    bool const lifeTapReady = IsManagedBotSpellKnownAndOffCooldown(bot, 11689);
+    bool const hardCrowdControlled =
+        bot->HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING | UNIT_STATE_ROOT) ||
+        bot->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM));
+
+    std::ostringstream status;
+    status << "PB diag: "
+           << "hp=" << bot->GetHealthPct() << "%"
+           << " mana=" << manaNow << "/" << manaMax << " (" << manaPct << "%)"
+           << " wand_equipped=" << (ManagedBotHasWandEquipped(bot) ? "yes" : "no")
+           << " wand_ready=" << (wandReady ? "yes" : "no")
+           << " lifetap_ready=" << (lifeTapReady ? "yes" : "no")
+           << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
+           << " hard_cc=" << (hardCrowdControlled ? "yes" : "no");
+
+    if (Unit* victim = bot->GetVictim())
+        status << " victim=" << victim->GetName() << " dist=" << bot->GetDistance(victim);
+    else
+        status << " victim=none";
+
+    return status.str();
+}
+
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -235,13 +305,11 @@ public:
         if (lang == LANG_ADDON)
             return;
 
-        if (!sender->IsGameMaster())
-            return;
-
         if (!playerbot::IsManagedRandomBot(receiver))
             return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(BuildManagedBotDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
 };
 
