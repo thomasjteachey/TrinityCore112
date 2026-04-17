@@ -801,6 +801,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // While stealthed, keep auto-attack disabled so we do not break
             // stealth early, but keep chase active so rogues continue
             // closing distance instead of idling in place during openers.
+            //
+            // AttackStop can clear chase intent in some movement states, so
+            // disable melee swing first and then (re)issue the movement order.
+            player->AttackStop();
+
             if (CanIssueFollowCommands(player))
             {
                 if (RequiresStrictHumanPathing(player))
@@ -808,8 +813,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 else
                     player->GetMotionMaster()->MoveChase(target);
             }
-
-            player->AttackStop();
         }
         else if (player->GetVictim() != target)
             player->Attack(target, false);
