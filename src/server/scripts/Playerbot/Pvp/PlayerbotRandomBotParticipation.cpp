@@ -522,6 +522,11 @@ bool IsRandomBotCandidate(Player const* player, std::unordered_set<uint32> const
     return IsManagedRandomBotImpl(player, botAccounts);
 }
 
+bool ShouldEmitRebalanceErrorDiagnostics(RandomBotPopulationState const& state)
+{
+    return state.rebalanceTicks <= 10 || (state.rebalanceTicks % 50) == 0;
+}
+
 struct OnlineRandomBotMetrics
 {
     uint32 total = 0;
@@ -537,10 +542,15 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
 
     BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
     std::unordered_set<uint32> const botAccounts = GetManagedBotAccountIdsSnapshot();
+    TC_LOG_ERROR("playerbots.population",
+        "DIAG startup-hang: Begin HasAnyRealHumanInterestInBattleground bgTypeId={} botAccounts={}.",
+        uint32(targetBgType), botAccounts.size());
 
     std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    uint32 scannedParticipants = 0;
     for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
     {
+        ++scannedParticipants;
         if (!participant)
             continue;
 
@@ -550,15 +560,28 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
             continue;
 
         if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
+        {
+            TC_LOG_ERROR("playerbots.population",
+                "DIAG startup-hang: Human battleground interest found from active participant guid={} bgTypeId={} scanned={}.",
+                participant->GetGUID().ToString(), uint32(targetBgType), scannedParticipants);
             return true;
+        }
 
         for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
         {
             if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
+            {
+                TC_LOG_ERROR("playerbots.population",
+                    "DIAG startup-hang: Human battleground interest found from queue participant guid={} bgTypeId={} scanned={}.",
+                    participant->GetGUID().ToString(), uint32(targetBgType), scannedParticipants);
                 return true;
+            }
         }
     }
 
+    TC_LOG_ERROR("playerbots.population",
+        "DIAG startup-hang: End HasAnyRealHumanInterestInBattleground bgTypeId={} scanned={} no-interest.",
+        uint32(targetBgType), scannedParticipants);
     return false;
 }
 
@@ -863,8 +886,22 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     state.rebalanceEpoch++;
     state.rebalanceTicks++;
     state.lastRebalanceUnixTime = static_cast<uint64>(GameTime::GetGameTime());
+    bool const emitDiag = ShouldEmitRebalanceErrorDiagnostics(state);
+    if (emitDiag)
+    {
+        TC_LOG_ERROR("playerbots.population",
+            "DIAG startup-hang: Rebalance start epoch={} tick={} runtimeEnabled={} configEnabled={} accountPool={}.",
+            state.rebalanceEpoch, state.rebalanceTicks, state.runtimeEnabled ? 1 : 0, state.config.enabled ? 1 : 0,
+            state.config.botAccountIds.size());
+    }
 
     OnlineRandomBotMetrics const online = CollectOnlineRandomBotMetrics(state.config.botAccountIds);
+    if (emitDiag)
+    {
+        TC_LOG_ERROR("playerbots.population",
+            "DIAG startup-hang: Rebalance after CollectOnlineRandomBotMetrics total={} alliance={} horde={}.",
+            online.total, online.alliance, online.horde);
+    }
 
     uint32 target = state.config.targetMin;
     if (state.config.targetMax > state.config.targetMin)
@@ -874,6 +911,8 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     }
 
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    if (emitDiag)
+        TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance before human-interest check bgTypeId={}.", uint32(kManagedBattleground));
     if (HasAnyRealHumanInterestInBattleground(kManagedBattleground))
     {
         if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
@@ -883,6 +922,8 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
                 target = fillTarget;
         }
     }
+    if (emitDiag)
+        TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance after human-interest check target={}.", target);
 
     TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} target={} range=[{}, {}] enabled={} runtime={}",
         state.rebalanceTicks, online.total, target, state.config.targetMin, state.config.targetMax,
