@@ -75,6 +75,7 @@ constexpr uint32 PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS = 30000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
 constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
+constexpr uint32 PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS = 3000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -82,7 +83,23 @@ constexpr uint32 SPELL_DESERTER = 26013;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
 uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
+uint32 g_LastScmSlotRefillAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
+bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
+uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
+bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate);
+
+bool IsScmManagedBotCandidate(Player const* player)
+{
+    if (!player)
+        return false;
+
+    if (playerbot::IsManagedRandomBot(player))
+        return true;
+
+    WorldSession const* session = player->GetSession();
+    return session && session->IsVirtualSession();
+}
 
 uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
 {
@@ -96,7 +113,7 @@ uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground cons
 
 bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battleground)
 {
-    if (!player || !battleground || !playerbot::IsManagedRandomBot(player))
+    if (!player || !battleground || !IsScmManagedBotCandidate(player))
         return false;
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
@@ -146,6 +163,78 @@ bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battlegroun
         player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID(), assignedTeam, botTeamCount,
         otherTeamCount, teamDiff);
     return true;
+}
+
+bool HasQueuedRealHumanForBattleground(BattlegroundTypeId targetBgType)
+{
+    if (targetBgType == BATTLEGROUND_TYPE_NONE)
+        return false;
+
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+    for (auto const& [queuedGuid, queueInfo] : bgQueue.m_QueuedPlayers)
+    {
+        (void)queueInfo;
+        Player* participant = ObjectAccessor::FindConnectedPlayer(queuedGuid);
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
+            continue;
+
+        return true;
+    }
+
+    return false;
+}
+
+bool ShouldManagedBotLeaveForQueuedHuman(Player* player, Battleground* battleground)
+{
+    if (!player || !battleground || !IsScmManagedBotCandidate(player))
+        return false;
+
+    if (battleground->GetTypeID() != BATTLEGROUND_SCM)
+        return false;
+
+    uint32 const maxPlayers = battleground->GetMaxPlayers();
+    if (!maxPlayers || battleground->GetPlayersSize() < maxPlayers)
+        return false;
+
+    return HasQueuedRealHumanForBattleground(battleground->GetTypeID());
+}
+
+bool TryRefillManagedScmSlots(Player* player, Battleground* battleground)
+{
+    if (!player || !battleground || battleground->GetTypeID() != BATTLEGROUND_SCM)
+        return false;
+
+    uint32 const maxPlayers = battleground->GetMaxPlayers();
+    uint32 const playersInInstance = battleground->GetPlayersSize();
+    if (!maxPlayers || playersInInstance >= maxPlayers)
+        return false;
+
+    // Only force-fill while real humans are participating in SCM.
+    if (!BattlegroundHasAnyRealHumanPlayers(player))
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (nowMs < g_LastScmSlotRefillAttemptMs + PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS)
+        return false;
+
+    g_LastScmSlotRefillAttemptMs = nowMs;
+
+    bool const rebalanceTriggered = playerbot::RandomBotParticipationManager::TriggerImmediateRebalance();
+    uint32 const queuedCount = QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0);
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP SCM refill attempt: guid={} instanceId={} players={} maxPlayers={} rebalanceTriggered={} queuedCount={}.",
+        player->GetGUID().ToString(), battleground->GetInstanceID(), playersInInstance, maxPlayers, rebalanceTriggered ? 1 : 0, queuedCount);
+
+    return rebalanceTriggered || queuedCount > 0;
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -964,6 +1053,11 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
             "Removed stale queueTypeId=" + std::to_string(uint32(existingQueueTypeId)));
     }
 
+    // SCM is intentionally prioritized over other BG queues for managed bots:
+    // free any existing non-arena queue slots first so SCM can always enqueue.
+    if (bgTypeId == BATTLEGROUND_SCM)
+        RemoveMatchingQueues(player, false, false, true);
+
     // Managed random bots can run on disconnected virtual sessions where RBAC
     // battleground permissions are not always populated like live client sessions.
     // Gate queue eligibility by battleground level + free queue slots instead.
@@ -1704,7 +1798,7 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
             if (!participant || !participant->IsInWorld())
                 continue;
 
-            if (!playerbot::IsManagedRandomBot(participant))
+            if (!IsScmManagedBotCandidate(participant))
                 continue;
 
             managedBotGuids.push_back(guid);
@@ -2449,6 +2543,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         else
             g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
+        TryRefillManagedScmSlots(player, battleground);
         return true;
     }
 
@@ -2515,11 +2610,26 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     else
         g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
+    TryRefillManagedScmSlots(player, battleground);
+
+    if (ShouldManagedBotLeaveForQueuedHuman(player, battleground))
+    {
+        player->LeaveBattleground();
+        FinalizeVirtualBotTeleportIfPending(player);
+        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP human-priority departure trigger: guid={} bgTypeId={} instanceId={} players={} maxPlayers={}.",
+            player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID(),
+            battleground->GetPlayersSize(), battleground->GetMaxPlayers());
+        return true;
+    }
+
     if (ShouldManagedBotLeaveForOverstack(player, battleground))
     {
         player->LeaveBattleground();
         FinalizeVirtualBotTeleportIfPending(player);
         player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        QueuePlayer(player, BATTLEGROUND_SCM, 0);
         return true;
     }
 
