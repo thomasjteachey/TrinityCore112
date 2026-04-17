@@ -321,12 +321,18 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!player || !target)
         return;
 
-    if (RequiresStrictHumanPathing(player))
+    if (RequiresStrictHumanPathing(player) && !player->HasStealthAura())
     {
         // Keep melee bots close to contact range instead of orbiting around a
         // larger follow radius (which can look like "running away" after
         // melee openers and while continuously reissuing approach directives).
-        IssueStrictHumanFollow(player, target, 1.5f);
+        if (!IssueStrictHumanFollow(player, target, 1.5f))
+        {
+            // Fallback when strict pathing cannot build a valid segment (for
+            // example during high-frequency stealth opener updates).
+            if (MotionMaster* motionMaster = player->GetMotionMaster())
+                motionMaster->MoveChase(target);
+        }
         return;
     }
 
@@ -841,10 +847,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
             if (CanIssueFollowCommands(player))
             {
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
-                else
-                    player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f), player->GetFollowAngle());
+                // In stealth opener states, favor direct chase over strict
+                // segmented follow to avoid stop/start stalls around ~6-10y.
+                if (MotionMaster* motionMaster = player->GetMotionMaster())
+                    motionMaster->MoveChase(target);
             }
         }
         else if (player->GetVictim() != target)
