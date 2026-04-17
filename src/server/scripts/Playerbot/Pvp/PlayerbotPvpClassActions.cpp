@@ -57,6 +57,7 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
+bool IsPrimaryMeleeClassForSpacing(uint8 classId);
 
 bool IsEffectivelyOutdoors(Player const* player)
 {
@@ -86,6 +87,21 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
     return player->IsOutdoors() && terrainStatus.outdoors;
+}
+
+bool IsPrimaryMeleeClassForSpacing(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+        case CLASS_PALADIN:
+        case CLASS_DRUID:
+        case CLASS_DEATH_KNIGHT:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool RequiresStrictHumanPathing(Player const* player)
