@@ -26,7 +26,6 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SpellInfo.h"
-#include "SpellHistory.h"
 #include "SpellMgr.h"
 
 #include <algorithm>
@@ -205,7 +204,7 @@ std::string BuildManagedBotDiagnosticLine(Player* bot)
            << " wand_ready=" << (wandReady ? "yes" : "no")
            << " lifetap_ready=" << (lifeTapReady ? "yes" : "no")
            << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
-           << " hard_cc=" << (bot->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_DISORIENTED)) ? "yes" : "no");
+           << " hard_cc=" << (bot->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_CONFUSED)) ? "yes" : "no");
 
     if (Unit* victim = bot->GetVictim())
         status << " victim=" << victim->GetName() << " dist=" << bot->GetDistance(victim);
@@ -213,13 +212,6 @@ std::string BuildManagedBotDiagnosticLine(Player* bot)
         status << " victim=none";
 
     return status.str();
-}
-
-bool WantsExtendedManagedBotDiag(std::string const& msg)
-{
-    std::string lowered = msg;
-    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return lowered.find("diag") != std::string::npos || lowered.find("debug") != std::string::npos || lowered.find("status") != std::string::npos;
 }
 
 class PlayerbotBootstrapWorldScript final : public WorldScript
@@ -315,8 +307,7 @@ public:
             return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
-        if (WantsExtendedManagedBotDiag(msg))
-            receiver->Whisper(BuildManagedBotDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(BuildManagedBotDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
 };
 

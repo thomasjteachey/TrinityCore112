@@ -300,10 +300,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         return;
 
     float const safeDistance = std::max(1.0f, desiredDistance);
+    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, safeDistance))
+        return;
+
+    // Fallback: if strict-human segment pathing cannot resolve a route this
+    // tick (common around dynamic battleground geometry), still issue regular
+    // chase/follow so the bot does not idle while out of range.
     if (RequiresStrictHumanPathing(player))
     {
-        IssueStrictHumanFollow(player, target, safeDistance);
-        return;
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict ranged follow fallback to generic movement: guid={} target={} desiredRange={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -321,19 +328,17 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!player || !target)
         return;
 
-    if (RequiresStrictHumanPathing(player) && !player->HasStealthAura())
+    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, 1.5f))
+        return;
+
+    if (RequiresStrictHumanPathing(player))
     {
         // Keep melee bots close to contact range instead of orbiting around a
-        // larger follow radius (which can look like "running away" after
-        // melee openers and while continuously reissuing approach directives).
-        if (!IssueStrictHumanFollow(player, target, 1.5f))
-        {
-            // Fallback when strict pathing cannot build a valid segment (for
-            // example during high-frequency stealth opener updates).
-            if (MotionMaster* motionMaster = player->GetMotionMaster())
-                motionMaster->MoveChase(target);
-        }
-        return;
+        // larger follow radius (which can look like "running away"). If strict
+        // pathing fails, fall back to regular chase so bots keep pressure.
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict melee follow fallback to generic chase: guid={} target={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString());
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
