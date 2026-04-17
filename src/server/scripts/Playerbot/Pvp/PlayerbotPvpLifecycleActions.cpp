@@ -87,6 +87,19 @@ uint32 g_LastScmSlotRefillAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
 bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
+bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate);
+
+bool IsScmManagedBotCandidate(Player const* player)
+{
+    if (!player)
+        return false;
+
+    if (playerbot::IsManagedRandomBot(player))
+        return true;
+
+    WorldSession const* session = player->GetSession();
+    return session && session->IsVirtualSession();
+}
 
 uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
 {
@@ -100,7 +113,7 @@ uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground cons
 
 bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battleground)
 {
-    if (!player || !battleground || !playerbot::IsManagedRandomBot(player))
+    if (!player || !battleground || !IsScmManagedBotCandidate(player))
         return false;
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
@@ -182,7 +195,7 @@ bool HasQueuedRealHumanForBattleground(BattlegroundTypeId targetBgType)
 
 bool ShouldManagedBotLeaveForQueuedHuman(Player* player, Battleground* battleground)
 {
-    if (!player || !battleground || !playerbot::IsManagedRandomBot(player))
+    if (!player || !battleground || !IsScmManagedBotCandidate(player))
         return false;
 
     if (battleground->GetTypeID() != BATTLEGROUND_SCM)
@@ -1040,6 +1053,11 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
             "Removed stale queueTypeId=" + std::to_string(uint32(existingQueueTypeId)));
     }
 
+    // SCM is intentionally prioritized over other BG queues for managed bots:
+    // free any existing non-arena queue slots first so SCM can always enqueue.
+    if (bgTypeId == BATTLEGROUND_SCM)
+        RemoveMatchingQueues(player, false, false, true);
+
     // Managed random bots can run on disconnected virtual sessions where RBAC
     // battleground permissions are not always populated like live client sessions.
     // Gate queue eligibility by battleground level + free queue slots instead.
@@ -1780,7 +1798,7 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
             if (!participant || !participant->IsInWorld())
                 continue;
 
-            if (!playerbot::IsManagedRandomBot(participant))
+            if (!IsScmManagedBotCandidate(participant))
                 continue;
 
             managedBotGuids.push_back(guid);
