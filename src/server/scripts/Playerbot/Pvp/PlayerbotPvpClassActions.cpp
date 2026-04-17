@@ -44,6 +44,15 @@
 
 namespace
 {
+bool IsLifeTapSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 1454; // Life Tap (rank 1)
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
@@ -943,7 +952,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
     }
 
-    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    // Auto-repeat ranged attacks (e.g., wand Shoot) and Life Tap are validated
+    // by the core cast pipeline and should not be blocked by this local
+    // pre-check. For low-mana caster fallbacks we intentionally allow entering
+    // the cast flow so the server can apply the spell-specific resource rules.
+    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell() || IsLifeTapSpell(spellInfo);
+    if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
             failureReason = "insufficient_power";
