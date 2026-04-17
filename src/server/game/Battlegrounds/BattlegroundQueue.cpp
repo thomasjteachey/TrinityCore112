@@ -280,6 +280,9 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
                 if (!bg)
                     continue;
 
+                if (bg->GetBracketId() != bracketId)
+                    continue;
+
                 uint32 const allianceFree = bg->GetFreeSlotsForTeam(ALLIANCE);
                 uint32 const hordeFree = bg->GetFreeSlotsForTeam(HORDE);
                 if (!allianceFree && !hordeFree)
@@ -947,6 +950,27 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
 
             if (!bg->HasFreeSlots())
                 bg->RemoveFromBGFreeSlotQueue();
+        }
+    }
+
+    // SCM should always saturate existing free-slot instances before creating another one.
+    // This prevents queue fragmentation where late joiners get split into a second SCM while
+    // the first instance still has open seats.
+    if (bgTypeId == BATTLEGROUND_SCM)
+    {
+        for (Battleground* bg : bgQueues)
+        {
+            if (!bg)
+                continue;
+
+            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id)
+                continue;
+
+            if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
+                continue;
+
+            if (bg->HasFreeSlots())
+                return;
         }
     }
 

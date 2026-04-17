@@ -625,62 +625,6 @@ void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
             playerbot::BattlegroundLifecycleActions::Execute(player, context);
 }
 
-struct HumanScmDemandWindow
-{
-    bool active = false;
-    uint8 minLevel = 1;
-    uint8 maxLevel = 80;
-};
-
-HumanScmDemandWindow DetectHumanScmDemandWindow(std::unordered_set<uint32> const& botAccounts)
-{
-    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
-    Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground);
-    if (!battlegroundTemplate)
-        return {};
-
-    BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(kManagedBattleground, 0);
-    HumanScmDemandWindow demand;
-
-    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
-    for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
-    {
-        if (!participant)
-            continue;
-
-        WorldSession const* session = participant->GetSession();
-        bool const isVirtualSession = session && session->IsVirtualSession();
-        if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
-            continue;
-
-        bool interested = participant->InBattleground() && participant->GetBattlegroundTypeId() == kManagedBattleground;
-        if (!interested)
-        {
-            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
-            {
-                if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
-                {
-                    interested = true;
-                    break;
-                }
-            }
-        }
-
-        if (!interested)
-            continue;
-
-        if (PvPDifficultyEntry const* bracket = GetBattlegroundBracketByLevel(battlegroundTemplate->GetMapId(), participant->GetLevel()))
-        {
-            demand.active = true;
-            demand.minLevel = bracket->MinLevel;
-            demand.maxLevel = bracket->MaxLevel;
-            return demand;
-        }
-    }
-
-    return demand;
-}
-
 OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(std::unordered_set<uint32> const& botAccounts)
 {
     OnlineRandomBotMetrics metrics;
@@ -1011,7 +955,6 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     if (emitDiag)
         TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance before human-interest check bgTypeId={}.", uint32(kManagedBattleground));
     bool const hasHumanInterest = HasAnyRealHumanInterestInBattleground(kManagedBattleground, state.config.botAccountIds);
-    HumanScmDemandWindow const scmDemandWindow = hasHumanInterest ? DetectHumanScmDemandWindow(state.config.botAccountIds) : HumanScmDemandWindow{};
     if (hasHumanInterest)
     {
         if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
@@ -1025,14 +968,6 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance after human-interest check target={}.", target);
 
     uint32 effectiveOnlineCount = online.total;
-    if (scmDemandWindow.active)
-    {
-        effectiveOnlineCount = 0;
-        for (ObjectGuid const& guid : online.guids)
-            if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
-                if (player->GetLevel() >= scmDemandWindow.minLevel && player->GetLevel() <= scmDemandWindow.maxLevel)
-                    ++effectiveOnlineCount;
-    }
 
     TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} target={} range=[{}, {}] enabled={} runtime={}",
         state.rebalanceTicks, online.total, target, state.config.targetMin, state.config.targetMax,
@@ -1051,14 +986,6 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         }
 
         std::vector<RandomBotPoolCandidate> pool = QueryOfflinePool(state.config);
-        if (scmDemandWindow.active)
-        {
-            pool.erase(std::remove_if(pool.begin(), pool.end(),
-                [&](RandomBotPoolCandidate const& candidate)
-                {
-                    return candidate.level < scmDemandWindow.minLevel || candidate.level > scmDemandWindow.maxLevel;
-                }), pool.end());
-        }
         std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
         if (pool.empty())
         {
@@ -1080,7 +1007,7 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         return !selection.empty();
     }
 
-    if (!scmDemandWindow.active && online.total > target)
+    if (!hasHumanInterest && online.total > target)
     {
         uint32 const excess = online.total - target;
         uint32 processed = 0;
