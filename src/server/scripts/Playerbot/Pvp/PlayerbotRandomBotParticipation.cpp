@@ -536,6 +536,7 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
         return false;
 
     BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
+    std::unordered_set<uint32> const botAccounts = GetManagedBotAccountIdsSnapshot();
 
     std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
     for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
@@ -545,7 +546,7 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
 
         WorldSession const* session = participant->GetSession();
         bool const isVirtualSession = session && session->IsVirtualSession();
-        if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
+        if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
             continue;
 
         if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
