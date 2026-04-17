@@ -23,6 +23,7 @@
 
 #include "AccountMgr.h"
 #include "Battleground.h"
+#include "BattlegroundMgr.h"
 #include "Configuration/Config.h"
 #include "CharacterCache.h"
 #include "Chat.h"
@@ -529,6 +530,37 @@ struct OnlineRandomBotMetrics
     std::vector<ObjectGuid> guids;
 };
 
+bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
+{
+    if (targetBgType == BATTLEGROUND_TYPE_NONE)
+        return false;
+
+    BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
+    {
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (isVirtualSession || IsManagedRandomBot(participant))
+            continue;
+
+        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
+            return true;
+
+        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        {
+            if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
+                return true;
+        }
+    }
+
+    return false;
+}
+
 OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(std::unordered_set<uint32> const& botAccounts)
 {
     OnlineRandomBotMetrics metrics;
@@ -838,6 +870,17 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     {
         uint64 const span = static_cast<uint64>(state.config.targetMax - state.config.targetMin + 1);
         target = state.config.targetMin + static_cast<uint32>(state.rebalanceEpoch % span);
+    }
+
+    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    if (HasAnyRealHumanInterestInBattleground(kManagedBattleground))
+    {
+        if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
+        {
+            uint32 const fillTarget = battlegroundTemplate->GetMaxPlayersPerTeam() * 2u;
+            if (fillTarget > target)
+                target = fillTarget;
+        }
     }
 
     TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} target={} range=[{}, {}] enabled={} runtime={}",
