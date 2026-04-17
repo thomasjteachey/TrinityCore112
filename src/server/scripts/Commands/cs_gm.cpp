@@ -37,6 +37,8 @@ EndScriptData */
 #include "World.h"
 #include "WorldSession.h"
 
+#include <array>
+
 using namespace Trinity::ChatCommands;
 
 class gm_commandscript : public CommandScript
@@ -265,17 +267,38 @@ public:
         return true;
     }
 
-    static bool HandleGMBgTeleportCommand(ChatHandler* handler, uint32 battlegroundTypeId, Optional<uint32> arenaTypeArg)
+    static bool HandleGMBgTeleportCommand(ChatHandler* handler, uint32 battlegroundTypeOrMapId, Optional<uint32> arenaTypeArg)
     {
         Player* player = handler->GetPlayer();
         if (!player)
             return false;
 
-        BattlegroundTypeId bgTypeId = BattlegroundTypeId(battlegroundTypeId);
+        BattlegroundTypeId bgTypeId = BattlegroundTypeId(battlegroundTypeOrMapId);
+        if (!sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
+        {
+            static constexpr std::array<BattlegroundTypeId, 14> BgTypes =
+            {
+                BATTLEGROUND_AV, BATTLEGROUND_WS, BATTLEGROUND_AB, BATTLEGROUND_NA,
+                BATTLEGROUND_BE, BATTLEGROUND_EY, BATTLEGROUND_RL, BATTLEGROUND_SA,
+                BATTLEGROUND_DS, BATTLEGROUND_RV, BATTLEGROUND_IC, BATTLEGROUND_SCM,
+                BATTLEGROUND_TV, BATTLEGROUND_TTP
+            };
+
+            for (BattlegroundTypeId typeId : BgTypes)
+            {
+                if (Battleground* templateBg = sBattlegroundMgr->GetBattlegroundTemplate(typeId))
+                    if (templateBg->GetMapId() == battlegroundTypeOrMapId)
+                    {
+                        bgTypeId = typeId;
+                        break;
+                    }
+            }
+        }
+
         Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
         if (!bgTemplate)
         {
-            handler->PSendSysMessage("Battleground template %u was not found.", battlegroundTypeId);
+            handler->PSendSysMessage("No battleground template found for value %u (expected battleground type id or map id).", battlegroundTypeOrMapId);
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -319,19 +342,20 @@ public:
         Battleground* battleground = sBattlegroundMgr->CreateNewBattleground(bgTypeId, bracketEntry, arenaType, false);
         if (!battleground)
         {
-            handler->PSendSysMessage("Could not create a battleground instance for type %u.", battlegroundTypeId);
+            handler->PSendSysMessage("Could not create a battleground instance for type %u.", bgTypeId);
             handler->SetSentErrorMessage(true);
             return false;
         }
 
-        battleground->StartBattleground();
+        // Keep this as a simple map test instance without starting a real match countdown.
+        sBattlegroundMgr->AddBattleground(battleground);
 
         player->SetBattlegroundId(battleground->GetInstanceID(), battleground->GetTypeID());
         player->SetBGTeam(player->GetTeam());
 
         sBattlegroundMgr->SendToBattleground(player, battleground->GetInstanceID(), battleground->GetTypeID());
 
-        handler->PSendSysMessage("Teleported to battleground type %u (instance %u, map %u).", battlegroundTypeId, battleground->GetInstanceID(), battleground->GetMapId());
+        handler->PSendSysMessage("Teleported to battleground map %u (bgType %u, instance %u).", battleground->GetMapId(), battleground->GetTypeID(), battleground->GetInstanceID());
         return true;
     }
 
