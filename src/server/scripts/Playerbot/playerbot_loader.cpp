@@ -322,10 +322,7 @@ public:
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
 
-        std::string lowerMsg = msg;
-        std::transform(lowerMsg.begin(), lowerMsg.end(), lowerMsg.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        if (lowerMsg.find("scm") != std::string::npos || lowerMsg.find("queue") != std::string::npos || lowerMsg.find("diag") != std::string::npos)
-            receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
 };
 

@@ -950,6 +950,34 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
 
             if (!bg->HasFreeSlots())
                 bg->RemoveFromBGFreeSlotQueue();
+            else if (bgTypeId == BATTLEGROUND_SCM)
+            {
+                // Keep SCM refill progressing even when no new external queue events
+                // occur. Without a follow-up update pulse, SCM can stall at an
+                // intermediate invite wave despite queued managed bots waiting.
+                sBattlegroundMgr->ScheduleQueueUpdate(0, arenaType, BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType), bgTypeId, bracket_id);
+            }
+        }
+    }
+
+    // SCM should always saturate existing free-slot instances before creating another one.
+    // This prevents queue fragmentation where late joiners get split into a second SCM while
+    // the first instance still has open seats.
+    if (bgTypeId == BATTLEGROUND_SCM)
+    {
+        for (Battleground* bg : bgQueues)
+        {
+            if (!bg)
+                continue;
+
+            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id)
+                continue;
+
+            if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
+                continue;
+
+            if (bg->HasFreeSlots())
+                return;
         }
     }
 
