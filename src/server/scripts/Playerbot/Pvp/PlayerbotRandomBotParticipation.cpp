@@ -599,11 +599,17 @@ void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
 
     g_LastForcedScmQueueSweepMs = nowMs;
 
-    playerbot::BattlegroundLifecycleContext context;
-    context.lifecycleEnabled = true;
-    context.queueOperation = playerbot::QueueOperationType::Join;
-    context.invitationResponse = playerbot::InvitationResponseType::Accept;
-    context.shouldHandleInProgressStatus = false;
+    playerbot::BattlegroundLifecycleContext joinContext;
+    joinContext.lifecycleEnabled = true;
+    joinContext.queueOperation = playerbot::QueueOperationType::Join;
+    joinContext.invitationResponse = playerbot::InvitationResponseType::None;
+    joinContext.shouldHandleInProgressStatus = false;
+
+    playerbot::BattlegroundLifecycleContext acceptContext;
+    acceptContext.lifecycleEnabled = true;
+    acceptContext.queueOperation = playerbot::QueueOperationType::None;
+    acceptContext.invitationResponse = playerbot::InvitationResponseType::Accept;
+    acceptContext.shouldHandleInProgressStatus = false;
 
     std::vector<ObjectGuid> managedGuids;
     {
@@ -622,7 +628,10 @@ void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
 
     for (ObjectGuid const& guid : managedGuids)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-            playerbot::BattlegroundLifecycleActions::Execute(player, context);
+        {
+            playerbot::BattlegroundLifecycleActions::Execute(player, joinContext);
+            playerbot::BattlegroundLifecycleActions::Execute(player, acceptContext);
+        }
 }
 
 OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(std::unordered_set<uint32> const& botAccounts)
