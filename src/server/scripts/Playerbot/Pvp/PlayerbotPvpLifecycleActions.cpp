@@ -1054,9 +1054,13 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     }
 
     // SCM is intentionally prioritized over other BG queues for managed bots:
-    // free any existing non-arena queue slots first so SCM can always enqueue.
+    // free any existing queue slots first so SCM can always enqueue.
     if (bgTypeId == BATTLEGROUND_SCM)
+    {
         RemoveMatchingQueues(player, false, false, true);
+        RemoveMatchingQueues(player, true, false, false);
+        player->SetArenaTeamIdInvited(0);
+    }
 
     // Managed random bots can run on disconnected virtual sessions where RBAC
     // battleground permissions are not always populated like live client sessions.
