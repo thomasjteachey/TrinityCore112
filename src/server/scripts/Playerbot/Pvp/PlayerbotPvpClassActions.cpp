@@ -801,6 +801,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // While stealthed, keep auto-attack disabled so we do not break
             // stealth early, but keep chase active so rogues continue
             // closing distance instead of idling in place during openers.
+            //
+            // AttackStop can clear chase intent in some movement states, so
+            // only call it when we are actively swinging a victim and then
+            // (re)issue chase immediately afterwards.
+            if (player->GetVictim())
+                player->AttackStop();
+
             if (CanIssueFollowCommands(player))
             {
                 if (RequiresStrictHumanPathing(player))
@@ -808,8 +815,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 else
                     player->GetMotionMaster()->MoveChase(target);
             }
-
-            player->AttackStop();
         }
         else if (player->GetVictim() != target)
             player->Attack(target, false);
@@ -836,12 +841,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     float const maxRange = spellInfo->GetMaxRange(false);
+    bool const shouldUseMeleeApproachForEnemySpell =
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
+        maxRange > 0.0f && maxRange <= 5.5f;
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
         if (CanIssueFollowCommands(player))
         {
-            float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-            IssueRangedApproachMovement(player, target, desiredRange);
+            if (shouldUseMeleeApproachForEnemySpell)
+                IssueMeleeApproachMovement(player, target);
+            else
+            {
+                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                IssueRangedApproachMovement(player, target, desiredRange);
+            }
         }
 
         failureReason = "no_los";
@@ -859,8 +873,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // close the gap instead of idling and repeating failed cast attempts.
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
-            float const desiredRange = std::max(1.0f, maxRange - 1.0f);
-            IssueRangedApproachMovement(player, target, desiredRange);
+            if (shouldUseMeleeApproachForEnemySpell)
+                IssueMeleeApproachMovement(player, target);
+            else
+            {
+                float const desiredRange = std::max(1.0f, maxRange - 1.0f);
+                IssueRangedApproachMovement(player, target, desiredRange);
+            }
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
         {
@@ -986,8 +1005,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
-                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                IssueRangedApproachMovement(player, target, desiredRange);
+                if (shouldUseMeleeApproachForEnemySpell)
+                    IssueMeleeApproachMovement(player, target);
+                else
+                {
+                    float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                    IssueRangedApproachMovement(player, target, desiredRange);
+                }
             }
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
@@ -999,8 +1023,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             }
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
-                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                IssueRangedApproachMovement(player, target, desiredRange);
+                if (shouldUseMeleeApproachForEnemySpell)
+                    IssueMeleeApproachMovement(player, target);
+                else
+                {
+                    float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                    IssueRangedApproachMovement(player, target, desiredRange);
+                }
             }
         }
 
