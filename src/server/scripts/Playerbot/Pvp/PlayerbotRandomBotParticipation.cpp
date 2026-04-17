@@ -114,6 +114,8 @@ std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
+uint32 g_LastForcedScmQueueSweepMs = 0;
+constexpr uint32 PLAYERBOT_FORCED_SCM_QUEUE_SWEEP_THROTTLE_MS = 3000;
 
 void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint32 throttleMs = 5000)
 {
@@ -583,6 +585,44 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, std:
         "DIAG startup-hang: End HasAnyRealHumanInterestInBattleground bgTypeId={} scanned={} no-interest.",
         uint32(targetBgType), scannedParticipants);
     return false;
+}
+
+void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
+{
+    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground, botAccounts))
+        return;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (nowMs < g_LastForcedScmQueueSweepMs + PLAYERBOT_FORCED_SCM_QUEUE_SWEEP_THROTTLE_MS)
+        return;
+
+    g_LastForcedScmQueueSweepMs = nowMs;
+
+    playerbot::BattlegroundLifecycleContext context;
+    context.lifecycleEnabled = true;
+    context.queueOperation = playerbot::QueueOperationType::Join;
+    context.invitationResponse = playerbot::InvitationResponseType::None;
+    context.shouldHandleInProgressStatus = false;
+
+    std::vector<ObjectGuid> managedGuids;
+    {
+        std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+        for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+        {
+            if (!player || !player->IsInWorld())
+                continue;
+
+            if (!IsManagedRandomBotImpl(player, botAccounts))
+                continue;
+
+            managedGuids.push_back(guid);
+        }
+    }
+
+    for (ObjectGuid const& guid : managedGuids)
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+            playerbot::BattlegroundLifecycleActions::Execute(player, context);
 }
 
 struct HumanScmDemandWindow
@@ -1176,6 +1216,7 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
     g_RandomPopulation.rebalanceTimerMs = 0;
     g_RandomPopulation.rebalanceRequested = false;
     RebalanceRandomPopulation(g_RandomPopulation);
+    ForceManagedScmQueueSweep(g_RandomPopulation.config.botAccountIds);
 }
 
 void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
