@@ -18,6 +18,7 @@
 #include "Log.h"
 #include "Chat.h"
 #include "GameTime.h"
+#include "Item.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "BattlegroundMgr.h"
@@ -26,8 +27,15 @@
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
+#include "SpellInfo.h"
+#include "SpellHistory.h"
+#include "SpellMgr.h"
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 using namespace Trinity::ChatCommands;
 
@@ -298,7 +306,7 @@ public:
         challenger->SendDuelCountdown(3000);
     }
 
-    void OnChat(Player* sender, uint32 type, uint32 lang, std::string& /*msg*/, Player* receiver) override
+    void OnChat(Player* sender, uint32 type, uint32 lang, std::string& msg, Player* receiver) override
     {
         if (!sender || !receiver)
             return;
@@ -307,9 +315,6 @@ public:
             return;
 
         if (lang == LANG_ADDON)
-            return;
-
-        if (!sender->IsGameMaster())
             return;
 
         if (!playerbot::IsManagedRandomBot(receiver))
