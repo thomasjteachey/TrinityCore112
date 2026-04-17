@@ -28,6 +28,8 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 
 using namespace Trinity::ChatCommands;
@@ -290,7 +292,7 @@ public:
         challenger->SendDuelCountdown(3000);
     }
 
-    void OnChat(Player* sender, uint32 type, uint32 lang, std::string& /*msg*/, Player* receiver) override
+    void OnChat(Player* sender, uint32 type, uint32 lang, std::string& msg, Player* receiver) override
     {
         if (!sender || !receiver)
             return;
