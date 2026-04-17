@@ -602,7 +602,7 @@ void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
     playerbot::BattlegroundLifecycleContext context;
     context.lifecycleEnabled = true;
     context.queueOperation = playerbot::QueueOperationType::Join;
-    context.invitationResponse = playerbot::InvitationResponseType::None;
+    context.invitationResponse = playerbot::InvitationResponseType::Accept;
     context.shouldHandleInProgressStatus = false;
 
     std::vector<ObjectGuid> managedGuids;
