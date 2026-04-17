@@ -269,6 +269,29 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
             addHorde = roll_chance_i(50);
 
         ginfo->Team = addHorde ? HORDE : ALLIANCE;
+
+        // SCM refill behavior: if there is already an active/free-slot SCM instance,
+        // drive new solo entries to the side that currently has more free slots.
+        if (BgTypeId == BATTLEGROUND_SCM)
+        {
+            BGFreeSlotQueueContainer& freeSlotQueue = sBattlegroundMgr->GetBGFreeSlotQueueStore(BgTypeId);
+            for (Battleground* bg : freeSlotQueue)
+            {
+                if (!bg)
+                    continue;
+
+                uint32 const allianceFree = bg->GetFreeSlotsForTeam(ALLIANCE);
+                uint32 const hordeFree = bg->GetFreeSlotsForTeam(HORDE);
+                if (!allianceFree && !hordeFree)
+                    continue;
+
+                if (allianceFree > hordeFree)
+                    ginfo->Team = ALLIANCE;
+                else if (hordeFree > allianceFree)
+                    ginfo->Team = HORDE;
+                break;
+            }
+        }
     }
 
     ginfo->Players.clear();
