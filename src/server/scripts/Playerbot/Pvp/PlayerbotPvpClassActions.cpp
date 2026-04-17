@@ -328,6 +328,20 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!player || !target)
         return;
 
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (player->HasStealthAura())
+    {
+        // Stealth openers (e.g., Cheap Shot) are very sensitive to smooth
+        // closing movement. Strict-human segmented MovePoint updates can look
+        // like start/stop inching while approaching. Keep a continuous follow
+        // command here so rogues fluidly close to opener distance.
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+        return;
+    }
+
     if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, 1.5f))
         return;
 
@@ -341,17 +355,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             player->GetGUID().ToString(), target->GetGUID().ToString());
     }
 
-    MotionMaster* motionMaster = player->GetMotionMaster();
-    if (!motionMaster)
-        return;
-
-    if (player->HasStealthAura())
-    {
-        // MoveChase can stall for non-swinging stealth openers. Use follow so
-        // rogues consistently close to opener distance while preserving stealth.
-        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
-    }
-    else if (player->IsValidAttackTarget(target))
+    if (player->IsValidAttackTarget(target))
         motionMaster->MoveChase(target);
     else
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
