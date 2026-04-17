@@ -165,6 +165,26 @@ bool IsClassSpellGateEnabled(playerbot::PvpCoreConfig const& config)
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpClassSpellsEnabled;
 }
 
+bool IsLowOrOutOfManaForFallback(Player const* player)
+{
+    if (!player || player->GetPowerType() != POWER_MANA)
+        return false;
+
+    return player->GetPowerPct(POWER_MANA) <= 10.0f || player->GetPower(POWER_MANA) < 250;
+}
+
+bool HasWandEquipped(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Item const* ranged = player->GetWeaponForAttack(RANGED_ATTACK, true);
+    if (!ranged || !ranged->GetTemplate())
+        return false;
+
+    return ranged->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_WAND;
+}
+
 bool IsFlagCarrierNear(Player const* player, ObjectGuid const& carrierGuid, float maxDistance)
 {
     if (!player || carrierGuid.IsEmpty())
@@ -2029,8 +2049,12 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled or open targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, controlledTarget && !HasAuraFromSpellChain(controlledTarget, 27605), 18.0f,
         { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy, controlledTarget ? controlledTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, hasHostileTarget && target && IsLowOrOutOfManaForFallback(player) && HasWandEquipped(player) && IsSpellReady(player, 5019), 18.5f,
+        { "priest shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 10917) && player->HealthBelowPct(85), 17.0f,
         { "priest flash heal", "fallback self-healing while under pressure", 10917, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, hasHostileTarget && target && !HasBreakableCrowdControl(target) && HasWandEquipped(player) && IsSpellReady(player, 5019), 8.0f,
+        { "priest shoot wand", "default offensive fallback when no better priest action is available", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
 }
@@ -2120,6 +2144,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
         { "paladin flash of light", "heal injured allies efficiently", 19943, flashHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, flashHealTarget ? flashHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, holyLightTarget, 47.0f,
         { "paladin holy light", "large heal for heavily injured ally", 635, holyLightTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, holyLightTarget ? holyLightTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, executeTarget && IsSpellReady(player, 20271), 46.0f,
+        { "paladin judgement", "default offensive pressure when healing is not required", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
         { "paladin concentration aura", "maintain concentration aura", 19746, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(25898) && IsSpellReady(player, 25898), 19.0f,
@@ -2174,10 +2200,14 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         { "warlock death coil", "peel melee or finish low enemy target", 17926, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->GetPower(POWER_MANA) < 400 && IsSpellReady(player, 11689), 32.0f,
         { "warlock life tap", "convert health to mana for sustained casting", 11689, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, IsLowOrOutOfManaForFallback(player) && HasWandEquipped(player) && IsSpellReady(player, 5019), 31.5f,
+        { "warlock shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HasAura(17941) && IsSpellReady(player, 25307), 20.0f,
         { "warlock shadow bolt", "consume nightfall proc for instant pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 25307), 19.0f,
         { "warlock shadow bolt", "default ranged pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(target) && HasWandEquipped(player) && IsSpellReady(player, 5019), 8.0f,
+        { "warlock shoot wand", "default offensive fallback when no better warlock action is available", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
@@ -2346,7 +2376,12 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
     case CLASS_HUNTER:
         return SelectHunterSpell(player, target, inMelee);
     case CLASS_MAGE:
-        return SelectMageSpell(player, target, inMelee);
+    {
+        SpellDecision mageDecision = SelectMageSpell(player, target, inMelee);
+        if (!mageDecision.spellId && HasHostileTarget(player, target) && IsLowOrOutOfManaForFallback(player) && HasWandEquipped(player) && IsSpellReady(player, 5019))
+            return { "mage shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+        return mageDecision;
+    }
     case CLASS_PRIEST:
         return SelectPriestSpell(player, target, allyTarget, profileSelection);
     case CLASS_PALADIN:
@@ -2865,7 +2900,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && IsPrimaryMeleeClassForSpacing(player->GetClass()))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
-        if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget))
+        bool const isGapCloser = context.spellId == 11578 || context.spellId == 20617;
+        if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !isGapCloser)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),
                 std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 85.0f);
@@ -2971,6 +3007,29 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, allyMovementTarget->GetGUID(),
                     std::max(1.0f, GetConfiguredHealRange() - 1.0f), "reach party member to heal", "party member to heal out of spell range", 68.0f);
+            }
+        }
+    }
+
+    if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        hasValidTarget && IsLowOrOutOfManaForFallback(player))
+    {
+        Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
+        if (fallbackTarget)
+        {
+            if (HasWandEquipped(player) && IsSpellReady(player, 5019) && !HasBreakableCrowdControl(fallbackTarget))
+            {
+                context.actionName = "fallback wand";
+                context.reason = "low mana fallback to wand pressure";
+                context.spellId = 5019;
+                context.targetMode = PvpClassSpellContext::TargetMode::Enemy;
+                context.targetGuid = fallbackTarget->GetGUID();
+                context.selfCast = false;
+            }
+            else
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
             }
         }
     }
