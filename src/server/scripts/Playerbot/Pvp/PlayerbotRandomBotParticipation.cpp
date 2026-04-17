@@ -545,7 +545,7 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
 
         WorldSession const* session = participant->GetSession();
         bool const isVirtualSession = session && session->IsVirtualSession();
-        if (isVirtualSession || IsManagedRandomBot(participant))
+        if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
             continue;
 
         if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
