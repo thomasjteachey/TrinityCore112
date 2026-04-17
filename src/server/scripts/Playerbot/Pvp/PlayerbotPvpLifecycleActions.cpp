@@ -215,7 +215,7 @@ bool TryRefillManagedScmSlots(Player* player, Battleground* battleground)
 
     g_LastScmSlotRefillAttemptMs = nowMs;
 
-    bool const rebalanceTriggered = RandomBotParticipationManager::TriggerImmediateRebalance();
+    bool const rebalanceTriggered = playerbot::RandomBotParticipationManager::TriggerImmediateRebalance();
     uint32 const queuedCount = QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0);
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP SCM refill attempt: guid={} instanceId={} players={} maxPlayers={} rebalanceTriggered={} queuedCount={}.",
