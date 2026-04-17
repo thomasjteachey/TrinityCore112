@@ -535,13 +535,12 @@ struct OnlineRandomBotMetrics
     std::vector<ObjectGuid> guids;
 };
 
-bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
+bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, std::unordered_set<uint32> const& botAccounts)
 {
     if (targetBgType == BATTLEGROUND_TYPE_NONE)
         return false;
 
     BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
-    std::unordered_set<uint32> const botAccounts = GetManagedBotAccountIdsSnapshot();
     TC_LOG_ERROR("playerbots.population",
         "DIAG startup-hang: Begin HasAnyRealHumanInterestInBattleground bgTypeId={} botAccounts={}.",
         uint32(targetBgType), botAccounts.size());
@@ -913,7 +912,7 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
     if (emitDiag)
         TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance before human-interest check bgTypeId={}.", uint32(kManagedBattleground));
-    if (HasAnyRealHumanInterestInBattleground(kManagedBattleground))
+    if (HasAnyRealHumanInterestInBattleground(kManagedBattleground, state.config.botAccountIds))
     {
         if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
         {
