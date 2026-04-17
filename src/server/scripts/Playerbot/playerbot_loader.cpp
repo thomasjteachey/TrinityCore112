@@ -21,6 +21,8 @@
 #include "Item.h"
 #include "MotionMaster.h"
 #include "Player.h"
+#include "BattlegroundMgr.h"
+#include "BattlegroundQueue.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
@@ -32,6 +34,8 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 using namespace Trinity::ChatCommands;
 
@@ -152,70 +156,76 @@ std::string BuildManagedBotStatusLine(Player* bot)
     return status.str();
 }
 
-bool IsManagedBotSpellKnownAndOffCooldown(Player const* bot, uint32 spellId)
+std::string BuildManagedBotScmQueueDiagnosticLine(Player* bot)
 {
-    if (!bot || !spellId)
-        return false;
+    if (!bot)
+        return "PB SCM diag unavailable.";
 
-    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
-    if (!baseSpellInfo)
-        return false;
+    constexpr BattlegroundTypeId kScmTypeId = BATTLEGROUND_SCM;
+    constexpr uint32 kDeserterSpellId = 26013;
+    BattlegroundQueueTypeId const scmQueueTypeId = BattlegroundMgr::BGQueueTypeId(kScmTypeId, 0);
+    bool const queuedForScm = scmQueueTypeId != BATTLEGROUND_QUEUE_NONE &&
+        bot->GetBattlegroundQueueIndex(scmQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES;
+    bool const invitedForScm = scmQueueTypeId != BATTLEGROUND_QUEUE_NONE && bot->IsInvitedForBattlegroundQueueType(scmQueueTypeId);
+    bool const hasScmAccessByLevel = bot->GetBGAccessByLevel(kScmTypeId);
+    bool const hasAnyFreeQueueSlot = bot->HasFreeBattlegroundQueueId();
 
-    uint32 resolvedSpellId = 0;
-    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+    uint8 usedQueueSlots = 0;
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        if (bot->GetBattlegroundQueueTypeId(i) != BATTLEGROUND_QUEUE_NONE)
+            ++usedQueueSlots;
+
+    bool hasQueueRecord = false;
+    GroupQueueInfo ginfo{};
+    if (queuedForScm)
     {
-        if (bot->HasSpell(chainSpellId))
-            resolvedSpellId = chainSpellId;
+        BattlegroundQueue& queue = sBattlegroundMgr->GetBattlegroundQueue(scmQueueTypeId);
+        hasQueueRecord = queue.GetPlayerGroupInfoData(bot->GetGUID(), &ginfo);
     }
 
-    if (!resolvedSpellId)
-        return false;
-
-    return !bot->GetSpellHistory()->HasCooldown(resolvedSpellId);
-}
-
-bool ManagedBotHasWandEquipped(Player const* bot)
-{
-    if (!bot)
-        return false;
-
-    Item const* ranged = bot->GetWeaponForAttack(RANGED_ATTACK, true);
-    if (!ranged || !ranged->GetTemplate())
-        return false;
-
-    return ranged->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_WAND;
-}
-
-std::string BuildManagedBotDiagnosticLine(Player* bot)
-{
-    if (!bot)
-        return "PB diag unavailable.";
-
-    float const manaPct = bot->GetPowerType() == POWER_MANA ? bot->GetPowerPct(POWER_MANA) : 0.0f;
-    uint32 const manaNow = bot->GetPowerType() == POWER_MANA ? bot->GetPower(POWER_MANA) : 0;
-    uint32 const manaMax = bot->GetPowerType() == POWER_MANA ? bot->GetMaxPower(POWER_MANA) : 0;
-    bool const wandReady = IsManagedBotSpellKnownAndOffCooldown(bot, 5019);
-    bool const lifeTapReady = IsManagedBotSpellKnownAndOffCooldown(bot, 11689);
-    bool const hardCrowdControlled =
-        bot->HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING | UNIT_STATE_ROOT) ||
-        bot->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM));
-
-    std::ostringstream status;
-    status << "PB diag: "
-           << "hp=" << bot->GetHealthPct() << "%"
-           << " mana=" << manaNow << "/" << manaMax << " (" << manaPct << "%)"
-           << " wand_equipped=" << (ManagedBotHasWandEquipped(bot) ? "yes" : "no")
-           << " wand_ready=" << (wandReady ? "yes" : "no")
-           << " lifetap_ready=" << (lifeTapReady ? "yes" : "no")
-           << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
-           << " hard_cc=" << (hardCrowdControlled ? "yes" : "no");
-
-    if (Unit* victim = bot->GetVictim())
-        status << " victim=" << victim->GetName() << " dist=" << bot->GetDistance(victim);
+    std::string reason = "unknown";
+    if (bot->InBattleground())
+        reason = "already-in-battleground";
+    else if (!bot->IsAlive())
+        reason = "dead-outside-bg";
+    else if (!hasScmAccessByLevel)
+        reason = "no-scm-level-access";
+    else if (bot->HasAura(kDeserterSpellId))
+        reason = "deserter-aura";
+    else if (queuedForScm && invitedForScm)
+        reason = "invite-pending-accept";
+    else if (queuedForScm && !hasQueueRecord)
+        reason = "stale-local-scm-queue-slot";
+    else if (queuedForScm)
+        reason = "queued-waiting";
+    else if (!hasAnyFreeQueueSlot)
+        reason = "no-free-queue-slot";
+    else if (!bot->IsInWorld())
+        reason = "not-in-world";
+    else if (bot->IsBeingTeleported())
+        reason = "teleporting";
     else
-        status << " victim=none";
+        reason = "eligible-not-queued";
 
-    return status.str();
+    std::ostringstream diag;
+    diag << "PB SCM diag: "
+         << "bot=" << bot->GetName()
+         << " in_world=" << (bot->IsInWorld() ? "yes" : "no")
+         << " in_bg=" << (bot->InBattleground() ? "yes" : "no")
+         << " bg_type=" << uint32(bot->GetBattlegroundTypeId())
+         << " bg_status=" << (bot->GetBattleground() ? uint32(bot->GetBattleground()->GetStatus()) : 255)
+         << " scm_access=" << (hasScmAccessByLevel ? "yes" : "no")
+         << " alive=" << (bot->IsAlive() ? "yes" : "no")
+         << " deserter=" << (bot->HasAura(kDeserterSpellId) ? "yes" : "no")
+         << " queued_scm=" << (queuedForScm ? "yes" : "no")
+         << " invited_scm=" << (invitedForScm ? "yes" : "no")
+         << " queue_record=" << (hasQueueRecord ? "yes" : "no")
+         << " queue_slots_used=" << uint32(usedQueueSlots) << "/" << uint32(PLAYER_MAX_BATTLEGROUND_QUEUES)
+         << " free_queue_slot=" << (hasAnyFreeQueueSlot ? "yes" : "no")
+         << " teleporting=" << (bot->IsBeingTeleported() ? "yes" : "no")
+         << " reason=" << reason;
+
+    return diag.str();
 }
 
 class PlayerbotBootstrapWorldScript final : public WorldScript
@@ -311,7 +321,11 @@ public:
             return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
-        receiver->Whisper(BuildManagedBotDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
+
+        std::string lowerMsg = msg;
+        std::transform(lowerMsg.begin(), lowerMsg.end(), lowerMsg.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (lowerMsg.find("scm") != std::string::npos || lowerMsg.find("queue") != std::string::npos || lowerMsg.find("diag") != std::string::npos)
+            receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
 };
 
