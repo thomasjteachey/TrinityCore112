@@ -309,7 +309,13 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!motionMaster)
         return;
 
-    if (player->IsValidAttackTarget(target))
+    if (player->HasStealthAura())
+    {
+        // MoveChase can stall for non-swinging stealth openers. Use follow so
+        // rogues consistently close to opener distance while preserving stealth.
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+    }
+    else if (player->IsValidAttackTarget(target))
         motionMaster->MoveChase(target);
     else
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
@@ -811,7 +817,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 if (RequiresStrictHumanPathing(player))
                     IssueStrictHumanFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
                 else
-                    player->GetMotionMaster()->MoveChase(target);
+                    player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f), player->GetFollowAngle());
             }
         }
         else if (player->GetVictim() != target)
