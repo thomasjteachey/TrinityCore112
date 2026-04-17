@@ -309,7 +309,13 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!motionMaster)
         return;
 
-    if (player->IsValidAttackTarget(target))
+    if (player->HasStealthAura())
+    {
+        // MoveChase can stall for non-swinging stealth openers. Use follow so
+        // rogues consistently close to opener distance while preserving stealth.
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+    }
+    else if (player->IsValidAttackTarget(target))
         motionMaster->MoveChase(target);
     else
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
@@ -813,7 +819,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 if (RequiresStrictHumanPathing(player))
                     IssueStrictHumanFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
                 else
-                    player->GetMotionMaster()->MoveChase(target);
+                    player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f), player->GetFollowAngle());
             }
         }
         else if (player->GetVictim() != target)
@@ -945,7 +951,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
     }
 
-    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    // Auto-repeat ranged attacks (e.g., wand Shoot) are validated by the core
+    // cast pipeline and should not be blocked by this pre-check. For low-mana
+    // caster fallbacks we intentionally allow entering the cast flow so the
+    // server can start/maintain auto-shoot behavior.
+    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell();
+    if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
             failureReason = "insufficient_power";
