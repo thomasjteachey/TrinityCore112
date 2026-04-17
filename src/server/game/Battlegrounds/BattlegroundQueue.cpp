@@ -668,12 +668,15 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 aliIndex = 0;
     for (; aliIndex < aliCount; aliIndex++)
     {
-        int32 hordeFree = bg->GetMaxPlayersPerTeam() - numHordeInGame;
-        int32 aliFree = bg->GetMaxPlayersPerTeam() - numAliInGame;
+        int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
+        int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
+        int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
+        int32 aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
 
         uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
         uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        bool addToHorde = (numHordeInGame < numAliInGame) || (numHordeInGame == numAliInGame && roll_chance_i(50));
+        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
 
         if (addToHorde)
         {
@@ -701,12 +704,15 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 hordeIndex = 0;
     for (; hordeIndex < hordeCount; hordeIndex++)
     {
-        int32 hordeFree = bg->GetMaxPlayersPerTeam() - numHordeInGame;
-        int32 aliFree = bg->GetMaxPlayersPerTeam() - numAliInGame;
+        int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
+        int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
+        int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
+        int32 aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
 
         uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
         uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        bool addToHorde = (numHordeInGame < numAliInGame) || (numHordeInGame == numAliInGame && roll_chance_i(50));
+        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
 
         if (addToHorde)
         {
