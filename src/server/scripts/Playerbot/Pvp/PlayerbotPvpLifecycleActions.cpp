@@ -148,6 +148,49 @@ bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battlegroun
     return true;
 }
 
+bool HasQueuedRealHumanForBattleground(BattlegroundTypeId targetBgType)
+{
+    if (targetBgType == BATTLEGROUND_TYPE_NONE)
+        return false;
+
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+    for (auto const& [queuedGuid, queueInfo] : bgQueue.m_QueuedPlayers)
+    {
+        (void)queueInfo;
+        Player* participant = ObjectAccessor::FindConnectedPlayer(queuedGuid);
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
+            continue;
+
+        return true;
+    }
+
+    return false;
+}
+
+bool ShouldManagedBotLeaveForQueuedHuman(Player* player, Battleground* battleground)
+{
+    if (!player || !battleground || !playerbot::IsManagedRandomBot(player))
+        return false;
+
+    if (battleground->GetTypeID() != BATTLEGROUND_SCM)
+        return false;
+
+    uint32 const maxPlayers = battleground->GetMaxPlayers();
+    if (!maxPlayers || battleground->GetPlayersSize() < maxPlayers)
+        return false;
+
+    return HasQueuedRealHumanForBattleground(battleground->GetTypeID());
+}
+
 void ForcePlayerbotDismount(Player* player)
 {
     if (!player)
@@ -2515,11 +2558,24 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     else
         g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
+    if (ShouldManagedBotLeaveForQueuedHuman(player, battleground))
+    {
+        player->LeaveBattleground();
+        FinalizeVirtualBotTeleportIfPending(player);
+        player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP human-priority departure trigger: guid={} bgTypeId={} instanceId={} players={} maxPlayers={}.",
+            player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID(),
+            battleground->GetPlayersSize(), battleground->GetMaxPlayers());
+        return true;
+    }
+
     if (ShouldManagedBotLeaveForOverstack(player, battleground))
     {
         player->LeaveBattleground();
         FinalizeVirtualBotTeleportIfPending(player);
         player->RemoveAurasDueToSpell(SPELL_DESERTER);
+        QueuePlayer(player, BATTLEGROUND_SCM, 0);
         return true;
     }
 
