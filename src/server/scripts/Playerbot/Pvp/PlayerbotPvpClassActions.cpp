@@ -943,7 +943,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
     }
 
-    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    // Auto-repeat ranged attacks (e.g., wand Shoot) are validated by the core
+    // cast pipeline and should not be blocked by this pre-check. For low-mana
+    // caster fallbacks we intentionally allow entering the cast flow so the
+    // server can start/maintain auto-shoot behavior.
+    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell();
+    if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
             failureReason = "insufficient_power";
