@@ -585,6 +585,15 @@ void BattlegroundMgr::LoadBattlegroundTemplates()
         bgTemplate.ScriptId          = sObjectMgr->GetScriptId(fields[11].GetString());
         bgTemplate.BattlemasterEntry = bl;
 
+        // SCM is designed as a 6v6 battleground for this codebase.
+        // Keep startup accessibility at 2v2, but always expose 6v6 capacity
+        // even if DB template values are lower on fresh/test datasets.
+        if (bgTemplate.Id == BATTLEGROUND_SCM)
+        {
+            bgTemplate.MinPlayersPerTeam = 2;
+            bgTemplate.MaxPlayersPerTeam = 6;
+        }
+
         if (bgTemplate.MaxPlayersPerTeam == 0 || bgTemplate.MinPlayersPerTeam > bgTemplate.MaxPlayersPerTeam)
         {
             TC_LOG_ERROR("sql.sql", "Table `battleground_template` for id {} contains bad values for MinPlayersPerTeam ({}) and MaxPlayersPerTeam({}).",
