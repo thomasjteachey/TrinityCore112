@@ -1196,27 +1196,41 @@ void RandomBotParticipationManager::OnStartupBootstrap()
 
 void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
 {
-    std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+    std::unordered_set<uint32> botAccountsForSweep;
+    bool shouldRunScmSweep = false;
 
-    if (!g_RandomPopulation.config.enabled || !g_RandomPopulation.runtimeEnabled)
-        return;
-
-    if (g_RandomPopulation.config.botAccountIds.empty())
     {
-        g_RandomPopulation.skippedNoCandidatePool++;
-        return;
+        std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
+
+        if (!g_RandomPopulation.config.enabled || !g_RandomPopulation.runtimeEnabled)
+            return;
+
+        if (g_RandomPopulation.config.botAccountIds.empty())
+        {
+            g_RandomPopulation.skippedNoCandidatePool++;
+            return;
+        }
+
+        if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs)
+            g_RandomPopulation.rebalanceTimerMs += diffMs;
+
+        if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs && !g_RandomPopulation.rebalanceRequested)
+            return;
+
+        g_RandomPopulation.rebalanceTimerMs = 0;
+        g_RandomPopulation.rebalanceRequested = false;
+        RebalanceRandomPopulation(g_RandomPopulation);
+        botAccountsForSweep = g_RandomPopulation.config.botAccountIds;
+        shouldRunScmSweep = true;
     }
 
-    if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs)
-        g_RandomPopulation.rebalanceTimerMs += diffMs;
-
-    if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs && !g_RandomPopulation.rebalanceRequested)
+    // Avoid running the SCM sweep while holding g_RandomPopulationLock:
+    // lifecycle queue operations can call TriggerImmediateRebalance(), which
+    // re-enters this mutex and can deadlock the world update thread.
+    if (!shouldRunScmSweep)
         return;
 
-    g_RandomPopulation.rebalanceTimerMs = 0;
-    g_RandomPopulation.rebalanceRequested = false;
-    RebalanceRandomPopulation(g_RandomPopulation);
-    ForceManagedScmQueueSweep(g_RandomPopulation.config.botAccountIds);
+    ForceManagedScmQueueSweep(botAccountsForSweep);
 }
 
 void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
