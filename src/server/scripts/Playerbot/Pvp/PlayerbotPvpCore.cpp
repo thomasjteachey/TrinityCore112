@@ -2212,7 +2212,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
 
-SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& profileSelection)
+SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, ClassicProfileSelection const& /*profileSelection*/)
 {
     SpellDecision decision;
     if (!player)
@@ -2257,6 +2257,9 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior berserker stance", "switch to berserker stance before intercept gap close", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(activeTarget) && player->IsInCombat() && IsSpellReady(player, 20617), 51.0f,
         { "warrior intercept", "close gap to target while in combat", 20617, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && !inBerserkerStance &&
+            IsSpellReady(player, 1680) && IsSpellReady(player, 2458), 50.4f,
+        { "warrior berserker stance", "switch to berserker stance to enable whirlwind in melee", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662), 50.0f,
         { "warrior execute", "finisher at low enemy health", 20662, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 25289) && IsSpellReady(player, 25289), 40.0f,
@@ -2265,8 +2268,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
             (!HasAuraFromSpellChain(activeTarget, 7373) || (activeTarget->GetAura(7373) && activeTarget->GetAura(7373)->GetDuration() < 2000)) &&
             IsSpellReady(player, 7373), 39.0f,
         { "warrior hamstring", "maintain stickiness snare", 7373, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && profileSelection.profile == ClassicClassProfile::PrimaryClassic &&
-            !HasAuraFromSpellChain(activeTarget, 21553) && IsSpellReady(player, 21553), 38.0f,
+    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && !HasAuraFromSpellChain(activeTarget, 21553) &&
+            IsSpellReady(player, 21553), 38.0f,
         { "warrior mortal strike", "arms-like burst pressure", 21553, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && activeTarget->GetClass() == CLASS_ROGUE &&
             !HasAuraFromSpellChain(activeTarget, 11574) && IsSpellReady(player, 11574), 37.0f,
