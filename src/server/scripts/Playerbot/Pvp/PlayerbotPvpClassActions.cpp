@@ -309,7 +309,13 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!motionMaster)
         return;
 
-    if (player->IsValidAttackTarget(target))
+    if (player->HasStealthAura())
+    {
+        // MoveChase can stall for non-swinging stealth openers. Use follow so
+        // rogues consistently close to opener distance while preserving stealth.
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+    }
+    else if (player->IsValidAttackTarget(target))
         motionMaster->MoveChase(target);
     else
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
@@ -801,15 +807,18 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // While stealthed, keep auto-attack disabled so we do not break
             // stealth early, but keep chase active so rogues continue
             // closing distance instead of idling in place during openers.
+            //
+            // AttackStop can clear chase intent in some movement states, so
+            // disable melee swing first and then (re)issue the movement order.
+            player->AttackStop();
+
             if (CanIssueFollowCommands(player))
             {
                 if (RequiresStrictHumanPathing(player))
                     IssueStrictHumanFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
                 else
-                    player->GetMotionMaster()->MoveChase(target);
+                    player->GetMotionMaster()->MoveFollow(target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f), player->GetFollowAngle());
             }
-
-            player->AttackStop();
         }
         else if (player->GetVictim() != target)
             player->Attack(target, false);
