@@ -28,6 +28,7 @@
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
 #include "Log.h"
@@ -522,6 +523,11 @@ bool IsRandomBotCandidate(Player const* player, std::unordered_set<uint32> const
     return IsManagedRandomBotImpl(player, botAccounts);
 }
 
+bool ShouldEmitRebalanceErrorDiagnostics(RandomBotPopulationState const& state)
+{
+    return state.rebalanceTicks <= 10 || (state.rebalanceTicks % 50) == 0;
+}
+
 struct OnlineRandomBotMetrics
 {
     uint32 total = 0;
@@ -530,12 +536,71 @@ struct OnlineRandomBotMetrics
     std::vector<ObjectGuid> guids;
 };
 
-bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
+bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, std::unordered_set<uint32> const& botAccounts)
 {
     if (targetBgType == BATTLEGROUND_TYPE_NONE)
         return false;
 
     BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(targetBgType, 0);
+    TC_LOG_ERROR("playerbots.population",
+        "DIAG startup-hang: Begin HasAnyRealHumanInterestInBattleground bgTypeId={} botAccounts={}.",
+        uint32(targetBgType), botAccounts.size());
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    uint32 scannedParticipants = 0;
+    for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
+    {
+        ++scannedParticipants;
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
+            continue;
+
+        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
+        {
+            TC_LOG_ERROR("playerbots.population",
+                "DIAG startup-hang: Human battleground interest found from active participant guid={} bgTypeId={} scanned={}.",
+                participant->GetGUID().ToString(), uint32(targetBgType), scannedParticipants);
+            return true;
+        }
+
+        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        {
+            if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
+            {
+                TC_LOG_ERROR("playerbots.population",
+                    "DIAG startup-hang: Human battleground interest found from queue participant guid={} bgTypeId={} scanned={}.",
+                    participant->GetGUID().ToString(), uint32(targetBgType), scannedParticipants);
+                return true;
+            }
+        }
+    }
+
+    TC_LOG_ERROR("playerbots.population",
+        "DIAG startup-hang: End HasAnyRealHumanInterestInBattleground bgTypeId={} scanned={} no-interest.",
+        uint32(targetBgType), scannedParticipants);
+    return false;
+}
+
+struct HumanScmDemandWindow
+{
+    bool active = false;
+    uint8 minLevel = 1;
+    uint8 maxLevel = 80;
+};
+
+HumanScmDemandWindow DetectHumanScmDemandWindow(std::unordered_set<uint32> const& botAccounts)
+{
+    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground);
+    if (!battlegroundTemplate)
+        return {};
+
+    BattlegroundQueueTypeId const targetQueueType = BattlegroundMgr::BGQueueTypeId(kManagedBattleground, 0);
+    HumanScmDemandWindow demand;
 
     std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
     for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
@@ -545,20 +610,35 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
 
         WorldSession const* session = participant->GetSession();
         bool const isVirtualSession = session && session->IsVirtualSession();
-        if (isVirtualSession || IsManagedRandomBot(participant))
+        if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
             continue;
 
-        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
-            return true;
-
-        for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        bool interested = participant->InBattleground() && participant->GetBattlegroundTypeId() == kManagedBattleground;
+        if (!interested)
         {
-            if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
-                return true;
+            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+            {
+                if (participant->GetBattlegroundQueueTypeId(i) == targetQueueType)
+                {
+                    interested = true;
+                    break;
+                }
+            }
+        }
+
+        if (!interested)
+            continue;
+
+        if (PvPDifficultyEntry const* bracket = GetBattlegroundBracketByLevel(battlegroundTemplate->GetMapId(), participant->GetLevel()))
+        {
+            demand.active = true;
+            demand.minLevel = bracket->MinLevel;
+            demand.maxLevel = bracket->MaxLevel;
+            return demand;
         }
     }
 
-    return false;
+    return demand;
 }
 
 OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(std::unordered_set<uint32> const& botAccounts)
@@ -859,11 +939,27 @@ bool TryLogoutRandomBot(ObjectGuid const& guid)
 
 bool RebalanceRandomPopulation(RandomBotPopulationState& state)
 {
+    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+
     state.rebalanceEpoch++;
     state.rebalanceTicks++;
     state.lastRebalanceUnixTime = static_cast<uint64>(GameTime::GetGameTime());
+    bool const emitDiag = ShouldEmitRebalanceErrorDiagnostics(state);
+    if (emitDiag)
+    {
+        TC_LOG_ERROR("playerbots.population",
+            "DIAG startup-hang: Rebalance start epoch={} tick={} runtimeEnabled={} configEnabled={} accountPool={}.",
+            state.rebalanceEpoch, state.rebalanceTicks, state.runtimeEnabled ? 1 : 0, state.config.enabled ? 1 : 0,
+            state.config.botAccountIds.size());
+    }
 
     OnlineRandomBotMetrics const online = CollectOnlineRandomBotMetrics(state.config.botAccountIds);
+    if (emitDiag)
+    {
+        TC_LOG_ERROR("playerbots.population",
+            "DIAG startup-hang: Rebalance after CollectOnlineRandomBotMetrics total={} alliance={} horde={}.",
+            online.total, online.alliance, online.horde);
+    }
 
     uint32 target = state.config.targetMin;
     if (state.config.targetMax > state.config.targetMin)
@@ -872,8 +968,11 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         target = state.config.targetMin + static_cast<uint32>(state.rebalanceEpoch % span);
     }
 
-    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
-    if (HasAnyRealHumanInterestInBattleground(kManagedBattleground))
+    if (emitDiag)
+        TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance before human-interest check bgTypeId={}.", uint32(kManagedBattleground));
+    bool const hasHumanInterest = HasAnyRealHumanInterestInBattleground(kManagedBattleground, state.config.botAccountIds);
+    HumanScmDemandWindow const scmDemandWindow = hasHumanInterest ? DetectHumanScmDemandWindow(state.config.botAccountIds) : HumanScmDemandWindow{};
+    if (hasHumanInterest)
     {
         if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(kManagedBattleground))
         {
@@ -882,14 +981,26 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
                 target = fillTarget;
         }
     }
+    if (emitDiag)
+        TC_LOG_ERROR("playerbots.population", "DIAG startup-hang: Rebalance after human-interest check target={}.", target);
+
+    uint32 effectiveOnlineCount = online.total;
+    if (scmDemandWindow.active)
+    {
+        effectiveOnlineCount = 0;
+        for (ObjectGuid const& guid : online.guids)
+            if (Player const* player = ObjectAccessor::FindConnectedPlayer(guid))
+                if (player->GetLevel() >= scmDemandWindow.minLevel && player->GetLevel() <= scmDemandWindow.maxLevel)
+                    ++effectiveOnlineCount;
+    }
 
     TC_LOG_INFO("playerbots.population", "Random bot population rebalance tick={} online={} target={} range=[{}, {}] enabled={} runtime={}",
         state.rebalanceTicks, online.total, target, state.config.targetMin, state.config.targetMax,
         state.config.enabled ? 1 : 0, state.runtimeEnabled ? 1 : 0);
 
-    if (online.total < target)
+    if (effectiveOnlineCount < target)
     {
-        uint32 const needed = target - online.total;
+        uint32 const needed = target - effectiveOnlineCount;
         if (!SupportsLoginOrchestration())
         {
             state.skippedIntegrationGap += needed;
@@ -899,7 +1010,15 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
             return false;
         }
 
-        std::vector<RandomBotPoolCandidate> const pool = QueryOfflinePool(state.config);
+        std::vector<RandomBotPoolCandidate> pool = QueryOfflinePool(state.config);
+        if (scmDemandWindow.active)
+        {
+            pool.erase(std::remove_if(pool.begin(), pool.end(),
+                [&](RandomBotPoolCandidate const& candidate)
+                {
+                    return candidate.level < scmDemandWindow.minLevel || candidate.level > scmDemandWindow.maxLevel;
+                }), pool.end());
+        }
         std::unordered_map<uint32, uint32> const onlineByAccount = QueryOnlineBotCountsByAccount(state.config);
         if (pool.empty())
         {
@@ -921,7 +1040,7 @@ bool RebalanceRandomPopulation(RandomBotPopulationState& state)
         return !selection.empty();
     }
 
-    if (online.total > target)
+    if (!scmDemandWindow.active && online.total > target)
     {
         uint32 const excess = online.total - target;
         uint32 processed = 0;

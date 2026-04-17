@@ -3029,6 +3029,29 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
+    if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        hasValidTarget && IsLowOrOutOfManaForFallback(player))
+    {
+        Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
+        if (fallbackTarget)
+        {
+            if (HasWandEquipped(player) && IsSpellReady(player, 5019) && !HasBreakableCrowdControl(fallbackTarget))
+            {
+                context.actionName = "fallback wand";
+                context.reason = "low mana fallback to wand pressure";
+                context.spellId = 5019;
+                context.targetMode = PvpClassSpellContext::TargetMode::Enemy;
+                context.targetGuid = fallbackTarget->GetGUID();
+                context.selfCast = false;
+            }
+            else
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
+            }
+        }
+    }
+
     if (player->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_ROOT)))
     {
         if (IsSpellReady(player, 42292))

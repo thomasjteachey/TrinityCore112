@@ -44,10 +44,20 @@
 
 namespace
 {
+bool IsLifeTapSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 1454; // Life Tap (rank 1)
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
+bool IsPrimaryMeleeClassForSpacing(uint8 classId);
 
 bool IsEffectivelyOutdoors(Player const* player)
 {
@@ -77,6 +87,21 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
     return player->IsOutdoors() && terrainStatus.outdoors;
+}
+
+bool IsPrimaryMeleeClassForSpacing(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+        case CLASS_PALADIN:
+        case CLASS_DRUID:
+        case CLASS_DEATH_KNIGHT:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool RequiresStrictHumanPathing(Player const* player)
@@ -315,7 +340,13 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!motionMaster)
         return;
 
-    if (player->IsValidAttackTarget(target))
+    if (player->HasStealthAura())
+    {
+        // MoveChase can stall for non-swinging stealth openers. Use follow so
+        // rogues consistently close to opener distance while preserving stealth.
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+    }
+    else if (player->IsValidAttackTarget(target))
         motionMaster->MoveChase(target);
     else
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
@@ -965,7 +996,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
     }
 
-    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    // Auto-repeat ranged attacks (e.g., wand Shoot) and Life Tap are validated
+    // by the core cast pipeline and should not be blocked by this local
+    // pre-check. For low-mana caster fallbacks we intentionally allow entering
+    // the cast flow so the server can apply the spell-specific resource rules.
+    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell() || IsLifeTapSpell(spellInfo);
+    if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
             failureReason = "insufficient_power";
