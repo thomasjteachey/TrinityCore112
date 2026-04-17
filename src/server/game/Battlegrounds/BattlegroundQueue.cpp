@@ -269,6 +269,32 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
             addHorde = roll_chance_i(50);
 
         ginfo->Team = addHorde ? HORDE : ALLIANCE;
+
+        // SCM refill behavior: if there is already an active/free-slot SCM instance,
+        // drive new solo entries to the side that currently has more free slots.
+        if (BgTypeId == BATTLEGROUND_SCM)
+        {
+            BGFreeSlotQueueContainer& freeSlotQueue = sBattlegroundMgr->GetBGFreeSlotQueueStore(BgTypeId);
+            for (Battleground* bg : freeSlotQueue)
+            {
+                if (!bg)
+                    continue;
+
+                if (bg->GetBracketId() != bracketId)
+                    continue;
+
+                uint32 const allianceFree = bg->GetFreeSlotsForTeam(ALLIANCE);
+                uint32 const hordeFree = bg->GetFreeSlotsForTeam(HORDE);
+                if (!allianceFree && !hordeFree)
+                    continue;
+
+                if (allianceFree > hordeFree)
+                    ginfo->Team = ALLIANCE;
+                else if (hordeFree > allianceFree)
+                    ginfo->Team = HORDE;
+                break;
+            }
+        }
     }
 
     ginfo->Players.clear();
@@ -645,12 +671,15 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 aliIndex = 0;
     for (; aliIndex < aliCount; aliIndex++)
     {
-        int32 hordeFree = bg->GetMaxPlayersPerTeam() - numHordeInGame;
-        int32 aliFree = bg->GetMaxPlayersPerTeam() - numAliInGame;
+        int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
+        int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
+        int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
+        int32 aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
 
         uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
         uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        bool addToHorde = (numHordeInGame < numAliInGame) || (numHordeInGame == numAliInGame && roll_chance_i(50));
+        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
 
         if (addToHorde)
         {
@@ -678,12 +707,15 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 hordeIndex = 0;
     for (; hordeIndex < hordeCount; hordeIndex++)
     {
-        int32 hordeFree = bg->GetMaxPlayersPerTeam() - numHordeInGame;
-        int32 aliFree = bg->GetMaxPlayersPerTeam() - numAliInGame;
+        int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
+        int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
+        int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
+        int32 aliFree = bg->GetMaxPlayersPerTeam() - projectedAliInGame;
 
         uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
         uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        bool addToHorde = (numHordeInGame < numAliInGame) || (numHordeInGame == numAliInGame && roll_chance_i(50));
+        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
 
         if (addToHorde)
         {
@@ -918,6 +950,27 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
 
             if (!bg->HasFreeSlots())
                 bg->RemoveFromBGFreeSlotQueue();
+        }
+    }
+
+    // SCM should always saturate existing free-slot instances before creating another one.
+    // This prevents queue fragmentation where late joiners get split into a second SCM while
+    // the first instance still has open seats.
+    if (bgTypeId == BATTLEGROUND_SCM)
+    {
+        for (Battleground* bg : bgQueues)
+        {
+            if (!bg)
+                continue;
+
+            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id)
+                continue;
+
+            if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
+                continue;
+
+            if (bg->HasFreeSlots())
+                return;
         }
     }
 
