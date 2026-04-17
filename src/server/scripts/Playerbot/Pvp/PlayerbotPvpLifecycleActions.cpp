@@ -75,6 +75,7 @@ constexpr uint32 PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS = 30000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
 constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
+constexpr uint32 PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS = 3000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -82,7 +83,10 @@ constexpr uint32 SPELL_DESERTER = 26013;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
 uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
+uint32 g_LastScmSlotRefillAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
+bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
+uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
 
 uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
 {
@@ -189,6 +193,35 @@ bool ShouldManagedBotLeaveForQueuedHuman(Player* player, Battleground* battlegro
         return false;
 
     return HasQueuedRealHumanForBattleground(battleground->GetTypeID());
+}
+
+bool TryRefillManagedScmSlots(Player* player, Battleground* battleground)
+{
+    if (!player || !battleground || battleground->GetTypeID() != BATTLEGROUND_SCM)
+        return false;
+
+    uint32 const maxPlayers = battleground->GetMaxPlayers();
+    uint32 const playersInInstance = battleground->GetPlayersSize();
+    if (!maxPlayers || playersInInstance >= maxPlayers)
+        return false;
+
+    // Only force-fill while real humans are participating in SCM.
+    if (!BattlegroundHasAnyRealHumanPlayers(player))
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (nowMs < g_LastScmSlotRefillAttemptMs + PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS)
+        return false;
+
+    g_LastScmSlotRefillAttemptMs = nowMs;
+
+    bool const rebalanceTriggered = RandomBotParticipationManager::TriggerImmediateRebalance();
+    uint32 const queuedCount = QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0);
+    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+        "Playerbot PvP SCM refill attempt: guid={} instanceId={} players={} maxPlayers={} rebalanceTriggered={} queuedCount={}.",
+        player->GetGUID().ToString(), battleground->GetInstanceID(), playersInInstance, maxPlayers, rebalanceTriggered ? 1 : 0, queuedCount);
+
+    return rebalanceTriggered || queuedCount > 0;
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -2492,6 +2525,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
         else
             g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
 
+        TryRefillManagedScmSlots(player, battleground);
         return true;
     }
 
@@ -2557,6 +2591,8 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
     else
         g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+
+    TryRefillManagedScmSlots(player, battleground);
 
     if (ShouldManagedBotLeaveForQueuedHuman(player, battleground))
     {
