@@ -26,6 +26,7 @@
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "SpellInfo.h"
+#include "SpellHistory.h"
 #include "SpellMgr.h"
 
 #include <algorithm>
@@ -195,6 +196,9 @@ std::string BuildManagedBotDiagnosticLine(Player* bot)
     uint32 const manaMax = bot->GetPowerType() == POWER_MANA ? bot->GetMaxPower(POWER_MANA) : 0;
     bool const wandReady = IsManagedBotSpellKnownAndOffCooldown(bot, 5019);
     bool const lifeTapReady = IsManagedBotSpellKnownAndOffCooldown(bot, 11689);
+    bool const hardCrowdControlled =
+        bot->HasUnitState(UNIT_STATE_STUNNED | UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING | UNIT_STATE_ROOT) ||
+        bot->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM));
 
     std::ostringstream status;
     status << "PB diag: "
@@ -204,7 +208,7 @@ std::string BuildManagedBotDiagnosticLine(Player* bot)
            << " wand_ready=" << (wandReady ? "yes" : "no")
            << " lifetap_ready=" << (lifeTapReady ? "yes" : "no")
            << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
-           << " hard_cc=" << (bot->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_CONFUSED)) ? "yes" : "no");
+           << " hard_cc=" << (hardCrowdControlled ? "yes" : "no");
 
     if (Unit* victim = bot->GetVictim())
         status << " victim=" << victim->GetName() << " dist=" << bot->GetDistance(victim);
