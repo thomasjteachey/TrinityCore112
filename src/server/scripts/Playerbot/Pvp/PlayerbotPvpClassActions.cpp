@@ -44,10 +44,20 @@
 
 namespace
 {
+bool IsLifeTapSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 1454; // Life Tap (rank 1)
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
+bool IsPrimaryMeleeClassForSpacing(uint8 classId);
 
 bool IsEffectivelyOutdoors(Player const* player)
 {
@@ -77,6 +87,21 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
     return player->IsOutdoors() && terrainStatus.outdoors;
+}
+
+bool IsPrimaryMeleeClassForSpacing(uint8 classId)
+{
+    switch (classId)
+    {
+        case CLASS_WARRIOR:
+        case CLASS_ROGUE:
+        case CLASS_PALADIN:
+        case CLASS_DRUID:
+        case CLASS_DEATH_KNIGHT:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool RequiresStrictHumanPathing(Player const* player)
@@ -275,10 +300,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         return;
 
     float const safeDistance = std::max(1.0f, desiredDistance);
+    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, safeDistance))
+        return;
+
+    // Fallback: if strict-human segment pathing cannot resolve a route this
+    // tick (common around dynamic battleground geometry), still issue regular
+    // chase/follow so the bot does not idle while out of range.
     if (RequiresStrictHumanPathing(player))
     {
-        IssueStrictHumanFollow(player, target, safeDistance);
-        return;
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict ranged follow fallback to generic movement: guid={} target={} desiredRange={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance);
     }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -296,18 +328,32 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!player || !target)
         return;
 
-    if (RequiresStrictHumanPathing(player))
-    {
-        // Keep melee bots close to contact range instead of orbiting around a
-        // larger follow radius (which can look like "running away" after
-        // melee openers and while continuously reissuing approach directives).
-        IssueStrictHumanFollow(player, target, 1.5f);
-        return;
-    }
-
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;
+
+    if (player->HasStealthAura())
+    {
+        // Stealth openers (e.g., Cheap Shot) are very sensitive to smooth
+        // closing movement. Strict-human segmented MovePoint updates can look
+        // like start/stop inching while approaching. Keep a continuous follow
+        // command here so rogues fluidly close to opener distance.
+        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+        return;
+    }
+
+    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, 1.5f))
+        return;
+
+    if (RequiresStrictHumanPathing(player))
+    {
+        // Keep melee bots close to contact range instead of orbiting around a
+        // larger follow radius (which can look like "running away"). If strict
+        // pathing fails, fall back to regular chase so bots keep pressure.
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict melee follow fallback to generic chase: guid={} target={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString());
+    }
 
     if (player->IsValidAttackTarget(target))
         motionMaster->MoveChase(target);
@@ -803,15 +849,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // closing distance instead of idling in place during openers.
             //
             // AttackStop can clear chase intent in some movement states, so
-            // disable melee swing first and then (re)issue the movement order.
-            player->AttackStop();
+            // only call it when we are actively swinging a victim and then
+            // (re)issue chase immediately afterwards.
+            if (player->GetVictim())
+                player->AttackStop();
 
             if (CanIssueFollowCommands(player))
             {
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
-                else
-                    player->GetMotionMaster()->MoveChase(target);
+                // In stealth opener states, favor direct chase over strict
+                // segmented follow to avoid stop/start stalls around ~6-10y.
+                if (MotionMaster* motionMaster = player->GetMotionMaster())
+                    motionMaster->MoveChase(target);
             }
         }
         else if (player->GetVictim() != target)
@@ -839,12 +887,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     float const maxRange = spellInfo->GetMaxRange(false);
+    bool const shouldUseMeleeApproachForEnemySpell =
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
+        maxRange > 0.0f && maxRange <= 5.5f;
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
         if (CanIssueFollowCommands(player))
         {
-            float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-            IssueRangedApproachMovement(player, target, desiredRange);
+            if (shouldUseMeleeApproachForEnemySpell)
+                IssueMeleeApproachMovement(player, target);
+            else
+            {
+                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                IssueRangedApproachMovement(player, target, desiredRange);
+            }
         }
 
         failureReason = "no_los";
@@ -862,8 +919,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // close the gap instead of idling and repeating failed cast attempts.
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
-            float const desiredRange = std::max(1.0f, maxRange - 1.0f);
-            IssueRangedApproachMovement(player, target, desiredRange);
+            if (shouldUseMeleeApproachForEnemySpell)
+                IssueMeleeApproachMovement(player, target);
+            else
+            {
+                float const desiredRange = std::max(1.0f, maxRange - 1.0f);
+                IssueRangedApproachMovement(player, target, desiredRange);
+            }
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
         {
@@ -943,7 +1005,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
     }
 
-    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    // Auto-repeat ranged attacks (e.g., wand Shoot) and Life Tap are validated
+    // by the core cast pipeline and should not be blocked by this local
+    // pre-check. For low-mana caster fallbacks we intentionally allow entering
+    // the cast flow so the server can apply the spell-specific resource rules.
+    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell() || IsLifeTapSpell(spellInfo);
+    if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
             failureReason = "insufficient_power";
@@ -989,8 +1056,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
-                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                IssueRangedApproachMovement(player, target, desiredRange);
+                if (shouldUseMeleeApproachForEnemySpell)
+                    IssueMeleeApproachMovement(player, target);
+                else
+                {
+                    float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                    IssueRangedApproachMovement(player, target, desiredRange);
+                }
             }
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
@@ -1002,8 +1074,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             }
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
-                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
-                IssueRangedApproachMovement(player, target, desiredRange);
+                if (shouldUseMeleeApproachForEnemySpell)
+                    IssueMeleeApproachMovement(player, target);
+                else
+                {
+                    float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                    IssueRangedApproachMovement(player, target, desiredRange);
+                }
             }
         }
 
