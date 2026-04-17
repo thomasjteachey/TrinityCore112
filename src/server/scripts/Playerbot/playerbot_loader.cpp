@@ -20,6 +20,8 @@
 #include "GameTime.h"
 #include "MotionMaster.h"
 #include "Player.h"
+#include "BattlegroundMgr.h"
+#include "BattlegroundQueue.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
@@ -146,6 +148,78 @@ std::string BuildManagedBotStatusLine(Player* bot)
     return status.str();
 }
 
+std::string BuildManagedBotScmQueueDiagnosticLine(Player* bot)
+{
+    if (!bot)
+        return "PB SCM diag unavailable.";
+
+    constexpr BattlegroundTypeId kScmTypeId = BATTLEGROUND_SCM;
+    constexpr uint32 kDeserterSpellId = 26013;
+    BattlegroundQueueTypeId const scmQueueTypeId = BattlegroundMgr::BGQueueTypeId(kScmTypeId, 0);
+    bool const queuedForScm = scmQueueTypeId != BATTLEGROUND_QUEUE_NONE &&
+        bot->GetBattlegroundQueueIndex(scmQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES;
+    bool const invitedForScm = scmQueueTypeId != BATTLEGROUND_QUEUE_NONE && bot->IsInvitedForBattlegroundQueueType(scmQueueTypeId);
+    bool const hasScmAccessByLevel = bot->GetBGAccessByLevel(kScmTypeId);
+    bool const hasAnyFreeQueueSlot = bot->HasFreeBattlegroundQueueId();
+
+    uint8 usedQueueSlots = 0;
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+        if (bot->GetBattlegroundQueueTypeId(i) != BATTLEGROUND_QUEUE_NONE)
+            ++usedQueueSlots;
+
+    bool hasQueueRecord = false;
+    GroupQueueInfo ginfo{};
+    if (queuedForScm)
+    {
+        BattlegroundQueue& queue = sBattlegroundMgr->GetBattlegroundQueue(scmQueueTypeId);
+        hasQueueRecord = queue.GetPlayerGroupInfoData(bot->GetGUID(), &ginfo);
+    }
+
+    std::string reason = "unknown";
+    if (bot->InBattleground())
+        reason = "already-in-battleground";
+    else if (!bot->IsAlive())
+        reason = "dead-outside-bg";
+    else if (!hasScmAccessByLevel)
+        reason = "no-scm-level-access";
+    else if (bot->HasAura(kDeserterSpellId))
+        reason = "deserter-aura";
+    else if (queuedForScm && invitedForScm)
+        reason = "invite-pending-accept";
+    else if (queuedForScm && !hasQueueRecord)
+        reason = "stale-local-scm-queue-slot";
+    else if (queuedForScm)
+        reason = "queued-waiting";
+    else if (!hasAnyFreeQueueSlot)
+        reason = "no-free-queue-slot";
+    else if (!bot->IsInWorld())
+        reason = "not-in-world";
+    else if (bot->IsBeingTeleported())
+        reason = "teleporting";
+    else
+        reason = "eligible-not-queued";
+
+    std::ostringstream diag;
+    diag << "PB SCM diag: "
+         << "bot=" << bot->GetName()
+         << " in_world=" << (bot->IsInWorld() ? "yes" : "no")
+         << " in_bg=" << (bot->InBattleground() ? "yes" : "no")
+         << " bg_type=" << uint32(bot->GetBattlegroundTypeId())
+         << " bg_status=" << (bot->GetBattleground() ? uint32(bot->GetBattleground()->GetStatus()) : 255)
+         << " scm_access=" << (hasScmAccessByLevel ? "yes" : "no")
+         << " alive=" << (bot->IsAlive() ? "yes" : "no")
+         << " deserter=" << (bot->HasAura(kDeserterSpellId) ? "yes" : "no")
+         << " queued_scm=" << (queuedForScm ? "yes" : "no")
+         << " invited_scm=" << (invitedForScm ? "yes" : "no")
+         << " queue_record=" << (hasQueueRecord ? "yes" : "no")
+         << " queue_slots_used=" << uint32(usedQueueSlots) << "/" << uint32(PLAYER_MAX_BATTLEGROUND_QUEUES)
+         << " free_queue_slot=" << (hasAnyFreeQueueSlot ? "yes" : "no")
+         << " teleporting=" << (bot->IsBeingTeleported() ? "yes" : "no")
+         << " reason=" << reason;
+
+    return diag.str();
+}
+
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -242,6 +316,8 @@ public:
             return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
+
+        receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
 };
 
