@@ -1674,6 +1674,26 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType)
     return false;
 }
 
+bool HasAnyRealHumanPlayerInBattleground(BattlegroundTypeId targetBgType)
+{
+    if (targetBgType == BATTLEGROUND_TYPE_NONE)
+        return false;
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
+    {
+        if (!participant || !participant->InBattleground() || participant->GetBattlegroundTypeId() != targetBgType)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (!isVirtualSession && !playerbot::IsManagedRandomBot(participant))
+            return true;
+    }
+
+    return false;
+}
+
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
     std::vector<ObjectGuid> managedBotGuids;
