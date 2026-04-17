@@ -1816,6 +1816,11 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
         if (!managedBot)
             continue;
 
+        // Mass-queue paths should also normalize stale battleground state for
+        // each candidate; otherwise a subset of bots can remain perpetually
+        // ineligible until their own lifecycle tick reaches recovery.
+        RecoverStaleBattlegroundState(managedBot);
+
         if (QueuePlayer(managedBot, bgTypeId, arenaType))
             ++queuedCount;
     }
