@@ -2418,12 +2418,12 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     {
         ForceHoldPlayerAtStartDuringWaitJoin(player);
 
-        if (!HasAnyRealHumanPlayerInBattleground(battleground->GetTypeID()))
+        if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
         {
             battleground->EndBattleground(PVP_TEAM_NEUTRAL);
             g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                "Playerbot PvP lifecycle wait-join end due to no real humans in battleground: guid={} bgTypeId={} instanceId={}.",
+                "Playerbot PvP lifecycle wait-join end due to no real human battleground interest: guid={} bgTypeId={} instanceId={}.",
                 player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
             return true;
         }
@@ -2485,12 +2485,12 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     // shutdown treats any non-virtual session as human, so these matches can
     // persist indefinitely after real humans leave.
     uint64 const battlegroundInstanceKey = BuildBattlegroundInstanceKey(battleground);
-    if (!HasAnyRealHumanPlayerInBattleground(battleground->GetTypeID()))
+    if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
     {
         battleground->EndBattleground(PVP_TEAM_NEUTRAL);
         g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP lifecycle end due to no real humans in battleground: guid={} bgTypeId={} instanceId={}.",
+            "Playerbot PvP lifecycle end due to no real human battleground interest: guid={} bgTypeId={} instanceId={}.",
             player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
         return true;
     }
