@@ -6,6 +6,7 @@
 #include "Log.h"
 #include "Player.h"
 #include "Random.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
