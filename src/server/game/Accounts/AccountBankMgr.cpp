@@ -597,6 +597,19 @@ bool IsAccountBankOpen(Player const* player)
     return GetSession(player) != nullptr;
 }
 
+bool IsAccountBankAccessible(Player const* player)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+
+    SessionState const* session = GetSession(player);
+    if (!session)
+        return false;
+
+    Creature* banker = ObjectAccessor::GetCreature(*player, session->BankerGuid);
+    return banker && player->IsWithinDistInMap(banker, INTERACTION_DISTANCE, false);
+}
+
 bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid)
 {
     if (!player)

@@ -45,6 +45,7 @@ namespace AccountBank
     void UpdateAccountBankSessions();
     void HandleLogin(Player* player);
     bool IsAccountBankOpen(Player const* player);
+    bool IsAccountBankAccessible(Player const* player);
     bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid);
 }
 
