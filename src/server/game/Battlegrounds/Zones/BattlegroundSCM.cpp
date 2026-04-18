@@ -6,6 +6,7 @@
 #include "Log.h"
 #include "Player.h"
 #include "Random.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 
@@ -227,11 +228,17 @@ void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
     {
         ++_allianceKills;
         m_TeamScores[TEAM_ALLIANCE] = _allianceKills;
+
+        if ((_allianceKills % 10) == 0)
+            RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, ALLIANCE);
     }
     else if (killerTeam == HORDE)
     {
         ++_hordeKills;
         m_TeamScores[TEAM_HORDE] = _hordeKills;
+
+        if ((_hordeKills % 10) == 0)
+            RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, HORDE);
     }
 
     UpdateTeamScoreWorldStates();
