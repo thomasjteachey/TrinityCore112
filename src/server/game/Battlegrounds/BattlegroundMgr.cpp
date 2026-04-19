@@ -60,6 +60,7 @@ bool BattlegroundTemplate::IsArena() const
 /*********************************************************/
 
 BattlegroundMgr::BattlegroundMgr() :
+    m_NextPeriodicQueueUpdateTime(BATTLEGROUND_QUEUE_UPDATE_INTERVAL),
     m_NextRatedArenaUpdate(sWorld->getIntConfig(CONFIG_ARENA_RATED_UPDATE_TIMER)),
     m_NextAutoDistributionTime(0),
     m_AutoDistributionTimeChecker(0), m_UpdateTimer(0), m_ArenaTesting(false), m_Testing(false)
@@ -146,6 +147,28 @@ void BattlegroundMgr::Update(uint32 diff)
             m_BattlegroundQueues[bgQueueTypeId].BattlegroundQueueUpdate(diff, bgTypeId, bracket_id, arenaType, arenaMMRating > 0, arenaMMRating);
         }
     }
+
+    // periodic queue update for battlegrounds to keep invitations flowing when
+    // slots open up without an explicit queue update trigger.
+    if (m_NextPeriodicQueueUpdateTime <= diff)
+    {
+        for (int qtype = BATTLEGROUND_QUEUE_NONE; qtype < MAX_BATTLEGROUND_QUEUE_TYPES; ++qtype)
+        {
+            BattlegroundTypeId const bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(qtype));
+            if (bgTypeId == BATTLEGROUND_TYPE_NONE || IsArenaType(bgTypeId))
+                continue;
+
+            for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
+            {
+                m_BattlegroundQueues[qtype].BattlegroundQueueUpdate(BATTLEGROUND_QUEUE_UPDATE_INTERVAL, bgTypeId,
+                    BattlegroundBracketId(bracket));
+            }
+        }
+
+        m_NextPeriodicQueueUpdateTime = BATTLEGROUND_QUEUE_UPDATE_INTERVAL;
+    }
+    else
+        m_NextPeriodicQueueUpdateTime -= diff;
 
     // if rating difference counts, maybe force-update queues
     if (sWorld->getIntConfig(CONFIG_ARENA_MAX_RATING_DIFFERENCE) && sWorld->getIntConfig(CONFIG_ARENA_RATED_UPDATE_TIMER))

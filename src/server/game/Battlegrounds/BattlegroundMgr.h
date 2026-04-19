@@ -35,7 +35,8 @@ enum BattlegroundMisc
 {
     BATTLEGROUND_ARENA_POINT_DISTRIBUTION_DAY   = 86400,    // seconds in a day
 
-    BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL      = 1000
+    BATTLEGROUND_OBJECTIVE_UPDATE_INTERVAL      = 1000,
+    BATTLEGROUND_QUEUE_UPDATE_INTERVAL          = 15 * IN_MILLISECONDS
 };
 
 struct BattlegroundData
@@ -144,6 +145,7 @@ class TC_GAME_API BattlegroundMgr
         BattlegroundQueue m_BattlegroundQueues[MAX_BATTLEGROUND_QUEUE_TYPES];
 
         std::vector<uint64> m_QueueUpdateScheduler;
+        uint32 m_NextPeriodicQueueUpdateTime;
         uint32 m_NextRatedArenaUpdate;
         time_t m_NextAutoDistributionTime;
         uint32 m_AutoDistributionTimeChecker;
