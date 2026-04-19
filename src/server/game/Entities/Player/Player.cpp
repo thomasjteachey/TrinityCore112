@@ -9792,6 +9792,10 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         }
         break;
     default:
+        // Tiger's Peak can report a non-canonical zone ID in some positions.
+        // Fall back to battleground type so arena world states are still initialized.
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TTP)
+            battleground->FillInitialWorldStates(packet);
         break;
     }
 
