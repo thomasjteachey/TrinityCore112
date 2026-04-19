@@ -18,6 +18,7 @@
 #include "Log.h"
 #include "Chat.h"
 #include "GameTime.h"
+#include "Globals/ObjectAccessor.h"
 #include "Item.h"
 #include "MotionMaster.h"
 #include "Movement/AbstractFollower.h"
@@ -113,6 +114,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
     playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(bot, values);
     playerbot::BattlegroundLifecycleContext const lifecycleContext = playerbot::PvpCore::BuildBattlegroundLifecycleContext(bot, values);
     playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
+    Unit* directiveTarget = classContext.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, classContext.movementTargetGuid);
     bool const lifecycleEnabled = lifecycleContext.lifecycleEnabled;
     bool const managedRandomBot = playerbot::IsManagedRandomBot(bot);
     bool const canFollowCommands = bot->IsAlive() &&
@@ -147,6 +149,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " target_guid=" << classContext.targetGuid.ToString()
            << " move_directive=" << ToString(classContext.movementDirective)
            << " move_target=" << classContext.movementTargetGuid.ToString()
+           << " move_target_resolved=" << (directiveTarget ? "yes" : "no")
            << " move_range=" << classContext.movementFollowRange
            << " lifecycle_q=" << ToString(lifecycleContext.queueOperation)
            << " lifecycle_invite=" << ToString(lifecycleContext.invitationResponse)
