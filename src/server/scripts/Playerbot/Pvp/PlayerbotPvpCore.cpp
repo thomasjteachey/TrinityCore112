@@ -407,6 +407,17 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (minRange > 0.0f && player->IsWithinDistInMap(resolvedTarget, minRange))
         return false;
 
+    // Skip decisions we cannot currently pay for so the fallback chain can
+    // choose a castable alternative (wand, movement, etc.) instead of
+    // repeatedly selecting an OOM support spell.
+    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    {
+        Powers const powerType = Powers(spellInfo->PowerType);
+        int32 const powerCost = spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask());
+        if (powerCost > 0 && player->GetPower(powerType) < powerCost)
+            return false;
+    }
+
     return true;
 }
 
@@ -2550,6 +2561,15 @@ bool CanUseHealRangeSpacing(uint8 classId)
     }
 }
 
+float ComputeApproachFollowRange(float nominalRange)
+{
+    // Keep an extra movement buffer so ranged bots do not settle in a
+    // dead-zone where spell-selection still reports out-of-range but chase
+    // motion does not re-engage because the desired distance is too close to
+    // edge tolerances.
+    return std::max(1.0f, nominalRange - 3.0f);
+}
+
 bool IsPrimaryMeleeClassForSpacing(uint8 classId)
 {
     switch (classId)
@@ -2853,6 +2873,47 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
+    bool const criticalLowMana = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
+
+    // Hard-priority mana preservation policy: below 10% mana, disengage from
+    // combat above all other class behavior, then drink as soon as combat drops.
+    if (criticalLowMana)
+    {
+        if (player->IsInCombat())
+        {
+            Unit const* disengageTarget = resolveTargetByGuid(activeTargetGuid);
+            if (!disengageTarget)
+                disengageTarget = resolveTargetByGuid(selectedTargetGuid);
+            if (!disengageTarget && player->GetVictim() && player->GetVictim()->IsAlive())
+                disengageTarget = player->GetVictim();
+
+            if (disengageTarget)
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, disengageTarget->GetGUID(),
+                    std::max(GetConfiguredLongRange(), GetConfiguredCloseRange() + 8.0f),
+                    "flee", "critical low mana disengage", 99.0f);
+                return context;
+            }
+
+            context.movementDirective = PvpClassSpellContext::MovementDirective::ResetCombatState;
+            context.actionName = "reset";
+            context.reason = "critical low mana force combat reset";
+            context.shouldExecute = true;
+            return context;
+        }
+
+        if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+        {
+            context.actionName = "drink";
+            context.reason = "critical low mana recover";
+            context.spellId = SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
+            context.targetMode = PvpClassSpellContext::TargetMode::Self;
+            context.targetGuid = player->GetGUID();
+            context.selfCast = true;
+            context.shouldExecute = true;
+            return context;
+        }
+    }
 
     if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
     {
@@ -3036,7 +3097,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             if (maxRange > 0.0f && distance > maxRange)
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
-                    std::max(1.0f, maxRange - 1.0f), "reach spell", "selected spell out of range", 84.0f);
+                    ComputeApproachFollowRange(maxRange), "reach spell", "selected spell out of range", 84.0f);
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
@@ -3061,7 +3122,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 // selecting enemy casts. Keep a config-based engage floor so
                 // they always step in to practical casting distance.
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredSpellRange() - 1.0f), "reach spell", "enemy outside configured cast distance", 82.0f);
+                    ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy outside configured cast distance", 82.0f);
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
@@ -3083,7 +3144,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             if (distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredSpellRange() - 1.0f), "reach spell", "enemy out of spell range", 70.0f);
+                    ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy out of spell range", 70.0f);
             }
             else if (distance < std::max(0.0f, GetConfiguredMeleeRange() - kRangedSpacingEnterTooCloseBuffer))
             {
@@ -3114,7 +3175,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             if (distance > GetConfiguredHealRange())
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, allyMovementTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredHealRange() - 1.0f), "reach party member to heal", "party member to heal out of spell range", 68.0f);
+                    ComputeApproachFollowRange(GetConfiguredHealRange()), "reach party member to heal", "party member to heal out of spell range", 68.0f);
             }
         }
     }
@@ -3136,8 +3197,16 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else
             {
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
+                if (IsPrimaryRangedClassForSpacing(player->GetClass()))
+                {
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, fallbackTarget->GetGUID(),
+                        std::max(1.0f, GetConfiguredCloseRange()), "flee", "low mana fallback disengage to recover", 67.0f);
+                }
+                else
+                {
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
+                        std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
+                }
             }
         }
     }
