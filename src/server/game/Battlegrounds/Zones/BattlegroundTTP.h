@@ -42,6 +42,8 @@ class BattlegroundTTP : public Arena
     public:
         BattlegroundTTP();
 
+        WorldSafeLocsEntry const* GetClosestGraveyard(Player* /*player*/) override { return nullptr; }
+
         /* inherited from BattlegroundClass */
         void StartingEventCloseDoors() override;
         void StartingEventOpenDoors() override;
