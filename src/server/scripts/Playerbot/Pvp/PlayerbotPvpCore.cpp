@@ -2873,6 +2873,47 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
+    bool const criticalLowMana = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
+
+    // Hard-priority mana preservation policy: below 10% mana, disengage from
+    // combat above all other class behavior, then drink as soon as combat drops.
+    if (criticalLowMana)
+    {
+        if (player->IsInCombat())
+        {
+            Unit const* disengageTarget = resolveTargetByGuid(activeTargetGuid);
+            if (!disengageTarget)
+                disengageTarget = resolveTargetByGuid(selectedTargetGuid);
+            if (!disengageTarget && player->GetVictim() && player->GetVictim()->IsAlive())
+                disengageTarget = player->GetVictim();
+
+            if (disengageTarget)
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, disengageTarget->GetGUID(),
+                    std::max(GetConfiguredLongRange(), GetConfiguredCloseRange() + 8.0f),
+                    "flee", "critical low mana disengage", 99.0f);
+                return context;
+            }
+
+            context.movementDirective = PvpClassSpellContext::MovementDirective::ResetCombatState;
+            context.actionName = "reset";
+            context.reason = "critical low mana force combat reset";
+            context.shouldExecute = true;
+            return context;
+        }
+
+        if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+        {
+            context.actionName = "drink";
+            context.reason = "critical low mana recover";
+            context.spellId = SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
+            context.targetMode = PvpClassSpellContext::TargetMode::Self;
+            context.targetGuid = player->GetGUID();
+            context.selfCast = true;
+            context.shouldExecute = true;
+            return context;
+        }
+    }
 
     if (player->IsInCombat() && !hasValidTarget && !hasValidAllyTarget)
     {
