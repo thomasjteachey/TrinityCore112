@@ -707,9 +707,17 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (IsHardControlled(player))
         return decision;
 
+    bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
+    bool const needsDrink = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
+    bool const urgentlyNeedsDrink = needsDrink && (player->GetPowerPct(POWER_MANA) < 35.0f || IsLowOrOutOfManaForFallback(player));
+
     // Keep a single nearby-enemy boundary for "switch to combat posture".
     // Inside this range we should avoid out-of-combat utility behaviors
     // (eat/drink/mount), so movement + combat targeting can take over cleanly.
+    //
+    // Exception: when mana is critically low and the bot is already out of
+    // combat, allow drink selection so they can recover instead of idling in a
+    // perpetual "combat posture" loop.
     float const nearbyHostileCombatBoundary = std::max(GetConfiguredLongRange(), 35.0f);
     if (player->GetMap())
     {
@@ -722,13 +730,14 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
             if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, nearbyHostileCombatBoundary))
                 continue;
 
-            return decision;
+            if (!urgentlyNeedsDrink)
+                return decision;
+
+            break;
         }
     }
 
     bool const needsFood = player->GetHealthPct() < 100.0f;
-    bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
-    bool const needsDrink = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
     bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
     bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
 
