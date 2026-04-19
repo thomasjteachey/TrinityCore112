@@ -944,31 +944,71 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
     if (!player || player->IsInCombat())
         return decision;
 
+    auto hasUnimbuedWeapon = [player]()
+    {
+        Item const* mainHand = player->GetWeaponForAttack(BASE_ATTACK, true);
+        if (mainHand && !mainHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            return true;
+
+        Item const* offHand = player->GetWeaponForAttack(OFF_ATTACK, true);
+        if (offHand && !offHand->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+            return true;
+
+        return false;
+    };
+
     switch (player->GetClass())
     {
-        case CLASS_PRIEST:
+        case CLASS_ROGUE:
         {
-            if (IsSpellReady(player, 10938))
+            if (IsSpellReady(player, 11202) && hasUnimbuedWeapon())
+                return { "rogue crippling poison prep", "coat both weapons before gates open", 11202, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            break;
+        }
+        case CLASS_WARRIOR:
+        {
+            if (IsSpellReady(player, 2687) && !HasAuraFromSpellChain(player, 2687))
+                return { "warrior bloodrage prep", "generate opening rage before gates open", 2687, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (IsSpellReady(player, 25289) && !HasAuraFromSpellChain(player, 25289))
+                return { "warrior battle shout prep", "maintain battle shout before gates open", 25289, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            break;
+        }
+        case CLASS_DRUID:
+        {
+            if (IsSpellReady(player, 21850) && !HasAuraFromSpellChain(player, 21850))
+                return { "druid gift of the wild prep", "apply raid-wide stat buff before gates open", 21850, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (IsSpellReady(player, 9910))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 10938, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "priest power word fortitude prep", "buff nearby team before gates open", 10938, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 9910, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "druid thorns prep", "apply thorns to nearby allies before gates open", 9910, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
             }
 
-            if (IsSpellReady(player, 10958))
-            {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 10958, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "priest shadow protection prep", "buff nearby team before gates open", 10958, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
-            }
+            break;
+        }
+        case CLASS_PRIEST:
+        {
+            if (IsSpellReady(player, 21564) && !HasAuraFromSpellChain(player, 21564))
+                return { "priest prayer of fortitude prep", "buff nearby party before gates open", 21564, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (IsSpellReady(player, 27683) && !HasAuraFromSpellChain(player, 27683))
+                return { "priest prayer of shadow protection prep", "buff nearby party before gates open", 27683, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (IsSpellReady(player, 27681) && !HasAuraFromSpellChain(player, 27681))
+                return { "priest prayer of spirit prep", "buff nearby party before gates open", 27681, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             break;
         }
         case CLASS_MAGE:
         {
-            if (IsSpellReady(player, 10157))
-            {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 10157, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "arcane intellect prep", "buff nearby team before gates open", 10157, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
-            }
+            if (IsSpellReady(player, 10054) && !player->HasItemCount(8008))
+                return { "create mana ruby prep", "create mana ruby before gates open", 10054, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (IsSpellReady(player, 23028) && !HasAuraFromSpellChain(player, 23028))
+                return { "arcane brilliance prep", "buff nearby party before gates open", 23028, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             if (!HasAuraFromSpellChain(player, 10220) && IsSpellReady(player, 10220))
                 return { "frost armor prep", "maintain armor before gates open", 10220, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
