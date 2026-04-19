@@ -2265,7 +2265,7 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
             // Stealth openers intentionally run without a committed victim for
             // part of the engage. MoveChase can pause when victim linkage is
             // absent, so use follow semantics to keep continuous closing.
-            player->GetMotionMaster()->MoveFollow(target, 1.5f, player->GetFollowAngle());
+            player->GetMotionMaster()->MoveFollow(target, 0.1f, player->GetFollowAngle());
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP distance band: bot={} profile={} decision=stealth-melee-close-follow distance={} max={}.",
                 player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);

@@ -312,7 +312,10 @@ bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDis
 
     static std::unordered_map<uint64, FollowOrderState> stateByGuid;
     FollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
-    float const safeDistance = std::max(1.0f, desiredDistance);
+    // Follow distance should allow true melee contact for stealth openers.
+    // Clamping to >= 1.0f can leave bots hovering outside melee reach
+    // depending on hitbox combinations.
+    float const safeDistance = std::max(0.1f, desiredDistance);
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
     bool const targetChanged = state.targetGuid != target->GetGUID();
@@ -375,7 +378,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         // closing movement. Strict-human segmented MovePoint updates can look
         // like start/stop inching while approaching. Keep a continuous follow
         // command here so rogues fluidly close to opener distance.
-        IssueThrottledFollowMovement(player, target, 1.5f);
+        IssueThrottledFollowMovement(player, target, 0.1f);
         return;
     }
 
@@ -897,7 +900,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 // longer matches the chased unit, and stealth openers
                 // intentionally avoid setting/keeping a victim so stealth is
                 // preserved.
-                IssueThrottledFollowMovement(player, target, 1.5f);
+                IssueThrottledFollowMovement(player, target, 0.1f);
             }
         }
         else if (player->GetVictim() != target)
