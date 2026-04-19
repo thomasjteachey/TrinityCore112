@@ -719,7 +719,9 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
         return decision;
 
     bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;
-    bool const needsDrink = usesMana && player->GetPowerPct(POWER_MANA) < 100.0f;
+    float const manaPct = usesMana ? player->GetPowerPct(POWER_MANA) : 100.0f;
+    bool const needsDrink = usesMana && manaPct < 100.0f;
+    bool const keepDrinkingFloor = usesMana && manaPct < 50.0f;
     bool const urgentlyNeedsDrink = needsDrink && (player->GetPowerPct(POWER_MANA) < 35.0f || IsLowOrOutOfManaForFallback(player));
 
     // Keep a single nearby-enemy boundary for "switch to combat posture".
@@ -751,6 +753,11 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     bool const needsFood = player->GetHealthPct() < 100.0f;
     bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
     bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+
+    // If already drinking, never decide away from drinking until at least 50%
+    // mana has been recovered.
+    if (hasDrinkAura && keepDrinkingFloor)
+        return { "drink", "maintain drink until 50% mana", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     // Recovery auras should naturally break on movement and should not linger
     // once the corresponding resource has fully recovered.

@@ -361,8 +361,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     {
         // Ensure hostile ranged approach can engage chase generators even when
         // the bot is currently out of combat.
-        if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
-            player->Attack(target, true);
+        if (player->GetVictim() != target || !player->IsInCombat())
+            player->Attack(target, false);
         motionMaster->MoveChase(target, safeDistance);
     }
     else
@@ -876,6 +876,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         failureReason = "self_target_mismatch";
         return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target &&
+        player->IsValidAttackTarget(target) &&
+        (player->GetVictim() != target || !player->IsInCombat()))
+    {
+        // Establish combat relationship before hostile casts so bots do not
+        // repeatedly select enemy spells while staying idle out of combat.
+        player->Attack(target, false);
     }
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
