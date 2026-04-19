@@ -332,13 +332,39 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     if (!motionMaster)
         return;
 
+    switch (motionMaster->GetCurrentMovementGeneratorType())
+    {
+        case IDLE_MOTION_TYPE:
+        case CHASE_MOTION_TYPE:
+        case POINT_MOTION_TYPE:
+        case FOLLOW_MOTION_TYPE:
+            break;
+        default:
+            // Battleground transitions can occasionally leave players parked in
+            // a non-combat generator (e.g. flight) while stationary. Clear it
+            // so reach-melee directives can issue fresh pursuit movement.
+            if (!player->isMoving())
+                motionMaster->Clear();
+            break;
+    }
+
     if (player->HasStealthAura())
     {
         // Stealth openers (e.g., Cheap Shot) are very sensitive to smooth
         // closing movement. Strict-human segmented MovePoint updates can look
-        // like start/stop inching while approaching. Keep a continuous follow
-        // command here so rogues fluidly close to opener distance.
-        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+        // like start/stop inching while approaching.
+        //
+        // Still prefer strict-human pathing when required (e.g. battleground
+        // base exits/ramps), otherwise the chase generator can fail to produce
+        // travel from long-range anchor points.
+        if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, 1.5f))
+            return;
+        // If strict pathing did not produce a segment this tick, use chase for
+        // hostile opener targets so rogues keep closing instead of idling.
+        if (player->IsValidAttackTarget(target))
+            motionMaster->MoveChase(target);
+        else
+            motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
         return;
     }
 
