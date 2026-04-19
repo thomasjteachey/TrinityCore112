@@ -523,6 +523,22 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
     if (!player || context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::None)
         return false;
 
+    bool const isTravelDirective =
+        context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::ReachMeleeRange ||
+        context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::ReachSpellRange ||
+        context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell;
+
+    // If we intended to travel but currently have no movement momentum, do not
+    // suppress directive execution. This keeps ranged spacing directives from
+    // idling when another system briefly clears active motion between ticks.
+    if (isTravelDirective && !player->isMoving())
+    {
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        MovementGeneratorType const movementType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+        if (movementType == IDLE_MOTION_TYPE)
+            return false;
+    }
+
     auto& state = g_LastDirectiveByBot[player->GetGUID()];
     std::chrono::steady_clock::time_point const now = GameTime::Now();
     if (state.directive == context.movementDirective &&
