@@ -2955,7 +2955,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             float const distance = player->GetDistance(spacingTarget);
             float const maxRange = spellInfo->GetMaxRange(false);
             float const minRange = spellInfo->GetMinRange(false);
-            if (maxRange > 0.0f && distance > (maxRange + kRangedSpacingEnterOutOfRangeBuffer))
+            if (maxRange > 0.0f && distance > maxRange)
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
                     std::max(1.0f, maxRange - 1.0f), "reach spell", "selected spell out of range", 84.0f);
