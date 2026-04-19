@@ -113,15 +113,33 @@ std::string BuildManagedBotStatusLine(Player* bot)
     playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(bot, values);
     playerbot::BattlegroundLifecycleContext const lifecycleContext = playerbot::PvpCore::BuildBattlegroundLifecycleContext(bot, values);
     playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
+    bool const lifecycleEnabled = lifecycleContext.lifecycleEnabled;
+    bool const managedRandomBot = playerbot::IsManagedRandomBot(bot);
+    bool const canFollowCommands = bot->IsAlive() &&
+        !bot->HasUnitState(UNIT_STATE_ROOT) &&
+        !bot->HasUnitState(UNIT_STATE_STUNNED) &&
+        !bot->HasUnitState(UNIT_STATE_CONFUSED) &&
+        !bot->HasUnitState(UNIT_STATE_FLEEING) &&
+        !bot->HasUnitState(UNIT_STATE_LOST_CONTROL);
 
     std::ostringstream status;
     status << "PB status: "
+           << "lifecycle=" << (lifecycleEnabled ? "on" : "off")
+           << " managed=" << (managedRandomBot ? "yes" : "no")
            << "combat=" << (bot->IsInCombat() ? "yes" : "no")
            << " alive=" << (bot->IsAlive() ? "yes" : "no")
            << " moving=" << (bot->isMoving() ? "yes" : "no")
+           << " can_follow=" << (canFollowCommands ? "yes" : "no")
+           << " rooted=" << (bot->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+           << " stunned=" << (bot->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
+           << " confused=" << (bot->HasUnitState(UNIT_STATE_CONFUSED) ? "yes" : "no")
+           << " fleeing=" << (bot->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no")
+           << " lost_control=" << (bot->HasUnitState(UNIT_STATE_LOST_CONTROL) ? "yes" : "no")
            << " stealth=" << (bot->HasStealthAura() ? "yes" : "no")
            << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
            << " bg_state=" << ToString(values.battlegroundState)
+           << " class_gate=" << (classContext.classSpellsEnabled ? "on" : "off")
+           << " class_exec=" << (classContext.shouldExecute ? "yes" : "no")
            << " class_action=" << (classContext.actionName ? classContext.actionName : "none")
            << " spell=" << classContext.spellId
            << " reason=" << (classContext.reason ? classContext.reason : "none")
