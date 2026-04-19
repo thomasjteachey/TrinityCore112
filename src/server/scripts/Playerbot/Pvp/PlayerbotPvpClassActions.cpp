@@ -507,6 +507,7 @@ struct CasterSpellCooldownKeyHash
 };
 
 std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
+std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -535,6 +536,14 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
     state.targetGuid = context.movementTargetGuid;
     state.timestamp = now;
     return false;
+}
+
+void SetLastExecutionStatus(Player const* player, std::string const& status)
+{
+    if (!player)
+        return;
+
+    g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -1362,6 +1371,18 @@ void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 s
     g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
 }
 
+std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
+{
+    if (!player)
+        return "none";
+
+    auto const itr = g_LastClassExecutionStatusByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_LastClassExecutionStatusByGuid.end())
+        return "none";
+
+    return itr->second;
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
@@ -1370,7 +1391,10 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (context.movementDirective != PvpClassSpellContext::MovementDirective::None)
     {
         if (ShouldThrottleDirective(player, context))
+        {
+            SetLastExecutionStatus(player, "move_throttled");
             return true;
+        }
 
         Unit* movementTarget = context.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*player, context.movementTargetGuid);
         bool const directiveNeedsTarget =
@@ -1389,12 +1413,16 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 movementTarget = victimTarget;
         }
         if (directiveNeedsTarget && (!movementTarget || !movementTarget->IsAlive()))
+        {
+            SetLastExecutionStatus(player, "move_skipped_target_invalid");
             return false;
+        }
 
         if (directiveNeedsTarget && !CanIssueFollowCommands(player))
         {
             if (IsCrowdControlledForAction(player))
                 ClearActiveMovementForControlLoss(player);
+            SetLastExecutionStatus(player, "move_skipped_cannot_follow");
             return false;
         }
 
@@ -1453,6 +1481,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             context.actionName ? context.actionName : "none",
             movementTarget ? movementTarget->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
             static_cast<uint8>(context.movementDirective));
+        SetLastExecutionStatus(player, "move_executed");
         return true;
     }
 
@@ -1471,6 +1500,10 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         context.targetGuid.ToString(),
         casted,
         context.reason ? context.reason : "none");
+    if (casted)
+        SetLastExecutionStatus(player, "cast_executed");
+    else
+        SetLastExecutionStatus(player, "cast_failed_" + failureReason);
     return casted;
 }
 }

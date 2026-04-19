@@ -21,6 +21,7 @@
 #include "PlayerbotPvpCore.h"
 
 #include <chrono>
+#include <string>
 
 class Player;
 class Unit;
@@ -35,6 +36,7 @@ public:
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);
     static bool IsCasterSpellCooldownActive(Player const* player, uint32 spellId);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
+    static std::string GetLastExecutionStatus(Player const* player);
 };
 }
 

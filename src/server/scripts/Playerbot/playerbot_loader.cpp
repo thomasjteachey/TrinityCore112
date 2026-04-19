@@ -25,6 +25,7 @@
 #include "Player.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
+#include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
@@ -115,6 +116,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
     playerbot::BattlegroundLifecycleContext const lifecycleContext = playerbot::PvpCore::BuildBattlegroundLifecycleContext(bot, values);
     playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
     Unit* directiveTarget = classContext.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, classContext.movementTargetGuid);
+    std::string const lastClassExecutionStatus = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
     bool const lifecycleEnabled = lifecycleContext.lifecycleEnabled;
     bool const managedRandomBot = playerbot::IsManagedRandomBot(bot);
     bool const canFollowCommands = bot->IsAlive() &&
@@ -155,6 +157,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " lifecycle_invite=" << ToString(lifecycleContext.invitationResponse)
            << " hooks(bg=" << (hooks.battlegroundParticipationHook ? "on" : "off")
            << ",arena=" << (hooks.arenaParticipationHook ? "on" : "off") << ")"
+           << " last_exec=" << lastClassExecutionStatus
            << " motion=" << uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType())
            << " pos=(" << bot->GetMapId() << ":" << bot->GetPositionX() << "," << bot->GetPositionY() << "," << bot->GetPositionZ() << ")"
            << " o=" << bot->GetOrientation();
