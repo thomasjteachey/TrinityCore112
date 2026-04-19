@@ -358,9 +358,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         return;
 
     if (player->IsValidAttackTarget(target))
+    {
+        // Ensure hostile ranged approach can engage chase generators even when
+        // the bot is currently out of combat.
+        if (player->GetVictim() != target || !player->IsInCombat())
+            player->Attack(target, false);
         motionMaster->MoveChase(target, safeDistance);
+    }
     else
+    {
         motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+    }
 }
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
@@ -870,6 +878,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target &&
+        player->IsValidAttackTarget(target) &&
+        (player->GetVictim() != target || !player->IsInCombat()))
+    {
+        // Establish combat relationship before hostile casts so bots do not
+        // repeatedly select enemy spells while staying idle out of combat.
+        player->Attack(target, false);
+    }
+
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
     {
         if (!player->IsValidAttackTarget(target, spellInfo))
@@ -1354,6 +1372,16 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             context.movementDirective == PvpClassSpellContext::MovementDirective::ReachSpellRange ||
             context.movementDirective == PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell ||
             context.movementDirective == PvpClassSpellContext::MovementDirective::FaceSpellTarget;
+        if (directiveNeedsTarget && (!movementTarget || !movementTarget->IsAlive()))
+        {
+            // Defensive fallback: if GUID resolution fails for this tick, use
+            // currently selected/victim targets so movement directives do not
+            // silently drop to idle.
+            if (Unit* selectedTarget = player->GetSelectedUnit(); selectedTarget && selectedTarget->IsAlive())
+                movementTarget = selectedTarget;
+            else if (Unit* victimTarget = player->GetVictim(); victimTarget && victimTarget->IsAlive())
+                movementTarget = victimTarget;
+        }
         if (directiveNeedsTarget && (!movementTarget || !movementTarget->IsAlive()))
             return false;
 
