@@ -523,6 +523,22 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
     if (!player || context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::None)
         return false;
 
+    bool const isTravelDirective =
+        context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::ReachMeleeRange ||
+        context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::ReachSpellRange ||
+        context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell;
+
+    // If we intended to travel but currently have no movement momentum, do not
+    // suppress directive execution. This keeps ranged spacing directives from
+    // idling when another system briefly clears active motion between ticks.
+    if (isTravelDirective && !player->isMoving())
+    {
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        MovementGeneratorType const movementType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+        if (movementType == IDLE_MOTION_TYPE)
+            return false;
+    }
+
     auto& state = g_LastDirectiveByBot[player->GetGUID()];
     std::chrono::steady_clock::time_point const now = GameTime::Now();
     if (state.directive == context.movementDirective &&
@@ -1282,6 +1298,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
     if (context.spellId == 6940)
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
+
+    // Warlock curse openers are instant and can leave the bot with an idle
+    // motion generator while still in combat against a moving target. Re-issue
+    // ranged approach pressure so follow-up casts do not stall.
+    if ((context.spellId == 11719 || context.spellId == 11713) &&
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target && target->IsAlive() && CanIssueFollowCommands(player))
+    {
+        float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 3.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+        IssueRangedApproachMovement(player, target, desiredRange);
+    }
 
     return true;
 }
