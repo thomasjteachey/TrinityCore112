@@ -1080,6 +1080,11 @@ void Unit::CalculateSpellDamageTaken(SpellNonMeleeDamage* damageInfo, int32 dama
         if (Unit::IsDamageReducedByArmor(damageSchoolMask, spellInfo))
             damage = Unit::CalcArmorReducedDamage(this, victim, damage, spellInfo, attackType);
 
+        // Sitting player targets should take a critical strike from any direct physical hit
+        // (includes melee/ranged damage-class spells such as Ambush/Backstab/Auto Shot).
+        if (!crit && victim->IsPlayer() && !victim->IsStandState() && !damageInfo->periodicLog && (damageSchoolMask & SPELL_SCHOOL_MASK_NORMAL))
+            crit = true;
+
         // Per-school calc
         switch (spellInfo->DmgClass)
         {
