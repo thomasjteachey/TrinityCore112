@@ -294,6 +294,43 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
 }
 
+bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDistance, uint32 minReissueMs = 250, float rangeChangeThreshold = 0.2f)
+{
+    if (!player || !target || !target->IsAlive())
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    struct FollowOrderState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        float range = 0.0f;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, FollowOrderState> stateByGuid;
+    FollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    float const safeDistance = std::max(1.0f, desiredDistance);
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    bool const targetChanged = state.targetGuid != target->GetGUID();
+    bool const rangeChanged = std::fabs(state.range - safeDistance) >= rangeChangeThreshold;
+    bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
+    if (!targetChanged && !rangeChanged && !canReissueByTime &&
+        motionMaster->GetCurrentMovementGeneratorType() == FOLLOW_MOTION_TYPE)
+    {
+        return true;
+    }
+
+    motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+    state.targetGuid = target->GetGUID();
+    state.range = safeDistance;
+    state.lastIssueMs = nowMs;
+    return true;
+}
+
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance)
 {
     if (!player || !target)
@@ -338,7 +375,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         // closing movement. Strict-human segmented MovePoint updates can look
         // like start/stop inching while approaching. Keep a continuous follow
         // command here so rogues fluidly close to opener distance.
-        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+        IssueThrottledFollowMovement(player, target, 1.5f);
         return;
     }
 
@@ -845,21 +882,22 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (preserveStealthForOpener)
         {
             // While stealthed, keep auto-attack disabled so we do not break
-            // stealth early, but keep chase active so rogues continue
-            // closing distance instead of idling in place during openers.
+            // stealth early, but continue issuing movement so rogues still
+            // close to opener distance instead of idling in place.
             //
-            // AttackStop can clear chase intent in some movement states, so
-            // only call it when we are actively swinging a victim and then
-            // (re)issue chase immediately afterwards.
+            // AttackStop can clear active movement intent in some states, so
+            // only call it when we are actively swinging a victim.
             if (player->GetVictim())
                 player->AttackStop();
 
             if (CanIssueFollowCommands(player))
             {
-                // In stealth opener states, favor direct chase over strict
-                // segmented follow to avoid stop/start stalls around ~6-10y.
-                if (MotionMaster* motionMaster = player->GetMotionMaster())
-                    motionMaster->MoveChase(target);
+                // In stealth opener states, favor continuous follow over
+                // chase. Chase movement pauses when owner->GetVictim() no
+                // longer matches the chased unit, and stealth openers
+                // intentionally avoid setting/keeping a victim so stealth is
+                // preserved.
+                IssueThrottledFollowMovement(player, target, 1.5f);
             }
         }
         else if (player->GetVictim() != target)

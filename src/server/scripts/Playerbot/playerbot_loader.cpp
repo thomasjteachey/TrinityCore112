@@ -20,6 +20,7 @@
 #include "GameTime.h"
 #include "Item.h"
 #include "MotionMaster.h"
+#include "Movement/AbstractFollower.h"
 #include "Player.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
@@ -118,6 +119,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << "combat=" << (bot->IsInCombat() ? "yes" : "no")
            << " alive=" << (bot->IsAlive() ? "yes" : "no")
            << " moving=" << (bot->isMoving() ? "yes" : "no")
+           << " stealth=" << (bot->HasStealthAura() ? "yes" : "no")
            << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
            << " bg_state=" << ToString(values.battlegroundState)
            << " class_action=" << (classContext.actionName ? classContext.actionName : "none")
@@ -140,6 +142,26 @@ std::string BuildManagedBotStatusLine(Player* bot)
         status << " victim=" << victim->GetName() << " victim_dist=" << bot->GetDistance(victim);
     else
         status << " victim=none";
+
+    Unit* motionTarget = nullptr;
+    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        if (MovementGenerator* movement = motionMaster->GetCurrentMovementGenerator())
+            if (AbstractFollower* follower = dynamic_cast<AbstractFollower*>(movement))
+                motionTarget = follower->GetTarget();
+
+    if (motionTarget)
+    {
+        bool const motionTargetMatchesVictim = bot->GetVictim() && bot->GetVictim()->GetGUID() == motionTarget->GetGUID();
+        bool const chaseVictimMismatch = bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE && !motionTargetMatchesVictim;
+        status << " motion_target=" << motionTarget->GetName()
+               << " motion_target_dist=" << bot->GetDistance(motionTarget)
+               << " motion_target_is_victim=" << (motionTargetMatchesVictim ? "yes" : "no")
+               << " chase_victim_mismatch=" << (chaseVictimMismatch ? "yes" : "no");
+    }
+    else
+    {
+        status << " motion_target=none";
+    }
 
     if (Unit* selected = bot->GetSelectedUnit())
     {
