@@ -723,6 +723,9 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     bool const needsDrink = usesMana && manaPct < 100.0f;
     bool const keepDrinkingFloor = usesMana && manaPct < 50.0f;
     bool const urgentlyNeedsDrink = needsDrink && (player->GetPowerPct(POWER_MANA) < 35.0f || IsLowOrOutOfManaForFallback(player));
+    bool const needsFood = player->GetHealthPct() < 100.0f;
+    bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
+    bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
 
     // Keep a single nearby-enemy boundary for "switch to combat posture".
     // Inside this range we should avoid out-of-combat utility behaviors
@@ -743,16 +746,16 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
             if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, nearbyHostileCombatBoundary))
                 continue;
 
-            if (!urgentlyNeedsDrink)
+            // If the bot is already drinking, keep that decision sticky until
+            // we reach the configured recovery floor instead of breaking to
+            // combat posture after only a small mana tick.
+            bool const shouldMaintainDrink = hasDrinkAura && keepDrinkingFloor;
+            if (!urgentlyNeedsDrink && !shouldMaintainDrink)
                 return decision;
 
             break;
         }
     }
-
-    bool const needsFood = player->GetHealthPct() < 100.0f;
-    bool const hasEatAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
-    bool const hasDrinkAura = player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
 
     // If already drinking, never decide away from drinking until at least 50%
     // mana has been recovered.

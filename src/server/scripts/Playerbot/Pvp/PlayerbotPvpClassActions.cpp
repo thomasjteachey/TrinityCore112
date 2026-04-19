@@ -1299,6 +1299,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (context.spellId == 6940)
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
 
+    // Warlock curse openers are instant and can leave the bot with an idle
+    // motion generator while still in combat against a moving target. Re-issue
+    // ranged approach pressure so follow-up casts do not stall.
+    if ((context.spellId == 11719 || context.spellId == 11713) &&
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target && target->IsAlive() && CanIssueFollowCommands(player))
+    {
+        float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 3.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+        IssueRangedApproachMovement(player, target, desiredRange);
+    }
+
     return true;
 }
 
