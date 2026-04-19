@@ -357,11 +357,18 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!motionMaster)
         return;
 
-    // Reach-spell movement should not depend on combat/chase state. Using
-    // follow for both hostile and friendly targets prevents edge cases where
-    // chase fails to engage while the bot is out of combat but still needs to
-    // close range for spellcasting.
-    motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+    if (player->IsValidAttackTarget(target))
+    {
+        // Ensure hostile ranged approach can engage chase generators even when
+        // the bot is currently out of combat.
+        if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+            player->Attack(target, true);
+        motionMaster->MoveChase(target, safeDistance);
+    }
+    else
+    {
+        motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+    }
 }
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
