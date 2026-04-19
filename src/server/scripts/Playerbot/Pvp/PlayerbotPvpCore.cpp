@@ -1215,35 +1215,38 @@ bool HasDotAura(Unit const* unit)
         unit->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT);
 }
 
-bool IsMountOrAimedShotCast(SpellInfo const* spellInfo)
-{
-    if (!spellInfo)
-        return false;
-
-    if (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT)
-        return true;
-
-    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
-    return firstRank && firstRank->Id == 19434; // Aimed Shot
-}
-
-bool ShouldIgnoreInterruptCast(Unit const* unit)
+bool IsInterruptibleCast(Unit const* unit)
 {
     if (!unit)
-        return true;
+        return false;
 
-    auto shouldIgnoreCurrent = [&](CurrentSpellTypes spellType)
+    auto isInterruptibleCurrentSpell = [&](CurrentSpellTypes spellType)
     {
-        Spell const* current = unit->GetCurrentSpell(spellType);
-        if (!current)
+        Spell const* currentSpell = unit->GetCurrentSpell(spellType);
+        if (!currentSpell)
             return false;
 
-        return IsMountOrAimedShotCast(current->GetSpellInfo());
+        SpellInfo const* spellInfo = currentSpell->GetSpellInfo();
+        if (!spellInfo || spellInfo->PreventionType != SPELL_PREVENTION_TYPE_SILENCE)
+            return false;
+
+        SpellState const state = currentSpell->getState();
+        bool const isInInterruptiblePhase = state == SPELL_STATE_CASTING ||
+            (state == SPELL_STATE_PREPARING && currentSpell->GetCastTime() > 0.0f);
+        if (!isInInterruptiblePhase)
+            return false;
+
+        if (spellType == CURRENT_GENERIC_SPELL)
+            return (spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_INTERRUPT) != 0;
+
+        if (spellType == CURRENT_CHANNELED_SPELL)
+            return (spellInfo->ChannelInterruptFlags & CHANNEL_INTERRUPT_FLAG_INTERRUPT) != 0;
+
+        return false;
     };
 
-    return shouldIgnoreCurrent(CURRENT_GENERIC_SPELL) ||
-        shouldIgnoreCurrent(CURRENT_CHANNELED_SPELL) ||
-        shouldIgnoreCurrent(CURRENT_AUTOREPEAT_SPELL);
+    return isInterruptibleCurrentSpell(CURRENT_GENERIC_SPELL) ||
+        isInterruptibleCurrentSpell(CURRENT_CHANNELED_SPELL);
 }
 
 bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
@@ -1316,7 +1319,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         return HasHostileTarget(player, candidate) &&
             !IsTargetInvalidByImmunity(player, candidate) &&
             candidate->HasUnitState(UNIT_STATE_CASTING) &&
-            !ShouldIgnoreInterruptCast(candidate) &&
+            IsInterruptibleCast(candidate) &&
             player->IsWithinLOSInMap(candidate) &&
             player->IsWithinDistInMap(candidate, maxDistance);
     };
