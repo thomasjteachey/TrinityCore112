@@ -336,9 +336,13 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     {
         // Stealth openers (e.g., Cheap Shot) are very sensitive to smooth
         // closing movement. Strict-human segmented MovePoint updates can look
-        // like start/stop inching while approaching. Keep a continuous follow
-        // command here so rogues fluidly close to opener distance.
-        motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+        // like start/stop inching while approaching. Use chase for hostile
+        // opener targets so rogues actually close distance instead of idling
+        // in a follow generator while out of combat.
+        if (player->IsValidAttackTarget(target))
+            motionMaster->MoveChase(target);
+        else
+            motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
         return;
     }
 
