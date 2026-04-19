@@ -381,6 +381,14 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
     playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
     bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
+    playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(player, values);
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    bool const movementIdle = !motionMaster || motionMaster->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE;
+    bool const shouldForceClassMovementTick = classContext.classSpellsEnabled &&
+        classContext.shouldExecute &&
+        classContext.movementDirective != playerbot::PvpClassSpellContext::MovementDirective::None &&
+        movementIdle;
+    bool const didExecuteClassSpell = shouldForceClassMovementTick && playerbot::PvpClassActions::Execute(player, classContext);
 
     playerbot::BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
@@ -393,6 +401,10 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     uint32 const bgTeam = player->GetBGTeam();
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
+               << " class_force=" << (shouldForceClassMovementTick ? 1 : 0)
+               << " class_exec=" << (didExecuteClassSpell ? 1 : 0)
+               << " class_directive=" << static_cast<uint32>(classContext.movementDirective)
+               << " class_spell=" << classContext.spellId
                << " lifecycle=" << (didExecuteLifecycle ? 1 : 0)
                << " alive=" << (player->IsAlive() ? 1 : 0)
                << " rooted=" << (player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0)
