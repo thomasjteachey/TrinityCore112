@@ -1270,7 +1270,7 @@ bool IsInterruptibleCast(Unit const* unit)
         if (!spellInfo || spellInfo->PreventionType != SPELL_PREVENTION_TYPE_SILENCE)
             return false;
 
-        SpellState const state = currentSpell->getState();
+        uint32 const state = currentSpell->getState();
         bool const isInInterruptiblePhase = state == SPELL_STATE_CASTING ||
             (state == SPELL_STATE_PREPARING && currentSpell->GetCastTime() > 0.0f);
         if (!isInInterruptiblePhase)
