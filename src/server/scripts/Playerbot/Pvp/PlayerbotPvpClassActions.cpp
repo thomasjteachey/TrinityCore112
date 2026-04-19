@@ -1071,6 +1071,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
         player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
+
+        // Virtual sessions do not emit client stand-state opcodes before
+        // casting. Explicitly stand when transitioning out of drink/eat casts
+        // so bots do not remain visually seated while spellcasting.
+        if (player->IsSitState())
+            player->SetStandState(UNIT_STAND_STATE_STAND);
     }
 
     // Auto-repeat ranged attacks (e.g., wand Shoot) and Life Tap are validated
