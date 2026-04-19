@@ -113,7 +113,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
     playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(bot, values);
     playerbot::BattlegroundLifecycleContext const lifecycleContext = playerbot::PvpCore::BuildBattlegroundLifecycleContext(bot, values);
     playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
-    bool const lifecycleEnabled = playerbot::PvpCore::IsLifecycleEnabled();
+    bool const lifecycleEnabled = lifecycleContext.lifecycleEnabled;
     bool const managedRandomBot = playerbot::IsManagedRandomBot(bot);
     bool const canFollowCommands = bot->IsAlive() &&
         !bot->HasUnitState(UNIT_STATE_ROOT) &&
