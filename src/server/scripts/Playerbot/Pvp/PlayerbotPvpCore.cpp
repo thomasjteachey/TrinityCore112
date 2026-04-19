@@ -1215,6 +1215,37 @@ bool HasDotAura(Unit const* unit)
         unit->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT);
 }
 
+bool IsMountOrAimedShotCast(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->HasAura(SPELL_AURA_MOUNTED) || spellInfo->Mechanic == MECHANIC_MOUNT)
+        return true;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 19434; // Aimed Shot
+}
+
+bool ShouldIgnoreInterruptCast(Unit const* unit)
+{
+    if (!unit)
+        return true;
+
+    auto shouldIgnoreCurrent = [&](CurrentSpellTypes spellType)
+    {
+        Spell const* current = unit->GetCurrentSpell(spellType);
+        if (!current)
+            return false;
+
+        return IsMountOrAimedShotCast(current->GetSpellInfo());
+    };
+
+    return shouldIgnoreCurrent(CURRENT_GENERIC_SPELL) ||
+        shouldIgnoreCurrent(CURRENT_CHANNELED_SPELL) ||
+        shouldIgnoreCurrent(CURRENT_AUTOREPEAT_SPELL);
+}
+
 bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
 {
     if (!player || !target)
@@ -1285,6 +1316,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         return HasHostileTarget(player, candidate) &&
             !IsTargetInvalidByImmunity(player, candidate) &&
             candidate->HasUnitState(UNIT_STATE_CASTING) &&
+            !ShouldIgnoreInterruptCast(candidate) &&
             player->IsWithinLOSInMap(candidate) &&
             player->IsWithinDistInMap(candidate, maxDistance);
     };
@@ -1776,6 +1808,9 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 
     auto isSnared = [](Unit const* target)
     {
+        if (!target || target->HasStealthAura())
+            return false;
+
         return target && (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) || target->HasAuraWithMechanic(1 << MECHANIC_ROOT));
     };
 
