@@ -35,7 +35,7 @@ struct PvpCoreConfig
     bool pvpClassSpellsEnabled = false;
     float spellRange = 30.0f;
     float healRange = 40.0f;
-    float meleeRange = 8.0f;
+    float meleeRange = 5.0f;
     float closeRange = 15.0f;
     float longRange = 35.0f;
 };
