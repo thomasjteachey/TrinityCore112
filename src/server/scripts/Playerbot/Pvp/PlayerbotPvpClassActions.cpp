@@ -1054,6 +1054,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
+            // If we cannot pay for the selected enemy spell, immediately
+            // transition to melee pressure so bots do not idle while OOM.
+            if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target && CanIssueFollowCommands(player))
+            {
+                IssueMeleeApproachMovement(player, target);
+                if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+                    player->Attack(target, true);
+            }
+
             failureReason = "insufficient_power";
             return false;
         }
