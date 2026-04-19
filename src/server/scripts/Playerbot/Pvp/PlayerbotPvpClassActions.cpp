@@ -845,21 +845,23 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (preserveStealthForOpener)
         {
             // While stealthed, keep auto-attack disabled so we do not break
-            // stealth early, but keep chase active so rogues continue
-            // closing distance instead of idling in place during openers.
+            // stealth early, but continue issuing movement so rogues still
+            // close to opener distance instead of idling in place.
             //
-            // AttackStop can clear chase intent in some movement states, so
-            // only call it when we are actively swinging a victim and then
-            // (re)issue chase immediately afterwards.
+            // AttackStop can clear active movement intent in some states, so
+            // only call it when we are actively swinging a victim.
             if (player->GetVictim())
                 player->AttackStop();
 
             if (CanIssueFollowCommands(player))
             {
-                // In stealth opener states, favor direct chase over strict
-                // segmented follow to avoid stop/start stalls around ~6-10y.
+                // In stealth opener states, favor continuous follow over
+                // chase. Chase movement pauses when owner->GetVictim() no
+                // longer matches the chased unit, and stealth openers
+                // intentionally avoid setting/keeping a victim so stealth is
+                // preserved.
                 if (MotionMaster* motionMaster = player->GetMotionMaster())
-                    motionMaster->MoveChase(target);
+                    motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
             }
         }
         else if (player->GetVictim() != target)
