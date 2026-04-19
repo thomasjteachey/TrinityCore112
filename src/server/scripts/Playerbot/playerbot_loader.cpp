@@ -18,12 +18,14 @@
 #include "Log.h"
 #include "Chat.h"
 #include "GameTime.h"
+#include "Globals/ObjectAccessor.h"
 #include "Item.h"
 #include "MotionMaster.h"
 #include "Movement/AbstractFollower.h"
 #include "Player.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
+#include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
@@ -113,15 +115,35 @@ std::string BuildManagedBotStatusLine(Player* bot)
     playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(bot, values);
     playerbot::BattlegroundLifecycleContext const lifecycleContext = playerbot::PvpCore::BuildBattlegroundLifecycleContext(bot, values);
     playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
+    Unit* directiveTarget = classContext.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, classContext.movementTargetGuid);
+    std::string const lastClassExecutionStatus = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
+    bool const lifecycleEnabled = lifecycleContext.lifecycleEnabled;
+    bool const managedRandomBot = playerbot::IsManagedRandomBot(bot);
+    bool const canFollowCommands = bot->IsAlive() &&
+        !bot->HasUnitState(UNIT_STATE_ROOT) &&
+        !bot->HasUnitState(UNIT_STATE_STUNNED) &&
+        !bot->HasUnitState(UNIT_STATE_CONFUSED) &&
+        !bot->HasUnitState(UNIT_STATE_FLEEING) &&
+        !bot->HasUnitState(UNIT_STATE_LOST_CONTROL);
 
     std::ostringstream status;
     status << "PB status: "
+           << "lifecycle=" << (lifecycleEnabled ? "on" : "off")
+           << " managed=" << (managedRandomBot ? "yes" : "no")
            << "combat=" << (bot->IsInCombat() ? "yes" : "no")
            << " alive=" << (bot->IsAlive() ? "yes" : "no")
            << " moving=" << (bot->isMoving() ? "yes" : "no")
+           << " can_follow=" << (canFollowCommands ? "yes" : "no")
+           << " rooted=" << (bot->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+           << " stunned=" << (bot->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
+           << " confused=" << (bot->HasUnitState(UNIT_STATE_CONFUSED) ? "yes" : "no")
+           << " fleeing=" << (bot->HasUnitState(UNIT_STATE_FLEEING) ? "yes" : "no")
+           << " lost_control=" << (bot->HasUnitState(UNIT_STATE_LOST_CONTROL) ? "yes" : "no")
            << " stealth=" << (bot->HasStealthAura() ? "yes" : "no")
            << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
            << " bg_state=" << ToString(values.battlegroundState)
+           << " class_gate=" << (classContext.classSpellsEnabled ? "on" : "off")
+           << " class_exec=" << (classContext.shouldExecute ? "yes" : "no")
            << " class_action=" << (classContext.actionName ? classContext.actionName : "none")
            << " spell=" << classContext.spellId
            << " reason=" << (classContext.reason ? classContext.reason : "none")
@@ -129,11 +151,13 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " target_guid=" << classContext.targetGuid.ToString()
            << " move_directive=" << ToString(classContext.movementDirective)
            << " move_target=" << classContext.movementTargetGuid.ToString()
+           << " move_target_resolved=" << (directiveTarget ? "yes" : "no")
            << " move_range=" << classContext.movementFollowRange
            << " lifecycle_q=" << ToString(lifecycleContext.queueOperation)
            << " lifecycle_invite=" << ToString(lifecycleContext.invitationResponse)
            << " hooks(bg=" << (hooks.battlegroundParticipationHook ? "on" : "off")
            << ",arena=" << (hooks.arenaParticipationHook ? "on" : "off") << ")"
+           << " last_exec=" << lastClassExecutionStatus
            << " motion=" << uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType())
            << " pos=(" << bot->GetMapId() << ":" << bot->GetPositionX() << "," << bot->GetPositionY() << "," << bot->GetPositionZ() << ")"
            << " o=" << bot->GetOrientation();
