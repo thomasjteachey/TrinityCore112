@@ -153,6 +153,18 @@ float GetConfiguredSpellRange() { return g_PvpCoreConfig.spellRange; }
 float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
 float GetConfiguredMeleeRange() { return g_PvpCoreConfig.meleeRange; }
 float GetConfiguredCloseRange() { return g_PvpCoreConfig.closeRange; }
+
+bool IsWithinPracticalMeleeRange(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return false;
+
+    if (player->IsWithinMeleeRange(target))
+        return true;
+
+    float const fallbackRange = std::max(2.5f, GetConfiguredMeleeRange());
+    return player->IsWithinLOSInMap(target) && player->IsWithinDistInMap(target, fallbackRange);
+}
 float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
 
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
@@ -2297,13 +2309,13 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
 
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 1784) && IsSpellReady(player, 1784), 50.0f,
         { "rogue stealth", "enter stealth before engagement", 1784, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, player->HasStealthAura() && player->IsWithinMeleeRange(target) && IsSpellReady(player, 1833), 49.0f,
+    AddDecisionCandidate(candidates, player->HasStealthAura() && IsWithinPracticalMeleeRange(player, target) && IsSpellReady(player, 1833), 49.0f,
         { "rogue cheap shot", "default opener", 1833, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 1766), 48.0f,
         { "rogue kick", "interrupt enemy cast", 1766, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HealthBelowPct(40) && IsSpellReady(player, 5277), 47.0f,
         { "rogue evasion", "defensive survival in melee", 5277, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !player->HealthBelowPct(50) && !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 30.0f) && IsSpellReady(player, 11305), 46.0f,
+    AddDecisionCandidate(candidates, !player->HealthBelowPct(50) && !IsWithinPracticalMeleeRange(player, target) && player->IsWithinDistInMap(target, 30.0f) && IsSpellReady(player, 11305), 46.0f,
         { "rogue sprint", "close gap for melee pressure", 11305, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, blindTarget, 45.0f,
         { "rogue blind", "prioritize druid/shaman/paladin secondary targets without abolish poison", 2094, playerbot::PvpClassSpellContext::TargetMode::Enemy, blindTarget ? blindTarget->GetGUID() : ObjectGuid::Empty });
@@ -2311,7 +2323,7 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target)
         { "rogue kidney shot", "primary stun finisher at full combo points", 8643, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->GetComboPoints() >= 5 && IsSpellReady(player, 11300), 43.0f,
         { "rogue eviscerate", "combo finisher pressure", 11300, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554), 42.0f,
+    AddDecisionCandidate(candidates, !IsWithinPracticalMeleeRange(player, target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554), 42.0f,
         { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 16511), 20.0f,
         { "rogue hemorrhage", "default subtlety combo point builder", 16511, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -2373,7 +2385,7 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
         return decision;
     }
 
-    bool const inMelee = target && player->IsWithinMeleeRange(target);
+    bool const inMelee = IsWithinPracticalMeleeRange(player, target);
     switch (player->GetClass())
     {
     case CLASS_HUNTER:
@@ -2907,7 +2919,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
         bool const isGapCloser = context.spellId == 11578 || context.spellId == 20617;
-        if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !isGapCloser)
+        if (meleeTarget && !IsWithinPracticalMeleeRange(player, meleeTarget) && !isGapCloser)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),
                 std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 85.0f);
@@ -3010,7 +3022,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         hasValidTarget && IsPrimaryMeleeClassForSpacing(player->GetClass()))
     {
         Unit const* meleeMovementTarget = resolveTargetByGuid(selectedTargetGuid);
-        if (meleeMovementTarget && !player->IsWithinMeleeRange(meleeMovementTarget))
+        if (meleeMovementTarget && !IsWithinPracticalMeleeRange(player, meleeMovementTarget))
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeMovementTarget->GetGUID(),
                 std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 69.0f);
