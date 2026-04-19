@@ -2254,17 +2254,30 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 
     if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
     {
-        bool const forceStealthRogueChase = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
-        if (!forceStealthRogueChase && !CanIssueMovementCommand(player, 500))
+        bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
+        if (!isStealthedRogue && !CanIssueMovementCommand(player, 500))
             return true;
-        // Use core chase movement for melee stickiness instead of repeatedly
-        // recomputing follow points around the target. This avoids oscillation
-        // where rogues can appear to peel away before re-engaging.
+
         ClearEatDrinkAurasForMovement(player);
+
+        if (isStealthedRogue)
+        {
+            // Stealth openers intentionally run without a committed victim for
+            // part of the engage. MoveChase can pause when victim linkage is
+            // absent, so use follow semantics to keep continuous closing.
+            player->GetMotionMaster()->MoveFollow(target, 0.1f, player->GetFollowAngle());
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP distance band: bot={} profile={} decision=stealth-melee-close-follow distance={} max={}.",
+                player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);
+            return true;
+        }
+
+        // Use core chase movement for non-stealth melee stickiness instead of
+        // repeatedly recomputing follow points around the target.
         player->GetMotionMaster()->MoveChase(target);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={} forceStealthRogueChase={}.",
-            player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange, forceStealthRogueChase ? 1 : 0);
+            "Playerbot PvP distance band: bot={} profile={} decision=melee-close distance={} max={}.",
+            player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);
         return true;
     }
 
