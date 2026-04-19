@@ -1255,6 +1255,40 @@ bool HasDotAura(Unit const* unit)
         unit->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT);
 }
 
+bool IsInterruptibleCast(Unit const* unit)
+{
+    if (!unit)
+        return false;
+
+    auto isInterruptibleCurrentSpell = [&](CurrentSpellTypes spellType)
+    {
+        Spell const* currentSpell = unit->GetCurrentSpell(spellType);
+        if (!currentSpell)
+            return false;
+
+        SpellInfo const* spellInfo = currentSpell->GetSpellInfo();
+        if (!spellInfo || spellInfo->PreventionType != SPELL_PREVENTION_TYPE_SILENCE)
+            return false;
+
+        SpellState const state = currentSpell->getState();
+        bool const isInInterruptiblePhase = state == SPELL_STATE_CASTING ||
+            (state == SPELL_STATE_PREPARING && currentSpell->GetCastTime() > 0.0f);
+        if (!isInInterruptiblePhase)
+            return false;
+
+        if (spellType == CURRENT_GENERIC_SPELL)
+            return (spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_INTERRUPT) != 0;
+
+        if (spellType == CURRENT_CHANNELED_SPELL)
+            return (spellInfo->ChannelInterruptFlags & CHANNEL_INTERRUPT_FLAG_INTERRUPT) != 0;
+
+        return false;
+    };
+
+    return isInterruptibleCurrentSpell(CURRENT_GENERIC_SPELL) ||
+        isInterruptibleCurrentSpell(CURRENT_CHANNELED_SPELL);
+}
+
 bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
 {
     if (!player || !target)
@@ -1325,6 +1359,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
         return HasHostileTarget(player, candidate) &&
             !IsTargetInvalidByImmunity(player, candidate) &&
             candidate->HasUnitState(UNIT_STATE_CASTING) &&
+            IsInterruptibleCast(candidate) &&
             player->IsWithinLOSInMap(candidate) &&
             player->IsWithinDistInMap(candidate, maxDistance);
     };
@@ -1816,6 +1851,9 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 
     auto isSnared = [](Unit const* target)
     {
+        if (!target || target->HasStealthAura())
+            return false;
+
         return target && (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) || target->HasAuraWithMechanic(1 << MECHANIC_ROOT));
     };
 
