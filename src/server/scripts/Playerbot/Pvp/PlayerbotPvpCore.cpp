@@ -407,6 +407,17 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (minRange > 0.0f && player->IsWithinDistInMap(resolvedTarget, minRange))
         return false;
 
+    // Skip decisions we cannot currently pay for so the fallback chain can
+    // choose a castable alternative (wand, movement, etc.) instead of
+    // repeatedly selecting an OOM support spell.
+    if (spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    {
+        Powers const powerType = Powers(spellInfo->PowerType);
+        int32 const powerCost = spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask());
+        if (powerCost > 0 && player->GetPower(powerType) < powerCost)
+            return false;
+    }
+
     return true;
 }
 
@@ -3145,8 +3156,16 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else
             {
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
+                if (IsPrimaryRangedClassForSpacing(player->GetClass()))
+                {
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, fallbackTarget->GetGUID(),
+                        std::max(1.0f, GetConfiguredCloseRange()), "flee", "low mana fallback disengage to recover", 67.0f);
+                }
+                else
+                {
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
+                        std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
+                }
             }
         }
     }
