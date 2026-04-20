@@ -549,6 +549,7 @@ class TC_GAME_API Battleground
         BattlegroundScoreMap PlayerScores;                // Player scores
         // must be implemented in BG subclass
         virtual void RemovePlayer(Player* /*player*/, ObjectGuid /*guid*/, uint32 /*team*/) { }
+        virtual void ModifyEndOfMatchHonorRewards(uint32 /*winner*/, uint32 /*team*/, uint32& /*winnerHonor*/, uint32& /*loserHonor*/) const { }
 
         // Player lists, those need to be accessible by inherited classes
         BattlegroundPlayerMap m_Players;

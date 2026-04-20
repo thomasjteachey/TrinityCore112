@@ -842,6 +842,8 @@ void Battleground::EndBattleground(uint32 winner)
             loser_money *= arenaMultiplier;
         }
 
+        ModifyEndOfMatchHonorRewards(winner, team, winner_honor, loser_honor);
+
         // Rewards
         // only grant rewards if battle has lasted 15 seconds
         if (GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
