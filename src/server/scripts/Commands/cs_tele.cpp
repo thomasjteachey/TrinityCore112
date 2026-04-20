@@ -26,6 +26,7 @@ EndScriptData */
 #include "Chat.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "BattlegroundMgr.h"
 #include "Group.h"
 #include "Language.h"
 #include "MapManager.h"
@@ -317,6 +318,37 @@ public:
         return true;
     }
 
+    static Position const* GetBattlegroundMapSpawnPosition(uint32 mapId, uint32 team)
+    {
+        for (uint32 i = 1; i < sBattlemasterListStore.GetNumRows(); ++i)
+        {
+            BattlemasterListEntry const* battlemasterEntry = sBattlemasterListStore.LookupEntry(i);
+            if (!battlemasterEntry)
+                continue;
+
+            for (int32 battlegroundMapId : battlemasterEntry->MapID)
+            {
+                if (battlegroundMapId == -1)
+                    break;
+
+                if (uint32(battlegroundMapId) != mapId)
+                    continue;
+
+                if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BattlegroundTypeId(battlemasterEntry->ID)))
+                {
+                    TeamId preferredTeam = Battleground::GetTeamIndexByTeamId(team);
+                    if (Position const* preferredSpawn = battlegroundTemplate->GetTeamStartPosition(preferredTeam))
+                        return preferredSpawn;
+
+                    TeamId fallbackTeam = preferredTeam == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+                    return battlegroundTemplate->GetTeamStartPosition(fallbackTeam);
+                }
+            }
+        }
+
+        return nullptr;
+    }
+
     static bool HandleTeleMapCommand(ChatHandler* handler, uint32 mapId, Optional<float> x, Optional<float> y, Optional<float> z, Optional<float> orientation)
     {
         Player* player = handler->GetSession()->GetPlayer();
@@ -333,6 +365,21 @@ public:
         if (x && y)
         {
             destination.Relocate(*x, *y, z.value_or(player->GetPositionZ()), orientation.value_or(player->GetOrientation()));
+        }
+        else if (map->IsBattlegroundOrArena())
+        {
+            if (Position const* teamSpawn = GetBattlegroundMapSpawnPosition(mapId, player->GetTeam()))
+            {
+                destination = *teamSpawn;
+                if (orientation)
+                    destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), *orientation);
+            }
+            else
+            {
+                handler->SendSysMessage(LANG_CANNOT_TELE_TO_BG);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
         }
         else
         {
