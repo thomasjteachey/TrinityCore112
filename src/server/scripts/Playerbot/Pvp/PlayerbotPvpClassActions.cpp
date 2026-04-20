@@ -409,6 +409,26 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
 }
 
+float ComputeLosRecoveryRange(Player const* player, Unit const* target, float maxRange)
+{
+    if (!player || !target)
+        return std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+
+    // LOS failures at "near max range" can repeatedly reissue follow distances
+    // that are already satisfied (e.g., 27y away with desired 29y), leaving
+    // ranged bots stationary. Bias recovery movement to a noticeably closer
+    // band so bots strafe/reposition to regain visibility.
+    float const currentDistance = player->GetDistance(target);
+    float desiredRange = std::max(1.0f, std::min(
+        std::max(3.0f, playerbot::PvpCore::GetConfig().closeRange),
+        currentDistance > 2.0f ? currentDistance - 2.0f : 1.0f));
+
+    if (maxRange > 0.0f)
+        desiredRange = std::min(desiredRange, std::max(1.0f, maxRange - 3.0f));
+
+    return desiredRange;
+}
+
 bool IsCrowdControlledForAction(Player const* player)
 {
     if (!player)
@@ -983,7 +1003,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 IssueMeleeApproachMovement(player, target);
             else
             {
-                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                float const desiredRange = ComputeLosRecoveryRange(player, target, maxRange);
                 IssueRangedApproachMovement(player, target, desiredRange);
             }
         }
@@ -1177,7 +1197,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     IssueMeleeApproachMovement(player, target);
                 else
                 {
-                    float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                    float const desiredRange = ComputeLosRecoveryRange(player, target, maxRange);
                     IssueRangedApproachMovement(player, target, desiredRange);
                 }
             }

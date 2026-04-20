@@ -271,9 +271,19 @@ SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileT
     if (!player)
         return {};
 
+    constexpr uint32 kPlayerbotDrinkSpell = 22734;
+    bool const maintainExistingDrink = !player->IsInCombat() &&
+        player->GetMaxPower(POWER_MANA) > 0 &&
+        player->HasAura(kPlayerbotDrinkSpell) &&
+        player->GetPowerPct(POWER_MANA) < 50.0f;
+
     // Match reference behavior more closely: do not let out-of-combat utility
     // preempt combat spell trees while a valid hostile target exists.
-    if (HasHostileTarget(player, hostileTarget))
+    //
+    // Exception: if the bot is already drinking and still below the 50% mana
+    // floor, keep utility selection available so drink remains sticky instead
+    // of immediately breaking back into combat posture.
+    if (HasHostileTarget(player, hostileTarget) && !maintainExistingDrink)
         return {};
 
     return SelectOutOfCombatEatDrinkOrMountSpell(player);
