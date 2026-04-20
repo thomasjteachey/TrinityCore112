@@ -7188,6 +7188,11 @@ void Player::AddWeeklyHonorPoints(uint32 value, CharacterDatabaseTransaction tra
     if (!value)
         return;
 
+    // Managed playerbots use virtual sessions; exclude their honor from the
+    // weekly warchief race tracking.
+    if (WorldSession const* session = GetSession(); session && session->IsVirtualSession())
+        return;
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_WEEKLY_HONOR_POINTS);
     stmt->setUInt32(0, GetGUID().GetCounter());
     stmt->setUInt32(1, value);
