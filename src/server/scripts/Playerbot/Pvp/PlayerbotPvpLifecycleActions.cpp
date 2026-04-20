@@ -76,12 +76,14 @@ constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS = 8000;
 constexpr uint32 PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS = 14000;
 constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
 constexpr uint32 PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS = 3000;
+constexpr uint32 PLAYERBOT_BG_QUEUE_REQUEUE_TIMEOUT_MS = 15000;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
 constexpr uint32 SPELL_DESERTER = 26013;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
+std::unordered_map<uint64, uint32> g_BattlegroundQueuedNoInviteSinceMsByGuid;
 uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
 uint32 g_LastScmSlotRefillAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
@@ -1266,6 +1268,51 @@ bool HasConflictingBattlegroundLifecycleContext(playerbot::BattlegroundLifecycle
         (context.invitationResponse != playerbot::InvitationResponseType::None);
 }
 
+bool HasPendingBattlegroundInvite(Player const* player)
+{
+    if (!player)
+        return false;
+
+    for (uint32 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const bgQueueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        if (player->IsInvitedForBattlegroundQueueType(bgQueueTypeId))
+            return true;
+    }
+
+    return false;
+}
+
+bool ShouldRefreshLongQueuedBot(Player* player)
+{
+    if (!player)
+        return false;
+
+    uint64 const guidRaw = player->GetGUID().GetRawValue();
+    if (player->InBattleground() || !player->InBattlegroundQueue() || HasPendingBattlegroundInvite(player))
+    {
+        g_BattlegroundQueuedNoInviteSinceMsByGuid.erase(guidRaw);
+        return false;
+    }
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& queuedSinceMs = g_BattlegroundQueuedNoInviteSinceMsByGuid[guidRaw];
+    if (!queuedSinceMs)
+    {
+        queuedSinceMs = nowMs;
+        return false;
+    }
+
+    if (nowMs < queuedSinceMs + PLAYERBOT_BG_QUEUE_REQUEUE_TIMEOUT_MS)
+        return false;
+
+    queuedSinceMs = nowMs;
+    return true;
+}
+
 bool HandleBattlegroundDeathState(Player* player)
 {
     static std::unordered_map<uint64, uint32> queuedSinceMsByGuid;
@@ -2429,6 +2476,15 @@ bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycle
             player->GetGUID().ToString(), static_cast<uint8>(context.queueOperation), static_cast<uint8>(context.invitationResponse),
             context.shouldHandleInProgressStatus ? 1 : 0);
         return false;
+    }
+
+    if (ShouldRefreshLongQueuedBot(player))
+    {
+        EmitLifecycleDiagnostic(player, "queue-timeout-requeue",
+            "Queue wait exceeded 15s without invite; leaving queue and requeueing.");
+        bool const leftQueue = LeaveQueuePrimitive(player);
+        bool const requeued = JoinQueuePrimitive(player);
+        return leftQueue || requeued;
     }
 
     bool didExecute = false;
