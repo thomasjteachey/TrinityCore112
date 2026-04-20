@@ -58,6 +58,7 @@ public:
         {
             { "add",    HandleTeleAddCommand,   rbac::RBAC_PERM_COMMAND_TELE_ADD,   Console::No },
             { "del",    HandleTeleDelCommand,   rbac::RBAC_PERM_COMMAND_TELE_DEL,   Console::Yes },
+            { "map",    HandleTeleMapCommand,   rbac::RBAC_PERM_COMMAND_TELE,       Console::No },
             { "name",   teleNameCommandTable },
             { "group",  HandleTeleGroupCommand, rbac::RBAC_PERM_COMMAND_TELE_GROUP, Console::No },
             { "",       HandleTeleCommand,      rbac::RBAC_PERM_COMMAND_TELE,       Console::No },
@@ -313,6 +314,50 @@ public:
             player->SaveRecallPosition(); // save only in non-flight case
 
         player->TeleportTo(tele->mapId, tele->position_x, tele->position_y, tele->position_z, tele->orientation);
+        return true;
+    }
+
+    static bool HandleTeleMapCommand(ChatHandler* handler, uint32 mapId, Optional<float> x, Optional<float> y, Optional<float> z, Optional<float> orientation)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+
+        MapEntry const* map = sMapStore.LookupEntry(mapId);
+        if (!map)
+        {
+            handler->SendSysMessage(LANG_COMMAND_NOMAPFOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Position destination;
+        if (x && y)
+        {
+            destination.Relocate(*x, *y, z.value_or(player->GetPositionZ()), orientation.value_or(player->GetOrientation()));
+        }
+        else
+        {
+            float centerX = 0.0f;
+            float centerY = 0.0f;
+            Map const* baseMap = sMapMgr->CreateBaseMap(mapId);
+            float groundZ = baseMap->GetHeight(centerX, centerY, MAX_HEIGHT);
+            float waterZ = baseMap->GetWaterLevel(centerX, centerY);
+            float centerZ = groundZ > waterZ ? groundZ : waterZ;
+            destination.Relocate(centerX, centerY, centerZ, orientation.value_or(player->GetOrientation()));
+        }
+
+        if (!MapManager::IsValidMapCoord(mapId, destination) || sObjectMgr->IsTransportMap(mapId))
+        {
+            handler->PSendSysMessage(LANG_INVALID_TARGET_COORD, destination.GetPositionX(), destination.GetPositionY(), mapId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (player->IsInFlight())
+            player->FinishTaxiFlight();
+        else
+            player->SaveRecallPosition();
+
+        player->TeleportTo({ mapId, destination });
         return true;
     }
 
