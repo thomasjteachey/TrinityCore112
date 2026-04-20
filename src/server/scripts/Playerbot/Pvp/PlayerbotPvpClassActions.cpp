@@ -1441,7 +1441,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
-    if (context.movementDirective != PvpClassSpellContext::MovementDirective::None)
+    bool const hasCastIntent = context.spellId != 0 || context.itemEntry != 0;
+    bool const shouldExecuteMovementBeforeCast =
+        !hasCastIntent || (
+            context.movementDirective != PvpClassSpellContext::MovementDirective::ReachMeleeRange &&
+            context.movementDirective != PvpClassSpellContext::MovementDirective::ReachSpellRange &&
+            context.movementDirective != PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell &&
+            context.movementDirective != PvpClassSpellContext::MovementDirective::FaceSpellTarget);
+
+    if (context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
     {
         if (ShouldThrottleDirective(player, context))
         {
