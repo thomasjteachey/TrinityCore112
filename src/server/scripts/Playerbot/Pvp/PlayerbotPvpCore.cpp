@@ -97,7 +97,11 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
     bool const previousRangedMode = rangedMode;
     if (rangedMode)
     {
-        if (target->GetVictim() == player && distance <= kReferenceHunterSwitchDistance)
+        // Deadzone guard: once a hostile is inside hunter minimum-range
+        // pressure distance, force melee mode even if threat ownership has not
+        // switched yet. Otherwise bots can stay in ranged mode with no valid
+        // cast options and appear "locked out" at point-blank range.
+        if (distance <= kReferenceHunterSwitchDistance)
             rangedMode = false;
     }
     else
@@ -271,9 +275,19 @@ SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileT
     if (!player)
         return {};
 
+    constexpr uint32 kPlayerbotDrinkSpell = 22734;
+    bool const maintainExistingDrink = !player->IsInCombat() &&
+        player->GetMaxPower(POWER_MANA) > 0 &&
+        player->HasAura(kPlayerbotDrinkSpell) &&
+        player->GetPowerPct(POWER_MANA) < 50.0f;
+
     // Match reference behavior more closely: do not let out-of-combat utility
     // preempt combat spell trees while a valid hostile target exists.
-    if (HasHostileTarget(player, hostileTarget))
+    //
+    // Exception: if the bot is already drinking and still below the 50% mana
+    // floor, keep utility selection available so drink remains sticky instead
+    // of immediately breaking back into combat posture.
+    if (HasHostileTarget(player, hostileTarget) && !maintainExistingDrink)
         return {};
 
     return SelectOutOfCombatEatDrinkOrMountSpell(player);
@@ -760,13 +774,17 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     // If already drinking, never decide away from drinking until at least 50%
     // mana has been recovered.
     if (hasDrinkAura && keepDrinkingFloor)
+    {
+        if (!hasEatAura && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            return { "eat", "pair food with active drink", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, playerbot::PvpClassSpellContext::TargetMode::Self };
         return { "drink", "maintain drink until 50% mana", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
 
     // Recovery auras should naturally break on movement and should not linger
     // once the corresponding resource has fully recovered.
     if (Player* mutablePlayer = const_cast<Player*>(player))
     {
-        if (hasEatAura && (mutablePlayer->isMoving() || !needsFood))
+        if (hasEatAura && (mutablePlayer->isMoving() || (!needsFood && !needsDrink)))
             mutablePlayer->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
         if (hasDrinkAura && (mutablePlayer->isMoving() || !needsDrink))
             mutablePlayer->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK);
@@ -786,8 +804,14 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (needsFood && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
         return { "eat", "recover health out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, playerbot::PvpClassSpellContext::TargetMode::Self };
 
-    if (needsDrink && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
-        return { "drink", "recover mana out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
+    if (needsDrink)
+    {
+        if (!hasEatAura && IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
+            return { "eat", "pair food with mana recovery", SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT, playerbot::PvpClassSpellContext::TargetMode::Self };
+
+        if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
+            return { "drink", "recover mana out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
 
     bool const inBattlegroundPreparation = player->InBattleground() &&
         (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));
@@ -2189,7 +2213,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
         { "druid innervate", "stabilize low-mana ally with innervate", 29166, lowManaAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lowManaAlly ? lowManaAlly->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, cursedTarget, 49.0f,
         { "druid remove curse", "remove curses from allies", 2782, cursedTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, poisonedTarget, 48.0f,
+    AddDecisionCandidate(candidates, poisonedTarget && !HasAuraFromSpellChain(poisonedTarget, 2893), 48.0f,
         { "druid abolish poison", "remove poison pressure from allies", 2893, poisonedTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, poisonedTarget ? poisonedTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, swiftmendTarget && (HasAuraFromSpellChain(swiftmendTarget, 9858) || HasAuraFromSpellChain(swiftmendTarget, 25299)), 47.0f,
         { "druid swiftmend", "consume hot for emergency heal under 50 percent", 18562, swiftmendTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, swiftmendTarget ? swiftmendTarget->GetGUID() : ObjectGuid::Empty });
@@ -2217,7 +2241,13 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
-    Unit const* cleanseTarget = IsSpellReady(player, 4987) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f) : nullptr;
+    Unit const* cleanseTarget = nullptr;
+    if (IsSpellReady(player, 4987))
+    {
+        cleanseTarget = SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f);
+        if (!cleanseTarget)
+            cleanseTarget = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f);
+    }
     Unit const* freedomTarget = IsSpellReady(player, 1044) ? SelectFriendlySnaredTarget(player, 40.0f) : nullptr;
     Unit const* sacrificeTarget = IsSpellReady(player, 6940) ? SelectFriendlyHealthTarget(player, 40.0f, 95.0f) : nullptr;
     Unit const* executeTarget = SelectNearbyEnemyTarget(player, target, 30.0f);
@@ -2452,7 +2482,8 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
         { "shaman earthbind totem", "kite nearby melee pressure", 2484, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 10473), 55.0f,
         { "shaman frost shock", "snare medium-range melee threats", 10473, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, target->GetClass() == CLASS_ROGUE && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 8170), 54.0f,
+    Unit const* poisonedAllyInTotemRange = IsSpellReady(player, 8170) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 20.0f) : nullptr;
+    AddDecisionCandidate(candidates, poisonedAllyInTotemRange && !HasAuraFromSpellChain(player, 8170), 54.0f,
         { "shaman poison cleansing totem", "answer rogue poison pressure", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, (target->GetClass() == CLASS_PRIEST || target->GetClass() == CLASS_WARLOCK) && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 8143), 53.0f,
         { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });

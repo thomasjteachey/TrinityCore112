@@ -409,6 +409,32 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
 }
 
+float ComputeLosRecoveryRange(Player const* player, Unit const* target, float maxRange)
+{
+    if (!player || !target)
+        return std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+
+    // LOS recovery should use a stable follow band. If desired range changes
+    // every tick from "current distance - X", bots can bounce between movement
+    // directives (approach/flee) and look like they are stutter-looping.
+    float const closeFloor = std::max(3.0f, playerbot::PvpCore::GetConfig().closeRange);
+    float const upperBound = maxRange > 0.0f
+        ? std::max(1.0f, maxRange - 3.0f)
+        : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+
+    // Keep recovery closer than max cast distance to re-acquire LOS, but avoid
+    // forcing a near-melee collapse that causes immediate spacing corrections.
+    float const stableRecoveryBand = upperBound * 0.65f;
+    float desiredRange = std::max(closeFloor, std::clamp(stableRecoveryBand, 1.0f, upperBound));
+
+    // If config floors exceed spell upper bounds, prefer the spell bound to
+    // avoid selecting an impossible follow distance.
+    if (closeFloor > upperBound)
+        desiredRange = upperBound;
+
+    return desiredRange;
+}
+
 bool IsCrowdControlledForAction(Player const* player)
 {
     if (!player)
@@ -983,7 +1009,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 IssueMeleeApproachMovement(player, target);
             else
             {
-                float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                float const desiredRange = ComputeLosRecoveryRange(player, target, maxRange);
                 IssueRangedApproachMovement(player, target, desiredRange);
             }
         }
@@ -1177,7 +1203,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     IssueMeleeApproachMovement(player, target);
                 else
                 {
-                    float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+                    float const desiredRange = ComputeLosRecoveryRange(player, target, maxRange);
                     IssueRangedApproachMovement(player, target, desiredRange);
                 }
             }
@@ -1462,8 +1488,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
             {
-                float const desiredRange = std::max(1.0f,
+                float desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
+                if (movementTarget)
+                {
+                    float const currentDistance = player->GetDistance(movementTarget);
+                    // ReachSpellRange must always request an actual "close the
+                    // gap" distance. If desiredRange is >= current distance,
+                    // chase movement can idle and repeatedly reissue the same
+                    // directive (visible as bow-raise stutter loops).
+                    float const closingRange = std::max(1.0f, currentDistance - 2.0f);
+                    desiredRange = std::min(desiredRange, closingRange);
+                }
                 IssueRangedApproachMovement(player, movementTarget, desiredRange);
             }
                 break;
