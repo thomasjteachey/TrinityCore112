@@ -230,7 +230,7 @@ bool TryRefillManagedScmSlots(Player* player, Battleground* battleground)
     g_LastScmSlotRefillAttemptMs = nowMs;
 
     bool const rebalanceTriggered = playerbot::RandomBotParticipationManager::TriggerImmediateRebalance();
-    uint32 const queuedCount = QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0);
+    uint32 const queuedCount = playerbot::QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0);
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Playerbot PvP SCM refill attempt: guid={} instanceId={} players={} maxPlayers={} rebalanceTriggered={} queuedCount={}.",
         player->GetGUID().ToString(), battleground->GetInstanceID(), playersInInstance, maxPlayers, rebalanceTriggered ? 1 : 0, queuedCount);
@@ -2175,7 +2175,7 @@ Unit* AcquireCombatTarget(Player* player, float scanDistance)
             target = duelOpponent;
     }
     if (!isAttackableTarget(target) && player->InBattleground())
-        target = FindNearestEnemyBattlegroundPlayer(player, scanDistance);
+        target = FindNearestEnemyBattlegroundPlayer(player, scanDistance, nullptr, nullptr);
     if (!isAttackableTarget(target))
         return nullptr;
 
@@ -2865,7 +2865,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
             if (EngageNearestEnemyPlayer(player, engageDistance))
                 return true;
 
-            if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
+            if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
                 return MoveTowardUnit(player, nearestEnemy, 20.0f);
         }
 
@@ -2909,7 +2909,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 if (EngageNearestEnemyPlayer(player, engageDistance))
                     return true;
 
-                if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
+                if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
                     return MoveTowardUnit(player, nearestEnemy, 20.0f);
             }
 
@@ -2942,7 +2942,7 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (EngageNearestEnemyPlayer(player, engageDistance))
         return true;
 
-    if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max()))
+    if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
         return MoveTowardUnit(player, nearestEnemy, 20.0f);
 
     return false;
