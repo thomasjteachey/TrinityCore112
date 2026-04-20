@@ -114,6 +114,7 @@ private:
     void ApplyNonInteractableObjectFlags();
     void SpawnRandomBuffSet(uint32 speedTypeIndex);
     uint32 GetHonorRewardForTeam() const;
+    void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
     void TrackHumanParticipantAdded(Player const* player, bool isInBattleground);
     void TrackHumanParticipantRemoved(Player const* player, uint32 team);
     void UpdateHumanFaceoffState();
