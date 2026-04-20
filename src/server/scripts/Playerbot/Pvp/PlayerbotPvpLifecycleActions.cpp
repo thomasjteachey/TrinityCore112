@@ -88,7 +88,6 @@ uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
 uint32 g_LastScmSlotRefillAttemptMs = 0;
 uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
 bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
-uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
 bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate);
 
 bool IsScmManagedBotCandidate(Player const* player)
@@ -1886,6 +1885,15 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
     }
 
     return queuedCount;
+}
+
+}
+
+namespace playerbot
+{
+uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
+{
+    return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType);
 }
 
 void FinalizeVirtualBotTeleportIfPending(Player* player)

@@ -27,6 +27,7 @@
 #include "BattlegroundQueue.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
+#include "Playerbot/Pvp/PlayerbotPvpLifecycleActions.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
@@ -274,6 +275,31 @@ std::string BuildManagedBotScmQueueDiagnosticLine(Player* bot)
     return diag.str();
 }
 
+BattlegroundTypeId ResolveCurrentBgTypeFromPlayerContext(Player const* player)
+{
+    if (!player)
+        return BATTLEGROUND_TYPE_NONE;
+
+    if (player->InBattleground())
+        return player->GetBattlegroundTypeId();
+
+    for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+    {
+        BattlegroundQueueTypeId const queueTypeId = player->GetBattlegroundQueueTypeId(i);
+        if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+            continue;
+
+        if (BattlegroundMgr::BGArenaType(queueTypeId) != 0)
+            continue;
+
+        BattlegroundTypeId const queueBgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+        if (queueBgTypeId != BATTLEGROUND_TYPE_NONE)
+            return queueBgTypeId;
+    }
+
+    return BATTLEGROUND_TYPE_NONE;
+}
+
 class PlayerbotBootstrapWorldScript final : public WorldScript
 {
 public:
@@ -387,6 +413,7 @@ public:
         static ChatCommandTable playerbotPvpTable =
         {
             { "lifecycle", playerbotPvpLifecycleTable },
+            { "forcequeue", HandlePlayerbotPvpForceQueueCurrentCommand, rbac::RBAC_PERM_COMMAND_GM, Console::No },
         };
 
         static ChatCommandTable playerbotRandomPopulationTable =
@@ -426,6 +453,27 @@ public:
         handler->PSendSysMessage(" - noLifecycleHooksActive: " UI64FMTD, snapshot.noLifecycleHooksActive);
         handler->PSendSysMessage(" - battlegroundLifecycleExecuted: " UI64FMTD, snapshot.battlegroundLifecycleExecuted);
         handler->PSendSysMessage(" - arenaLifecycleExecuted: " UI64FMTD, snapshot.arenaLifecycleExecuted);
+        return true;
+    }
+
+    static bool HandlePlayerbotPvpForceQueueCurrentCommand(ChatHandler* handler)
+    {
+        if (!handler || !handler->GetSession())
+            return false;
+
+        Player* player = handler->GetPlayer();
+        if (!player)
+            return false;
+
+        BattlegroundTypeId const bgTypeId = ResolveCurrentBgTypeFromPlayerContext(player);
+        if (bgTypeId == BATTLEGROUND_TYPE_NONE)
+        {
+            handler->PSendSysMessage("You must be inside a battleground or queued for one before using this command.");
+            return false;
+        }
+
+        uint32 const queuedCount = playerbot::QueueEligibleManagedBotsForBattleground(bgTypeId, 0);
+        handler->PSendSysMessage("Forced managed playerbots to queue for battleground type %u. Queued bots: %u", uint32(bgTypeId), queuedCount);
         return true;
     }
 
