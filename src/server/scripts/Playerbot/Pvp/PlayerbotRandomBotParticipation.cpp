@@ -1276,6 +1276,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     }
 
     ObjectGuid const guid = player->GetGUID();
+    uint64 const guidRaw = guid.GetRawValue();
 
     if (!IsLifecycleGateEnabled())
     {
@@ -1289,7 +1290,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ClearActiveMovementForControlLoss(player);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle paused: guid={} reason=crowd-control",
-            guid.ToString());
+            guidRaw);
         return;
     }
 
@@ -1297,7 +1298,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle values: guid={} inBg={} bgState={} inBgQueue={} hasBgQueue={} hasBgInvite={} hasArenaQueue={} hasArenaInvite={} hasArenaTeamInvite={} bgTypeId={} bgId={} queueSlot0={} queueSlot1={} queueSlot2={}",
-        guid.ToString(),
+        guidRaw,
         values.inBattleground ? 1 : 0,
         static_cast<uint32>(values.battlegroundState),
         values.inBattlegroundQueue ? 1 : 0,
@@ -1325,7 +1326,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         g_NextRandomBotLifecycleProcessTimeByGuid[guid.GetRawValue()] = LifecycleCadenceClock::now();
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP cadence bypass applied: guid={} spell={} reason=off-gcd-burst-window.",
-            guid.ToString(), classSpellContext.spellId);
+            guidRaw, classSpellContext.spellId);
     }
 
     BattlegroundLifecycleContext const bgContext = PvpCore::BuildBattlegroundLifecycleContext(player, values);
@@ -1334,7 +1335,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle contexts: guid={} bgQueueOp={} bgInviteResp={} bgInProgress={} arenaQueueOp={} arenaTeamInteraction={} bgHook={} arenaHook={}",
-        guid.ToString(),
+        guidRaw,
         static_cast<uint32>(bgContext.queueOperation),
         static_cast<uint32>(bgContext.invitationResponse),
         bgContext.shouldHandleInProgressStatus ? 1 : 0,
@@ -1349,7 +1350,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ObserveLifecycleReason(LifecycleObservationReason::GateDisabled, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle exited: guid={} reason=hooks-lifecycle-disabled",
-            guid.ToString());
+            guidRaw);
         return;
     }
 
@@ -1359,7 +1360,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         ObserveLifecycleReason(LifecycleObservationReason::NoLifecycleHooksActive, guid);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle exited: guid={} reason=no-hooks inBg={} inBgQueue={} hasBgQueue={} hasBgInvite={} hasArenaQueue={} hasArenaInvite={} hasArenaTeamInvite={}",
-            guid.ToString(),
+            guidRaw,
             values.inBattleground ? 1 : 0,
             values.inBattlegroundQueue ? 1 : 0,
             values.hasBattlegroundQueue ? 1 : 0,
@@ -1380,7 +1381,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
             didExecuteBattleground = BattlegroundLifecycleActions::Execute(player, bgContext);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Lifecycle battleground execute: guid={} executed={} queueOp={} inviteResp={} inProgress={}",
-                guid.ToString(),
+                guidRaw,
                 didExecuteBattleground ? 1 : 0,
                 static_cast<uint32>(bgContext.queueOperation),
                 static_cast<uint32>(bgContext.invitationResponse),
@@ -1399,7 +1400,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
             didExecuteArena = ArenaLifecycleActions::Execute(player, postArenaContext);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Lifecycle arena execute: guid={} executed={} queueOp={} teamInteraction={} hasArenaInvite={} hasArenaTeamInvite={}",
-                guid.ToString(),
+                guidRaw,
                 didExecuteArena ? 1 : 0,
                 static_cast<uint32>(postArenaContext.queueOperation),
                 static_cast<uint32>(postArenaContext.teamInteraction),
@@ -1413,7 +1414,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         LogLifecycleBranchSummary(guid, "active-hooks-no-op-context");
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Lifecycle no-op with active hooks: guid={} bgHook={} arenaHook={}",
-            guid.ToString(), hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
+            guidRaw, hooks.battlegroundParticipationHook ? 1 : 0, hooks.arenaParticipationHook ? 1 : 0);
     }
 
     if (didExecuteBattleground)
@@ -1430,7 +1431,7 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
         "Lifecycle complete: guid={} didBg={} didArena={} didTactical={} didClassSpell={}",
-        guid.ToString(),
+        guidRaw,
         didExecuteBattleground ? 1 : 0,
         didExecuteArena ? 1 : 0,
         (didExecuteTactical || didExecuteDuelTactical) ? 1 : 0,
