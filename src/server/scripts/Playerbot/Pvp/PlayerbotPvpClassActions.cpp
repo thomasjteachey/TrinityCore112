@@ -1518,8 +1518,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     // gap" distance. If desiredRange is >= current distance,
                     // chase movement can idle and repeatedly reissue the same
                     // directive (visible as bow-raise stutter loops).
-                    float const closingRange = std::max(1.0f, currentDistance - 2.0f);
-                    desiredRange = std::min(desiredRange, closingRange);
+                    if (desiredRange >= currentDistance)
+                    {
+                        float const closingRange = std::max(1.0f, currentDistance - 2.0f);
+                        desiredRange = std::min(desiredRange, closingRange);
+                    }
                 }
                 IssueRangedApproachMovement(player, movementTarget, desiredRange);
             }
