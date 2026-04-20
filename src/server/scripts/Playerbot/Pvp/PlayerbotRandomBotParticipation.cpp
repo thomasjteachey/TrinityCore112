@@ -846,6 +846,30 @@ bool SupportsLoginOrchestration()
     return true;
 }
 
+uint32 AcquireVirtualSessionKeyForCandidate(uint32 lowGuid)
+{
+    // Use a reserved high-bit namespace and probe to avoid rare collisions when
+    // multiple character GUIDs map to the same synthesized session key.
+    constexpr uint32 kVirtualSessionNamespaceBit = 0x80000000u;
+    constexpr uint32 kVirtualSessionProbeLimit = 64u;
+
+    if (!lowGuid)
+        return 0;
+
+    uint32 candidateKey = kVirtualSessionNamespaceBit | lowGuid;
+    for (uint32 probe = 0; probe < kVirtualSessionProbeLimit; ++probe)
+    {
+        if (!sWorld->FindSession(candidateKey))
+            return candidateKey;
+
+        ++candidateKey;
+        if (!(candidateKey & kVirtualSessionNamespaceBit))
+            candidateKey = kVirtualSessionNamespaceBit;
+    }
+
+    return 0;
+}
+
 bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
 {
     if (!candidate.lowGuid || !candidate.account)
@@ -855,11 +879,12 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
         return false;
     }
 
-    uint32 const virtualSessionKey = 0xF0000000u | (candidate.lowGuid & 0x0FFFFFFFu);
-    if (sWorld->FindSession(virtualSessionKey))
+    uint32 const virtualSessionKey = AcquireVirtualSessionKeyForCandidate(candidate.lowGuid);
+    if (!virtualSessionKey)
     {
-        TC_LOG_WARN("playerbots.population", "Random bot login skipped: virtual session key {} already active (candidate guidLow={} account={}).",
-            virtualSessionKey, candidate.lowGuid, candidate.account);
+        TC_LOG_WARN("playerbots.population",
+            "Random bot login skipped: failed to allocate a virtual session key (candidate guidLow={} account={}).",
+            candidate.lowGuid, candidate.account);
         return false;
     }
 
@@ -904,9 +929,12 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     }
     else
     {
-        TC_LOG_INFO("playerbots.population",
-            "Random bot login dispatched: guid={} guidLow={} account={} level={} (player materialization pending).",
+        TC_LOG_WARN("playerbots.population",
+            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} level={} (no player materialized).",
             playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
+
+        session->KickPlayer("Random bot login verification failed (no player materialized)");
+        return false;
     }
 
     return true;
