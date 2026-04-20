@@ -94,6 +94,7 @@ public:
     ~BattlegroundSCM() override = default;
 
     void AddPlayer(Player* player) override;
+    void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
     void Reset() override;
     bool SetupBattleground() override;
 
@@ -112,9 +113,17 @@ private:
     void UpdateTeamScoreWorldStates();
     void ApplyNonInteractableObjectFlags();
     void SpawnRandomBuffSet(uint32 speedTypeIndex);
+    uint32 GetHonorRewardForTeam() const;
+    void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
+    void TrackHumanParticipantAdded(Player const* player, bool isInBattleground);
+    void TrackHumanParticipantRemoved(Player const* player, uint32 team);
+    void UpdateHumanFaceoffState();
 
     uint32 _allianceKills;
     uint32 _hordeKills;
+    uint32 _allianceHumanParticipants;
+    uint32 _hordeHumanParticipants;
+    bool _humanFaceoffEverHappened;
 };
 
 #endif

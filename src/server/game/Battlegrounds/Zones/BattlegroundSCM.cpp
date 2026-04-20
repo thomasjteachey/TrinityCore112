@@ -9,6 +9,7 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
+#include "WorldSession.h"
 
 void BattlegroundSCMScore::BuildObjectivesBlock(WorldPacket& data)
 {
@@ -21,12 +22,17 @@ BattlegroundSCM::BattlegroundSCM()
     BgCreatures.resize(BG_SCM_CREATURE_MAX);
     _allianceKills = 0;
     _hordeKills = 0;
+    _allianceHumanParticipants = 0;
+    _hordeHumanParticipants = 0;
+    _humanFaceoffEverHappened = false;
     m_BuffChange = true;
 }
 
 void BattlegroundSCM::AddPlayer(Player* player)
 {
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
+    TrackHumanParticipantAdded(player, isInBattleground);
+
     Battleground::AddPlayer(player);
 
     if (!isInBattleground)
@@ -36,11 +42,79 @@ void BattlegroundSCM::AddPlayer(Player* player)
     }
 }
 
+void BattlegroundSCM::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 team)
+{
+    TrackHumanParticipantRemoved(player, team);
+}
+
 void BattlegroundSCM::Reset()
 {
     Battleground::Reset();
     _allianceKills = 0;
     _hordeKills = 0;
+    _allianceHumanParticipants = 0;
+    _hordeHumanParticipants = 0;
+    _humanFaceoffEverHappened = false;
+}
+
+void BattlegroundSCM::TrackHumanParticipantAdded(Player const* player, bool isInBattleground)
+{
+    if (!player || isInBattleground)
+        return;
+
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsVirtualSession())
+        return;
+
+    if (player->GetBGTeam() == ALLIANCE)
+        ++_allianceHumanParticipants;
+    else if (player->GetBGTeam() == HORDE)
+        ++_hordeHumanParticipants;
+
+    UpdateHumanFaceoffState();
+}
+
+void BattlegroundSCM::TrackHumanParticipantRemoved(Player const* player, uint32 team)
+{
+    if (!player)
+        return;
+
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsVirtualSession())
+        return;
+
+    if (team == ALLIANCE && _allianceHumanParticipants > 0)
+        --_allianceHumanParticipants;
+    else if (team == HORDE && _hordeHumanParticipants > 0)
+        --_hordeHumanParticipants;
+}
+
+void BattlegroundSCM::UpdateHumanFaceoffState()
+{
+    if (_allianceHumanParticipants > 0 && _hordeHumanParticipants > 0)
+        _humanFaceoffEverHappened = true;
+}
+
+uint32 BattlegroundSCM::GetHonorRewardForTeam() const
+{
+    uint32 reward = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2;
+
+    if (!_humanFaceoffEverHappened)
+        reward /= 2;
+
+    return reward;
+}
+
+void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& /*loserHonor*/) const
+{
+    if (winner != ALLIANCE && winner != HORDE)
+        return;
+
+    if (team != winner)
+        return;
+
+    if (!_humanFaceoffEverHappened)
+        winnerHonor /= 2;
 }
 
 bool BattlegroundSCM::SetupBattleground()
@@ -230,7 +304,7 @@ void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
         m_TeamScores[TEAM_ALLIANCE] = _allianceKills;
 
         if ((_allianceKills % 10) == 0)
-            RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, ALLIANCE);
+            RewardHonorToTeam(GetHonorRewardForTeam(), ALLIANCE);
     }
     else if (killerTeam == HORDE)
     {
@@ -238,7 +312,7 @@ void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
         m_TeamScores[TEAM_HORDE] = _hordeKills;
 
         if ((_hordeKills % 10) == 0)
-            RewardHonorToTeam(sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2, HORDE);
+            RewardHonorToTeam(GetHonorRewardForTeam(), HORDE);
     }
 
     UpdateTeamScoreWorldStates();
