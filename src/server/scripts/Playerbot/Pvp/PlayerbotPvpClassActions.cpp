@@ -1460,10 +1460,13 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             // Defensive fallback: if GUID resolution fails for this tick, use
             // currently selected/victim targets so movement directives do not
             // silently drop to idle.
-            if (Unit* selectedTarget = player->GetSelectedUnit(); selectedTarget && selectedTarget->IsAlive())
-                movementTarget = selectedTarget;
-            else if (Unit* victimTarget = player->GetVictim(); victimTarget && victimTarget->IsAlive())
-                movementTarget = victimTarget;
+            if (context.movementDirective != PvpClassSpellContext::MovementDirective::FaceSpellTarget)
+            {
+                if (Unit* selectedTarget = player->GetSelectedUnit(); selectedTarget && selectedTarget->IsAlive())
+                    movementTarget = selectedTarget;
+                else if (Unit* victimTarget = player->GetVictim(); victimTarget && victimTarget->IsAlive())
+                    movementTarget = victimTarget;
+            }
         }
         if (directiveNeedsTarget && (!movementTarget || !movementTarget->IsAlive()))
         {
@@ -1477,6 +1480,16 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 ClearActiveMovementForControlLoss(player);
             SetLastExecutionStatus(player, "move_skipped_cannot_follow");
             return false;
+        }
+
+        // Re-facing while a non-melee spellcast is in progress can interrupt
+        // channels/cast bars and manifests as abrupt facing flips. Defer this
+        // directive until cast completion.
+        if (context.movementDirective == PvpClassSpellContext::MovementDirective::FaceSpellTarget &&
+            player->IsNonMeleeSpellCast(false, false, true))
+        {
+            SetLastExecutionStatus(player, "move_skipped_face_while_casting");
+            return true;
         }
 
         switch (context.movementDirective)
