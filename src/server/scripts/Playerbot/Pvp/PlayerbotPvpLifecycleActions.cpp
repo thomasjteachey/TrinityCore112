@@ -64,6 +64,13 @@
 #include <vector>
 #include <list>
 
+namespace playerbot
+{
+uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
+Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers = nullptr, uint32* attackableEnemies = nullptr);
+bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
+}
+
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
@@ -86,7 +93,6 @@ std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureM
 std::unordered_map<uint64, uint32> g_BattlegroundQueuedNoInviteSinceMsByGuid;
 uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
 uint32 g_LastScmSlotRefillAttemptMs = 0;
-uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
 bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
 bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate);
 
@@ -147,7 +153,7 @@ bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battlegroun
     if (cooldownUntilMs && nowMs < cooldownUntilMs)
         return false;
 
-    uint64 const instanceKey = BuildBattlegroundInstanceKey(battleground);
+    uint64 const instanceKey = playerbot::BuildBattlegroundInstanceKey(battleground);
     uint32 const nextDepartureEarliestMs = g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey];
     if (nextDepartureEarliestMs && nowMs < nextDepartureEarliestMs)
         return false;
@@ -375,9 +381,7 @@ TeamId ResolveBotTeamId(Player const* player)
     return ResolveTeamId(player->GetTeam());
 }
 
-Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers = nullptr, uint32* attackableEnemies = nullptr);
 bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
-bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
 bool CanIssueBotMovement(Player* player);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
@@ -436,7 +440,7 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
 
     uint32 scannedPlayers = 0;
     uint32 attackableEnemies = 0;
-    Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
+    Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
     uint64 const botGuid = player->GetGUID().GetRawValue();
     uint32 const nowMs = GameTime::GetGameTimeMS();
     Player* selectedEnemy = nearestEnemy;
@@ -489,7 +493,7 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
             " scan=" + std::to_string(scannedPlayers) +
             " attackable=" + std::to_string(attackableEnemies) +
             " sticky=" + std::to_string(stickyTargetHeld ? 1 : 0), 1200);
-        return EngageNearestEnemyPlayer(player, combatEngageDistance);
+        return playerbot::EngageNearestEnemyPlayer(player, combatEngageDistance);
     }
 
     bool chaseIssued = MoveTowardUnit(player, selectedEnemy, 20.0f);
