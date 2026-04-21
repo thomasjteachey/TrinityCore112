@@ -9801,6 +9801,10 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         // Fall back to battleground type so arena world states are still initialized.
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TTP)
             battleground->FillInitialWorldStates(packet);
+        // Scarlet Chapel can also report a non-canonical zone ID near spawn.
+        // Fall back to battleground type so the top-frame world states initialize immediately.
+        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM)
+            battleground->FillInitialWorldStates(packet);
         break;
     }
 
