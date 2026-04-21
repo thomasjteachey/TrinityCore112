@@ -416,7 +416,7 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
 }
 
-void TryFinalizePendingVirtualBotTeleport(Player* player)
+void TryFinalizePendingManagedBotTeleport(Player* player)
 {
     if (!player || !playerbot::IsManagedRandomBot(player))
         return;
@@ -472,6 +472,32 @@ void TryFinalizePendingVirtualBotTeleport(Player* player)
             player->ProcessDelayedOperations();
         }
     }
+}
+
+void RecoverManagedVirtualBotTeleports(std::unordered_set<uint32> const& botAccounts)
+{
+    std::vector<ObjectGuid> managedTeleportGuids;
+    {
+        std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+        for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+        {
+            if (!player || !IsManagedRandomBotImpl(player, botAccounts))
+                continue;
+
+            WorldSession const* session = player->GetSession();
+            if (!session || !session->IsVirtualSession())
+                continue;
+
+            if (!player->IsBeingTeleported())
+                continue;
+
+            managedTeleportGuids.push_back(guid);
+        }
+    }
+
+    for (ObjectGuid const& guid : managedTeleportGuids)
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+            TryFinalizePendingManagedBotTeleport(player);
 }
 
 void TryReviveManagedBotAfterStartup(Player* player)
@@ -1181,7 +1207,8 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
         if (!g_RandomPopulation.config.enabled || !g_RandomPopulation.runtimeEnabled)
             return;
 
-        if (g_RandomPopulation.config.botAccountIds.empty())
+        botAccountsForSweep = g_RandomPopulation.config.botAccountIds;
+        if (botAccountsForSweep.empty())
         {
             g_RandomPopulation.skippedNoCandidatePool++;
             return;
@@ -1191,14 +1218,19 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
             g_RandomPopulation.rebalanceTimerMs += diffMs;
 
         if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs && !g_RandomPopulation.rebalanceRequested)
-            return;
-
-        g_RandomPopulation.rebalanceTimerMs = 0;
-        g_RandomPopulation.rebalanceRequested = false;
-        RebalanceRandomPopulation(g_RandomPopulation);
-        botAccountsForSweep = g_RandomPopulation.config.botAccountIds;
-        shouldRunScmSweep = true;
+        {
+            // Still run teleport recovery below even when no rebalance/sweep is due.
+        }
+        else
+        {
+            g_RandomPopulation.rebalanceTimerMs = 0;
+            g_RandomPopulation.rebalanceRequested = false;
+            RebalanceRandomPopulation(g_RandomPopulation);
+            shouldRunScmSweep = true;
+        }
     }
+
+    RecoverManagedVirtualBotTeleports(botAccountsForSweep);
 
     // Avoid running the SCM sweep while holding g_RandomPopulationLock:
     // lifecycle queue operations can call TriggerImmediateRebalance(), which
@@ -1221,7 +1253,7 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
-    TryFinalizePendingVirtualBotTeleport(player);
+    TryFinalizePendingManagedBotTeleport(player);
     ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
