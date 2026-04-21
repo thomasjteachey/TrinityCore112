@@ -194,23 +194,11 @@ namespace
 {
 bool ShouldPropagateCombatToOwner(Unit* owner, Unit* controlled)
 {
-    if (!owner || owner->GetTypeId() != TYPEID_PLAYER)
+    if (!owner || !controlled)
         return true;
 
-    if (!controlled || !controlled->IsPet())
+    if (controlled->GetCharmerOrOwnerGUID() != owner->GetGUID())
         return true;
-
-    if (controlled->GetOwnerGUID() != owner->GetGUID())
-        return true;
-
-    switch (owner->ToPlayer()->GetClass())
-    {
-        case CLASS_HUNTER:
-        case CLASS_WARLOCK:
-            return false;
-        default:
-            break;
-    }
 
     return true;
 }
