@@ -320,30 +320,18 @@ public:
 
     static Position const* GetBattlegroundMapSpawnPosition(uint32 mapId, uint32 team)
     {
-        for (uint32 i = 1; i < sBattlemasterListStore.GetNumRows(); ++i)
+        for (uint32 bgTypeValue = 1; bgTypeValue < MAX_BATTLEGROUND_TYPE_ID; ++bgTypeValue)
         {
-            BattlemasterListEntry const* battlemasterEntry = sBattlemasterListStore.LookupEntry(i);
-            if (!battlemasterEntry)
+            Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BattlegroundTypeId(bgTypeValue));
+            if (!battlegroundTemplate || battlegroundTemplate->GetMapId() != mapId)
                 continue;
 
-            for (int32 battlegroundMapId : battlemasterEntry->MapID)
-            {
-                if (battlegroundMapId == -1)
-                    break;
+            TeamId preferredTeam = Battleground::GetTeamIndexByTeamId(team);
+            if (Position const* preferredSpawn = battlegroundTemplate->GetTeamStartPosition(preferredTeam))
+                return preferredSpawn;
 
-                if (uint32(battlegroundMapId) != mapId)
-                    continue;
-
-                if (Battleground* battlegroundTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BattlegroundTypeId(battlemasterEntry->ID)))
-                {
-                    TeamId preferredTeam = Battleground::GetTeamIndexByTeamId(team);
-                    if (Position const* preferredSpawn = battlegroundTemplate->GetTeamStartPosition(preferredTeam))
-                        return preferredSpawn;
-
-                    TeamId fallbackTeam = preferredTeam == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
-                    return battlegroundTemplate->GetTeamStartPosition(fallbackTeam);
-                }
-            }
+            TeamId fallbackTeam = preferredTeam == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+            return battlegroundTemplate->GetTeamStartPosition(fallbackTeam);
         }
 
         return nullptr;
