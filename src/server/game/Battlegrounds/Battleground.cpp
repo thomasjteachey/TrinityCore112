@@ -1228,7 +1228,11 @@ void Battleground::AddPlayer(Player* player)
     // setup BG group membership
     PlayerAddedToBGCheckIfBGIsRunning(player);
     AddOrSetPlayerToCorrectBgGroup(player, team);
-    
+
+    // Initialize battleground worldstates immediately on join.
+    // Relying only on zone-change driven updates can delay top-frame UI setup
+    // on maps that report transitional/non-canonical zone ids near spawn.
+    player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
 }
 
 // this method adds player to his team's bg group, or sets his correct group if player is already in bg group
