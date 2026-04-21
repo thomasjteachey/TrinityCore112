@@ -57,6 +57,8 @@
 
 namespace
 {
+bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts);
+
 bool IsCrowdControlledForLifecyclePause(Player const* player)
 {
     if (!player)
