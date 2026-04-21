@@ -565,12 +565,13 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
 
     // If we intended to travel but currently have no movement momentum, do not
     // suppress directive execution. This keeps ranged spacing directives from
-    // idling when another system briefly clears active motion between ticks.
+    // idling when another system leaves us stationary with either idle or stale
+    // chase/follow generators between ticks.
     if (isTravelDirective && !player->isMoving())
     {
         MotionMaster const* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const movementType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-        if (movementType == IDLE_MOTION_TYPE)
+        if (movementType == IDLE_MOTION_TYPE || movementType == CHASE_MOTION_TYPE || movementType == FOLLOW_MOTION_TYPE)
             return false;
     }
 
