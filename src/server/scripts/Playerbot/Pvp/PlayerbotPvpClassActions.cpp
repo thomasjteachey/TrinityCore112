@@ -357,6 +357,15 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!motionMaster)
         return;
 
+    float const currentDistance = player->GetDistance(target);
+    bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f);
+    if (shouldForceActiveRepath)
+    {
+        // Recover from stale active movement generators that can leave ranged
+        // bots idling while repeatedly selecting "reach spell" directives.
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    }
+
     if (player->IsValidAttackTarget(target))
     {
         // Ensure hostile ranged approach can engage chase generators even when
