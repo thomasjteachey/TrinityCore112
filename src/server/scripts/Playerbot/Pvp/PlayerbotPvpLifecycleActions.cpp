@@ -1900,9 +1900,12 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
     return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType);
 }
 
-void FinalizeVirtualBotTeleportIfPending(Player* player)
+void FinalizeManagedBotTeleportIfPending(Player* player)
 {
     if (!player)
+        return;
+
+    if (!playerbot::IsManagedRandomBot(player))
         return;
 
     WorldSession* session = player->GetSession();
@@ -2659,7 +2662,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
             return false;
 
         player->LeaveBattleground();
-        FinalizeVirtualBotTeleportIfPending(player);
+        FinalizeManagedBotTeleportIfPending(player);
         if (playerbot::IsManagedRandomBot(player))
             player->RemoveAurasDueToSpell(SPELL_DESERTER);
         RemoveMatchingQueues(player, false, false, true);
@@ -2718,7 +2721,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (ShouldManagedBotLeaveForQueuedHuman(player, battleground))
     {
         player->LeaveBattleground();
-        FinalizeVirtualBotTeleportIfPending(player);
+        FinalizeManagedBotTeleportIfPending(player);
         player->RemoveAurasDueToSpell(SPELL_DESERTER);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP human-priority departure trigger: guid={} bgTypeId={} instanceId={} players={} maxPlayers={}.",
@@ -2730,7 +2733,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     if (ShouldManagedBotLeaveForOverstack(player, battleground))
     {
         player->LeaveBattleground();
-        FinalizeVirtualBotTeleportIfPending(player);
+        FinalizeManagedBotTeleportIfPending(player);
         player->RemoveAurasDueToSpell(SPELL_DESERTER);
         QueuePlayer(player, BATTLEGROUND_SCM, 0);
         return true;
