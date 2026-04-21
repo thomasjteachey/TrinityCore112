@@ -1597,6 +1597,23 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
     if (!player || !player->GetMap())
         return nullptr;
 
+    SpellInfo const* fearInfo = sSpellMgr->GetSpellInfo(6215);
+    DiminishingGroup const fearDrGroup = fearInfo ? fearInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
+
+    auto isFearInvalidTarget = [&](Player const* candidate)
+    {
+        if (!candidate)
+            return true;
+
+        if (fearInfo && candidate->IsImmunedToSpell(fearInfo, player))
+            return true;
+
+        if (fearDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(fearDrGroup) >= DIMINISHING_LEVEL_IMMUNE)
+            return true;
+
+        return false;
+    };
+
     Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
@@ -1604,6 +1621,8 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         if (!HasHostileTarget(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (isFearInvalidTarget(candidate))
             continue;
         if (candidate->HasAuraType(SPELL_AURA_MOD_FEAR))
             return nullptr;
@@ -1620,6 +1639,8 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         if (IsTargetInvalidByImmunity(player, candidate))
             continue;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (isFearInvalidTarget(candidate))
             continue;
 
         if (!(candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST))
@@ -2314,8 +2335,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     Unit const* fearTarget = IsSpellReady(player, 6215) ? SelectWarlockFearTarget(player, 20.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, player->HealthBelowPct(45) && IsSpellReady(player, 7812), 55.0f,
-        { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, player->HealthBelowPct(45) && hasLivingPet && IsSpellReady(player, 19443), 55.0f,
+        { "warlock sacrifice", "consume voidwalker shield under low health pressure", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19647), 54.0f,
         { "warlock spell lock", "pet interrupt when available", 19647, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, fearTarget, 53.0f,
