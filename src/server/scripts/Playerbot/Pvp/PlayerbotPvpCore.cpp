@@ -2320,7 +2320,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
         return decision;
 
     Pet const* pet = player->GetPet();
-    bool const needsPetSummon = !pet || !pet->IsAlive();
+    bool const hasLivingPet = pet && pet->IsAlive();
+    bool const needsPetSummon = !hasLivingPet;
     bool const hasHostileTarget = HasHostileTarget(player, target);
 
     if (!hasHostileTarget)
