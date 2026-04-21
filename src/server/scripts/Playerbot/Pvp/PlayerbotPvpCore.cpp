@@ -3173,10 +3173,27 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
+    bool const healerHasLivingAllyTarget = hasValidAllyTarget && CanUseHealRangeSpacing(player->GetClass());
+
+    if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        healerHasLivingAllyTarget)
+    {
+        Unit const* allyMovementTarget = resolveTargetByGuid(selectedAllyGuid);
+        if (allyMovementTarget)
+        {
+            float const distance = player->GetDistance(allyMovementTarget);
+            if (distance > GetConfiguredHealRange())
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, allyMovementTarget->GetGUID(),
+                    ComputeApproachFollowRange(GetConfiguredHealRange()), "reach party member to heal", "party member to heal out of spell range", 72.0f);
+            }
+        }
+    }
+
     // Reference parity bridge: provide trigger-like movement directives even
     // when we do not have a castable spell yet ("enemy out of spell" / "enemy
     // too close for spell"). Keep classic spell IDs untouched.
-    if (!context.spellId && hasValidTarget && IsPrimaryRangedClassForSpacing(player->GetClass()))
+    if (!context.spellId && hasValidTarget && IsPrimaryRangedClassForSpacing(player->GetClass()) && !healerHasLivingAllyTarget)
     {
         Unit const* movementTarget = resolveTargetByGuid(activeTargetGuid);
         if (movementTarget)
@@ -3203,21 +3220,6 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeMovementTarget->GetGUID(),
                 std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 69.0f);
-        }
-    }
-
-    if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
-        hasValidAllyTarget && CanUseHealRangeSpacing(player->GetClass()))
-    {
-        Unit const* allyMovementTarget = resolveTargetByGuid(selectedAllyGuid);
-        if (allyMovementTarget)
-        {
-            float const distance = player->GetDistance(allyMovementTarget);
-            if (distance > GetConfiguredHealRange())
-            {
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, allyMovementTarget->GetGUID(),
-                    ComputeApproachFollowRange(GetConfiguredHealRange()), "reach party member to heal", "party member to heal out of spell range", 68.0f);
-            }
         }
     }
 
