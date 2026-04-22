@@ -1077,7 +1077,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 IssueMeleeApproachMovement(player, target);
             else
             {
-                float const desiredRange = ComputeLosRecoveryRange(player, target, maxRange);
+                // Healing/support LOS recovery should collapse closer than DPS
+                // spacing so bots can actually peek around pillars instead of
+                // trying to hold long cast distance on allies.
+                float const desiredRange = (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
+                    ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                    : ComputeLosRecoveryRange(player, target, maxRange);
                 IssueRangedApproachMovement(player, target, desiredRange);
             }
         }
@@ -1271,7 +1276,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     IssueMeleeApproachMovement(player, target);
                 else
                 {
-                    float const desiredRange = ComputeLosRecoveryRange(player, target, maxRange);
+                    float const desiredRange = (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
+                        ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                        : ComputeLosRecoveryRange(player, target, maxRange);
                     IssueRangedApproachMovement(player, target, desiredRange);
                 }
             }
