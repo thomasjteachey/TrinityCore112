@@ -3316,8 +3316,10 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 context.targetGuid = ObjectGuid::Empty;
                 context.selfCast = false;
             }
-            else if (minRange > 0.0f && distance < std::max(0.0f, minRange - kRangedSpacingEnterTooCloseBuffer))
+            else if (minRange > 0.0f && distance < std::max(0.0f, minRange + kRangedSpacingEnterTooCloseBuffer))
             {
+                // Enter too-close movement before strict dead-zone boundaries so
+                // ranged users do not idle in 5-8y style min-range gaps.
                 // Keep an extra cushion over strict spell minimum range so ranged
                 // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
                 // immediately re-enter the dead-zone from minor pathing drift.
@@ -3379,7 +3381,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
                     ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy out of spell range", 70.0f);
             }
-            else if (distance < std::max(0.0f, GetConfiguredMeleeRange() - kRangedSpacingEnterTooCloseBuffer))
+            else if (distance < std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, movementTarget->GetGUID(),
                     std::max(1.0f, GetConfiguredCloseRange()), "flee", "enemy too close for spell", 71.0f);
