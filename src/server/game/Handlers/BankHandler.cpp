@@ -57,6 +57,12 @@ void WorldSession::HandleBankerActivateOpcode(WorldPackets::NPC::Hello& packet)
     if (GetPlayer()->HasUnitState(UNIT_STATE_DIED))
         GetPlayer()->RemoveAurasByType(SPELL_AURA_FEIGN_DEATH);
 
+    if (AccountBank::IsAccountBankerCreature(unit) && !AccountBank::OpenAccountBank(GetPlayer(), packet.Unit))
+    {
+        SendNotification("Unable to open the shared account bank.");
+        return;
+    }
+
     SendShowBank(packet.Unit);
 }
 
@@ -68,6 +74,15 @@ void WorldSession::HandleAutoBankItemOpcode(WorldPackets::Bank::AutoBankItem& pa
     {
         TC_LOG_DEBUG("network", "WORLD: HandleAutoBankItemOpcode - Unit ({}) not found or you can't interact with him.", m_currentBankerGUID.ToString());
         return;
+    }
+
+    if (Creature* banker = GetPlayer()->GetNPCIfCanInteractWith(m_currentBankerGUID, UNIT_NPC_FLAG_BANKER))
+    {
+        if (AccountBank::IsAccountBankerCreature(banker) && !AccountBank::IsAccountBankOpen(_player))
+        {
+            SendNotification("Shared account bank is no longer active. Please reopen it.");
+            return;
+        }
     }
 
     Item* item = _player->GetItemByPos(packet.Bag, packet.Slot);
@@ -101,6 +116,15 @@ void WorldSession::HandleAutoStoreBankItemOpcode(WorldPackets::Bank::AutoStoreBa
     {
         TC_LOG_DEBUG("network", "WORLD: HandleAutoStoreBankItemOpcode - Unit ({}) not found or you can't interact with him.", m_currentBankerGUID.ToString());
         return;
+    }
+
+    if (Creature* banker = GetPlayer()->GetNPCIfCanInteractWith(m_currentBankerGUID, UNIT_NPC_FLAG_BANKER))
+    {
+        if (AccountBank::IsAccountBankerCreature(banker) && !AccountBank::IsAccountBankOpen(_player))
+        {
+            SendNotification("Shared account bank is no longer active. Please reopen it.");
+            return;
+        }
     }
 
     Item* item = _player->GetItemByPos(packet.Bag, packet.Slot);
