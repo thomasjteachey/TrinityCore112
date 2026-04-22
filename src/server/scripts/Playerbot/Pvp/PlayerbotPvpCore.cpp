@@ -1270,6 +1270,46 @@ Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredT
     return best;
 }
 
+Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* preferredTarget, float maxDistance, float minManaPct)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        if (!HasHostileTarget(player, candidate) || IsTargetInvalidByImmunity(player, candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return false;
+        if (candidate->GetPowerType() != POWER_MANA)
+            return false;
+
+        return candidate->GetPowerPct(POWER_MANA) > minManaPct;
+    };
+
+    if (isCandidateUsable(preferredTarget))
+        return preferredTarget;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 uint32 CountNearbyUnsNaredEnemies(Player const* player, float maxDistance)
 {
     if (!player || !player->GetMap())
@@ -2182,6 +2222,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
     Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
     Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
+    Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
 
@@ -2209,8 +2250,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
 
     AddDecisionCandidate(candidates, hasHostileTarget && target && target->GetClass() == CLASS_ROGUE && !HasAuraFromSpellChain(target, 27605) && IsSpellReady(player, 27605), 22.0f,
         { "priest shadow word pain", "maintain dot pressure on rogues", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && target->GetPowerType() == POWER_MANA && target->GetPowerPct(POWER_MANA) > 25.0f && IsSpellReady(player, 10876), 21.0f,
-        { "priest mana burn", "burn mana from enemy casters", 10876, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, manaBurnTarget, 21.0f,
+        { "priest mana burn", "burn mana from enemy casters", 10876, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaBurnTarget ? manaBurnTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, CountNearbyEnemies(player, 10.0f) >= 2 && CountNearbyFriendlyPlayers(player, 10.0f) >= 2 && IsSpellReady(player, 27801), 20.0f,
         { "priest holy nova", "aoe pressure and splash healing in melee cluster", 27801, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasHostileTarget && target && IsSpellReady(player, 27605) && !HasBreakableCrowdControl(target) && !HasAuraFromSpellChain(target, 27605), 19.0f,
