@@ -935,6 +935,21 @@ bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
     return false;
 }
 
+bool HasActivePaladinSeal(Player const* player)
+{
+    if (!player)
+        return false;
+
+    return HasAuraFromSpellChain(player, 21084) || // Seal of Righteousness
+        HasAuraFromSpellChain(player, 20164) ||    // Seal of Justice
+        HasAuraFromSpellChain(player, 20165) ||    // Seal of Light
+        HasAuraFromSpellChain(player, 20166) ||    // Seal of Wisdom
+        HasAuraFromSpellChain(player, 20375) ||    // Seal of Command
+        HasAuraFromSpellChain(player, 31801) ||    // Seal of Vengeance
+        HasAuraFromSpellChain(player, 53736) ||    // Seal of Corruption
+        HasAuraFromSpellChain(player, 31892);      // Seal of Blood / Seal of the Martyr
+}
+
 ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance, bool includeSelf)
 {
     if (!player || !player->GetMap() || !baseSpellId)
@@ -2303,8 +2318,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
         { "paladin flash of light", "heal injured allies efficiently", 19943, flashHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, flashHealTarget ? flashHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, holyLightTarget, 47.0f,
         { "paladin holy light", "large heal for heavily injured ally", 635, holyLightTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, holyLightTarget ? holyLightTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, executeTarget && IsSpellReady(player, 20271), 46.0f,
-        { "paladin judgement", "default offensive pressure when healing is not required", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, executeTarget && HasActivePaladinSeal(player) && IsSpellReady(player, 20271), 46.0f,
+        { "paladin judgement", "default offensive pressure when a seal is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
         { "paladin concentration aura", "maintain concentration aura", 19746, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(25898) && IsSpellReady(player, 25898), 19.0f,
