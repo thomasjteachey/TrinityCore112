@@ -794,7 +794,9 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         if (player->GetCommandStatus(CHEAT_GOD))
             return 0;
 
-    if (damagetype != NODAMAGE && (damage != 0 || cleanDamage->absorbed_damage > 0))
+    bool const hasAbsorbedDamage = cleanDamage && cleanDamage->absorbed_damage > 0;
+
+    if (damagetype != NODAMAGE && (damage != 0 || hasAbsorbedDamage))
     {
         // interrupting auras with AURA_INTERRUPT_FLAG_DAMAGE before checking !damage (absorbed damage breaks that type of auras)
         if (spellProto)
@@ -806,7 +808,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TAKE_DAMAGE, 0);
 
         // interrupt spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG on absorbed damage (no dots)
-        if (!damage && damagetype != DOT && cleanDamage && cleanDamage->absorbed_damage)
+        if (!damage && damagetype != DOT && hasAbsorbedDamage)
         {
             if (victim != attacker && victim->GetTypeId() == TYPEID_PLAYER)
             {
@@ -819,6 +821,10 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
                     }
             }
         }
+
+        // direct damage should also interrupt direct-damage-sensitive auras when fully absorbed
+        if (!damage && (damagetype == DIRECT_DAMAGE || damagetype == SPELL_DIRECT_DAMAGE) && hasAbsorbedDamage)
+            victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_DIRECT_DAMAGE, spellProto ? spellProto->Id : 0);
 
         // We're going to call functions which can modify content of the list during iteration over it's elements
         // Let's copy the list so we can prevent iterator invalidation
@@ -888,7 +894,7 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
     if (!damage)
     {
         // Rage from absorbed damage
-        if (cleanDamage && cleanDamage->absorbed_damage && victim->GetPowerType() == POWER_RAGE)
+        if (hasAbsorbedDamage && victim->GetPowerType() == POWER_RAGE)
             victim->RewardRage(cleanDamage->absorbed_damage, 0, false);
 
         return 0;
