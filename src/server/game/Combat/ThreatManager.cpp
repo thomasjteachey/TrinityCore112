@@ -361,6 +361,9 @@ void ThreatManager::EvaluateSuppressed(bool canExpire)
 
 void ThreatManager::AddThreat(Unit* target, float amount, SpellInfo const* spell, bool ignoreModifiers, bool ignoreRedirects)
 {
+    bool const noCombatThreatSpell = spell && (spell->Id == 14309 || spell->Id == 14308 || spell->Id == 3355 || spell->Id == 13810 || spell->Id == 63487 || spell->Id == 67035
+        || spell->Id == 72216 || spell->Id == 19185 || spell->Id == 3600 || spell->Id == 6474); // freezing/frost traps and Earthbind Totem don't put you in combat
+
     // step 1: we can shortcut if the spell has one of the NO_THREAT attrs set - nothing will happen
     if (spell)
     {
@@ -399,6 +402,9 @@ void ThreatManager::AddThreat(Unit* target, float amount, SpellInfo const* spell
     // if we cannot actually have a threat list, we instead just set combat state and avoid creating threat refs altogether
     if (!CanHaveThreatList())
     {
+        if (noCombatThreatSpell)
+            return;
+
         CombatManager& combatMgr = _owner->GetCombatManager();
         if (!combatMgr.SetInCombatWith(target))
             return;
@@ -442,14 +448,8 @@ void ThreatManager::AddThreat(Unit* target, float amount, SpellInfo const* spell
         }
     }
 
-    if (spell)
-    {
-        if (spell->Id == 14309 || spell->Id == 14308 || spell->Id == 3355 || spell->Id == 13810 || spell->Id == 63487 || spell->Id == 67035 || spell->Id == 72216
-            || spell->Id == 19185 || spell->Id == 3600 || spell->Id == 6474) //freezing/frost traps and Earthbind Totem don't put you in combat
-        {
-            return;
-        }
-    }
+    if (noCombatThreatSpell)
+        return;
 
     // ensure we're in combat (threat implies combat!)
     if (!_owner->GetCombatManager().SetInCombatWith(target)) // if this returns false, we're not actually in combat, and thus cannot have threat!
