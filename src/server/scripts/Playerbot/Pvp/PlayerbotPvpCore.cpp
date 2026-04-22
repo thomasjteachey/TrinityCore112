@@ -3256,8 +3256,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else if (minRange > 0.0f && distance < std::max(0.0f, minRange - kRangedSpacingEnterTooCloseBuffer))
             {
+                // Keep an extra cushion over strict spell minimum range so ranged
+                // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
+                // immediately re-enter the dead-zone from minor pathing drift.
+                float const fleeFollowRange = std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredCloseRange()), "flee", "selected spell minimum range violation", 84.0f);
+                    fleeFollowRange, "flee", "selected spell minimum range violation", 84.0f);
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
