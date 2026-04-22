@@ -2234,7 +2234,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
         return decision;
 
     bool const recoveredFromPolymorph =
-        PvpClassActions::GetLastExecutionStatus(player) == "cast_failed_crowd_controlled_polymorph" &&
+        playerbot::PvpClassActions::GetLastExecutionStatus(player) == "cast_failed_crowd_controlled_polymorph" &&
         !player->HasUnitState(UNIT_STATE_CONFUSED) &&
         !player->HasAuraType(SPELL_AURA_MOD_CONFUSE) &&
         !player->IsPolymorphed();
