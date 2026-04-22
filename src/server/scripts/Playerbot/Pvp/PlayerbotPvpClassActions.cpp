@@ -1537,9 +1537,21 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             {
                 float desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
-                if (movementTarget)
+                Unit* approachTarget = movementTarget;
+                if (approachTarget && !player->IsValidAttackTarget(approachTarget))
                 {
-                    float const currentDistance = player->GetDistance(movementTarget);
+                    // Defensive fallback: spacing directives are intended to
+                    // close on hostile casts. If the preserved movement target
+                    // is no longer attackable for this tick, fall back to
+                    // current hostile context so ranged casters do not idle.
+                    if (Unit* selectedTarget = player->GetSelectedUnit(); selectedTarget && selectedTarget->IsAlive() && player->IsValidAttackTarget(selectedTarget))
+                        approachTarget = selectedTarget;
+                    else if (Unit* victimTarget = player->GetVictim(); victimTarget && victimTarget->IsAlive() && player->IsValidAttackTarget(victimTarget))
+                        approachTarget = victimTarget;
+                }
+                if (approachTarget)
+                {
+                    float const currentDistance = player->GetDistance(approachTarget);
                     // ReachSpellRange must always request an actual "close the
                     // gap" distance. If desiredRange is >= current distance,
                     // chase movement can idle and repeatedly reissue the same
@@ -1550,7 +1562,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                         desiredRange = std::min(desiredRange, closingRange);
                     }
                 }
-                IssueRangedApproachMovement(player, movementTarget, desiredRange);
+                IssueRangedApproachMovement(player, approachTarget, desiredRange);
             }
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
