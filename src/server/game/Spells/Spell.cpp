@@ -2474,7 +2474,7 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision())
     {
         if(spell->m_spellInfo->Id != 14309 && spell->m_spellInfo->Id != 14308 && spell->m_spellInfo->Id != 3355 && spell->m_spellInfo->Id != 13810 && spell->m_spellInfo->Id != 63487 && spell->m_spellInfo->Id != 67035
-            && spell->m_spellInfo->Id != 72216 && spell->m_spellInfo->Id != 19185 && spell->m_spellInfo->Id != 3600 && spell->m_spellInfo->Id != 6474) //freezing/frost traps and Earthbind Totem don't put you in combat
+            && spell->m_spellInfo->Id != 72216 && spell->m_spellInfo->Id != 19185 && spell->m_spellInfo->Id != 3600 && spell->m_spellInfo->Id != 6474) // freezing/frost traps and Earthbind Totem don't put you in combat
             unit->SetInCombatWith(spell->m_originalCaster);
     }
 
@@ -2759,7 +2759,8 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
             {
                 bool isEntrap = (spell->m_spellInfo->Id == 19185);
                 bool fromFrostTrap = (spell->m_triggeredByAuraSpell && spell->m_triggeredByAuraSpell->Id == 13810);
-                if (!isEntrap && !fromFrostTrap) //freezing/frost traps/entrapment don't put you in combat
+                bool isEarthbind = (spell->m_spellInfo->Id == 3600 || spell->m_spellInfo->Id == 6474);
+                if (!isEntrap && !fromFrostTrap && !isEarthbind) // freezing/frost traps/entrapment and Earthbind don't put you in combat
                 {
                     unitCaster->AtTargetAttacked(unit, spell->m_spellInfo->HasInitialAggro());
                 }
@@ -2894,7 +2895,11 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
             return SPELL_MISS_EVADE;
 
         if (m_caster->IsValidAttackTarget(unit, m_spellInfo) && !m_spellInfo->IsMindVision())
-            unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
+        {
+            // Earthbind Totem pulses (6474/3600) should not break stealth/prowl.
+            if (m_spellInfo->Id != 6474 && m_spellInfo->Id != 3600)
+                unit->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_HITBYSPELL);
+        }
         else if (m_caster->IsFriendlyTo(unit))
         {
             // for delayed spells ignore negative spells (after duel end) for friendly targets
