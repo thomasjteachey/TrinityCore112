@@ -24,6 +24,7 @@
 #include "ObjectGuid.h"
 
 class ChatHandler;
+class Creature;
 class Item;
 class Player;
 
@@ -46,6 +47,7 @@ namespace AccountBank
     void HandleLogin(Player* player);
     bool IsAccountBankOpen(Player const* player);
     bool IsAccountBankAccessible(Player const* player);
+    bool IsAccountBankerCreature(Creature const* creature);
     bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid);
 }
 

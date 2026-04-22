@@ -38,6 +38,12 @@ namespace AccountBank
 {
 namespace
 {
+    uint32 GetAccountBankerScriptId()
+    {
+        static uint32 const scriptId = sObjectMgr->GetScriptId("npc_account_banker");
+        return scriptId;
+    }
+
     void CleanupRemovedItem(Player* player, Item* item)
     {
         if (!player || !item)
@@ -620,6 +626,11 @@ bool IsAccountBanker(Player const* player, ObjectGuid bankerGuid)
         return false;
 
     return session->BankerGuid == bankerGuid;
+}
+
+bool IsAccountBankerCreature(Creature const* creature)
+{
+    return creature && creature->GetScriptId() == GetAccountBankerScriptId();
 }
 
 void UpdateAccountBankSessions()
