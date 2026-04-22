@@ -2095,8 +2095,12 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, nearbyCastingTarget && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, enemyOnTop && IsSpellReady(player, 14268) && !HasAuraFromSpellChain(enemyOnTopTarget, 14268), 21.0f,
-        { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates,
+        enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) &&
+            IsSpellReady(player, 14268) && !HasAuraFromSpellChain(enemyOnTopTarget, 14268),
+        21.0f,
+        { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy,
+            enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
         { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 25295), 19.5f,
@@ -3256,8 +3260,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else if (minRange > 0.0f && distance < std::max(0.0f, minRange - kRangedSpacingEnterTooCloseBuffer))
             {
+                // Keep an extra cushion over strict spell minimum range so ranged
+                // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
+                // immediately re-enter the dead-zone from minor pathing drift.
+                float const fleeFollowRange = std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
-                    std::max(1.0f, GetConfiguredCloseRange()), "flee", "selected spell minimum range violation", 84.0f);
+                    fleeFollowRange, "flee", "selected spell minimum range violation", 84.0f);
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
