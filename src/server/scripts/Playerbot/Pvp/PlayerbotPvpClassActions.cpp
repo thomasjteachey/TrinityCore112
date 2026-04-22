@@ -39,6 +39,7 @@
 #include <cmath>
 #include <algorithm>
 #include <chrono>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 
@@ -845,6 +846,47 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
     player->SetInFront(target);
 }
 
+void RepositionDruidAfterTravelFormRecovery(Player* player)
+{
+    if (!player || !player->GetMap() || !CanIssueFollowCommands(player))
+        return;
+
+    Unit* nearestEnemy = nullptr;
+    float nearestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || candidate == player || !candidate->IsAlive())
+            continue;
+        if (!player->IsValidAttackTarget(candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, 20.0f))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < nearestDistance)
+        {
+            nearestDistance = distance;
+            nearestEnemy = candidate;
+        }
+    }
+
+    if (!nearestEnemy)
+        return;
+
+    Position destination = player->GetPosition();
+    float const retreatDistance = std::max(8.0f, std::min(16.0f, nearestDistance + 6.0f));
+    float const angleToEnemy = player->GetAbsoluteAngle(nearestEnemy->GetPosition());
+    destination.RelocateOffset({ std::cos(angleToEnemy + static_cast<float>(M_PI)) * retreatDistance,
+        std::sin(angleToEnemy + static_cast<float>(M_PI)) * retreatDistance, 0.0f, 0.0f });
+
+    if (RequiresStrictHumanPathing(player))
+        IssueStrictHumanMove(player, destination);
+    else
+        player->GetMotionMaster()->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -1626,7 +1668,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         casted,
         context.reason ? context.reason : "none");
     if (casted)
+    {
+        if (context.spellId == 783 && context.reason && std::string_view(context.reason) == "recovering from polymorph by travel-form reposition")
+            RepositionDruidAfterTravelFormRecovery(player);
         SetLastExecutionStatus(player, "cast_executed");
+    }
     else
         SetLastExecutionStatus(player, "cast_failed_" + failureReason);
     return casted;
