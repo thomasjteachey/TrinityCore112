@@ -1270,6 +1270,46 @@ Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredT
     return best;
 }
 
+Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* preferredTarget, float maxDistance, float minManaPct)
+{
+    if (!player || !player->GetMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        if (!HasHostileTarget(player, candidate) || IsTargetInvalidByImmunity(player, candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return false;
+        if (candidate->GetPowerType() != POWER_MANA)
+            return false;
+
+        return candidate->GetPowerPct(POWER_MANA) > minManaPct;
+    };
+
+    if (isCandidateUsable(preferredTarget))
+        return preferredTarget;
+
+    Unit const* best = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 uint32 CountNearbyUnsNaredEnemies(Player const* player, float maxDistance)
 {
     if (!player || !player->GetMap())
@@ -2153,7 +2193,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage ice barrier", "maintain defensive absorb shield", 13033, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy low health", hasHostileTarget && target && target->HealthBelowPct(20) && IsSpellReady(player, 10199), 30.0f,
             { "mage fire blast", "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
-        { "polymorph", polymorphTarget, 29.0f,
+        { "polymorph", polymorphTarget && !polymorphTarget->HealthBelowPct(75), 29.0f,
             { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
         { "default ranged", hasHostileTarget && IsSpellReady(player, 25304), 18.0f,
             { "mage frostbolt", "default ranged pressure", 25304, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
@@ -2182,6 +2222,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
     Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
     Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
+    Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
 
@@ -2209,8 +2250,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
 
     AddDecisionCandidate(candidates, hasHostileTarget && target && target->GetClass() == CLASS_ROGUE && !HasAuraFromSpellChain(target, 27605) && IsSpellReady(player, 27605), 22.0f,
         { "priest shadow word pain", "maintain dot pressure on rogues", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && target->GetPowerType() == POWER_MANA && IsSpellReady(player, 14033), 21.0f,
-        { "priest mana burn", "burn mana from enemy casters", 14033, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, manaBurnTarget, 21.0f,
+        { "priest mana burn", "burn mana from enemy casters", 10876, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaBurnTarget ? manaBurnTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, CountNearbyEnemies(player, 10.0f) >= 2 && CountNearbyFriendlyPlayers(player, 10.0f) >= 2 && IsSpellReady(player, 27801), 20.0f,
         { "priest holy nova", "aoe pressure and splash healing in melee cluster", 27801, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasHostileTarget && target && IsSpellReady(player, 27605) && !HasBreakableCrowdControl(target) && !HasAuraFromSpellChain(target, 27605), 19.0f,
@@ -2233,6 +2274,12 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
     if (!player)
         return decision;
 
+    bool const recoveredFromPolymorph =
+        playerbot::PvpClassActions::GetLastExecutionStatus(player) == "cast_failed_crowd_controlled_polymorph" &&
+        !player->HasUnitState(UNIT_STATE_CONFUSED) &&
+        !player->HasAuraType(SPELL_AURA_MOD_CONFUSE) &&
+        !player->IsPolymorphed();
+
     Unit const* lowManaAlly = IsSpellReady(player, 29166) ? SelectFriendlyLowManaTarget(player, 40.0f, 10.0f) : nullptr;
     Unit const* cursedTarget = IsSpellReady(player, 2782) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
     Unit const* poisonedTarget = IsSpellReady(player, 2893) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
@@ -2243,8 +2290,17 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
     Unit const* rejuvTarget = IsSpellReady(player, 25299) ? SelectFriendlyHealthTarget(player, 40.0f, 90.0f) : nullptr;
     Unit const* rogueTarget = SelectEnemyClassTarget(player, CLASS_ROGUE, 30.0f);
     Unit const* meleeThreat = SelectNearbyMeleeTarget(player, target, 8.0f);
+    Unit const* moonfireExecuteTarget = nullptr;
+    if (IsSpellReady(player, 8921))
+    {
+        Unit const* nearbyTarget = SelectNearbyEnemyTarget(player, target, 25.0f);
+        if (nearbyTarget && nearbyTarget->HealthBelowPct(20))
+            moonfireExecuteTarget = nearbyTarget;
+    }
 
     std::vector<PrioritizedSpellDecision> candidates;
+    AddDecisionCandidate(candidates, recoveredFromPolymorph && IsSpellReady(player, 783), 55.0f,
+        { "druid travel form recovery", "recovering from polymorph by travel-form reposition", 783, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, lowManaAlly && !lowManaAlly->HasAura(29166), 50.0f,
         { "druid innervate", "stabilize low-mana ally with innervate", 29166, lowManaAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lowManaAlly ? lowManaAlly->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, cursedTarget, 49.0f,
@@ -2261,6 +2317,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
         { "druid regrowth", "maintain regrowth on injured allies", 9858, regrowthTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, regrowthTarget ? regrowthTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, rejuvTarget && !HasAuraFromSpellChain(rejuvTarget, 25299), 43.0f,
         { "druid rejuvenation", "maintain rejuvenation on injured allies", 25299, rejuvTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, rejuvTarget ? rejuvTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, moonfireExecuteTarget, 42.0f,
+        { "druid moonfire execute", "spam moonfire pressure on nearby low-health enemies", 8921, playerbot::PvpClassSpellContext::TargetMode::Enemy, moonfireExecuteTarget ? moonfireExecuteTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 9907) && IsSpellReady(player, 9907), 30.0f,
         { "druid faerie fire", "apply faerie fire to nearby rogues", 9907, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, meleeThreat && IsSpellReady(player, 5487), 29.0f,
