@@ -2616,6 +2616,45 @@ bool IsPrimaryRangedClassForSpacing(uint8 classId)
     }
 }
 
+bool IsDruidMeleeForm(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_DRUID)
+        return false;
+
+    switch (player->GetShapeshiftForm())
+    {
+        case FORM_CAT:
+        case FORM_BEAR:
+        case FORM_DIREBEAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool UsesRangedSpacingProfile(Player const* player, ClassicProfileSelection const& profileSelection)
+{
+    if (!player)
+        return false;
+
+    switch (player->GetClass())
+    {
+        case CLASS_DRUID:
+            if (IsDruidMeleeForm(player))
+                return false;
+            return profileSelection.profile != ClassicClassProfile::TertiaryClassic;
+        case CLASS_PALADIN:
+            return profileSelection.profile == ClassicClassProfile::PrimaryClassic;
+        case CLASS_SHAMAN:
+            return profileSelection.profile == ClassicClassProfile::PrimaryClassic ||
+                profileSelection.profile == ClassicClassProfile::TertiaryClassic;
+        default:
+            break;
+    }
+
+    return IsPrimaryRangedClassForSpacing(player->GetClass());
+}
+
 bool CanUseHealRangeSpacing(uint8 classId)
 {
     switch (classId)
@@ -2652,6 +2691,28 @@ bool IsPrimaryMeleeClassForSpacing(uint8 classId)
         default:
             return false;
     }
+}
+
+bool UsesMeleeSpacingProfile(Player const* player, ClassicProfileSelection const& profileSelection)
+{
+    if (!player)
+        return false;
+
+    switch (player->GetClass())
+    {
+        case CLASS_DRUID:
+            if (IsDruidMeleeForm(player))
+                return true;
+            return profileSelection.profile == ClassicClassProfile::TertiaryClassic;
+        case CLASS_PALADIN:
+            return profileSelection.profile != ClassicClassProfile::PrimaryClassic;
+        case CLASS_SHAMAN:
+            return profileSelection.profile == ClassicClassProfile::SecondaryClassic;
+        default:
+            break;
+    }
+
+    return IsPrimaryMeleeClassForSpacing(player->GetClass());
 }
 
 void ConsiderMovementDirective(playerbot::PvpClassSpellContext& context, playerbot::PvpClassSpellContext::MovementDirective directive,
@@ -2916,6 +2977,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
+    ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     ObjectGuid const selectedTargetGuid = SelectCombatTargetGuid(player);
     ObjectGuid activeTargetGuid = selectedTargetGuid;
     if (activeTargetGuid.IsEmpty())
@@ -2924,7 +2986,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (activeTargetGuid.IsEmpty())
     {
         bool const allowLongAcquire =
-            IsPrimaryRangedClassForSpacing(player->GetClass()) ||
+            UsesRangedSpacingProfile(player, profileSelection) ||
             CanUseHealRangeSpacing(player->GetClass());
         if (Unit const* fallbackTarget = SelectClosestEnemyTarget(player, !allowLongAcquire))
             activeTargetGuid = fallbackTarget->GetGUID();
@@ -3029,7 +3091,6 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return context;
     }
 
-    ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
     if (player->GetClass() == CLASS_HUNTER)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
@@ -3125,7 +3186,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && IsPrimaryMeleeClassForSpacing(player->GetClass()))
+    if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
         bool const isGapCloser = context.spellId == 11578 || context.spellId == 20617;
@@ -3153,7 +3214,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     // If the selected spell is not immediately castable due spacing, switch this
     // tick into movement-directive execution to mirror reference trigger flow.
-    if (context.spellId && IsPrimaryRangedClassForSpacing(player->GetClass()))
+    if (context.spellId && UsesRangedSpacingProfile(player, profileSelection))
     {
         Unit const* spacingTarget = nullptr;
         if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy ||
@@ -3226,7 +3287,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // Reference parity bridge: provide trigger-like movement directives even
     // when we do not have a castable spell yet ("enemy out of spell" / "enemy
     // too close for spell"). Keep classic spell IDs untouched.
-    if (!context.spellId && hasValidTarget && IsPrimaryRangedClassForSpacing(player->GetClass()) && !healerHasLivingAllyTarget)
+    if (!context.spellId && hasValidTarget && UsesRangedSpacingProfile(player, profileSelection) && !healerHasLivingAllyTarget)
     {
         Unit const* movementTarget = resolveTargetByGuid(activeTargetGuid);
         if (movementTarget)
@@ -3246,7 +3307,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     }
 
     if (!context.spellId && context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
-        hasValidTarget && IsPrimaryMeleeClassForSpacing(player->GetClass()))
+        hasValidTarget && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeMovementTarget = resolveTargetByGuid(selectedTargetGuid);
         if (meleeMovementTarget && !player->IsWithinMeleeRange(meleeMovementTarget))
@@ -3273,7 +3334,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else
             {
-                if (IsPrimaryRangedClassForSpacing(player->GetClass()))
+                if (UsesRangedSpacingProfile(player, profileSelection))
                 {
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, fallbackTarget->GetGUID(),
                         std::max(1.0f, GetConfiguredCloseRange()), "flee", "low mana fallback disengage to recover", 67.0f);
