@@ -392,7 +392,13 @@ public:
         else
             player->SaveRecallPosition();
 
-        player->TeleportTo({ mapId, destination });
+        if (!player->TeleportTo({ mapId, destination }))
+        {
+            handler->PSendSysMessage(LANG_INVALID_TARGET_COORD, destination.GetPositionX(), destination.GetPositionY(), mapId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
         return true;
     }
 
