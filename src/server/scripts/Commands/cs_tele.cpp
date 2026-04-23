@@ -362,6 +362,10 @@ public:
                 if (orientation)
                     destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), *orientation);
             }
+            else if (AreaTrigger const* entrance = sObjectMgr->GetMapEntranceTrigger(mapId))
+            {
+                destination.Relocate(entrance->target_X, entrance->target_Y, entrance->target_Z, orientation.value_or(entrance->target_Orientation));
+            }
             else
             {
                 handler->SendSysMessage(LANG_CANNOT_TELE_TO_BG);
@@ -371,13 +375,20 @@ public:
         }
         else
         {
-            float centerX = 0.0f;
-            float centerY = 0.0f;
-            Map const* baseMap = sMapMgr->CreateBaseMap(mapId);
-            float groundZ = baseMap->GetHeight(centerX, centerY, MAX_HEIGHT);
-            float waterZ = baseMap->GetWaterLevel(centerX, centerY);
-            float centerZ = groundZ > waterZ ? groundZ : waterZ;
-            destination.Relocate(centerX, centerY, centerZ, orientation.value_or(player->GetOrientation()));
+            if (AreaTrigger const* entrance = sObjectMgr->GetMapEntranceTrigger(mapId))
+            {
+                destination.Relocate(entrance->target_X, entrance->target_Y, entrance->target_Z, orientation.value_or(entrance->target_Orientation));
+            }
+            else
+            {
+                float centerX = 0.0f;
+                float centerY = 0.0f;
+                Map const* baseMap = sMapMgr->CreateBaseMap(mapId);
+                float groundZ = baseMap->GetHeight(centerX, centerY, MAX_HEIGHT);
+                float waterZ = baseMap->GetWaterLevel(centerX, centerY);
+                float centerZ = groundZ > waterZ ? groundZ : waterZ;
+                destination.Relocate(centerX, centerY, centerZ, orientation.value_or(player->GetOrientation()));
+            }
         }
 
         if (!MapManager::IsValidMapCoord(mapId, destination) || sObjectMgr->IsTransportMap(mapId))
@@ -394,7 +405,8 @@ public:
 
         if (!player->TeleportTo({ mapId, destination }))
         {
-            handler->PSendSysMessage(LANG_INVALID_TARGET_COORD, destination.GetPositionX(), destination.GetPositionY(), mapId);
+            handler->PSendSysMessage("Map %u exists, but teleport failed at (%f, %f, %f). The destination may be inaccessible for your character state or map type.",
+                mapId, destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
             handler->SetSentErrorMessage(true);
             return false;
         }
