@@ -60,6 +60,7 @@ public:
             { "add",    HandleTeleAddCommand,   rbac::RBAC_PERM_COMMAND_TELE_ADD,   Console::No },
             { "del",    HandleTeleDelCommand,   rbac::RBAC_PERM_COMMAND_TELE_DEL,   Console::Yes },
             { "map",    HandleTeleMapCommand,   rbac::RBAC_PERM_COMMAND_TELE,       Console::No },
+            { "mapinst", HandleTeleMapInstanceCommand, rbac::RBAC_PERM_COMMAND_TELE, Console::No },
             { "name",   teleNameCommandTable },
             { "group",  HandleTeleGroupCommand, rbac::RBAC_PERM_COMMAND_TELE_GROUP, Console::No },
             { "",       HandleTeleCommand,      rbac::RBAC_PERM_COMMAND_TELE,       Console::No },
@@ -337,6 +338,18 @@ public:
         return nullptr;
     }
 
+    static Battleground* GetBattlegroundByMapAndInstance(uint32 mapId, uint32 instanceId)
+    {
+        for (uint32 bgTypeValue = 1; bgTypeValue < MAX_BATTLEGROUND_TYPE_ID; ++bgTypeValue)
+        {
+            if (Battleground* battleground = sBattlegroundMgr->GetBattleground(instanceId, BattlegroundTypeId(bgTypeValue)))
+                if (battleground->GetMapId() == mapId)
+                    return battleground;
+        }
+
+        return nullptr;
+    }
+
     static bool HandleTeleMapCommand(ChatHandler* handler, uint32 mapId, Optional<float> x, Optional<float> y, Optional<float> z, Optional<float> orientation)
     {
         Player* player = handler->GetSession()->GetPlayer();
@@ -345,6 +358,13 @@ public:
         if (!map)
         {
             handler->SendSysMessage(LANG_COMMAND_NOMAPFOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (map->IsBattlegroundOrArena() && !player->GetBattlegroundId() && !player->IsGameMaster())
+        {
+            handler->PSendSysMessage("Map %u is a battleground/arena map and requires an active battleground instance context (battleground id).", mapId);
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -412,6 +432,30 @@ public:
         }
 
         return true;
+    }
+
+    static bool HandleTeleMapInstanceCommand(ChatHandler* handler, uint32 mapId, uint32 instanceId, Optional<float> x, Optional<float> y, Optional<float> z, Optional<float> orientation)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!player || !player->IsGameMaster())
+        {
+            handler->SendSysMessage("This command requires GM mode enabled (.gm on).");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Battleground* battleground = GetBattlegroundByMapAndInstance(mapId, instanceId);
+        if (!battleground)
+        {
+            handler->PSendSysMessage("No active battleground instance %u found for map %u.", instanceId, mapId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        player->SetBattlegroundId(instanceId, battleground->GetTypeID());
+        player->SetBGTeam(player->GetTeam());
+
+        return HandleTeleMapCommand(handler, mapId, x, y, z, orientation);
     }
 
     static bool HandleTeleNameNpcIdCommand(ChatHandler* handler, PlayerIdentifier player, Variant<Hyperlink<creature_entry>, uint32> creatureId)

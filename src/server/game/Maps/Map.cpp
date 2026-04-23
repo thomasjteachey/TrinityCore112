@@ -4317,8 +4317,11 @@ BattlegroundMap::~BattlegroundMap()
 {
     if (m_bg)
     {
+        bool const isDebugSandboxBg = m_bg->GetTypeID() == BATTLEGROUND_TYPE_NONE;
         //unlink to prevent crash, always unlink all pointer reference before destruction
         m_bg->SetBgMap(nullptr);
+        if (isDebugSandboxBg)
+            delete m_bg;
         m_bg = nullptr;
     }
 }
