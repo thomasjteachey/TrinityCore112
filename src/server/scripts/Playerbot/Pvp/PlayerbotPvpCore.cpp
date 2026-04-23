@@ -55,6 +55,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
+constexpr uint32 kHunterAutoShotSpellId = 75;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -122,6 +123,19 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
             player->GetGUID().ToString(), target->GetGUID().ToString(), previousRangedMode ? "ranged" : "melee",
             rangedMode ? "ranged" : "melee", distance, target->GetVictim() == player ? 1 : 0);
     }
+}
+
+float GetHunterDeadZoneMaxRange()
+{
+    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(kHunterAutoShotSpellId);
+    if (!autoShotInfo)
+        return kReferenceHunterSwitchDistance;
+
+    float const minRange = autoShotInfo->GetMinRange(false);
+    if (minRange <= 0.0f)
+        return kReferenceHunterSwitchDistance;
+
+    return minRange;
 }
 
 uint8 IncrementCombatNoTargetTicks(Player const* player)
@@ -3318,14 +3332,33 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else if (minRange > 0.0f && distance < std::max(0.0f, minRange + kRangedSpacingEnterTooCloseBuffer))
             {
-                // Enter too-close movement before strict dead-zone boundaries so
-                // ranged users do not idle in 5-8y style min-range gaps.
-                // Keep an extra cushion over strict spell minimum range so ranged
-                // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
-                // immediately re-enter the dead-zone from minor pathing drift.
-                float const fleeFollowRange = std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
-                    fleeFollowRange, "flee", "selected spell minimum range violation", 84.0f);
+                bool collapseToMelee = false;
+                if (player->GetClass() == CLASS_HUNTER)
+                {
+                    float const meleeEnterRange = std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer);
+                    if (distance > meleeEnterRange)
+                    {
+                        // Hunters in the 5-8y dead-zone cannot use either
+                        // ranged weapon shots or reliable melee pressure.
+                        // Collapse into melee first, then resume normal
+                        // hunter mode logic on subsequent ticks.
+                        ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, spacingTarget->GetGUID(),
+                            std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "selected spell dead-zone collapse", 84.0f);
+                        collapseToMelee = true;
+                    }
+                }
+
+                if (!collapseToMelee)
+                {
+                    // Enter too-close movement before strict dead-zone boundaries so
+                    // ranged users do not idle in 5-8y style min-range gaps.
+                    // Keep an extra cushion over strict spell minimum range so ranged
+                    // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
+                    // immediately re-enter the dead-zone from minor pathing drift.
+                    float const fleeFollowRange = std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
+                        fleeFollowRange, "flee", "selected spell minimum range violation", 84.0f);
+                }
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
@@ -3380,6 +3413,16 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
                     ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy out of spell range", 70.0f);
+            }
+            else if (player->GetClass() == CLASS_HUNTER &&
+                distance < std::max(0.0f, GetHunterDeadZoneMaxRange() + kRangedSpacingEnterTooCloseBuffer) &&
+                distance > std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer))
+            {
+                // No castable spell + hunter dead-zone often left the bot in a
+                // bow-raise idle loop. For this 5-8y band, force a short melee
+                // close to re-enter a valid action envelope.
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, movementTarget->GetGUID(),
+                    std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy in hunter dead-zone", 71.0f);
             }
             else if (distance < std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer))
             {
