@@ -7342,6 +7342,23 @@ float Unit::SpellCritChanceDone(SpellInfo const* spellInfo, SpellSchoolMask scho
     if (!isPeriodic && !spellInfo->HasAttribute(SPELL_ATTR0_CU_CAN_CRIT))
         return 0.0f;
 
+    // 89742 - Primal Wisdom
+    // Custom behavior: Regrowth and Wrath use melee crit chance instead of spell crit chance.
+    if (GetTypeId() == TYPEID_PLAYER && HasAura(89742))
+    {
+        SpellInfo const* wrathFirstRank = sSpellMgr->AssertSpellInfo(5176);
+        SpellInfo const* regrowthFirstRank = sSpellMgr->AssertSpellInfo(8936);
+        if (spellInfo->IsRankOf(wrathFirstRank) || spellInfo->IsRankOf(regrowthFirstRank))
+        {
+            float critChance = GetFloatValue(PLAYER_CRIT_PERCENTAGE);
+
+            if (Player* modOwner = GetSpellModOwner())
+                modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_CRITICAL_CHANCE, critChance);
+
+            return std::max(critChance, 0.0f);
+        }
+    }
+
     float crit_chance = 0.0f;
     switch (spellInfo->DmgClass)
     {
