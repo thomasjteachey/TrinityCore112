@@ -340,9 +340,27 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!player || !target)
         return;
 
+    struct RangedApproachStallState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        float lastDistance = 0.0f;
+        uint32 lastSampleMs = 0;
+        uint32 lastFallbackMs = 0;
+        uint8 stagnantSamples = 0;
+    };
+
+    static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
+    RangedApproachStallState& stallState = stallStateByGuid[player->GetGUID().GetRawValue()];
+
     float const safeDistance = std::max(1.0f, desiredDistance);
     if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, safeDistance))
+    {
+        stallState.stagnantSamples = 0;
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = player->GetDistance(target);
+        stallState.lastSampleMs = GameTime::GetGameTimeMS();
         return;
+    }
 
     // Fallback: if strict-human segment pathing cannot resolve a route this
     // tick (common around dynamic battleground geometry), still issue regular
@@ -385,15 +403,38 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // back to a direct MovePoint so "reach spell" does not loop forever with
     // no actual motion.
     float const postIssueDistance = player->GetDistance(target);
-    if (!player->isMoving() && postIssueDistance > (safeDistance + 1.0f))
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const targetChanged = stallState.targetGuid != target->GetGUID();
+    bool const recentlySampled = !targetChanged && stallState.lastSampleMs != 0 && nowMs <= (stallState.lastSampleMs + 1500);
+    bool const distanceStagnant = recentlySampled && std::fabs(postIssueDistance - stallState.lastDistance) < 0.35f;
+
+    if (targetChanged || !distanceStagnant)
+        stallState.stagnantSamples = 0;
+
+    if (!player->isMoving() && postIssueDistance > (safeDistance + 1.0f) && distanceStagnant)
+        ++stallState.stagnantSamples;
+
+    stallState.targetGuid = target->GetGUID();
+    stallState.lastDistance = postIssueDistance;
+    stallState.lastSampleMs = nowMs;
+
+    // Avoid clearing active movement every tick; only recover when we have
+    // repeated stagnant samples and throttle the fallback issue rate.
+    if (!player->isMoving() &&
+        postIssueDistance > (safeDistance + 1.0f) &&
+        stallState.stagnantSamples >= 2 &&
+        (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 500)))
     {
-        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
+        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
         Position const fallbackDestination = BuildFollowDestination(player, target, safeDistance);
         motionMaster->MovePoint(0, fallbackDestination, true);
+        stallState.lastFallbackMs = nowMs;
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach forced MovePoint fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance,
-            static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()));
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
     }
 }
 
@@ -1623,9 +1664,23 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * fleeDistance,
                     std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
                 if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanMove(player, destination);
+                {
+                    if (!IssueStrictHumanMove(player, destination))
+                    {
+                        // Strict segment pathing can fail to resolve around
+                        // battleground geometry. Fall back to a direct point
+                        // move so flee directives never devolve into idle.
+                        MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
+                        if (fallbackMotionMaster)
+                            fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+                    }
+                }
                 else
-                    player->GetMotionMaster()->MovePoint(0, destination, true);
+                {
+                    MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
+                    if (fallbackMotionMaster)
+                        fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+                }
                 break;
             }
             case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
