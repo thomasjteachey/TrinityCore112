@@ -60,6 +60,7 @@ public:
             { "add",    HandleTeleAddCommand,   rbac::RBAC_PERM_COMMAND_TELE_ADD,   Console::No },
             { "del",    HandleTeleDelCommand,   rbac::RBAC_PERM_COMMAND_TELE_DEL,   Console::Yes },
             { "map",    HandleTeleMapCommand,   rbac::RBAC_PERM_COMMAND_TELE,       Console::No },
+            { "mapinst", HandleTeleMapInstanceCommand, rbac::RBAC_PERM_COMMAND_TELE, Console::No },
             { "name",   teleNameCommandTable },
             { "group",  HandleTeleGroupCommand, rbac::RBAC_PERM_COMMAND_TELE_GROUP, Console::No },
             { "",       HandleTeleCommand,      rbac::RBAC_PERM_COMMAND_TELE,       Console::No },
@@ -337,6 +338,18 @@ public:
         return nullptr;
     }
 
+    static Battleground* GetBattlegroundByMapAndInstance(uint32 mapId, uint32 instanceId)
+    {
+        for (uint32 bgTypeValue = 1; bgTypeValue < MAX_BATTLEGROUND_TYPE_ID; ++bgTypeValue)
+        {
+            if (Battleground* battleground = sBattlegroundMgr->GetBattleground(instanceId, BattlegroundTypeId(bgTypeValue)))
+                if (battleground->GetMapId() == mapId)
+                    return battleground;
+        }
+
+        return nullptr;
+    }
+
     static bool HandleTeleMapCommand(ChatHandler* handler, uint32 mapId, Optional<float> x, Optional<float> y, Optional<float> z, Optional<float> orientation)
     {
         Player* player = handler->GetSession()->GetPlayer();
@@ -345,6 +358,13 @@ public:
         if (!map)
         {
             handler->SendSysMessage(LANG_COMMAND_NOMAPFOUND);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (map->IsBattlegroundOrArena() && !player->GetBattlegroundId() && !player->IsGameMaster())
+        {
+            handler->PSendSysMessage("Map %u is a battleground/arena map and requires an active battleground instance context (battleground id).", mapId);
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -362,6 +382,10 @@ public:
                 if (orientation)
                     destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), *orientation);
             }
+            else if (AreaTrigger const* entrance = sObjectMgr->GetMapEntranceTrigger(mapId))
+            {
+                destination.Relocate(entrance->target_X, entrance->target_Y, entrance->target_Z, orientation.value_or(entrance->target_Orientation));
+            }
             else
             {
                 handler->SendSysMessage(LANG_CANNOT_TELE_TO_BG);
@@ -371,13 +395,20 @@ public:
         }
         else
         {
-            float centerX = 0.0f;
-            float centerY = 0.0f;
-            Map const* baseMap = sMapMgr->CreateBaseMap(mapId);
-            float groundZ = baseMap->GetHeight(centerX, centerY, MAX_HEIGHT);
-            float waterZ = baseMap->GetWaterLevel(centerX, centerY);
-            float centerZ = groundZ > waterZ ? groundZ : waterZ;
-            destination.Relocate(centerX, centerY, centerZ, orientation.value_or(player->GetOrientation()));
+            if (AreaTrigger const* entrance = sObjectMgr->GetMapEntranceTrigger(mapId))
+            {
+                destination.Relocate(entrance->target_X, entrance->target_Y, entrance->target_Z, orientation.value_or(entrance->target_Orientation));
+            }
+            else
+            {
+                float centerX = 0.0f;
+                float centerY = 0.0f;
+                Map const* baseMap = sMapMgr->CreateBaseMap(mapId);
+                float groundZ = baseMap->GetHeight(centerX, centerY, MAX_HEIGHT);
+                float waterZ = baseMap->GetWaterLevel(centerX, centerY);
+                float centerZ = groundZ > waterZ ? groundZ : waterZ;
+                destination.Relocate(centerX, centerY, centerZ, orientation.value_or(player->GetOrientation()));
+            }
         }
 
         if (!MapManager::IsValidMapCoord(mapId, destination) || sObjectMgr->IsTransportMap(mapId))
@@ -392,8 +423,39 @@ public:
         else
             player->SaveRecallPosition();
 
-        player->TeleportTo({ mapId, destination });
+        if (!player->TeleportTo({ mapId, destination }))
+        {
+            handler->PSendSysMessage("Map %u exists, but teleport failed at (%f, %f, %f). The destination may be inaccessible for your character state or map type.",
+                mapId, destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
         return true;
+    }
+
+    static bool HandleTeleMapInstanceCommand(ChatHandler* handler, uint32 mapId, uint32 instanceId, Optional<float> x, Optional<float> y, Optional<float> z, Optional<float> orientation)
+    {
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!player || !player->IsGameMaster())
+        {
+            handler->SendSysMessage("This command requires GM mode enabled (.gm on).");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        Battleground* battleground = GetBattlegroundByMapAndInstance(mapId, instanceId);
+        if (!battleground)
+        {
+            handler->PSendSysMessage("No active battleground instance %u found for map %u.", instanceId, mapId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        player->SetBattlegroundId(instanceId, battleground->GetTypeID());
+        player->SetBGTeam(player->GetTeam());
+
+        return HandleTeleMapCommand(handler, mapId, x, y, z, orientation);
     }
 
     static bool HandleTeleNameNpcIdCommand(ChatHandler* handler, PlayerIdentifier player, Variant<Hyperlink<creature_entry>, uint32> creatureId)

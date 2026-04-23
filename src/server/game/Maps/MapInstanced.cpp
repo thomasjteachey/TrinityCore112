@@ -127,13 +127,32 @@ Map* MapInstanced::CreateInstanceForPlayer(uint32 mapId, Player* player, uint32 
         // the instance id is set in battlegroundid
         newInstanceId = player->GetBattlegroundId();
         if (!newInstanceId)
-            return nullptr;
+        {
+            if (!player->IsGameMaster())
+                return nullptr;
+
+            // GM sandbox mode: allow opening battleground maps without a live battleground instance.
+            newInstanceId = 0xF0000000u | (player->GetGUID().GetCounter() & 0x0FFFFFFFu);
+            player->SetBattlegroundId(newInstanceId, BATTLEGROUND_TYPE_NONE);
+            player->SetBGTeam(player->GetTeam());
+        }
 
         map = sMapMgr->FindMap(mapId, newInstanceId);
         if (!map)
         {
             if (Battleground* bg = player->GetBattleground())
                 map = CreateBattleground(newInstanceId, bg);
+            else if (player->IsGameMaster())
+            {
+                Battleground* debugBg = new Battleground();
+                debugBg->SetMapId(mapId);
+                debugBg->SetInstanceID(newInstanceId);
+                debugBg->SetTypeID(BATTLEGROUND_TYPE_NONE);
+                debugBg->SetMaxPlayersPerTeam(1);
+                debugBg->SetMinPlayersPerTeam(1);
+                debugBg->SetMaxPlayers(2);
+                map = CreateBattleground(newInstanceId, debugBg);
+            }
             else
             {
                 player->TeleportToBGEntryPoint();
