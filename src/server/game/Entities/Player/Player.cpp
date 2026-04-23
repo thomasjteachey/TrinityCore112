@@ -1716,9 +1716,8 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
 
     MapEntry const* mEntry = sMapStore.LookupEntry(mapid);
 
-    // don't let enter battlegrounds without assigned battleground id (for example through areatrigger)...
-    // don't let gm level > 1 either
-    if (!InBattleground() && mEntry->IsBattlegroundOrArena())
+    // don't let regular players enter battlegrounds without assigned battleground id (for example through areatrigger)
+    if (!InBattleground() && mEntry->IsBattlegroundOrArena() && !IsGameMaster())
         return false;
 
     // client without expansion support
