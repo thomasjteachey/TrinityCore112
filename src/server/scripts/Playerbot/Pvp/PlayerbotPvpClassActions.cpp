@@ -380,20 +380,20 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
     }
 
-    // Some battleground edge-cases can drop the requested chase/follow order
-    // and leave the active generator idle for a tick while we are still out of
-    // range. Fall back to a direct MovePoint so "reach spell" does not loop
-    // forever with no actual motion.
+    // Some battleground edge-cases keep a stale chase/follow generator active
+    // without producing displacement while we are still out of range. Fall
+    // back to a direct MovePoint so "reach spell" does not loop forever with
+    // no actual motion.
     float const postIssueDistance = player->GetDistance(target);
-    if (!player->isMoving() &&
-        postIssueDistance > (safeDistance + 1.0f) &&
-        motionMaster->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE)
+    if (!player->isMoving() && postIssueDistance > (safeDistance + 1.0f))
     {
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
         Position const fallbackDestination = BuildFollowDestination(player, target, safeDistance);
         motionMaster->MovePoint(0, fallbackDestination, true);
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach fallback MovePoint: guid={} target={} desiredRange={} currentDistance={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance);
+            "Ranged approach forced MovePoint fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance,
+            static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()));
     }
 }
 
