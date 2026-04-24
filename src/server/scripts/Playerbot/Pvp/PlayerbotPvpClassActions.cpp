@@ -268,12 +268,21 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
-    if (!destinationChanged && !canReissueByTime)
-        return true;
-
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return false;
+
+    if (!destinationChanged && !canReissueByTime)
+    {
+        // Do not suppress strict re-issue while stalled. Battleground pathing
+        // can occasionally leave a stale/idle generator active, which causes
+        // repeated "reach spell" directives to report success while the bot
+        // remains stationary.
+        MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+        bool const hasActivePointMove = player->isMoving() && movementType == POINT_MOTION_TYPE;
+        if (hasActivePointMove)
+            return true;
+    }
 
     Position segmentDestination;
     if (!TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
