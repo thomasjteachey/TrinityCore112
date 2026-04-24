@@ -435,7 +435,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 500)))
     {
         MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
-        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
+        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE || motionType == POINT_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
         Position const fallbackDestination = BuildFollowDestination(player, target, safeDistance);
@@ -638,7 +638,7 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
     {
         MotionMaster const* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const movementType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-        if (movementType == IDLE_MOTION_TYPE || movementType == CHASE_MOTION_TYPE || movementType == FOLLOW_MOTION_TYPE)
+        if (movementType == IDLE_MOTION_TYPE || movementType == CHASE_MOTION_TYPE || movementType == FOLLOW_MOTION_TYPE || movementType == POINT_MOTION_TYPE)
             return false;
     }
 
@@ -1799,6 +1799,53 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             static_cast<uint8>(context.movementDirective));
         SetLastExecutionStatus(player, "move_executed");
         return true;
+    }
+
+    // Recovery guard: after LOS-related cast failures, reserve a tick for
+    // explicit re-positioning before retrying the same cast. Without this,
+    // caster bots can repeatedly fail with LOS while remaining idle when
+    // class-selection keeps returning a spell action without a move directive.
+    if (hasCastIntent &&
+        context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        CanIssueFollowCommands(player))
+    {
+        std::string const lastStatus = GetLastExecutionStatus(player);
+        bool const previousLosFailure =
+            lastStatus == "cast_failed_no_los" ||
+            lastStatus == "cast_failed_SPELL_FAILED_LINE_OF_SIGHT";
+
+        if (previousLosFailure && !context.targetGuid.IsEmpty())
+        {
+            if (Unit* recoveryTarget = ObjectAccessor::GetUnit(*player, context.targetGuid); recoveryTarget && recoveryTarget->IsAlive())
+            {
+                uint32 resolvedSpellId = context.spellId;
+                if (context.spellId)
+                {
+                    if (uint32 knownSpell = ResolveKnownSpellInChain(player, context.spellId))
+                        resolvedSpellId = knownSpell;
+                }
+
+                SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+                float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+                bool const enemyMeleeSpacing =
+                    context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
+                    IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
+                    maxRange > 0.0f && maxRange <= 5.5f;
+
+                if (enemyMeleeSpacing)
+                    IssueMeleeApproachMovement(player, recoveryTarget);
+                else
+                {
+                    float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+                        ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                        : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
+                    IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
+                }
+
+                SetLastExecutionStatus(player, "move_recover_los");
+                return true;
+            }
+        }
     }
 
     std::string failureReason;
