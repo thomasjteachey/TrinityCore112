@@ -564,7 +564,17 @@ float ComputeLosRecoveryRange(Player const* player, Unit const* target, float ma
     if (closeFloor > upperBound)
         desiredRange = upperBound;
 
-    return desiredRange;
+    // Always bias LOS recovery to move inward at least slightly. Holding a
+    // follow distance >= current separation can leave casters repeating LOS
+    // failures while standing still.
+    float const currentDistance = player->GetDistance(target);
+    if (currentDistance > 0.0f)
+    {
+        float const inwardRecoveryCap = std::max(1.0f, currentDistance - 2.0f);
+        desiredRange = std::min(desiredRange, inwardRecoveryCap);
+    }
+
+    return std::max(1.0f, desiredRange);
 }
 
 bool IsCrowdControlledForAction(Player const* player)
