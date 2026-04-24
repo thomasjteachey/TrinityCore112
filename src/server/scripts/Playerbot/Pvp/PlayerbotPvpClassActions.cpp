@@ -455,11 +455,13 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-        Position const fallbackDestination = BuildFollowDestination(player, target, safeDistance);
-        motionMaster->MovePoint(0, fallbackDestination, true);
+        if (player->IsValidAttackTarget(target))
+            motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
+        else
+            motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
         stallState.lastFallbackMs = nowMs;
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach forced MovePoint fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
+            "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
     }
 }
