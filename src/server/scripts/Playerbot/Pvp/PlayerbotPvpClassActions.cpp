@@ -706,6 +706,27 @@ uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
     return resolvedSpellId;
 }
 
+uint32 ResolveKnownPetSpellInChain(Player const* player, uint32 baseSpellId)
+{
+    if (!player || !baseSpellId)
+        return 0;
+
+    Pet const* pet = player->GetPet();
+    if (!pet || !pet->IsAlive())
+        return 0;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return 0;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (pet->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+
+    return resolvedSpellId;
+}
+
 void CommandPetAttackTarget(Player* player, Unit* target)
 {
     if (!player || !target || !target->IsAlive())
@@ -947,7 +968,19 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    uint32 resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    bool castFromPet = false;
+    Pet* petCaster = nullptr;
+    if (!resolvedSpellId)
+    {
+        resolvedSpellId = ResolveKnownPetSpellInChain(player, context.spellId);
+        if (resolvedSpellId)
+        {
+            petCaster = player->GetPet();
+            castFromPet = petCaster && petCaster->IsAlive();
+        }
+    }
+
     if (!resolvedSpellId)
     {
         failureReason = "missing_spell";
@@ -959,6 +992,53 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         failureReason = "spell_info_missing";
         return false;
+    }
+
+    Unit* target = ResolveTarget(player, context);
+    if ((!target || !target->IsAlive()))
+    {
+        failureReason = "target_invalid_or_dead";
+        return false;
+    }
+
+    if (castFromPet)
+    {
+        if (!petCaster)
+        {
+            failureReason = "pet_missing";
+            return false;
+        }
+
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        {
+            if (!petCaster->IsValidAttackTarget(target, spellInfo))
+            {
+                failureReason = "invalid_enemy_target";
+                return false;
+            }
+
+            if (!petCaster->IsWithinLOSInMap(target))
+            {
+                failureReason = "no_los";
+                return false;
+            }
+
+            float const maxRange = spellInfo->GetMaxRange(false);
+            if (maxRange > 0.0f && !petCaster->IsWithinDistInMap(target, maxRange))
+            {
+                failureReason = "out_of_range";
+                return false;
+            }
+        }
+
+        SpellCastResult const petCastResult = petCaster->CastSpell(target, resolvedSpellId, false);
+        if (petCastResult != SPELL_CAST_OK)
+        {
+            failureReason = "pet_cast_failed";
+            return false;
+        }
+
+        return true;
     }
 
     if (IsCrowdControlledForAction(player))
@@ -1033,8 +1113,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
     }
-
-    Unit* target = ResolveTarget(player, context);
 
     if ((!target || !target->IsAlive()) && !itemTarget)
     {
@@ -1269,7 +1347,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    if (spellInfo->CalcCastTime() > 0 || isFoodOrDrinkSpell)
+    if (spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell)
     {
         player->StopMoving();
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
