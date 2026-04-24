@@ -107,6 +107,34 @@ char const* ToString(playerbot::PvpClassSpellContext::TargetMode mode)
     }
 }
 
+char const* ToString(MovementGeneratorType motionType)
+{
+    switch (motionType)
+    {
+        case IDLE_MOTION_TYPE: return "idle";
+        case RANDOM_MOTION_TYPE: return "random";
+        case WAYPOINT_MOTION_TYPE: return "waypoint";
+        case CONFUSED_MOTION_TYPE: return "confused";
+        case CHASE_MOTION_TYPE: return "chase";
+        case HOME_MOTION_TYPE: return "home";
+        case FLIGHT_MOTION_TYPE: return "flight";
+        case POINT_MOTION_TYPE: return "point";
+        case FLEEING_MOTION_TYPE: return "fleeing";
+        case DISTRACT_MOTION_TYPE: return "distract";
+        case ASSISTANCE_MOTION_TYPE: return "assist";
+        case ASSISTANCE_DISTRACT_MOTION_TYPE: return "assist_distract";
+        case TIMED_FLEEING_MOTION_TYPE: return "timed_flee";
+        case FOLLOW_MOTION_TYPE: return "follow";
+        case ROTATE_MOTION_TYPE: return "rotate";
+        case EFFECT_MOTION_TYPE: return "effect";
+        case SPLINE_CHAIN_MOTION_TYPE: return "spline_chain";
+        case FORMATION_MOTION_TYPE: return "formation";
+        case MAX_MOTION_TYPE:
+        default:
+            return "unknown";
+    }
+}
+
 std::string BuildManagedBotStatusLine(Player* bot)
 {
     if (!bot)
@@ -128,6 +156,9 @@ std::string BuildManagedBotStatusLine(Player* bot)
         !bot->HasUnitState(UNIT_STATE_LOST_CONTROL);
 
     std::ostringstream status;
+    MovementGeneratorType const motionType = bot->GetMotionMaster()->GetCurrentMovementGeneratorType();
+    uint32 const unitState = bot->GetUnitState();
+    uint32 const movementFlags = bot->GetUnitMovementFlags();
     status << "PB status: "
            << "lifecycle=" << (lifecycleEnabled ? "on" : "off")
            << " managed=" << (managedRandomBot ? "yes" : "no")
@@ -159,7 +190,11 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " hooks(bg=" << (hooks.battlegroundParticipationHook ? "on" : "off")
            << ",arena=" << (hooks.arenaParticipationHook ? "on" : "off") << ")"
            << " last_exec=" << lastClassExecutionStatus
-           << " motion=" << uint32(bot->GetMotionMaster()->GetCurrentMovementGeneratorType())
+           << " strict_pathing=" << (bot->InBattleground() ? "on" : "off")
+           << " motion=" << uint32(motionType)
+           << "/" << ToString(motionType)
+           << " unit_state=0x" << std::hex << unitState
+           << " move_flags=0x" << movementFlags << std::dec
            << " pos=(" << bot->GetMapId() << ":" << bot->GetPositionX() << "," << bot->GetPositionY() << "," << bot->GetPositionZ() << ")"
            << " o=" << bot->GetOrientation();
 
@@ -186,6 +221,18 @@ std::string BuildManagedBotStatusLine(Player* bot)
     else
     {
         status << " motion_target=none";
+    }
+
+    if (directiveTarget)
+    {
+        status << " directive_target=" << directiveTarget->GetName()
+               << " directive_target_dist=" << bot->GetDistance(directiveTarget)
+               << " directive_target_los=" << (bot->IsWithinLOSInMap(directiveTarget) ? "yes" : "no")
+               << " directive_target_attackable=" << (bot->IsValidAttackTarget(directiveTarget) ? "yes" : "no");
+    }
+    else
+    {
+        status << " directive_target=none";
     }
 
     if (Unit* selected = bot->GetSelectedUnit())
