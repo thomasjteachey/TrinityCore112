@@ -268,6 +268,14 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
+    if (!destinationChanged && !canReissueByTime)
+    {
+        // Treat strict move as unsuccessful when the throttled order is stale
+        // and we are not currently moving; callers can then fall back to
+        // alternate movement instead of assuming progress.
+        return player->isMoving();
+    }
+
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return false;
@@ -364,11 +372,21 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     float const safeDistance = std::max(1.0f, desiredDistance);
     if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, safeDistance))
     {
+        float const postStrictDistance = player->GetDistance(target);
         stallState.stagnantSamples = 0;
         stallState.targetGuid = target->GetGUID();
-        stallState.lastDistance = player->GetDistance(target);
+        stallState.lastDistance = postStrictDistance;
         stallState.lastSampleMs = GameTime::GetGameTimeMS();
-        return;
+
+        // Strict-human segmented movement uses point generators. If that order
+        // does not result in movement while still far outside desired range,
+        // immediately fall through to generic chase/follow recovery.
+        if (player->isMoving() || postStrictDistance <= (safeDistance + 1.0f))
+            return;
+
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict ranged follow issued but stalled this tick: guid={} target={} desiredRange={} currentDistance={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postStrictDistance);
     }
 
     // Fallback: if strict-human segment pathing cannot resolve a route this
