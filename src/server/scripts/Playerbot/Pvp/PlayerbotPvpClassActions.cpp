@@ -269,7 +269,12 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
     if (!destinationChanged && !canReissueByTime)
-        return true;
+    {
+        // Treat strict move as unsuccessful when the throttled order is stale
+        // and we are not currently moving; callers can then fall back to
+        // alternate movement instead of assuming progress.
+        return player->isMoving();
+    }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
