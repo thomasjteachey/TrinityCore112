@@ -431,6 +431,25 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // no actual motion.
     float const postIssueDistance = player->GetDistance(target);
     uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (!player->isMoving() &&
+        postIssueDistance > (safeDistance + 1.0f) &&
+        (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 350)))
+    {
+        Position const forcedDestination = BuildFollowDestination(player, target, std::max(1.0f, safeDistance - 2.0f));
+        bool forcedMoveIssued = false;
+        if (RequiresStrictHumanPathing(player))
+            forcedMoveIssued = IssueStrictHumanMove(player, forcedDestination, 1.5f, 0);
+
+        if (!forcedMoveIssued)
+            motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, forcedDestination), true);
+
+        stallState.lastFallbackMs = nowMs;
+        stallState.stagnantSamples = 0;
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Ranged approach forced point fallback from idle: guid={} target={} desiredRange={} currentDistance={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance);
+    }
+
     bool const targetChanged = stallState.targetGuid != target->GetGUID();
     bool const recentlySampled = !targetChanged && stallState.lastSampleMs != 0 && nowMs <= (stallState.lastSampleMs + 1500);
     bool const distanceStagnant = recentlySampled && std::fabs(postIssueDistance - stallState.lastDistance) < 0.35f;
