@@ -435,7 +435,24 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 500)))
     {
         MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
-        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE || motionType == POINT_MOTION_TYPE)
+        if (motionType == POINT_MOTION_TYPE)
+        {
+            // If we are already in a stalled point movement, prefer reissuing
+            // chase/follow instead of chaining another point destination.
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            if (player->IsValidAttackTarget(target))
+                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
+            else
+                motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+
+            stallState.lastFallbackMs = nowMs;
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "Ranged approach fallback reissued chase/follow from stalled point: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
+            return;
+        }
+
+        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
         Position const fallbackDestination = BuildFollowDestination(player, target, safeDistance);
