@@ -268,12 +268,21 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
-    if (!destinationChanged && !canReissueByTime)
-        return true;
-
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return false;
+
+    if (!destinationChanged && !canReissueByTime)
+    {
+        // Do not suppress strict re-issue while stalled. Battleground pathing
+        // can occasionally leave a stale/idle generator active, which causes
+        // repeated "reach spell" directives to report success while the bot
+        // remains stationary.
+        MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+        bool const hasActivePointMove = player->isMoving() && movementType == POINT_MOTION_TYPE;
+        if (hasActivePointMove)
+            return true;
+    }
 
     Position segmentDestination;
     if (!TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
@@ -648,7 +657,7 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
     {
         MotionMaster const* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const movementType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-        if (movementType == IDLE_MOTION_TYPE || movementType == CHASE_MOTION_TYPE || movementType == FOLLOW_MOTION_TYPE)
+        if (movementType == IDLE_MOTION_TYPE || movementType == CHASE_MOTION_TYPE || movementType == FOLLOW_MOTION_TYPE || movementType == POINT_MOTION_TYPE)
             return false;
     }
 
@@ -711,6 +720,27 @@ uint32 ResolveKnownSpellInChain(Player const* player, uint32 baseSpellId)
     uint32 resolvedSpellId = 0;
     for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
         if (player->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+
+    return resolvedSpellId;
+}
+
+uint32 ResolveKnownPetSpellInChain(Player const* player, uint32 baseSpellId)
+{
+    if (!player || !baseSpellId)
+        return 0;
+
+    Pet const* pet = player->GetPet();
+    if (!pet || !pet->IsAlive())
+        return 0;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return 0;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (pet->HasSpell(chainSpellId))
             resolvedSpellId = chainSpellId;
 
     return resolvedSpellId;
@@ -957,7 +987,19 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    uint32 resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    bool castFromPet = false;
+    Pet* petCaster = nullptr;
+    if (!resolvedSpellId)
+    {
+        resolvedSpellId = ResolveKnownPetSpellInChain(player, context.spellId);
+        if (resolvedSpellId)
+        {
+            petCaster = player->GetPet();
+            castFromPet = petCaster && petCaster->IsAlive();
+        }
+    }
+
     if (!resolvedSpellId)
     {
         failureReason = "missing_spell";
@@ -969,6 +1011,53 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         failureReason = "spell_info_missing";
         return false;
+    }
+
+    Unit* target = ResolveTarget(player, context);
+    if ((!target || !target->IsAlive()))
+    {
+        failureReason = "target_invalid_or_dead";
+        return false;
+    }
+
+    if (castFromPet)
+    {
+        if (!petCaster)
+        {
+            failureReason = "pet_missing";
+            return false;
+        }
+
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        {
+            if (!petCaster->IsValidAttackTarget(target, spellInfo))
+            {
+                failureReason = "invalid_enemy_target";
+                return false;
+            }
+
+            if (!petCaster->IsWithinLOSInMap(target))
+            {
+                failureReason = "no_los";
+                return false;
+            }
+
+            float const maxRange = spellInfo->GetMaxRange(false);
+            if (maxRange > 0.0f && !petCaster->IsWithinDistInMap(target, maxRange))
+            {
+                failureReason = "out_of_range";
+                return false;
+            }
+        }
+
+        SpellCastResult const petCastResult = petCaster->CastSpell(target, resolvedSpellId, false);
+        if (petCastResult != SPELL_CAST_OK)
+        {
+            failureReason = "pet_cast_failed";
+            return false;
+        }
+
+        return true;
     }
 
     if (IsCrowdControlledForAction(player))
@@ -1043,8 +1132,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
     }
-
-    Unit* target = ResolveTarget(player, context);
 
     if ((!target || !target->IsAlive()) && !itemTarget)
     {
@@ -1279,7 +1366,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    if (spellInfo->CalcCastTime() > 0 || isFoodOrDrinkSpell)
+    if (spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell)
     {
         player->StopMoving();
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
@@ -1395,6 +1482,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     bool hasTeleportEffect = false;
+    bool hasChargeEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
         switch (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect)
@@ -1408,6 +1496,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             case SPELL_EFFECT_CHARGE:
             case SPELL_EFFECT_CHARGE_DEST:
                 hasTeleportEffect = true;
+                hasChargeEffect = true;
                 break;
             default:
                 break;
@@ -1438,6 +1527,20 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (player->IsBeingTeleportedNear())
                 FinalizeVirtualNearTeleport(player);
         }
+    }
+
+    // Charge/Intercept target switching: when bots are already attacking one
+    // unit and gap-close a different unit, preserve the charge destination by
+    // immediately promoting the spell target to combat/selection context.
+    // Otherwise downstream pursuit logic can snap movement back to the old
+    // victim in the same tick, which looks like "stun/sound with no charge".
+    if (hasChargeEffect &&
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target && target->IsAlive())
+    {
+        player->SetSelection(target->GetGUID());
+        if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+            player->Attack(target, true);
     }
 
     // Avoid immediate reapplication loops after quick dispels by imposing
@@ -1731,6 +1834,53 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             static_cast<uint8>(context.movementDirective));
         SetLastExecutionStatus(player, "move_executed");
         return true;
+    }
+
+    // Recovery guard: after LOS-related cast failures, reserve a tick for
+    // explicit re-positioning before retrying the same cast. Without this,
+    // caster bots can repeatedly fail with LOS while remaining idle when
+    // class-selection keeps returning a spell action without a move directive.
+    if (hasCastIntent &&
+        context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
+        CanIssueFollowCommands(player))
+    {
+        std::string const lastStatus = GetLastExecutionStatus(player);
+        bool const previousLosFailure =
+            lastStatus == "cast_failed_no_los" ||
+            lastStatus == "cast_failed_SPELL_FAILED_LINE_OF_SIGHT";
+
+        if (previousLosFailure && !context.targetGuid.IsEmpty())
+        {
+            if (Unit* recoveryTarget = ObjectAccessor::GetUnit(*player, context.targetGuid); recoveryTarget && recoveryTarget->IsAlive())
+            {
+                uint32 resolvedSpellId = context.spellId;
+                if (context.spellId)
+                {
+                    if (uint32 knownSpell = ResolveKnownSpellInChain(player, context.spellId))
+                        resolvedSpellId = knownSpell;
+                }
+
+                SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+                float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+                bool const enemyMeleeSpacing =
+                    context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
+                    IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
+                    maxRange > 0.0f && maxRange <= 5.5f;
+
+                if (enemyMeleeSpacing)
+                    IssueMeleeApproachMovement(player, recoveryTarget);
+                else
+                {
+                    float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+                        ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                        : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
+                    IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
+                }
+
+                SetLastExecutionStatus(player, "move_recover_los");
+                return true;
+            }
+        }
     }
 
     std::string failureReason;
