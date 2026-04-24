@@ -157,7 +157,6 @@ std::string BuildManagedBotStatusLine(Player* bot)
 
     std::ostringstream status;
     MovementGeneratorType const motionType = bot->GetMotionMaster()->GetCurrentMovementGeneratorType();
-    uint32 const unitState = bot->GetUnitState();
     uint32 const movementFlags = bot->GetUnitMovementFlags();
     status << "PB status: "
            << "lifecycle=" << (lifecycleEnabled ? "on" : "off")
@@ -193,8 +192,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " strict_pathing=" << (bot->InBattleground() ? "on" : "off")
            << " motion=" << uint32(motionType)
            << "/" << ToString(motionType)
-           << " unit_state=0x" << std::hex << unitState
-           << " move_flags=0x" << movementFlags << std::dec
+           << " move_flags=0x" << std::hex << movementFlags << std::dec
            << " pos=(" << bot->GetMapId() << ":" << bot->GetPositionX() << "," << bot->GetPositionY() << "," << bot->GetPositionZ() << ")"
            << " o=" << bot->GetOrientation();
 
