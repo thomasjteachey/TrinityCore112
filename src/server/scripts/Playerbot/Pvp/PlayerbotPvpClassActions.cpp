@@ -1463,6 +1463,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     bool hasTeleportEffect = false;
+    bool hasChargeEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
         switch (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect)
@@ -1476,6 +1477,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             case SPELL_EFFECT_CHARGE:
             case SPELL_EFFECT_CHARGE_DEST:
                 hasTeleportEffect = true;
+                hasChargeEffect = true;
                 break;
             default:
                 break;
@@ -1506,6 +1508,20 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (player->IsBeingTeleportedNear())
                 FinalizeVirtualNearTeleport(player);
         }
+    }
+
+    // Charge/Intercept target switching: when bots are already attacking one
+    // unit and gap-close a different unit, preserve the charge destination by
+    // immediately promoting the spell target to combat/selection context.
+    // Otherwise downstream pursuit logic can snap movement back to the old
+    // victim in the same tick, which looks like "stun/sound with no charge".
+    if (hasChargeEffect &&
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target && target->IsAlive())
+    {
+        player->SetSelection(target->GetGUID());
+        if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+            player->Attack(target, true);
     }
 
     // Avoid immediate reapplication loops after quick dispels by imposing
