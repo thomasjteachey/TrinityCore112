@@ -984,7 +984,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     else if (!botCurrentlyMoving && player->InBattleground() &&
         currentMovement != IDLE_MOTION_TYPE &&
         currentMovement != CHASE_MOTION_TYPE &&
-        currentMovement != POINT_MOTION_TYPE)
+        currentMovement != POINT_MOTION_TYPE &&
+        // Charge/Intercept movement is issued through effect generators.
+        // Do not treat those as stale while they are resolving.
+        currentMovement != EFFECT_MOTION_TYPE)
     {
         EmitBattlegroundGmDebug(player,
             "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
@@ -2830,6 +2833,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         case CHASE_MOTION_TYPE:
         case POINT_MOTION_TYPE:
         case FOLLOW_MOTION_TYPE:
+        // Charge/Intercept traverse through EFFECT_MOTION_TYPE.
+        case EFFECT_MOTION_TYPE:
             break;
         default:
         {
