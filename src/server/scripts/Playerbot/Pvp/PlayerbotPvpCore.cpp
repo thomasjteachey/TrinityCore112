@@ -2093,7 +2093,7 @@ ObjectGuid SelectAllyTargetGuid(Player const* player)
     if (!IsFriendlySupportTarget(player, selected))
         return ObjectGuid::Empty;
 
-    if (!player->IsWithinLOSInMap(selected) || !player->IsWithinDistInMap(selected, GetConfiguredHealRange()))
+    if (!player->IsWithinLOSInMap(selected))
         return ObjectGuid::Empty;
 
     return selectedGuid;
