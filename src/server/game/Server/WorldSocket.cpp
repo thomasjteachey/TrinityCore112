@@ -49,7 +49,10 @@ void WorldSocket::Start()
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_IP_INFO);
     stmt->setString(0, ip_address);
 
-    _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(stmt).WithPreparedCallback(std::bind(&WorldSocket::CheckIpCallback, this, std::placeholders::_1)));
+    _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(stmt).WithPreparedCallback([self = shared_from_this()](PreparedQueryResult result)
+    {
+        self->CheckIpCallback(std::move(result));
+    }));
 }
 
 void WorldSocket::CheckIpCallback(PreparedQueryResult result)
@@ -444,9 +447,9 @@ void WorldSocket::HandleAuthSession(WorldPacket& recvPacket)
     stmt->setInt32(0, int32(realm.Id.Realm));
     stmt->setString(1, authSession->Account);
 
-    _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(stmt).WithPreparedCallback([this, authSession = std::move(authSession)](PreparedQueryResult result) mutable
+    _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(stmt).WithPreparedCallback([self = shared_from_this(), authSession = std::move(authSession)](PreparedQueryResult result) mutable
     {
-        HandleAuthSessionCallback(std::move(authSession), std::move(result));
+        self->HandleAuthSessionCallback(std::move(authSession), std::move(result));
     }));
 }
 
@@ -616,7 +619,10 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<AuthSession> authSes
     if (wardenActive)
         _worldSession->InitWarden(account.SessionKey, account.OS);
 
-    _queryProcessor.AddCallback(_worldSession->LoadPermissionsAsync().WithPreparedCallback(std::bind(&WorldSocket::LoadSessionPermissionsCallback, this, std::placeholders::_1)));
+    _queryProcessor.AddCallback(_worldSession->LoadPermissionsAsync().WithPreparedCallback([self = shared_from_this()](PreparedQueryResult result)
+    {
+        self->LoadSessionPermissionsCallback(std::move(result));
+    }));
     AsyncRead();
 }
 

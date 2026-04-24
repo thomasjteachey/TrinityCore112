@@ -588,6 +588,30 @@ bool IsSpellReady(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
+bool IsPetSpellReady(Player const* player, uint32 spellId)
+{
+    if (!player || !spellId)
+        return false;
+
+    Pet const* pet = player->GetPet();
+    if (!pet || !pet->IsAlive())
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!baseSpellInfo)
+        return false;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (pet->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+
+    if (!resolvedSpellId)
+        return false;
+
+    return !pet->GetSpellHistory()->HasCooldown(resolvedSpellId);
+}
+
 bool IsEffectivelyOutdoors(Player const* player)
 {
     if (!player)
@@ -1626,13 +1650,13 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
             return false;
         if (HasAnyAura(candidate, { 2893 })) // Abolish Poison
             return false;
+        if (HasBreakableCrowdControl(candidate) || HasDotAura(candidate))
+            return false;
         return true;
     };
 
     Unit const* bestSecondary = nullptr;
     float bestSecondaryDistance = std::numeric_limits<float>::max();
-    Unit const* fallbackPrimary = nullptr;
-    float fallbackPrimaryDistance = std::numeric_limits<float>::max();
     Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
@@ -1642,14 +1666,7 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
 
         float const distance = player->GetDistance(candidate);
         if (primaryTarget && candidate->GetGUID() == primaryTarget->GetGUID())
-        {
-            if (distance < fallbackPrimaryDistance)
-            {
-                fallbackPrimary = candidate;
-                fallbackPrimaryDistance = distance;
-            }
             continue;
-        }
 
         if (distance < bestSecondaryDistance)
         {
@@ -1658,7 +1675,7 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
         }
     }
 
-    return bestSecondary ? bestSecondary : fallbackPrimary;
+    return bestSecondary;
 }
 
 Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
@@ -2093,7 +2110,7 @@ ObjectGuid SelectAllyTargetGuid(Player const* player)
     if (!IsFriendlySupportTarget(player, selected))
         return ObjectGuid::Empty;
 
-    if (!player->IsWithinLOSInMap(selected) || !player->IsWithinDistInMap(selected, GetConfiguredHealRange()))
+    if (!player->IsWithinLOSInMap(selected))
         return ObjectGuid::Empty;
 
     return selectedGuid;
@@ -2241,6 +2258,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
     Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
     Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
+    Unit const* rogueTarget = IsSpellReady(player, 27605) ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
 
@@ -2266,8 +2284,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             { "priest flash heal", "heal party with flash heal", 10917, healTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, healTarget ? healTarget->GetGUID() : ObjectGuid::Empty });
     }
 
-    AddDecisionCandidate(candidates, hasHostileTarget && target && target->GetClass() == CLASS_ROGUE && !HasAuraFromSpellChain(target, 27605) && IsSpellReady(player, 27605), 22.0f,
-        { "priest shadow word pain", "maintain dot pressure on rogues", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 27605), 22.0f,
+        { "priest shadow word pain", "maintain dot pressure on rogues", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, manaBurnTarget, 21.0f,
         { "priest mana burn", "burn mana from enemy casters", 10876, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaBurnTarget ? manaBurnTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, CountNearbyEnemies(player, 10.0f) >= 2 && CountNearbyFriendlyPlayers(player, 10.0f) >= 2 && IsSpellReady(player, 27801), 20.0f,
@@ -2427,10 +2445,10 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     Unit const* fearTarget = IsSpellReady(player, 6215) ? SelectWarlockFearTarget(player, 20.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, player->HealthBelowPct(45) && hasLivingPet && IsSpellReady(player, 19443), 55.0f,
-        { "warlock sacrifice", "consume voidwalker shield under low health pressure", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19647), 54.0f,
-        { "warlock spell lock", "pet interrupt when available", 19647, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, player->HealthBelowPct(45) && hasLivingPet && IsPetSpellReady(player, 7812), 55.0f,
+        { "warlock sacrifice", "consume voidwalker shield under low health pressure", 7812, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, target->HasUnitState(UNIT_STATE_CASTING) && IsPetSpellReady(player, 19244), 54.0f,
+        { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, fearTarget, 53.0f,
         { "warlock fear", "prioritize fear control on paladin/priest targets in range", 6215, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget ? fearTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708), 52.0f,
