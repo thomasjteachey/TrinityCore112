@@ -624,6 +624,30 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     if (state.phase == 1)
     {
         bool issuedMovement = false;
+        TeamId const teamId = ResolveBotTeamId(player);
+        Position const gateStagingPoint = (teamId == TEAM_HORDE)
+            ? Position(1066.0946404f, 1380.843994f, 340.612305f, 0.0f)
+            : Position(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
+        Position const gateExitPoint = (teamId == TEAM_HORDE)
+            ? Position(978.20f, 1427.10f, 335.20f, 0.0f)
+            : Position(1498.60f, 1484.30f, 340.20f, 0.0f);
+
+        // Explicit egress routing near the spawn gate. This keeps bots from
+        // parking against the fence/gate line when direct nearest-enemy
+        // pathing fails to build a viable first segment from spawn.
+        if (!player->IsWithinDist3d(gateStagingPoint.GetPositionX(), gateStagingPoint.GetPositionY(), gateStagingPoint.GetPositionZ(), 5.0f))
+        {
+            issuedMovement = IssueMovePointThrottled(player, gateStagingPoint, 2.0f, 400);
+            if (issuedMovement)
+                return true;
+        }
+
+        if (!player->IsWithinDist3d(gateExitPoint.GetPositionX(), gateExitPoint.GetPositionY(), gateExitPoint.GetPositionZ(), 8.0f))
+        {
+            issuedMovement = IssueMovePointThrottled(player, gateExitPoint, 2.0f, 400);
+            if (issuedMovement)
+                return true;
+        }
 
         if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
         {
@@ -777,7 +801,10 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         Position const collisionSafeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        path.SetPathLengthLimit(90.0f);
+        // Allow long battleground routes (including spawn-to-midfield/target
+        // pursuit) to be generated in one request instead of forcing very
+        // short local segments that can stall at gate/fence bottlenecks.
+        path.SetPathLengthLimit(350.0f);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -786,7 +813,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(90.0f);
+            retryPath.SetPathLengthLimit(350.0f);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -899,10 +926,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     ClearEatDrinkAurasForMovement(player);
 
-    minReissueMs = std::max<uint32>(minReissueMs, 2000);
+    minReissueMs = std::max<uint32>(minReissueMs, 500);
 
     if (IsWarsongGulch(player))
-        minReissueMs = std::max<uint32>(minReissueMs, 2000);
+        minReissueMs = std::max<uint32>(minReissueMs, 500);
 
     struct MoveOrderState
     {
@@ -930,12 +957,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (hardThrottleActive && botCurrentlyMoving)
         return false;
-
-    if (IsWarsongGulch(player) && botCurrentlyMoving && state.lastIssueMs != 0 &&
-        nowMs < state.lastIssueMs + 8000 && player->GetDistance(state.lastDestination) > 10.0f)
-    {
-        return false;
-    }
 
     if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
         return false;
