@@ -1189,6 +1189,12 @@ void Battleground::AddPlayer(Player* player)
     if (!isInBattleground)
         UpdatePlayersCountByTeam(team, false);                  // +1 player
 
+    // The invited counters represent pending queue invites. Once the player
+    // actually joins the battleground, consume one invite slot so refill logic
+    // sees the true remaining capacity.
+    if (!isInBattleground)
+        DecreaseInvitedCount(team);
+
     if (WorldSession const* session = player->GetSession(); session && !session->IsVirtualSession())
     {
         m_HasEverHadNonVirtualHumanParticipant = true;
