@@ -623,18 +623,20 @@ bool TryJumpOffWarsongGraveyard(Player* player)
 
     if (state.phase == 1)
     {
+        bool issuedMovement = false;
+
         if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
         {
-            bool const issued = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
+            issuedMovement = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
                 IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 12.0f, 500);
-            if (issued)
+            if (issuedMovement)
                 return true;
         }
 
-        IssueMovePointThrottled(player, midPoint, 4.0f, 500);
+        issuedMovement = IssueMovePointThrottled(player, midPoint, 4.0f, 500);
         if (nowMs >= state.forwardBurstEndMs)
             state.phase = 2;
-        return true;
+        return issuedMovement;
     }
 
     if (state.phase == 2)
