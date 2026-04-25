@@ -607,53 +607,31 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     if (!state.active)
         return false;
 
-    static Position const hordeGraveyardTip(1066.0946404f, 1380.843994f, 340.612305f, 0.0f);
-    static Position const allianceGraveyardTip(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
     static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-    // Per-side anchors that point off the graveyard ledge into the field.
-    static Position const hordeForwardAnchor(978.20f, 1427.10f, 335.20f, 0.0f);
-    static Position const allianceForwardAnchor(1498.60f, 1484.30f, 340.20f, 0.0f);
+    uint32 const nowMs = GameTime::GetGameTimeMS();
 
-    TeamId const teamId = ResolveBotTeamId(player);
-    Position const& graveyardTip = (teamId == TEAM_HORDE) ? hordeGraveyardTip : allianceGraveyardTip;
-    Position const& forwardAnchor = (teamId == TEAM_HORDE) ? hordeForwardAnchor : allianceForwardAnchor;
-
+    // Replace rigid graveyard jump anchors with navmesh-driven pursuit:
+    // build movement toward the nearest enemy immediately after resurrection
+    // and keep issuing path segments for a short bootstrap window so bots do
+    // not tunnel through floor/wall geometry while leaving spawn platforms.
     if (state.phase == 0)
     {
-        if (!player->IsWithinDist3d(graveyardTip.GetPositionX(), graveyardTip.GetPositionY(), graveyardTip.GetPositionZ(), 2.5f))
-        {
-            IssueMovePointThrottled(player, graveyardTip, 1.0f, 300);
-            return true;
-        }
-
+        if (!state.forwardBurstEndMs)
+            state.forwardBurstEndMs = nowMs + 7000;
         state.phase = 1;
     }
 
     if (state.phase == 1)
     {
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        if (!state.forwardBurstEndMs)
-            state.forwardBurstEndMs = nowMs + 1000;
-
-        // Push straight off the graveyard ledge first, then route to mid.
-        float const dx = forwardAnchor.GetPositionX() - graveyardTip.GetPositionX();
-        float const dy = forwardAnchor.GetPositionY() - graveyardTip.GetPositionY();
-        float const len = std::sqrt(dx * dx + dy * dy);
-        if (len <= 0.001f)
+        if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
         {
-            state.phase = 2;
-            return true;
+            bool const issued = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
+                IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 12.0f, 500);
+            if (issued)
+                return true;
         }
 
-        float const forwardDistance = player->GetSpeed(MOVE_RUN) * 1.0f;
-        Position forwardPoint(
-            graveyardTip.GetPositionX() + (dx / len) * forwardDistance,
-            graveyardTip.GetPositionY() + (dy / len) * forwardDistance,
-            graveyardTip.GetPositionZ(),
-            player->GetAbsoluteAngle(forwardAnchor.GetPositionX(), forwardAnchor.GetPositionY()));
-
-        IssueMovePointThrottled(player, forwardPoint, 0.5f, 100);
-
+        IssueMovePointThrottled(player, midPoint, 4.0f, 500);
         if (nowMs >= state.forwardBurstEndMs)
             state.phase = 2;
         return true;
@@ -661,11 +639,10 @@ bool TryJumpOffWarsongGraveyard(Player* player)
 
     if (state.phase == 2)
     {
-        IssueMovePointThrottled(player, midPoint, 1.0f, 300);
-
-        if (player->IsWithinDist3d(midPoint.GetPositionX(), midPoint.GetPositionY(), midPoint.GetPositionZ(), 6.0f))
-            state.active = false;
-        return true;
+        state.active = false;
+        state.phase = 0;
+        state.forwardBurstEndMs = 0;
+        return false;
     }
 
     return true;
