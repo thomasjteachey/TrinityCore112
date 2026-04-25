@@ -993,27 +993,6 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
         }
     }
 
-    // SCM should always saturate existing free-slot instances before creating another one.
-    // This prevents queue fragmentation where late joiners get split into a second SCM while
-    // the first instance still has open seats.
-    if (bgTypeId == BATTLEGROUND_SCM)
-    {
-        for (Battleground* bg : bgQueues)
-        {
-            if (!bg)
-                continue;
-
-            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id)
-                continue;
-
-            if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
-                continue;
-
-            if (bg->HasFreeSlots())
-                return;
-        }
-    }
-
     // finished iterating through the bgs with free slots, maybe we need to create a new bg
 
     Battleground* bg_template = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
