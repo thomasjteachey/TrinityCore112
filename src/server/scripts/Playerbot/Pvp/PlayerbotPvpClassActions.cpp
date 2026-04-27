@@ -170,7 +170,17 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
 
         uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
         if (!pathOk || (pathType & forbiddenPathFlags) != 0)
+        {
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "Strict path candidate rejected: guid={} map={} from=({},{},{}) requested=({},{},{}) safe=({},{},{}) pathOk={} pathType={} points={} actualEnd=({},{},{}).",
+                player->GetGUID().ToString(), player->GetMapId(),
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+                requestedDestination.GetPositionX(), requestedDestination.GetPositionY(), requestedDestination.GetPositionZ(),
+                safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(),
+                pathOk ? 1 : 0, static_cast<uint32>(pathType), static_cast<uint32>(points.size()),
+                actualEnd.x, actualEnd.y, actualEnd.z);
             return false;
+        }
 
         bool haveResolvedDestination = false;
         if (points.size() > 1)
@@ -192,7 +202,15 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         }
 
         if (!haveResolvedDestination)
+        {
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "Strict path candidate had no usable resolved destination: guid={} map={} requested=({},{},{}) safe=({},{},{}) pathType={} points={} actualEnd=({},{},{}).",
+                player->GetGUID().ToString(), player->GetMapId(),
+                requestedDestination.GetPositionX(), requestedDestination.GetPositionY(), requestedDestination.GetPositionZ(),
+                safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(),
+                static_cast<uint32>(pathType), static_cast<uint32>(points.size()), actualEnd.x, actualEnd.y, actualEnd.z);
             return false;
+        }
 
         resolvedDestination = BuildCollisionSafeDestination(player, resolvedDestination);
         float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
@@ -200,7 +218,21 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
         float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+        {
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "Strict path resolved destination rejected: guid={} map={} resolved=({},{},{}) planarDelta={} verticalDelta={} pathType={} points={}.",
+                player->GetGUID().ToString(), player->GetMapId(),
+                resolvedDestination.GetPositionX(), resolvedDestination.GetPositionY(), resolvedDestination.GetPositionZ(),
+                planarDelta, verticalDelta, static_cast<uint32>(pathType), static_cast<uint32>(points.size()));
             return false;
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict path resolved destination accepted: guid={} map={} requested=({},{},{}) resolved=({},{},{}) pathType={} points={} planarDelta={} verticalDelta={}.",
+            player->GetGUID().ToString(), player->GetMapId(),
+            requestedDestination.GetPositionX(), requestedDestination.GetPositionY(), requestedDestination.GetPositionZ(),
+            resolvedDestination.GetPositionX(), resolvedDestination.GetPositionY(), resolvedDestination.GetPositionZ(),
+            static_cast<uint32>(pathType), static_cast<uint32>(points.size()), planarDelta, verticalDelta);
 
         return true;
     };
@@ -251,7 +283,18 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         return false;
 
     if (!CanIssueFollowCommands(player))
+    {
+        if (player)
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "Strict move rejected: guid={} map={} reason=cannot_follow rooted={} stunned={} confused={} fleeing={} lost_control={}.",
+                player->GetGUID().ToString(), player->GetMapId(),
+                player->HasUnitState(UNIT_STATE_ROOT) ? 1 : 0,
+                player->HasUnitState(UNIT_STATE_STUNNED) ? 1 : 0,
+                player->HasUnitState(UNIT_STATE_CONFUSED) ? 1 : 0,
+                player->HasUnitState(UNIT_STATE_FLEEING) ? 1 : 0,
+                player->HasUnitState(UNIT_STATE_LOST_CONTROL) ? 1 : 0);
         return false;
+    }
 
     struct MoveOrderState
     {
@@ -294,13 +337,29 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
 
     Position segmentDestination;
     if (!TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Strict move failed to resolve segment: guid={} map={} from=({},{},{}) requested=({},{},{}) moving={} motion={}.",
+            player->GetGUID().ToString(), player->GetMapId(),
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+            destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+            player->isMoving() ? 1 : 0,
+            motionMaster ? static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()) : 0);
         return false;
+    }
 
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
     motionMaster->MovePoint(0, segmentDestination, true);
 
     state.lastDestination = segmentDestination;
     state.lastIssueMs = nowMs;
+    TC_LOG_DEBUG("playerbots.pvp.classspell",
+        "Strict move issued: guid={} map={} requested=({},{},{}) segment=({},{},{}) segmentDist={} movingAfter={} motionAfter={}.",
+        player->GetGUID().ToString(), player->GetMapId(),
+        destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+        segmentDestination.GetPositionX(), segmentDestination.GetPositionY(), segmentDestination.GetPositionZ(),
+        player->GetDistance(segmentDestination), player->isMoving() ? 1 : 0,
+        static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()));
     return true;
 }
 
@@ -647,6 +706,7 @@ struct CasterSpellCooldownKeyHash
 
 std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
+std::unordered_map<uint64, std::string> g_LastClassExecutionDiagnosticByGuid;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -700,6 +760,56 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
         return;
 
     g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
+}
+
+void SetLastExecutionDiagnostic(Player const* player, std::string const& detail)
+{
+    if (!player)
+        return;
+
+    g_LastClassExecutionDiagnosticByGuid[player->GetGUID().GetRawValue()] = detail;
+}
+
+char const* GetMovementDirectiveLabel(playerbot::PvpClassSpellContext::MovementDirective directive)
+{
+    switch (directive)
+    {
+        case playerbot::PvpClassSpellContext::MovementDirective::ReachMeleeRange: return "reach_melee";
+        case playerbot::PvpClassSpellContext::MovementDirective::ReachSpellRange: return "reach_spell";
+        case playerbot::PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell: return "flee";
+        case playerbot::PvpClassSpellContext::MovementDirective::FaceSpellTarget: return "face_target";
+        case playerbot::PvpClassSpellContext::MovementDirective::DropInvalidTarget: return "drop_target";
+        case playerbot::PvpClassSpellContext::MovementDirective::CheckMountState: return "check_mount";
+        case playerbot::PvpClassSpellContext::MovementDirective::ResetCombatState: return "reset_combat";
+        case playerbot::PvpClassSpellContext::MovementDirective::None:
+        default:
+            return "none";
+    }
+}
+
+char const* GetMotionTypeLabel(MovementGeneratorType motionType)
+{
+    switch (motionType)
+    {
+        case IDLE_MOTION_TYPE: return "idle";
+        case RANDOM_MOTION_TYPE: return "random";
+        case WAYPOINT_MOTION_TYPE: return "waypoint";
+        case CONFUSED_MOTION_TYPE: return "confused";
+        case CHASE_MOTION_TYPE: return "chase";
+        case HOME_MOTION_TYPE: return "home";
+        case FLIGHT_MOTION_TYPE: return "flight";
+        case POINT_MOTION_TYPE: return "point";
+        case FLEEING_MOTION_TYPE: return "fleeing";
+        case DISTRACT_MOTION_TYPE: return "distract";
+        case FOLLOW_MOTION_TYPE: return "follow";
+        case ROTATE_MOTION_TYPE: return "rotate";
+        case EFFECT_MOTION_TYPE: return "effect";
+        case SPLINE_CHAIN_MOTION_TYPE: return "spline_chain";
+        case FORMATION_MOTION_TYPE: return "formation";
+        case MAX_MOTION_TYPE:
+        default:
+            return "unknown";
+    }
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -940,6 +1050,104 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
         default:
             return nullptr;
     }
+}
+
+std::string BuildExecutionDiagnostic(Player* player, playerbot::PvpClassSpellContext const& context, std::string const& phase, std::string const& outcome)
+{
+    if (!player)
+        return "player=none";
+
+    uint32 resolvedSpellId = 0;
+    if (context.spellId)
+    {
+        resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+        if (!resolvedSpellId)
+            resolvedSpellId = ResolveKnownPetSpellInChain(player, context.spellId);
+    }
+
+    SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+    Unit* target = ResolveTarget(player, context);
+    Unit* movementTarget = context.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*player, context.movementTargetGuid);
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+    bool const hasCooldown = spellInfo && player->GetSpellHistory() && player->GetSpellHistory()->HasCooldown(resolvedSpellId);
+    bool const hasGlobalCooldown = spellInfo && player->GetSpellHistory() && player->GetSpellHistory()->HasGlobalCooldown(spellInfo);
+    bool const isCasting = player->IsNonMeleeSpellCast(false, false, true);
+    bool powerKnown = false;
+    bool powerOk = true;
+    int32 currentPower = 0;
+    int32 powerCost = 0;
+    if (spellInfo && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    {
+        powerKnown = true;
+        currentPower = player->GetPower(Powers(spellInfo->PowerType));
+        powerCost = spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask());
+        powerOk = currentPower >= powerCost;
+    }
+
+    float const minRange = spellInfo ? spellInfo->GetMinRange(false) : 0.0f;
+    float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+    bool const hasTarget = target != nullptr;
+    bool const targetAlive = target && target->IsAlive();
+    bool const targetLos = target && player->IsWithinLOSInMap(target);
+    bool const targetAttackable = target && (spellInfo ? player->IsValidAttackTarget(target, spellInfo) : player->IsValidAttackTarget(target));
+    bool const targetAssistable = target && spellInfo && player->IsValidAssistTarget(target, spellInfo);
+    float const targetDistance = target ? player->GetDistance(target) : -1.0f;
+    bool const targetInMaxRange = target && (maxRange <= 0.0f || player->IsWithinDistInMap(target, maxRange));
+    bool const targetOutsideMinRange = target && (minRange <= 0.0f || !player->IsWithinDistInMap(target, minRange));
+    constexpr float kHalfCircleArc = 3.14159265358979323846f;
+    bool const targetInFront = target && player->HasInArc(kHalfCircleArc, target);
+
+    bool const moveTargetAlive = movementTarget && movementTarget->IsAlive();
+    bool const moveTargetLos = movementTarget && player->IsWithinLOSInMap(movementTarget);
+    float const moveTargetDistance = movementTarget ? player->GetDistance(movementTarget) : -1.0f;
+
+    std::ostringstream detail;
+    detail << "phase=" << phase
+           << " outcome=" << outcome
+           << " action=" << (context.actionName ? context.actionName : "none")
+           << " reason=" << (context.reason ? context.reason : "none")
+           << " spell=" << context.spellId
+           << " resolved_spell=" << resolvedSpellId
+           << " item=" << context.itemEntry
+           << " target_mode=" << GetTargetModeLabel(context.targetMode)
+           << " target_guid=" << context.targetGuid.ToString()
+           << " target_resolved=" << (hasTarget ? "yes" : "no")
+           << " target_alive=" << (targetAlive ? "yes" : "no")
+           << " target_dist=" << targetDistance
+           << " target_los=" << (targetLos ? "yes" : "no")
+           << " target_attackable=" << (targetAttackable ? "yes" : "no")
+           << " target_assistable=" << (targetAssistable ? "yes" : "no")
+           << " target_in_front=" << (targetInFront ? "yes" : "no")
+           << " spell_min=" << minRange
+           << " spell_max=" << maxRange
+           << " target_in_max=" << (targetInMaxRange ? "yes" : "no")
+           << " target_outside_min=" << (targetOutsideMinRange ? "yes" : "no")
+           << " cooldown=" << (hasCooldown ? "yes" : "no")
+           << " gcd=" << (hasGlobalCooldown ? "yes" : "no")
+           << " casting=" << (isCasting ? "yes" : "no")
+           << " power_known=" << (powerKnown ? "yes" : "no")
+           << " power=" << currentPower
+           << " power_cost=" << powerCost
+           << " power_ok=" << (powerOk ? "yes" : "no")
+           << " directive=" << GetMovementDirectiveLabel(context.movementDirective)
+           << " move_target_guid=" << context.movementTargetGuid.ToString()
+           << " move_target_resolved=" << (movementTarget ? "yes" : "no")
+           << " move_target_alive=" << (moveTargetAlive ? "yes" : "no")
+           << " move_target_dist=" << moveTargetDistance
+           << " move_target_los=" << (moveTargetLos ? "yes" : "no")
+           << " follow_range=" << context.movementFollowRange
+           << " can_follow=" << (CanIssueFollowCommands(player) ? "yes" : "no")
+           << " in_bg=" << (player->InBattleground() ? "yes" : "no")
+           << " map=" << player->GetMapId()
+           << " pos=(" << player->GetPositionX() << "," << player->GetPositionY() << "," << player->GetPositionZ() << ")"
+           << " moving=" << (player->isMoving() ? "yes" : "no")
+           << " motion=" << static_cast<uint32>(motionType) << "/" << GetMotionTypeLabel(motionType)
+           << " move_flags=0x" << std::hex << player->GetUnitMovementFlags() << std::dec;
+
+    return detail.str();
 }
 
 void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spellInfo)
@@ -1692,6 +1900,18 @@ std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
     return itr->second;
 }
 
+std::string PvpClassActions::GetLastExecutionDiagnostic(Player const* player)
+{
+    if (!player)
+        return "none";
+
+    auto const itr = g_LastClassExecutionDiagnosticByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_LastClassExecutionDiagnosticByGuid.end())
+        return "none";
+
+    return itr->second;
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
@@ -1710,6 +1930,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         if (ShouldThrottleDirective(player, context))
         {
             SetLastExecutionStatus(player, "move_throttled");
+            SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "movement", "move_throttled"));
             return true;
         }
 
@@ -1735,6 +1956,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         if (directiveNeedsTarget && (!movementTarget || !movementTarget->IsAlive()))
         {
             SetLastExecutionStatus(player, "move_skipped_target_invalid");
+            SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "movement", "move_skipped_target_invalid"));
             return false;
         }
 
@@ -1743,6 +1965,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             if (IsCrowdControlledForAction(player))
                 ClearActiveMovementForControlLoss(player);
             SetLastExecutionStatus(player, "move_skipped_cannot_follow");
+            SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "movement", "move_skipped_cannot_follow"));
             return false;
         }
 
@@ -1753,6 +1976,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             player->IsNonMeleeSpellCast(false, false, true))
         {
             SetLastExecutionStatus(player, "move_skipped_face_while_casting");
+            SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "movement", "move_skipped_face_while_casting"));
             return true;
         }
 
@@ -1851,6 +2075,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             movementTarget ? movementTarget->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
             static_cast<uint8>(context.movementDirective));
         SetLastExecutionStatus(player, "move_executed");
+        SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "movement", "move_executed"));
         return true;
     }
 
@@ -1896,6 +2121,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 }
 
                 SetLastExecutionStatus(player, "move_recover_los");
+                SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "recovery", "move_recover_los"));
                 return true;
             }
         }
@@ -1921,9 +2147,13 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         if (context.spellId == 783 && context.reason && std::string_view(context.reason) == "recovering from polymorph by travel-form reposition")
             RepositionDruidAfterTravelFormRecovery(player);
         SetLastExecutionStatus(player, "cast_executed");
+        SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "cast", "cast_executed"));
     }
     else
+    {
         SetLastExecutionStatus(player, "cast_failed_" + failureReason);
+        SetLastExecutionDiagnostic(player, BuildExecutionDiagnostic(player, context, "cast", "cast_failed_" + failureReason));
+    }
     return casted;
 }
 }

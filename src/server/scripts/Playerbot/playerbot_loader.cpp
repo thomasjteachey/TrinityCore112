@@ -135,6 +135,141 @@ char const* ToString(MovementGeneratorType motionType)
     }
 }
 
+uint32 ResolveKnownSpellForDiagnostics(Player const* bot, uint32 baseSpellId)
+{
+    if (!bot || !baseSpellId)
+        return 0;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return 0;
+
+    SpellInfo const* firstRank = baseSpellInfo->GetFirstRankSpell();
+    if (!firstRank)
+        return bot->HasSpell(baseSpellId) ? baseSpellId : 0;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 spellId = firstRank->Id; spellId != 0; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+        if (bot->HasSpell(spellId))
+            resolvedSpellId = spellId;
+
+    return resolvedSpellId;
+}
+
+Unit* ResolveClassSpellDiagnosticTarget(Player* bot, playerbot::PvpClassSpellContext const& context)
+{
+    if (!bot)
+        return nullptr;
+
+    switch (context.targetMode)
+    {
+        case playerbot::PvpClassSpellContext::TargetMode::Self:
+            return bot;
+        case playerbot::PvpClassSpellContext::TargetMode::Enemy:
+        case playerbot::PvpClassSpellContext::TargetMode::Ally:
+            if (!context.targetGuid.IsEmpty())
+                return ObjectAccessor::GetUnit(*bot, context.targetGuid);
+            return context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy ? bot->GetVictim() : nullptr;
+        case playerbot::PvpClassSpellContext::TargetMode::None:
+        default:
+            return nullptr;
+    }
+}
+
+std::string BuildManagedBotSpellDiagnosticLine(Player* bot)
+{
+    if (!bot)
+        return "PB spell diag unavailable.";
+
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(bot);
+    playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(bot, values);
+    Unit* spellTarget = ResolveClassSpellDiagnosticTarget(bot, classContext);
+    Unit* moveTarget = classContext.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, classContext.movementTargetGuid);
+
+    uint32 const resolvedSpellId = ResolveKnownSpellForDiagnostics(bot, classContext.spellId);
+    SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+    SpellHistory* spellHistory = bot->GetSpellHistory();
+
+    float const minRange = spellInfo ? spellInfo->GetMinRange(false) : 0.0f;
+    float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+    bool const hasCooldown = spellInfo && spellHistory && spellHistory->HasCooldown(resolvedSpellId);
+    bool const hasGlobalCooldown = spellInfo && spellHistory && spellHistory->HasGlobalCooldown(spellInfo);
+    bool const isCasting = bot->IsNonMeleeSpellCast(false, false, true);
+
+    bool powerKnown = false;
+    int32 currentPower = 0;
+    int32 powerCost = 0;
+    bool powerOk = true;
+    if (spellInfo && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    {
+        powerKnown = true;
+        currentPower = bot->GetPower(Powers(spellInfo->PowerType));
+        powerCost = spellInfo->CalcPowerCost(bot, spellInfo->GetSchoolMask());
+        powerOk = currentPower >= powerCost;
+    }
+
+    constexpr float kHalfCircleArc = 3.14159265358979323846f;
+    bool const targetResolved = spellTarget != nullptr;
+    bool const targetAlive = spellTarget && spellTarget->IsAlive();
+    bool const targetLos = spellTarget && bot->IsWithinLOSInMap(spellTarget);
+    bool const targetAttackable = spellTarget && (spellInfo ? bot->IsValidAttackTarget(spellTarget, spellInfo) : bot->IsValidAttackTarget(spellTarget));
+    bool const targetAssistable = spellTarget && spellInfo && bot->IsValidAssistTarget(spellTarget, spellInfo);
+    bool const targetInFront = spellTarget && bot->HasInArc(kHalfCircleArc, spellTarget);
+    float const targetDistance = spellTarget ? bot->GetDistance(spellTarget) : -1.0f;
+    bool const targetInMaxRange = spellTarget && (maxRange <= 0.0f || bot->IsWithinDistInMap(spellTarget, maxRange));
+    bool const targetOutsideMinRange = spellTarget && (minRange <= 0.0f || !bot->IsWithinDistInMap(spellTarget, minRange));
+
+    bool const moveTargetResolved = moveTarget != nullptr;
+    bool const moveTargetAlive = moveTarget && moveTarget->IsAlive();
+    bool const moveTargetLos = moveTarget && bot->IsWithinLOSInMap(moveTarget);
+    float const moveTargetDistance = moveTarget ? bot->GetDistance(moveTarget) : -1.0f;
+
+    MovementGeneratorType const motionType = bot->GetMotionMaster() ? bot->GetMotionMaster()->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+    std::ostringstream diag;
+    diag << "PB spell diag: "
+         << "class_gate=" << (classContext.classSpellsEnabled ? "on" : "off")
+         << " should_exec=" << (classContext.shouldExecute ? "yes" : "no")
+         << " action=" << (classContext.actionName ? classContext.actionName : "none")
+         << " reason=" << (classContext.reason ? classContext.reason : "none")
+         << " spell=" << classContext.spellId
+         << " resolved_spell=" << resolvedSpellId
+         << " item=" << classContext.itemEntry
+         << " target_mode=" << ToString(classContext.targetMode)
+         << " target_guid=" << classContext.targetGuid.ToString()
+         << " target_resolved=" << (targetResolved ? "yes" : "no")
+         << " target_alive=" << (targetAlive ? "yes" : "no")
+         << " target_dist=" << targetDistance
+         << " target_los=" << (targetLos ? "yes" : "no")
+         << " target_attackable=" << (targetAttackable ? "yes" : "no")
+         << " target_assistable=" << (targetAssistable ? "yes" : "no")
+         << " target_in_front=" << (targetInFront ? "yes" : "no")
+         << " spell_min=" << minRange
+         << " spell_max=" << maxRange
+         << " target_in_max=" << (targetInMaxRange ? "yes" : "no")
+         << " target_outside_min=" << (targetOutsideMinRange ? "yes" : "no")
+         << " cooldown=" << (hasCooldown ? "yes" : "no")
+         << " gcd=" << (hasGlobalCooldown ? "yes" : "no")
+         << " casting=" << (isCasting ? "yes" : "no")
+         << " power_known=" << (powerKnown ? "yes" : "no")
+         << " power=" << currentPower
+         << " power_cost=" << powerCost
+         << " power_ok=" << (powerOk ? "yes" : "no")
+         << " directive=" << ToString(classContext.movementDirective)
+         << " follow_range=" << classContext.movementFollowRange
+         << " move_target_guid=" << classContext.movementTargetGuid.ToString()
+         << " move_target_resolved=" << (moveTargetResolved ? "yes" : "no")
+         << " move_target_alive=" << (moveTargetAlive ? "yes" : "no")
+         << " move_target_dist=" << moveTargetDistance
+         << " move_target_los=" << (moveTargetLos ? "yes" : "no")
+         << " moving=" << (bot->isMoving() ? "yes" : "no")
+         << " motion=" << uint32(motionType) << "/" << ToString(motionType)
+         << " last_exec=" << playerbot::PvpClassActions::GetLastExecutionStatus(bot)
+         << " last_detail={" << playerbot::PvpClassActions::GetLastExecutionDiagnostic(bot) << "}";
+
+    return diag.str();
+}
+
 std::string BuildManagedBotStatusLine(Player* bot)
 {
     if (!bot)
@@ -438,6 +573,7 @@ public:
             return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(BuildManagedBotSpellDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
 
         receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
