@@ -172,6 +172,12 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " lost_control=" << (bot->HasUnitState(UNIT_STATE_LOST_CONTROL) ? "yes" : "no")
            << " stealth=" << (bot->HasStealthAura() ? "yes" : "no")
            << " casting=" << (bot->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
+           << " not_move=" << (bot->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+           << " chase_state=" << (bot->HasUnitState(UNIT_STATE_CHASE) ? "yes" : "no")
+           << " chase_move=" << (bot->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+           << " follow_state=" << (bot->HasUnitState(UNIT_STATE_FOLLOW) ? "yes" : "no")
+           << " follow_move=" << (bot->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+           << " casting_prevent=" << (bot->IsMovementPreventedByCasting() ? "yes" : "no")
            << " bg_state=" << ToString(values.battlegroundState)
            << " class_gate=" << (classContext.classSpellsEnabled ? "on" : "off")
            << " class_exec=" << (classContext.shouldExecute ? "yes" : "no")
@@ -211,8 +217,13 @@ std::string BuildManagedBotStatusLine(Player* bot)
     {
         bool const motionTargetMatchesVictim = bot->GetVictim() && bot->GetVictim()->GetGUID() == motionTarget->GetGUID();
         bool const chaseVictimMismatch = bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE && !motionTargetMatchesVictim;
+        float const motionTargetExactDist = bot->GetExactDist(motionTarget);
+        float const motionTargetHitboxSum = bot->GetCombatReach() + motionTarget->GetCombatReach();
         status << " motion_target=" << motionTarget->GetName()
                << " motion_target_dist=" << bot->GetDistance(motionTarget)
+               << " motion_target_exact=" << motionTargetExactDist
+               << " motion_target_hitbox_sum=" << motionTargetHitboxSum
+               << " motion_target_edge_over_range=" << (bot->GetDistance(motionTarget) - classContext.movementFollowRange)
                << " motion_target_is_victim=" << (motionTargetMatchesVictim ? "yes" : "no")
                << " chase_victim_mismatch=" << (chaseVictimMismatch ? "yes" : "no");
     }
@@ -225,6 +236,9 @@ std::string BuildManagedBotStatusLine(Player* bot)
     {
         status << " directive_target=" << directiveTarget->GetName()
                << " directive_target_dist=" << bot->GetDistance(directiveTarget)
+               << " directive_target_exact=" << bot->GetExactDist(directiveTarget)
+               << " directive_target_hitbox_sum=" << (bot->GetCombatReach() + directiveTarget->GetCombatReach())
+               << " directive_target_edge_over_range=" << (bot->GetDistance(directiveTarget) - classContext.movementFollowRange)
                << " directive_target_los=" << (bot->IsWithinLOSInMap(directiveTarget) ? "yes" : "no")
                << " directive_target_attackable=" << (bot->IsValidAttackTarget(directiveTarget) ? "yes" : "no");
     }

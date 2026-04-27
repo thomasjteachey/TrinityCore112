@@ -18,6 +18,7 @@
 #include "FollowMovementGenerator.h"
 #include "Creature.h"
 #include "CreatureAI.h"
+#include "Log.h"
 #include "MoveSpline.h"
 #include "MoveSplineInit.h"
 #include "Optional.h"
@@ -52,6 +53,32 @@ static bool PositionOkay(Unit* owner, Unit* target, float range, Optional<ChaseA
     return !angle || angle->IsAngleOkay(target->GetRelativeAngle(owner));
 }
 
+static bool ShouldLogPlayerbotFollow(Unit const* owner)
+{
+    return owner && owner->GetTypeId() == TYPEID_PLAYER;
+}
+
+static void LogPlayerbotFollowDiag(Unit* owner, Unit* target, char const* phase, float range, ChaseAngle const& angle)
+{
+    if (!ShouldLogPlayerbotFollow(owner) || !target)
+        return;
+
+    float const hitboxSum = owner->GetCombatReach() + target->GetCombatReach();
+    bool const positionOkay = PositionOkay(owner, target, range, angle);
+
+    TC_LOG_DEBUG("playerbots.pvp.classspell",
+        "PB follow diag: phase={} owner={} target={} edge_dist={} exact_dist={} hitbox_sum={} range={} max_exact={} position_ok={} moving={} not_move={} casting_prevent={} follow_move={} spline_finalized={} angle_ok={}.",
+        phase ? phase : "unknown",
+        owner->GetGUID().ToString(), target->GetGUID().ToString(),
+        owner->GetDistance(target), owner->GetExactDist(target), hitboxSum,
+        range, range + hitboxSum, positionOkay, owner->isMoving(),
+        owner->HasUnitState(UNIT_STATE_NOT_MOVE),
+        owner->IsMovementPreventedByCasting(),
+        owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE),
+        owner->movespline->Finalized(),
+        angle.IsAngleOkay(target->GetRelativeAngle(owner)));
+}
+
 void FollowMovementGenerator::Initialize(Unit* owner)
 {
     RemoveFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
@@ -83,6 +110,7 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
 
     if (owner->HasUnitState(UNIT_STATE_NOT_MOVE) || owner->IsMovementPreventedByCasting())
     {
+        LogPlayerbotFollowDiag(owner, target, "stop_not_move_or_casting", _range, _angle);
         _path = nullptr;
         owner->StopMoving();
         _lastTargetPosition.reset();
@@ -95,6 +123,7 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
         _checkTimer.Reset(CHECK_INTERVAL);
         if (HasFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED) && PositionOkay(owner, target, _range, _angle))
         {
+            LogPlayerbotFollowDiag(owner, target, "range_timer_position_ok_stop", _range, _angle);
             RemoveFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
             _path = nullptr;
             owner->StopMoving();
@@ -106,6 +135,7 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
 
     if (owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) && owner->movespline->Finalized())
     {
+        LogPlayerbotFollowDiag(owner, target, "spline_finalized", _range, _angle);
         RemoveFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
         _path = nullptr;
         owner->ClearUnitState(UNIT_STATE_FOLLOW_MOVE);
@@ -115,8 +145,13 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
     if (!_lastTargetPosition || _lastTargetPosition->GetExactDistSq(target->GetPosition()) > 0.0f)
     {
         _lastTargetPosition = target->GetPosition();
-        if (owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) || !PositionOkay(owner, target, _range + FOLLOW_RANGE_TOLERANCE))
+        bool const needsRepath = owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE) || !PositionOkay(owner, target, _range + FOLLOW_RANGE_TOLERANCE);
+        if (!needsRepath)
+            LogPlayerbotFollowDiag(owner, target, "target_changed_position_ok_no_repath", _range + FOLLOW_RANGE_TOLERANCE, _angle);
+
+        if (needsRepath)
         {
+            LogPlayerbotFollowDiag(owner, target, "target_changed_repath_needed", _range + FOLLOW_RANGE_TOLERANCE, _angle);
             if (!_path)
                 _path = std::make_unique<PathGenerator>(owner);
 
@@ -151,12 +186,20 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
             }
 
             bool success = _path->CalculatePath(x, y, z, allowShortcut);
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "PB follow path: owner={} target={} path_ok={} path_type={} points={} dest=({}, {}, {}) edge_dist={} exact_dist={} range={}.",
+                owner->GetGUID().ToString(), target->GetGUID().ToString(), success,
+                uint32(_path->GetPathType()), uint32(_path->GetPath().size()), x, y, z,
+                owner->GetDistance(target), owner->GetExactDist(target), _range);
+
             if (!success || (_path->GetPathType() & PATHFIND_NOPATH))
             {
+                LogPlayerbotFollowDiag(owner, target, "path_failed_stop", _range, _angle);
                 owner->StopMoving();
                 return true;
             }
 
+            LogPlayerbotFollowDiag(owner, target, "launching_spline", _range, _angle);
             owner->AddUnitState(UNIT_STATE_FOLLOW_MOVE);
             AddFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
 

@@ -19,6 +19,7 @@
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "G3DPosition.hpp"
+#include "Log.h"
 #include "MotionMaster.h"
 #include "MoveSpline.h"
 #include "MoveSplineInit.h"
@@ -54,6 +55,42 @@ static bool PositionOkay(Unit* owner, Unit* target, Optional<float> minDistance,
     if (!owner->IsWithinLOSInMap(target))
         return false;
     return true;
+}
+
+static bool ShouldLogPlayerbotChase(Unit const* owner)
+{
+    return owner && owner->GetTypeId() == TYPEID_PLAYER;
+}
+
+static void LogPlayerbotChaseDiag(Unit* owner, Unit* target, char const* phase, Optional<ChaseRange> const& range,
+    Optional<ChaseAngle> const& angle, Optional<float> minCheck, Optional<float> maxCheck, bool movingTowards)
+{
+    if (!ShouldLogPlayerbotChase(owner) || !target)
+        return;
+
+    float const hitboxSum = owner->GetCombatReach() + target->GetCombatReach();
+    float const configuredMinRange = range ? range->MinRange : -1.0f;
+    float const configuredMinTolerance = range ? range->MinTolerance : -1.0f;
+    float const configuredMaxTolerance = range ? range->MaxTolerance : -1.0f;
+    float const configuredMaxRange = range ? range->MaxRange : -1.0f;
+    bool const los = owner->IsWithinLOSInMap(target);
+    bool const positionOkay = PositionOkay(owner, target, minCheck, maxCheck, angle);
+
+    TC_LOG_DEBUG("playerbots.pvp.classspell",
+        "PB chase diag: phase={} owner={} target={} edge_dist={} exact_dist={} hitbox_sum={} cfg_min={} cfg_min_tol={} cfg_max_tol={} cfg_max={} check_min={} check_max={} los={} position_ok={} moving={} moving_towards={} not_move={} casting_prevent={} lost_target={} chase_move={} spline_finalized={} angle_active={}.",
+        phase ? phase : "unknown",
+        owner->GetGUID().ToString(), target->GetGUID().ToString(),
+        owner->GetDistance(target), owner->GetExactDist(target), hitboxSum,
+        configuredMinRange, configuredMinTolerance, configuredMaxTolerance, configuredMaxRange,
+        minCheck ? *minCheck : -1.0f,
+        maxCheck ? *maxCheck : -1.0f,
+        los, positionOkay, owner->isMoving(), movingTowards,
+        owner->HasUnitState(UNIT_STATE_NOT_MOVE),
+        owner->IsMovementPreventedByCasting(),
+        owner->GetVictim() != target,
+        owner->HasUnitState(UNIT_STATE_CHASE_MOVE),
+        owner->movespline->Finalized(),
+        bool(angle));
 }
 
 static void DoMovementInform(Unit* owner, Unit* target)
@@ -113,6 +150,7 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
     // the owner might be unable to move (rooted or casting), or we have lost the target, pause movement
     if (owner->HasUnitState(UNIT_STATE_NOT_MOVE) || owner->IsMovementPreventedByCasting() || HasLostTarget(owner, target))
     {
+        LogPlayerbotChaseDiag(owner, target, "stop_not_move_casting_or_lost_target", _range, _angle, Optional<float>(), Optional<float>(), _movingTowards);
         owner->StopMoving();
         if (owner->GetTypeId() == TYPEID_PLAYER)
             owner->RemoveUnitFlag(UNIT_FLAG_FLEEING);
@@ -133,6 +171,11 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
     float const maxTarget = _range ? _range->MaxTolerance + hitboxSum : CONTACT_DISTANCE + hitboxSum;
     Optional<ChaseAngle> angle = mutualChase ? Optional<ChaseAngle>() : _angle;
 
+    LogPlayerbotChaseDiag(owner, target, "update_range_state", _range, angle,
+        _movingTowards ? Optional<float>() : minTarget,
+        _movingTowards ? maxTarget : Optional<float>(),
+        _movingTowards);
+
     // periodically check if we're already in the expected range...
     _rangeCheckTimer.Update(diff);
     if (_rangeCheckTimer.Passed())
@@ -140,6 +183,10 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
         _rangeCheckTimer.Reset(RANGE_CHECK_INTERVAL);
         if (HasFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED) && PositionOkay(owner, target, _movingTowards ? Optional<float>() : minTarget, _movingTowards ? maxTarget : Optional<float>(), angle))
         {
+            LogPlayerbotChaseDiag(owner, target, "range_timer_position_ok_stop", _range, angle,
+                _movingTowards ? Optional<float>() : minTarget,
+                _movingTowards ? maxTarget : Optional<float>(),
+                _movingTowards);
             RemoveFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
             _path = nullptr;
             if (Creature* cOwner = owner->ToCreature())
@@ -154,6 +201,7 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
     // if we're done moving, we want to clean up
     if (owner->HasUnitState(UNIT_STATE_CHASE_MOVE) && owner->movespline->Finalized())
     {
+        LogPlayerbotChaseDiag(owner, target, "spline_finalized", _range, angle, minRange, maxRange, _movingTowards);
         RemoveFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
         _path = nullptr;
         if (Creature* cOwner = owner->ToCreature())
@@ -168,8 +216,13 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
     {
         _lastTargetPosition = target->GetPosition();
         _mutualChase = mutualChase;
-        if (owner->HasUnitState(UNIT_STATE_CHASE_MOVE) || !PositionOkay(owner, target, minRange, maxRange, angle))
+        bool const needsRepath = owner->HasUnitState(UNIT_STATE_CHASE_MOVE) || !PositionOkay(owner, target, minRange, maxRange, angle);
+        if (!needsRepath)
+            LogPlayerbotChaseDiag(owner, target, "target_changed_position_ok_no_repath", _range, angle, minRange, maxRange, _movingTowards);
+
+        if (needsRepath)
         {
+            LogPlayerbotChaseDiag(owner, target, "target_changed_repath_needed", _range, angle, minRange, maxRange, _movingTowards);
             Creature* const cOwner = owner->ToCreature();
             // can we get to the target?
             if (cOwner && !target->isInAccessiblePlaceFor(cOwner))
@@ -207,8 +260,15 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
                 owner->UpdateAllowedPositionZ(x, y, z);
 
             bool success = _path->CalculatePath(x, y, z, owner->CanFly());
+            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                "PB chase path: owner={} target={} move_toward={} path_ok={} path_type={} points={} dest=({}, {}, {}) edge_dist={} exact_dist={} max_target={} max_range={}.",
+                owner->GetGUID().ToString(), target->GetGUID().ToString(), moveToward, success,
+                uint32(_path->GetPathType()), uint32(_path->GetPath().size()), x, y, z,
+                owner->GetDistance(target), owner->GetExactDist(target), maxTarget, maxRange);
+
             if (!success || (_path->GetPathType() & (PATHFIND_NOPATH /* | PATHFIND_INCOMPLETE*/)))
             {
+                LogPlayerbotChaseDiag(owner, target, "path_failed_stop", _range, angle, minRange, maxRange, _movingTowards);
                 if (cOwner)
                     cOwner->SetCannotReachTarget(true);
                 owner->StopMoving();
@@ -239,6 +299,8 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
 
             owner->AddUnitState(UNIT_STATE_CHASE_MOVE);
             AddFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+
+            LogPlayerbotChaseDiag(owner, target, "launching_spline", _range, angle, minRange, maxRange, moveToward);
 
             Movement::MoveSplineInit init(owner);
             init.MovebyPath(_path->GetPath());

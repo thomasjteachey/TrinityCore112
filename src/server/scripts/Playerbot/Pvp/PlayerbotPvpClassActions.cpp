@@ -20,8 +20,10 @@
 #include "GameTime.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
+#include "ObjectDefines.h"
 #include "Log.h"
 #include "Map.h"
+#include "MovementDefines.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Battleground.h"
@@ -354,6 +356,72 @@ bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDis
     return true;
 }
 
+ChaseRange BuildEdgeDistanceChaseRange(float desiredEdgeDistance, float toleranceBackoff = 1.0f)
+{
+    // MotionMaster::MoveChase(float) wraps ChaseRange(float), which adds
+    // CONTACT_DISTANCE to MaxRange. For spell range movement that makes
+    // 27y behave like roughly 27.5y + hitboxes inside ChaseMovementGenerator.
+    // Use the explicit constructor so the max range means "edge distance".
+    float const maxEdge = std::max(0.5f, desiredEdgeDistance);
+    float const maxToleranceEdge = std::max(0.5f, maxEdge - std::max(0.0f, toleranceBackoff));
+    return ChaseRange(0.0f, 0.0f, maxToleranceEdge, maxEdge);
+}
+
+void IssueTargetRelativeRangedMovement(Player* player, Unit* target, float desiredEdgeDistance, bool targetAttackable)
+{
+    if (!player || !target)
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (targetAttackable)
+        motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(desiredEdgeDistance));
+    else
+        motionMaster->MoveFollow(target, std::max(0.5f, desiredEdgeDistance), player->GetFollowAngle());
+}
+
+std::string BuildRangedMovementDiag(Player const* player, Unit const* target, char const* label, float desiredEdgeDistance, float issuedEdgeDistance,
+    bool targetLos, bool targetAttackable, bool cleared, MovementGeneratorType motionBefore)
+{
+    std::ostringstream diag;
+    if (!player || !target)
+    {
+        diag << (label ? label : "ranged_move") << " unavailable";
+        return diag.str();
+    }
+
+    float const edgeDistance = player->GetDistance(target);
+    float const exactDistance = player->GetExactDist(target);
+    float const hitboxSum = player->GetCombatReach() + target->GetCombatReach();
+    float const singleFloatStopEdge = issuedEdgeDistance + CONTACT_DISTANCE;
+
+    diag << (label ? label : "ranged_move")
+         << " edge_dist=" << edgeDistance
+         << " exact_dist=" << exactDistance
+         << " hitbox_sum=" << hitboxSum
+         << " desired_edge=" << desiredEdgeDistance
+         << " issued_edge=" << issuedEdgeDistance
+         << " single_float_stop_edge=" << singleFloatStopEdge
+         << " custom_chase_max_exact=" << (issuedEdgeDistance + hitboxSum)
+         << " los=" << (targetLos ? "yes" : "no")
+         << " attackable=" << (targetAttackable ? "yes" : "no")
+         << " cleared=" << (cleared ? "yes" : "no")
+         << " motion_before=" << uint32(motionBefore);
+
+    if (MotionMaster const* motionMaster = player->GetMotionMaster())
+        diag << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType());
+
+    diag << " moving_after=" << (player->isMoving() ? "yes" : "no")
+         << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+         << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+         << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+         << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
+
+    return diag.str();
+}
+
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance)
 {
     if (!player || !target)
@@ -408,10 +476,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->Attack(target, false);
 
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        if (targetAttackable)
-            motionMaster->MoveChase(target, forcedRange);
-        else
-            motionMaster->MoveFollow(target, forcedRange, player->GetFollowAngle());
+        IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable);
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -419,21 +484,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastFallbackMs = stallState.lastSampleMs;
         stallState.stagnantSamples = 0;
 
-        std::ostringstream diag;
-        diag << "near_edge_chase_follow_nudge"
-             << " dist=" << currentDistance
-             << " desired=" << safeDistance
-             << " forced_range=" << forcedRange
-             << " los=" << (targetLos ? "yes" : "no")
-             << " attackable=" << (targetAttackable ? "yes" : "no")
-             << " moving_before=" << (currentlyMoving ? "yes" : "no")
-             << " motion_before=" << uint32(initialMotionType)
-             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
-             << " moving_after=" << (player->isMoving() ? "yes" : "no");
-        SetLastMovementDebugStatus(player, diag.str());
+        SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target, "near_edge_chase_follow_nudge",
+            safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType));
 
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged near-edge chase/follow nudge: guid={} target={} currentDistance={} desiredRange={} forcedRange={} los={} attackable={} movingBefore={} motionBefore={} motionAfter={} movingAfter={}.",
+            "Ranged near-edge edge-aware chase/follow nudge: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} movingBefore={} motionBefore={} motionAfter={} movingAfter={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, forcedRange, targetLos, targetAttackable, currentlyMoving, static_cast<uint32>(initialMotionType), static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()), player->isMoving());
         return;
     }
@@ -460,27 +515,15 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         // the bot is currently out of combat.
         if (player->GetVictim() != target || !player->IsInCombat())
             player->Attack(target, false);
-        motionMaster->MoveChase(target, genericMoveRange);
+        motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(genericMoveRange));
     }
     else
     {
         motionMaster->MoveFollow(target, genericMoveRange, player->GetFollowAngle());
     }
 
-    {
-        std::ostringstream diag;
-        diag << "generic_ranged_move"
-             << " dist=" << currentDistance
-             << " desired=" << safeDistance
-             << " issued_range=" << genericMoveRange
-             << " los=" << (targetLos ? "yes" : "no")
-             << " attackable=" << (targetAttackable ? "yes" : "no")
-             << " cleared=" << (shouldForceActiveRepath ? "yes" : "no")
-             << " motion_before=" << uint32(initialMotionType)
-             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
-             << " moving_after=" << (player->isMoving() ? "yes" : "no");
-        SetLastMovementDebugStatus(player, diag.str());
-    }
+    SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target, "generic_ranged_move",
+        safeDistance, genericMoveRange, targetLos, targetAttackable, shouldForceActiveRepath, initialMotionType));
 
     // Some battleground edge-cases keep a stale chase/follow generator active
     // without producing displacement while we are still out of range. Recover
@@ -516,7 +559,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             // chase/follow instead of chaining another point destination.
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
             if (player->IsValidAttackTarget(target))
-                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
+                motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(std::max(1.0f, safeDistance - 2.0f)));
             else
                 motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
 
@@ -540,7 +583,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
         if (player->IsValidAttackTarget(target))
-            motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
+            motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(std::max(1.0f, safeDistance - 2.0f)));
         else
             motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
         stallState.lastFallbackMs = nowMs;
