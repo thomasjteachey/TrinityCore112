@@ -29,6 +29,7 @@
 #include "Battleground.h"
 #include "PathGenerator.h"
 #include "Pet.h"
+#include "Position.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
 #include "SpellInfo.h"
@@ -389,6 +390,116 @@ char const* GetTargetRelativeRangedMoveResultLabel(TargetRelativeRangedMoveResul
     }
 }
 
+
+struct RangedPathProbeResult
+{
+    bool attempted = false;
+    bool success = false;
+    uint32 pathType = 0;
+    uint32 pointCount = 0;
+    float destX = 0.0f;
+    float destY = 0.0f;
+    float destZ = 0.0f;
+    float range = 0.0f;
+    float relativeAngle = 0.0f;
+    char const* mode = "none";
+};
+
+bool IsUsableProbePath(RangedPathProbeResult const& probe)
+{
+    return probe.attempted && probe.success && !(probe.pathType & PATHFIND_NOPATH) && probe.pointCount > 1;
+}
+
+RangedPathProbeResult ProbeChasePath(Player* player, Unit* target)
+{
+    RangedPathProbeResult probe;
+    probe.mode = "chase_center";
+    if (!player || !target)
+        return probe;
+
+    probe.attempted = true;
+    target->GetPosition(probe.destX, probe.destY, probe.destZ);
+    if (player->IsHovering())
+        player->UpdateAllowedPositionZ(probe.destX, probe.destY, probe.destZ);
+
+    PathGenerator path(player);
+    probe.success = path.CalculatePath(probe.destX, probe.destY, probe.destZ, player->CanFly());
+    probe.pathType = uint32(path.GetPathType());
+    probe.pointCount = uint32(path.GetPath().size());
+    return probe;
+}
+
+RangedPathProbeResult ProbeFollowPath(Player* player, Unit* target, float edgeRange, float relativeAngle)
+{
+    RangedPathProbeResult probe;
+    probe.mode = "follow_nearpoint";
+    probe.range = std::max(0.5f, edgeRange);
+    probe.relativeAngle = Position::NormalizeOrientation(relativeAngle);
+    if (!player || !target)
+        return probe;
+
+    probe.attempted = true;
+    target->GetNearPoint(player, probe.destX, probe.destY, probe.destZ, probe.range, target->ToAbsoluteAngle(probe.relativeAngle));
+    if (player->IsHovering())
+        player->UpdateAllowedPositionZ(probe.destX, probe.destY, probe.destZ);
+
+    PathGenerator path(player);
+    probe.success = path.CalculatePath(probe.destX, probe.destY, probe.destZ, false);
+    probe.pathType = uint32(path.GetPathType());
+    probe.pointCount = uint32(path.GetPath().size());
+    return probe;
+}
+
+RangedPathProbeResult FindBestFollowProbe(Player* player, Unit* target, float edgeRange)
+{
+    RangedPathProbeResult best;
+    if (!player || !target)
+        return best;
+
+    float const currentRelative = target->GetRelativeAngle(player);
+    std::array<float, 7> const offsets = { 0.0f, float(M_PI_4), -float(M_PI_4), float(M_PI_2), -float(M_PI_2), float(M_PI), -float(M_PI) };
+
+    for (float offset : offsets)
+    {
+        RangedPathProbeResult probe = ProbeFollowPath(player, target, edgeRange, currentRelative + offset);
+        if (!best.attempted || (probe.pointCount > best.pointCount && !(probe.pathType & PATHFIND_NOPATH)))
+            best = probe;
+        if (IsUsableProbePath(probe))
+            return probe;
+    }
+
+    return best;
+}
+
+void AppendProbeDiag(std::ostringstream& diag, char const* prefix, RangedPathProbeResult const& probe)
+{
+    diag << ' ' << prefix << "_mode=" << (probe.mode ? probe.mode : "none")
+         << ' ' << prefix << "_attempted=" << (probe.attempted ? "yes" : "no")
+         << ' ' << prefix << "_ok=" << (IsUsableProbePath(probe) ? "yes" : "no")
+         << ' ' << prefix << "_success=" << (probe.success ? "yes" : "no")
+         << ' ' << prefix << "_type=" << probe.pathType
+         << ' ' << prefix << "_points=" << probe.pointCount
+         << ' ' << prefix << "_range=" << probe.range
+         << ' ' << prefix << "_angle=" << probe.relativeAngle
+         << ' ' << prefix << "_dest=(" << probe.destX << ',' << probe.destY << ',' << probe.destZ << ')';
+}
+
+TargetRelativeRangedMoveResult IssuePathProbedFollow(Player* player, Unit* target, RangedPathProbeResult const& followProbe, float fallbackEdgeRange)
+{
+    if (!player || !target)
+        return TargetRelativeRangedMoveResult::None;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return TargetRelativeRangedMoveResult::None;
+
+    float const safeRange = std::max(0.5f, followProbe.range > 0.0f ? followProbe.range : fallbackEdgeRange);
+    float const angle = followProbe.attempted ? followProbe.relativeAngle : target->GetRelativeAngle(player);
+
+    motionMaster->MoveFollow(target, safeRange, ChaseAngle(angle, float(M_PI_4)));
+    return TargetRelativeRangedMoveResult::FollowIssued;
+}
+
 TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player, Unit* target, float desiredEdgeDistance, bool targetAttackable, bool forceFollow = false)
 {
     if (!player || !target)
@@ -666,15 +777,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         }
 
         bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
-        bool const rescueToContactChase = staleQueuedGenerator && targetAttackable && lastIssueAgeMs >= 1400;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
             player->Attack(target, false);
 
+        RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
+        RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, forcedRange);
+
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        TargetRelativeRangedMoveResult const moveResult = rescueToContactChase
-            ? IssueContactChaseRescue(player, target)
+        TargetRelativeRangedMoveResult const moveResult = staleQueuedGenerator && IsUsableProbePath(followProbe)
+            ? IssuePathProbedFollow(player, target, followProbe, forcedRange)
             : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable);
 
         stallState.targetGuid = target->GetGUID();
@@ -682,28 +795,29 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastSampleMs = nowMs;
         stallState.lastFallbackMs = nowMs;
         stallState.lastIssueMs = nowMs;
-        stallState.lastIssuedRange = rescueToContactChase ? 0.0f : forcedRange;
+        stallState.lastIssuedRange = forcedRange;
         stallState.lastIssuedMode = moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1;
-        stallState.stagnantSamples = rescueToContactChase ? 1 : 0;
+        stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
-        char const* label = rescueToContactChase
-            ? "near_edge_stale_contact_chase_rescue"
-            : (staleQueuedGenerator ? "near_edge_stale_reissued_chase" : "near_edge_chase_follow_nudge");
+        char const* label = staleQueuedGenerator
+            ? (IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase_no_follow_path")
+            : "near_edge_chase_follow_nudge";
 
         std::string diag = BuildRangedMovementDiag(player, target, label,
-            safeDistance, rescueToContactChase ? 0.0f : forcedRange, targetLos, targetAttackable, true, initialMotionType,
-            rescueToContactChase ? "contact_chase_rescue" : GetTargetRelativeRangedMoveResultLabel(moveResult));
+            safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType,
+            GetTargetRelativeRangedMoveResultLabel(moveResult));
         std::ostringstream extra;
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
-              << " contact_rescue=" << (rescueToContactChase ? "yes" : "no")
               << " issue_age_ms=" << lastIssueAgeMs;
+        AppendProbeDiag(extra, "chase_probe", chaseProbe);
+        AppendProbeDiag(extra, "follow_probe", followProbe);
         SetLastMovementDebugStatus(player, extra.str());
 
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged near-edge queued target-relative movement: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} issuedMode={} stale={} contactRescue={} issueAgeMs={} movingBefore={} motionBefore={} motionAfter={} movingAfter={} chaseMove={} followMove={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, rescueToContactChase ? 0.0f : forcedRange, targetLos, targetAttackable,
-            rescueToContactChase ? "contact_chase_rescue" : GetTargetRelativeRangedMoveResultLabel(moveResult), staleQueuedGenerator, rescueToContactChase, lastIssueAgeMs, currentlyMoving, static_cast<uint32>(initialMotionType),
+            "Ranged near-edge queued target-relative movement: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} issuedMode={} stale={} issueAgeMs={} chaseProbeOk={} followProbeOk={} followProbeType={} followProbePoints={} movingBefore={} motionBefore={} motionAfter={} movingAfter={} chaseMove={} followMove={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, forcedRange, targetLos, targetAttackable,
+            GetTargetRelativeRangedMoveResultLabel(moveResult), staleQueuedGenerator, lastIssueAgeMs, IsUsableProbePath(chaseProbe), IsUsableProbePath(followProbe), followProbe.pathType, followProbe.pointCount, currentlyMoving, static_cast<uint32>(initialMotionType),
             static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()), player->isMoving(),
             player->HasUnitState(UNIT_STATE_CHASE_MOVE), player->HasUnitState(UNIT_STATE_FOLLOW_MOVE));
         return;
@@ -801,26 +915,32 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
         bool const hostileTarget = player->IsValidAttackTarget(target);
-        TargetRelativeRangedMoveResult const fallbackMoveResult = hostileTarget
-            ? IssueContactChaseRescue(player, target)
-            : IssueTargetRelativeRangedMovement(player, target, std::max(1.0f, safeDistance - 2.0f), false, true);
+        float const fallbackRange = std::max(1.0f, safeDistance - 2.0f);
+        RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
+        RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, fallbackRange);
+        TargetRelativeRangedMoveResult const fallbackMoveResult = IsUsableProbePath(followProbe)
+            ? IssuePathProbedFollow(player, target, followProbe, fallbackRange)
+            : IssueTargetRelativeRangedMovement(player, target, fallbackRange, hostileTarget, !hostileTarget);
         stallState.lastFallbackMs = nowMs;
         {
             std::ostringstream diag;
-            diag << (hostileTarget ? "stagnant_contact_chase_rescue" : "stagnant_forced_target_relative")
+            diag << (IsUsableProbePath(followProbe) ? "stagnant_pathprobed_follow" : "stagnant_reissued_target_relative_no_follow_path")
                  << " dist=" << postIssueDistance
                  << " desired=" << safeDistance
-                 << " issued_mode=" << (hostileTarget ? "contact_chase_rescue" : GetTargetRelativeRangedMoveResultLabel(fallbackMoveResult))
+                 << " issued_range=" << fallbackRange
+                 << " issued_mode=" << GetTargetRelativeRangedMoveResultLabel(fallbackMoveResult)
                  << " motion_before=" << uint32(motionType)
                  << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
                  << " moving_after=" << (player->isMoving() ? "yes" : "no")
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
+            AppendProbeDiag(diag, "chase_probe", chaseProbe);
+            AppendProbeDiag(diag, "follow_probe", followProbe);
             SetLastMovementDebugStatus(player, diag.str());
         }
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach forced target-relative fallback: guid={} target={} desiredRange={} currentDistance={} motionType={} contactRescue={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType), hostileTarget);
+            "Ranged approach forced target-relative fallback: guid={} target={} desiredRange={} currentDistance={} motionType={} issuedMode={} chaseProbeOk={} followProbeOk={} followProbeType={} followProbePoints={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType), GetTargetRelativeRangedMoveResultLabel(fallbackMoveResult), IsUsableProbePath(chaseProbe), IsUsableProbePath(followProbe), followProbe.pathType, followProbe.pointCount);
     }
 }
 
@@ -845,8 +965,21 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             if (player->GetVictim() != target || !player->IsInCombat())
                 player->Attack(target, false);
 
-            motionMaster->MoveChase(target);
-            SetLastMovementDebugStatus(player, "stealth_melee_contact_chase issued_mode=contact_chase motion_after=" + std::to_string(uint32(motionMaster->GetCurrentMovementGeneratorType())));
+            RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, 1.5f);
+            if (IsUsableProbePath(followProbe))
+                IssuePathProbedFollow(player, target, followProbe, 1.5f);
+            else
+                motionMaster->MoveChase(target);
+
+            std::ostringstream diag;
+            diag << (IsUsableProbePath(followProbe) ? "stealth_melee_pathprobed_follow" : "stealth_melee_chase_no_follow_path")
+                 << " issued_mode=" << (IsUsableProbePath(followProbe) ? "follow" : "chase")
+                 << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+                 << " moving_after=" << (player->isMoving() ? "yes" : "no")
+                 << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+                 << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
+            AppendProbeDiag(diag, "follow_probe", followProbe);
+            SetLastMovementDebugStatus(player, diag.str());
             return;
         }
 
