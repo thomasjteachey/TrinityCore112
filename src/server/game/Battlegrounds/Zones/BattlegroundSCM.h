@@ -18,7 +18,8 @@ enum BG_SCM_WorldStates
     BG_SCM_WORLDSTATE_MAX_SCORE      = 9002,
     BG_SCM_WORLDSTATE_TIMER_ACTIVE   = 9003,
     BG_SCM_WORLDSTATE_TIMER          = 9004,
-    BG_SCM_WORLDSTATE_SHOW           = 9005
+    BG_SCM_WORLDSTATE_SHOW           = 9005,
+    BG_SCM_WORLDSTATE_MAX_KILLS_UI   = 9006
 };
 
 enum BG_SCM_Graveyards
@@ -71,7 +72,7 @@ enum BG_SCM_ObjectEntries
 
 enum BG_SCM_Constants
 {
-    BG_SCM_KILL_LIMIT        = 50,
+    BG_SCM_KILL_LIMIT        = 30,
     BG_SCM_BUFF_RESPAWN_TIME = 60
 };
 

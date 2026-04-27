@@ -588,48 +588,25 @@ typedef std::multimap<uint32, uint32> QuestRelations; // unit/go -> quest
 struct QuestRelationResult
 {
     public:
-        struct Iterator
-        {
-            public:
-                using iterator_category = std::forward_iterator_tag;
-                using value_type = QuestRelations::mapped_type;
-                using pointer = value_type const*;
-                using reference = value_type const&;
-                using difference_type = void;
+        using Container = std::vector<QuestRelations::mapped_type>;
+        using Iterator = Container::const_iterator;
 
-                Iterator(QuestRelations::const_iterator it, QuestRelations::const_iterator end, bool onlyActive)
-                    : _it(it), _end(end), _onlyActive(onlyActive)
-                {
-                    skip();
-                }
-
-                bool operator==(Iterator const& other) const { return _it == other._it; }
-
-                Iterator& operator++() { ++_it; skip(); return *this; }
-                Iterator operator++(int) { Iterator t = *this; ++*this; return t; }
-
-                value_type operator*() const { return _it->second; }
-
-            private:
-                void skip() { if (_onlyActive) _skip(); }
-                void _skip();
-
-                QuestRelations::const_iterator _it, _end;
-                bool _onlyActive;
-        };
-
-        QuestRelationResult() : _onlyActive(false) {}
+        QuestRelationResult() = default;
         QuestRelationResult(std::pair<QuestRelations::const_iterator, QuestRelations::const_iterator> range, bool onlyActive)
-            : _begin(range.first), _end(range.second), _onlyActive(onlyActive) {}
+        {
+            _questIds.reserve(std::distance(range.first, range.second));
+            for (QuestRelations::const_iterator itr = range.first; itr != range.second; ++itr)
+                if (!onlyActive || Quest::IsTakingQuestEnabled(itr->second))
+                    _questIds.push_back(itr->second);
+        }
 
-        Iterator begin() const { return { _begin, _end, _onlyActive }; }
-        Iterator end() const { return { _end, _end, _onlyActive }; }
+        Iterator begin() const { return _questIds.begin(); }
+        Iterator end() const { return _questIds.end(); }
 
         bool HasQuest(uint32 questId) const;
 
     private:
-        QuestRelations::const_iterator _begin, _end;
-        bool _onlyActive;
+        Container _questIds;
 };
 
 struct PlayerCreateInfoItem

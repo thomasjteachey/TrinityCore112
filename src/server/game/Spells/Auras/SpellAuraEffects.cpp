@@ -5815,6 +5815,7 @@ void AuraEffect::HandleModAttackPowerOfArmorAuraTick(Unit* target, Unit* caster)
     target->UpdateAttackPowerAndDamage(true);
 }
 
+//ttopper: fear/root/frost nova breakondamage
 void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInfo& eventInfo)
 {
     static flag96 const EntanglingRootsFamilyMask(0x00000200, 0, 0);
@@ -5832,7 +5833,7 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
     }
 
     Unit* caster = aurApp->GetBase()->GetCaster()->ToUnit();
-    int32 maxDamage = 1300;
+    int32 maxDamage = 1200;
     if (caster)
     {
         maxDamage = (caster->GetLevel() * 25) - 200;
