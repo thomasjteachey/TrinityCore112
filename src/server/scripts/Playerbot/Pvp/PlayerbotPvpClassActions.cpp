@@ -1124,7 +1124,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 return false;
             }
 
-            float const maxRange = spellInfo->GetMaxRange(false);
+            float const maxRange = petCaster->GetSpellMaxRangeForTarget(target, spellInfo);
             if (maxRange > 0.0f && !petCaster->IsWithinDistInMap(target, maxRange))
             {
                 failureReason = "out_of_range";
@@ -1294,7 +1294,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    float const maxRange = spellInfo->GetMaxRange(false);
+    float const maxRange = player->GetSpellMaxRangeForTarget(target, spellInfo);
     bool const shouldUseMeleeApproachForEnemySpell =
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
@@ -1963,7 +1963,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 }
 
                 SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
-                float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+                float const maxRange = spellInfo ? player->GetSpellMaxRangeForTarget(recoveryTarget, spellInfo) : 0.0f;
                 bool const enemyMeleeSpacing =
                     context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
                     IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
