@@ -1857,6 +1857,13 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                         float const closingRange = std::max(1.0f, currentDistance - 2.0f);
                         desiredRange = std::min(desiredRange, closingRange);
                     }
+
+                    float const minimumClosingDelta = 6.0f;
+                    if ((currentDistance - desiredRange) < minimumClosingDelta)
+                    {
+                        float const closingRange = std::max(1.0f, currentDistance - minimumClosingDelta);
+                        desiredRange = std::min(desiredRange, closingRange);
+                    }
                 }
                 EnsureActiveChaseTracksTarget(player, approachTarget);
                 IssueRangedApproachMovement(player, approachTarget, desiredRange);

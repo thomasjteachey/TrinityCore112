@@ -1470,9 +1470,6 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
             continue;
         if (IsTargetInvalidByImmunity(player, candidate))
             continue;
-        if (!player->IsWithinLOSInMap(candidate))
-            continue;
-
         float const distance = player->GetDistance(candidate);
         if (requireReachable && distance > 35.0f)
             continue;
@@ -2782,9 +2779,9 @@ float ComputeApproachFollowRange(float nominalRange)
 {
     // Keep a larger inward buffer so approach directives trigger visible
     // displacement even when current distance is only slightly above range.
-    // A small 2-3y delta can leave chase generators stationary on tolerance
+    // A small 2-5y delta can leave chase generators stationary on tolerance
     // edges in battleground terrain.
-    return std::max(1.0f, nominalRange - 5.0f);
+    return std::max(1.0f, nominalRange - 7.0f);
 }
 
 bool IsPrimaryMeleeClassForSpacing(uint8 classId)
@@ -3094,10 +3091,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             activeTargetGuid = combatVictim->GetGUID();
     if (activeTargetGuid.IsEmpty())
     {
-        bool const allowLongAcquire =
-            UsesRangedSpacingProfile(player, profileSelection) ||
-            CanUseHealRangeSpacing(player->GetClass());
-        if (Unit const* fallbackTarget = SelectClosestEnemyTarget(player, !allowLongAcquire))
+        if (Unit const* fallbackTarget = SelectClosestEnemyTarget(player, false))
             activeTargetGuid = fallbackTarget->GetGUID();
     }
 
