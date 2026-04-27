@@ -110,9 +110,6 @@ void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, u
     if (winner != ALLIANCE && winner != HORDE)
         return;
 
-    if (team != winner)
-        return;
-
     if (!_humanFaceoffEverHappened)
         winnerHonor /= 2;
 

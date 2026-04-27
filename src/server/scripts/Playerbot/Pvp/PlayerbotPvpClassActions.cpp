@@ -1080,25 +1080,51 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // same target-relative generator with a deeper desired range for this tick.
     if (strictPathing && nearRangeEdge)
     {
-        // Let a freshly queued Chase/Follow generator get at least one movement
-        // update before we clear/reissue it. The status line reports moving=no
-        // immediately after MoveChase/MoveFollow because the spline is launched
-        // from the movement-generator Update(), not synchronously from the API
-        // call. Clearing here every lifecycle tick can permanently starve the
-        // generator and leave the bot standing still at ~30 yards.
-        if (sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs < 2500)
+        // If Chase/Follow is already installed but has not launched yet, do NOT
+        // immediately clear/reissue it. First prime the existing generator in
+        // place. The latest diagnostics showed the bad loop clearly:
+        //   motion_before=14/follow, moving=no, then after reissue+prime
+        //   moving_after=yes follow_move=yes.
+        // Reissuing every stale window caused visible inch/stop movement.
+        if (sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0)
         {
-            std::string diag = BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
-                safeDistance, stallState.lastIssuedRange > 0.0f ? stallState.lastIssuedRange : safeDistance,
-                targetLos, targetAttackable, false, initialMotionType,
-                stallState.lastIssuedMode == 2 ? "follow_wait" : "chase_wait");
-            std::ostringstream extra;
-            extra << diag
-                  << " issue_age_ms=" << lastIssueAgeMs
-                  << " last_mode=" << uint32(stallState.lastIssuedMode)
-                  << " last_range=" << stallState.lastIssuedRange;
-            SetLastMovementDebugStatus(player, extra.str());
-            return;
+            MotionPrimeResult existingPrimeResult = PrimeTargetRelativeMotion(player);
+            bool const existingMotionStarted = player->isMoving() ||
+                player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+
+            if (existingMotionStarted)
+            {
+                stallState.lastDistance = currentDistance;
+                stallState.lastSampleMs = nowMs;
+                std::ostringstream extra;
+                extra << BuildRangedMovementDiag(player, target, "near_edge_existing_motion_primed",
+                    safeDistance, stallState.lastIssuedRange > 0.0f ? stallState.lastIssuedRange : safeDistance,
+                    targetLos, targetAttackable, false, initialMotionType,
+                    stallState.lastIssuedMode == 2 ? "existing_follow_primed" : "existing_chase_primed")
+                      << " issue_age_ms=" << lastIssueAgeMs
+                      << " last_mode=" << uint32(stallState.lastIssuedMode)
+                      << " last_range=" << stallState.lastIssuedRange;
+                AppendMotionPrimeDiag(extra, existingPrimeResult);
+                SetLastMovementDebugStatus(player, extra.str());
+                return;
+            }
+
+            // Give the queued generator a settle window after a failed prime.
+            // Only after that window do we clear/reissue.
+            if (lastIssueAgeMs < 2500)
+            {
+                std::ostringstream extra;
+                extra << BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
+                    safeDistance, stallState.lastIssuedRange > 0.0f ? stallState.lastIssuedRange : safeDistance,
+                    targetLos, targetAttackable, false, initialMotionType,
+                    stallState.lastIssuedMode == 2 ? "follow_wait" : "chase_wait")
+                      << " issue_age_ms=" << lastIssueAgeMs
+                      << " last_mode=" << uint32(stallState.lastIssuedMode)
+                      << " last_range=" << stallState.lastIssuedRange;
+                AppendMotionPrimeDiag(extra, existingPrimeResult);
+                SetLastMovementDebugStatus(player, extra.str());
+                return;
+            }
         }
 
         bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 2500;
@@ -1161,8 +1187,38 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
-    bool const hardStaleTargetRelative = activeTargetRelativeMotion && movementGeneratorHasNotLaunched &&
+    bool hardStaleTargetRelative = activeTargetRelativeMotion && movementGeneratorHasNotLaunched &&
         sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 3000;
+
+    // Same protection for the generic ranged path: before clearing/reissuing a
+    // stale Chase/Follow generator, prime the existing generator once in place.
+    // If it starts moving, preserve it instead of resetting the spline.
+    if (hardStaleTargetRelative)
+    {
+        MotionPrimeResult existingPrimeResult = PrimeTargetRelativeMotion(player);
+        bool const existingMotionStarted = player->isMoving() ||
+            player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+
+        if (existingMotionStarted)
+        {
+            stallState.lastDistance = currentDistance;
+            stallState.lastSampleMs = nowMs;
+            std::ostringstream diag;
+            diag << BuildRangedMovementDiag(player, target, "generic_existing_motion_primed",
+                safeDistance, stallState.lastIssuedRange > 0.0f ? stallState.lastIssuedRange : safeDistance,
+                targetLos, targetAttackable, false, initialMotionType,
+                stallState.lastIssuedMode == 2 ? "existing_follow_primed" : "existing_chase_primed")
+                 << " issue_age_ms=" << lastIssueAgeMs
+                 << " last_mode=" << uint32(stallState.lastIssuedMode)
+                 << " last_range=" << stallState.lastIssuedRange;
+            AppendMotionPrimeDiag(diag, existingPrimeResult);
+            SetLastMovementDebugStatus(player, diag.str());
+            return;
+        }
+
+        hardStaleTargetRelative = true;
+    }
+
     bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f) &&
         (!activeTargetRelativeMotion || hardStaleTargetRelative);
     if (shouldForceActiveRepath)
