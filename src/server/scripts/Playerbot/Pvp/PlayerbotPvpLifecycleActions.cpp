@@ -742,6 +742,31 @@ void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 thro
     (void)throttleMs;
 }
 
+void ClearMovementBeforeBattlegroundTeleport(Player* player)
+{
+    if (!player)
+        return;
+
+    player->AttackStop();
+    player->SetSelection(ObjectGuid::Empty);
+
+    if (player->isMoving())
+        player->StopMoving();
+
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear();
+
+    // The teleport/visibility path must not inherit stale client movement
+    // flags from whatever the bot was doing before the queue invite. A stale
+    // spline flag with an interrupted/finalized MoveSpline can make object
+    // create packets assert while HandleMoveWorldportAck() rebuilds visibility.
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ELEVATION);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
+}
+
+
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
 {
     if (!player)
@@ -1473,30 +1498,6 @@ void ClearActiveMovementForControlLoss(Player* player)
 
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-}
-
-void ClearMovementBeforeBattlegroundTeleport(Player* player)
-{
-    if (!player)
-        return;
-
-    player->AttackStop();
-    player->SetSelection(ObjectGuid::Empty);
-
-    if (player->isMoving())
-        player->StopMoving();
-
-    if (MotionMaster* motionMaster = player->GetMotionMaster())
-        motionMaster->Clear();
-
-    // The teleport/visibility path must not inherit stale client movement
-    // flags from whatever the bot was doing before the queue invite. A stale
-    // spline flag with an interrupted/finalized MoveSpline can make object
-    // create packets assert while HandleMoveWorldportAck() rebuilds visibility.
-    player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
-    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ELEVATION);
-    player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
 }
 
 bool CanIssueBotMovement(Player* player)
