@@ -24,6 +24,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MovementDefines.h"
+#include "MoveSpline.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Battleground.h"
