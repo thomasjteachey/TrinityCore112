@@ -59,6 +59,14 @@ namespace
 {
 bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts);
 
+bool HasClassMovementIntent(playerbot::PvpClassSpellContext const& context)
+{
+    if (!context.classSpellsEnabled || !context.shouldExecute)
+        return false;
+
+    return context.movementDirective != playerbot::PvpClassSpellContext::MovementDirective::None;
+}
+
 bool IsCrowdControlledForLifecyclePause(Player const* player)
 {
     if (!player)
@@ -381,29 +389,31 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     }
 
     playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
-    playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
-    bool const didExecuteTactical = playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
     playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(player, values);
+    bool const classOwnsMovement = HasClassMovementIntent(classContext);
+    playerbot::BattlegroundTacticalContext const tacticalContext = playerbot::PvpCore::BuildBattlegroundTacticalContext(player, values);
+    bool const didExecuteTactical = !classOwnsMovement && playerbot::BattlegroundTacticalActions::Execute(player, tacticalContext);
     MotionMaster* motionMaster = player->GetMotionMaster();
     bool const movementIdle = !motionMaster || motionMaster->GetCurrentMovementGeneratorType() == IDLE_MOTION_TYPE;
     bool const shouldForceClassMovementTick = classContext.classSpellsEnabled &&
         classContext.shouldExecute &&
         classContext.movementDirective != playerbot::PvpClassSpellContext::MovementDirective::None &&
         movementIdle;
-    bool const didExecuteClassSpell = shouldForceClassMovementTick && playerbot::PvpClassActions::Execute(player, classContext);
+    bool const didExecuteClassSpell = (classOwnsMovement || shouldForceClassMovementTick) && playerbot::PvpClassActions::Execute(player, classContext);
 
     playerbot::BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
     inProgressContext.queueOperation = playerbot::QueueOperationType::None;
     inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
     inProgressContext.shouldHandleInProgressStatus = true;
-    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+    bool const didExecuteLifecycle = !classOwnsMovement && playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
 
     std::ostringstream tickDetail;
     uint32 const bgTeam = player->GetBGTeam();
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
                << " class_force=" << (shouldForceClassMovementTick ? 1 : 0)
+               << " class_owns_movement=" << (classOwnsMovement ? 1 : 0)
                << " class_exec=" << (didExecuteClassSpell ? 1 : 0)
                << " class_directive=" << static_cast<uint32>(classContext.movementDirective)
                << " class_spell=" << classContext.spellId
@@ -1375,10 +1385,11 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
         uint32(player->GetBattlegroundQueueTypeId(1)),
         uint32(player->GetBattlegroundQueueTypeId(2)));
 
-    BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
-    bool const didExecuteTactical = BattlegroundTacticalActions::Execute(player, tacticalContext);
-    bool const didExecuteDuelTactical = DuelTacticalActions::Execute(player);
     PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values);
+    bool const classOwnsMovement = HasClassMovementIntent(classSpellContext);
+    BattlegroundTacticalContext const tacticalContext = PvpCore::BuildBattlegroundTacticalContext(player, values);
+    bool const didExecuteTactical = !classOwnsMovement && BattlegroundTacticalActions::Execute(player, tacticalContext);
+    bool const didExecuteDuelTactical = !classOwnsMovement && DuelTacticalActions::Execute(player);
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
     if (didExecuteClassSpell &&
         (classSpellContext.spellId == 16166 ||
@@ -1396,8 +1407,9 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     RandomBotParticipationHooks const hooks = PvpCore::BuildRandomBotParticipationHooks(player, values);
 
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "Lifecycle contexts: guid={} bgQueueOp={} bgInviteResp={} bgInProgress={} arenaQueueOp={} arenaTeamInteraction={} bgHook={} arenaHook={}",
+        "Lifecycle contexts: guid={} classOwnsMovement={} bgQueueOp={} bgInviteResp={} bgInProgress={} arenaQueueOp={} arenaTeamInteraction={} bgHook={} arenaHook={}",
         guidRaw,
+        classOwnsMovement ? 1 : 0,
         static_cast<uint32>(bgContext.queueOperation),
         static_cast<uint32>(bgContext.invitationResponse),
         bgContext.shouldHandleInProgressStatus ? 1 : 0,
@@ -1438,7 +1450,13 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
 
     if (hooks.battlegroundParticipationHook)
     {
-        if (!IsNoOp(bgContext))
+        bool const shouldSkipBgInProgressLifecycle = classOwnsMovement &&
+            values.inBattleground &&
+            bgContext.queueOperation == QueueOperationType::None &&
+            bgContext.invitationResponse == InvitationResponseType::None &&
+            bgContext.shouldHandleInProgressStatus;
+
+        if (!IsNoOp(bgContext) && !shouldSkipBgInProgressLifecycle)
         {
             didExecuteBattleground = BattlegroundLifecycleActions::Execute(player, bgContext);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -1448,6 +1466,12 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
                 static_cast<uint32>(bgContext.queueOperation),
                 static_cast<uint32>(bgContext.invitationResponse),
                 bgContext.shouldHandleInProgressStatus ? 1 : 0);
+        }
+        else if (shouldSkipBgInProgressLifecycle)
+        {
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Lifecycle battleground execute skipped: guid={} reason=class-movement-owner",
+                guidRaw);
         }
     }
 

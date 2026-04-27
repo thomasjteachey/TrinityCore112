@@ -31,12 +31,26 @@ namespace playerbot
 class PvpClassActions
 {
 public:
+    struct RangedApproachDiagnostic
+    {
+        bool valid = false;
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        float desiredRange = 0.0f;
+        float currentDistance = 0.0f;
+        uint8 stagnantSamples = 0;
+        uint32 lastSampleMs = 0;
+        uint32 lastFallbackMs = 0;
+        MovementGeneratorType motionType = IDLE_MOTION_TYPE;
+        bool moving = false;
+    };
+
     static bool Execute(Player* player, PvpClassSpellContext const& context);
     static bool IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId);
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);
     static bool IsCasterSpellCooldownActive(Player const* player, uint32 spellId);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
     static std::string GetLastExecutionStatus(Player const* player);
+    static RangedApproachDiagnostic GetRangedApproachDiagnostic(Player const* player);
 };
 }
 
