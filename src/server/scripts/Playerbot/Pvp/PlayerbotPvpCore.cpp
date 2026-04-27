@@ -427,7 +427,7 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (!player->IsWithinLOSInMap(resolvedTarget))
         return false;
 
-    float const maxRange = spellInfo->GetMaxRange(false);
+    float const maxRange = player->GetSpellMaxRangeForTarget(resolvedTarget, spellInfo);
     if (maxRange > 0.0f && !player->IsWithinDistInMap(resolvedTarget, maxRange))
         return false;
 
@@ -2780,11 +2780,11 @@ bool CanUseHealRangeSpacing(uint8 classId)
 
 float ComputeApproachFollowRange(float nominalRange)
 {
-    // Keep an extra movement buffer so ranged bots do not settle in a
-    // dead-zone where spell-selection still reports out-of-range but chase
-    // motion does not re-engage because the desired distance is too close to
-    // edge tolerances.
-    return std::max(1.0f, nominalRange - 3.0f);
+    // Keep a larger inward buffer so approach directives trigger visible
+    // displacement even when current distance is only slightly above range.
+    // A small 2-3y delta can leave chase generators stationary on tolerance
+    // edges in battleground terrain.
+    return std::max(1.0f, nominalRange - 5.0f);
 }
 
 bool IsPrimaryMeleeClassForSpacing(uint8 classId)
@@ -3282,6 +3282,30 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (context.spellId &&
         (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
     {
+        Unit const* losRecoveryTarget = resolveTargetByGuid(context.targetGuid);
+        if (losRecoveryTarget && !player->IsWithinLOSInMap(losRecoveryTarget))
+        {
+            SpellInfo const* recoverySpellInfo = sSpellMgr->GetSpellInfo(context.spellId);
+            float const spellMaxRange = recoverySpellInfo ? player->GetSpellMaxRangeForTarget(losRecoveryTarget, recoverySpellInfo) : 0.0f;
+            float const currentDistance = player->GetDistance(losRecoveryTarget);
+            float const maxFollowRange = spellMaxRange > 0.0f
+                ? std::max(1.5f, spellMaxRange - 1.0f)
+                : std::max(1.5f, GetConfiguredSpellRange() - 1.0f);
+            float const desiredRange = std::clamp(currentDistance - 2.0f, 1.5f, maxFollowRange);
+
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, losRecoveryTarget->GetGUID(),
+                desiredRange, "recover los", "selected spell target out of line of sight", 86.0f);
+            context.spellId = 0;
+            context.itemEntry = 0;
+            context.targetMode = PvpClassSpellContext::TargetMode::None;
+            context.targetGuid = ObjectGuid::Empty;
+            context.selfCast = false;
+        }
+    }
+
+    if (context.spellId &&
+        (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
+    {
         Unit const* facingTarget = resolveTargetByGuid(context.targetGuid);
         if (facingTarget && !player->HasInArc(static_cast<float>(M_PI), facingTarget))
         {
@@ -3336,7 +3360,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (spellInfo && spacingTarget)
         {
             float const distance = player->GetDistance(spacingTarget);
-            float const maxRange = spellInfo->GetMaxRange(false);
+            float const maxRange = player->GetSpellMaxRangeForTarget(spacingTarget, spellInfo);
             float const minRange = spellInfo->GetMinRange(false);
             if (maxRange > 0.0f && distance > maxRange)
             {
@@ -3520,7 +3544,37 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    context.shouldExecute = context.shouldExecute || context.spellId != 0;
+    auto const movementDirectiveNeedsTarget = [](PvpClassSpellContext::MovementDirective directive) -> bool
+    {
+        switch (directive)
+        {
+            case PvpClassSpellContext::MovementDirective::ReachSpellRange:
+            case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
+            case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
+            case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
+                return true;
+            default:
+                return false;
+        }
+    };
+
+    if (movementDirectiveNeedsTarget(context.movementDirective) && context.movementTargetGuid.IsEmpty())
+    {
+        // Defensive target backfill: stale snapshot races can occasionally
+        // leave movement directives with an empty target guid, which causes
+        // strict-path follower movement to no-op and the bot to idle in place.
+        if (Unit const* movementFallbackTarget = resolveTargetByGuid(activeTargetGuid))
+            context.movementTargetGuid = movementFallbackTarget->GetGUID();
+        else if (Unit const* movementSelectedTarget = resolveTargetByGuid(selectedTargetGuid))
+            context.movementTargetGuid = movementSelectedTarget->GetGUID();
+        else if (Unit const* movementVictim = player->GetVictim(); movementVictim && movementVictim->IsAlive())
+            context.movementTargetGuid = movementVictim->GetGUID();
+        else
+            context.movementDirective = PvpClassSpellContext::MovementDirective::None;
+    }
+
+    context.shouldExecute = context.shouldExecute || context.spellId != 0 ||
+        context.movementDirective != PvpClassSpellContext::MovementDirective::None;
 
     char const* targetModeLabel = "none";
     switch (context.targetMode)
