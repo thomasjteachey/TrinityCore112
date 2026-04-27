@@ -24,7 +24,6 @@
 #include "Log.h"
 #include "Map.h"
 #include "MovementDefines.h"
-#include "MoveSpline.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Battleground.h"
@@ -68,7 +67,6 @@ void SetLastExecutionStatus(Player const* player, std::string const& status);
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
-void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, char const* prefix);
 
 struct LastLosCastFailureState
 {
@@ -461,75 +459,9 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.lastY = player->GetPositionY();
     state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
-    // Do not count the act of issuing MoveChase/MoveFollow as movement progress.
-    // Progress timestamps should only update after actual distance/position
-    // improvement, otherwise the preserve logic keeps dead generators alive for
-    // several seconds with moving=no.
-    state.lastProgressMs = 0;
-    state.lastPositionProgressMs = 0;
+    state.lastProgressMs = state.lastIssueMs;
+    state.lastPositionProgressMs = state.lastIssueMs;
     state.mode = mode;
-}
-
-void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, char const* prefix)
-{
-    char const* pfx = prefix ? prefix : "motion";
-    if (!player)
-    {
-        diag << ' ' << pfx << "_snapshot=player_null";
-        return;
-    }
-
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    if (!motionMaster)
-    {
-        diag << ' ' << pfx << "_snapshot=mm_null";
-        return;
-    }
-
-    MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
-    MovementGenerator const* top = motionMaster->GetCurrentMovementGenerator();
-
-    diag << ' ' << pfx << "_mm_size=" << motionMaster->Size()
-         << ' ' << pfx << "_slot=" << uint32(motionMaster->GetCurrentSlot())
-         << ' ' << pfx << "_type=" << uint32(motionType)
-         << ' ' << pfx << "_top=" << (top ? "yes" : "no");
-
-    if (top)
-    {
-        diag << ' ' << pfx << "_top_type=" << uint32(top->GetMovementGeneratorType())
-             << ' ' << pfx << "_top_flags=" << uint32(top->Flags)
-             << ' ' << pfx << "_top_init=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING) ? "yes" : "no")
-             << ' ' << pfx << "_top_inited=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED) ? "yes" : "no")
-             << ' ' << pfx << "_top_speed=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING) ? "yes" : "no")
-             << ' ' << pfx << "_top_interrupt=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INTERRUPTED) ? "yes" : "no")
-             << ' ' << pfx << "_top_paused=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_PAUSED) ? "yes" : "no")
-             << ' ' << pfx << "_top_timed_paused=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_TIMED_PAUSED) ? "yes" : "no")
-             << ' ' << pfx << "_top_deact=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED) ? "yes" : "no")
-             << ' ' << pfx << "_top_final=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_FINALIZED) ? "yes" : "no")
-             << ' ' << pfx << "_top_base_state=" << top->BaseUnitState;
-    }
-
-    diag << ' ' << pfx << "_unit_moving=" << (player->isMoving() ? "yes" : "no")
-         << ' ' << pfx << "_unit_chase=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
-         << ' ' << pfx << "_unit_follow=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
-         << ' ' << pfx << "_unit_notmove=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-         << ' ' << pfx << "_unit_root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
-         << ' ' << pfx << "_unit_stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
-         << ' ' << pfx << "_casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
-
-    if (player->movespline)
-    {
-        diag << ' ' << pfx << "_spline_init=" << (player->movespline->Initialized() ? "yes" : "no")
-             << ' ' << pfx << "_spline_done=" << (player->movespline->Finalized() ? "yes" : "no")
-             << ' ' << pfx << "_spline_started=" << (player->movespline->HasStarted() ? "yes" : "no")
-             << ' ' << pfx << "_spline_falling=" << (player->movespline->isFalling() ? "yes" : "no")
-             << ' ' << pfx << "_spline_cyclic=" << (player->movespline->isCyclic() ? "yes" : "no")
-             << ' ' << pfx << "_spline_idx=" << player->movespline->currentPathIdx()
-             << ' ' << pfx << "_spline_duration=" << player->movespline->Duration()
-             << ' ' << pfx << "_spline_velocity=" << player->movespline->Velocity();
-    }
-    else
-        diag << ' ' << pfx << "_spline=null";
 }
 
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
@@ -582,37 +514,23 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     uint32 const distanceProgressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
     uint32 const positionProgressAgeMs = state.lastPositionProgressMs != 0 && nowMs >= state.lastPositionProgressMs ? nowMs - state.lastPositionProgressMs : 0;
 
-    MovementGenerator const* top = motionMaster->GetCurrentMovementGenerator();
-    bool const topInitPending = top && top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
-    bool const topDeactivated = top && top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
-    bool const generatorStarted = player->isMoving() ||
+    bool const splineInitialized = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const splineStarted = splineInitialized && player->movespline->HasStarted();
+    bool const hasMovementSignal = player->isMoving() ||
         player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
-        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
-    bool const movementBlocked = player->HasUnitState(UNIT_STATE_NOT_MOVE) ||
-        player->HasUnitState(UNIT_STATE_ROOT) ||
-        player->HasUnitState(UNIT_STATE_STUNNED) ||
-        player->HasUnitState(UNIT_STATE_CONFUSED) ||
-        player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->IsMovementPreventedByCasting();
-    bool const unlaunchedTargetMotion = !generatorStarted && !topInitPending && !topDeactivated && !movementBlocked;
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        splineStarted;
 
-    // Do not preserve CHASE/FOLLOW for multiple seconds if the generator never
-    // actually launches. That was the visible stuck state:
-    // motion=chase/follow, moving=no, chase_move=no, follow_move=no,
-    // reason=settle_window.
-    uint32 constexpr UnlaunchedMotionGraceMs = 650;
-    uint32 constexpr StartedButUnprovenMotionGraceMs = 1200;
-    bool const inSettleWindow = ageMs < minRunMs;
-    bool const inUnlaunchedGraceWindow = ageMs < UnlaunchedMotionGraceMs;
-    bool const inStartedGraceWindow = ageMs < StartedButUnprovenMotionGraceMs;
-    bool const preserveSettle = inSettleWindow && (
-        (unlaunchedTargetMotion && inUnlaunchedGraceWindow) ||
-        (generatorStarted && inStartedGraceWindow) ||
-        topInitPending ||
-        movementBlocked);
+    // Do not keep a dead CHASE/FOLLOW generator alive for the whole normal
+    // settle window. The bad screenshots show motion=CHASE/FOLLOW with
+    // moving=no, chase_move=no, follow_move=no, and spline_started=no. In that
+    // state the order has not actually launched; preserving it for 1.5-3s
+    // pins rogues/casters at spawn or makes ranged bots appear stuck.
+    uint32 const effectiveSettleMs = hasMovementSignal ? minRunMs : std::min<uint32>(minRunMs, 350);
+    bool const inSettleWindow = ageMs < effectiveSettleMs;
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
-    bool const preserve = preserveSettle || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
+    bool const preserve = inSettleWindow || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
     {
@@ -634,19 +552,13 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " moving=" << (player->isMoving() ? "yes" : "no")
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+                 << " spline_init=" << (splineInitialized ? "yes" : "no")
+                 << " spline_started=" << (splineStarted ? "yes" : "no")
+                 << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
+                 << " effective_settle_ms=" << effectiveSettleMs
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-                 << " root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
-                 << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-                 << " top_init=" << (topInitPending ? "yes" : "no")
-                 << " top_deact=" << (topDeactivated ? "yes" : "no")
-                 << " generator_started=" << (generatorStarted ? "yes" : "no")
-                 << " movement_blocked=" << (movementBlocked ? "yes" : "no")
-                 << " unlaunched=" << (unlaunchedTargetMotion ? "yes" : "no")
-                 << " unlaunched_grace=" << (inUnlaunchedGraceWindow ? "yes" : "no")
-                 << " started_grace=" << (inStartedGraceWindow ? "yes" : "no")
-                 << " reason=" << (unlaunchedTargetMotion ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
-            AppendMotionSnapshotDiag(diag, player, "preserve_fail");
+                 << " reason=" << (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
             *reasonOut = diag.str();
         }
         return false;
@@ -670,19 +582,13 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " moving=" << (player->isMoving() ? "yes" : "no")
              << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
              << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+             << " spline_init=" << (splineInitialized ? "yes" : "no")
+             << " spline_started=" << (splineStarted ? "yes" : "no")
+             << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
+             << " effective_settle_ms=" << effectiveSettleMs
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-             << " root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
-             << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-             << " top_init=" << (topInitPending ? "yes" : "no")
-             << " top_deact=" << (topDeactivated ? "yes" : "no")
-             << " generator_started=" << (generatorStarted ? "yes" : "no")
-             << " movement_blocked=" << (movementBlocked ? "yes" : "no")
-             << " unlaunched=" << (unlaunchedTargetMotion ? "yes" : "no")
-             << " unlaunched_grace=" << (inUnlaunchedGraceWindow ? "yes" : "no")
-             << " started_grace=" << (inStartedGraceWindow ? "yes" : "no")
-             << " reason=" << (preserveSettle ? "settle_window" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
-        AppendMotionSnapshotDiag(diag, player, "preserve_ok");
+             << " reason=" << (inSettleWindow ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle") : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
         *reasonOut = diag.str();
     }
 
@@ -1076,7 +982,6 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
     else
         diag << " order_match=none";
 
-    AppendMotionSnapshotDiag(diag, player, "move");
     return diag.str();
 }
 
@@ -1302,7 +1207,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
             // Give the queued generator a settle window after a failed prime.
             // Only after that window do we clear/reissue.
-            if (lastIssueAgeMs < 900)
+            if (lastIssueAgeMs < 2500)
             {
                 std::ostringstream extra;
                 extra << BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
@@ -1379,7 +1284,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     }
 
     bool hardStaleTargetRelative = activeTargetRelativeMotion && movementGeneratorHasNotLaunched &&
-        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
+        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 3000;
 
     // Same protection for the generic ranged path: before clearing/reissuing a
     // stale Chase/Follow generator, prime the existing generator once in place.
@@ -1827,14 +1732,7 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
-    uint64 const rawGuid = player->GetGUID().GetRawValue();
-    auto& previous = g_LastClassExecutionStatusByGuid[rawGuid];
-    if (previous != status)
-    {
-        TC_LOG_DEBUG("playerbots.pvp.classspell", "PB exec diag: bot={} guid={} status={}",
-            player->GetName(), player->GetGUID().ToString(), status);
-        previous = status;
-    }
+    g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void SetLastMovementDebugStatus(Player const* player, std::string const& status)
@@ -1842,42 +1740,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
-    uint64 const rawGuid = player->GetGUID().GetRawValue();
-    auto& previous = g_LastMovementDebugStatusByGuid[rawGuid];
-    if (previous != status)
-    {
-        TC_LOG_DEBUG("playerbots.pvp.classspell", "PB move diag: bot={} guid={} status={}",
-            player->GetName(), player->GetGUID().ToString(), status);
-        previous = status;
-    }
-}
-
-void LogPlayerbotStopMovingRequest(Player const* player, char const* reason, uint32 spellId = 0)
-{
-    if (!player)
-        return;
-
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-    std::ostringstream diag;
-    diag << "stop_moving_request"
-         << " reason=" << (reason ? reason : "unknown")
-         << " spell=" << spellId
-         << " motion=" << uint32(motionType)
-         << " moving=" << (player->isMoving() ? "yes" : "no")
-         << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
-         << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
-         << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-         << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
-    if (player->movespline)
-        diag << " spline_init=" << (player->movespline->Initialized() ? "yes" : "no")
-             << " spline_done=" << (player->movespline->Finalized() ? "yes" : "no")
-             << " spline_started=" << (player->movespline->HasStarted() ? "yes" : "no")
-             << " spline_idx=" << player->movespline->currentPathIdx()
-             << " spline_duration=" << player->movespline->Duration()
-             << " spline_velocity=" << player->movespline->Velocity();
-    SetLastMovementDebugStatus(player, diag.str());
-    TC_LOG_DEBUG("playerbots.pvp.motion", "PB StopMoving request: bot={} guid={} {}", player->GetName(), player->GetGUID().ToString(), diag.str());
+    g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -2171,6 +2034,110 @@ void RepositionDruidAfterTravelFormRecovery(Player* player)
         IssueStrictHumanMove(player, destination);
     else
         player->GetMotionMaster()->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+}
+
+
+bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget, SpellInfo const* spellInfo,
+    playerbot::PvpClassSpellContext const& context, bool isFoodOrDrinkSpell, std::string* diagOut)
+{
+    if (!player || !castTarget || !spellInfo || isFoodOrDrinkSpell)
+        return false;
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    // If this spell is genuinely ready from the current position, stopping is
+    // correct. The bug we are chasing is a cast-time/autorepeat spell stopping
+    // an active range/LOS movement order before the bot can actually reach the
+    // target it is trying to move toward.
+    bool const genericLos = player->IsWithinLOSInMap(castTarget);
+    float const maxRange = spellInfo->GetMaxRange(false);
+    float const minRange = spellInfo->GetMinRange(false);
+    bool const maxOk = maxRange <= 0.0f || player->IsWithinDistInMap(castTarget, maxRange);
+    bool const minOk = minRange <= 0.0f || !player->IsWithinDistInMap(castTarget, minRange);
+    bool const genericReady = genericLos && maxOk && minOk;
+    if (genericReady)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    bool const activeTargetRelativeMotion = motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE;
+
+    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    TargetRelativeMoveOrderState const* order = orderItr != g_TargetRelativeMoveOrderByGuid.end() ? &orderItr->second : nullptr;
+
+    Unit* moveTarget = nullptr;
+    if (order && !order->targetGuid.IsEmpty())
+        moveTarget = ObjectAccessor::GetUnit(*player, order->targetGuid);
+
+    float moveTargetDistance = moveTarget ? player->GetDistance(moveTarget) : 0.0f;
+    bool const activeMoveOrder = order && !order->targetGuid.IsEmpty();
+    bool const moveOrderStillOutside = activeMoveOrder && moveTarget && order->issuedRange > 0.0f && moveTargetDistance > order->issuedRange + 0.75f;
+    bool const hasMoveSignal = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const orderAgeMs = order && order->lastIssueMs != 0 && nowMs >= order->lastIssueMs ? nowMs - order->lastIssueMs : 0;
+
+    // Defer only when a target-relative move is actually active/recent and not
+    // done. This prevents indefinite suppression if a stale order was already
+    // cleared by the movement code.
+    bool const shouldDefer = (activeTargetRelativeMotion || moveOrderStillOutside) && activeMoveOrder && orderAgeMs < 6000;
+    if (!shouldDefer)
+        return false;
+
+    if (CanIssueFollowCommands(player))
+    {
+        if (!genericLos)
+        {
+            float const desiredRange = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally
+                ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                : ComputeLosRecoveryRange(player, castTarget, maxRange);
+            IssueRangedApproachMovement(player, castTarget, desiredRange, true, "stationary_cast_deferred_no_los");
+        }
+        else if (!maxOk)
+        {
+            float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+            IssueRangedApproachMovement(player, castTarget, desiredRange, false, "stationary_cast_deferred_out_of_range");
+        }
+        else if (!minOk)
+        {
+            float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+            player->GetMotionMaster()->MoveFollow(castTarget, desiredRange, player->GetFollowAngle());
+        }
+    }
+
+    if (diagOut)
+    {
+        std::ostringstream diag;
+        diag << "stationary_cast_stop_suppressed"
+             << " spell=" << spellInfo->Id
+             << " action=" << (context.actionName ? context.actionName : "none")
+             << " reason=" << (context.reason ? context.reason : "none")
+             << " cast_target=" << castTarget->GetGUID().ToString()
+             << " cast_dist=" << player->GetDistance(castTarget)
+             << " cast_los=" << (genericLos ? "yes" : "no")
+             << " cast_max=" << maxRange
+             << " cast_max_ok=" << (maxOk ? "yes" : "no")
+             << " cast_min=" << minRange
+             << " cast_min_ok=" << (minOk ? "yes" : "no")
+             << " motion=" << uint32(motionType)
+             << " moving=" << (player->isMoving() ? "yes" : "no")
+             << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+             << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+             << " move_signal=" << (hasMoveSignal ? "yes" : "no")
+             << " order_present=" << (activeMoveOrder ? "yes" : "no")
+             << " order_age_ms=" << orderAgeMs
+             << " order_range=" << (order ? order->issuedRange : 0.0f)
+             << " order_target=" << (moveTarget ? moveTarget->GetGUID().ToString() : "none")
+             << " order_target_dist=" << moveTargetDistance
+             << " order_outside=" << (moveOrderStillOutside ? "yes" : "no");
+        *diagOut = diag.str();
+    }
+
+    return true;
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -2552,10 +2519,25 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
+    //
+    // Important: do not stop an active range/LOS movement order for a stationary
+    // spell that is not ready yet. The stopper diagnostics showed exactly this
+    // failure mode: PB move diag had a live CHASE/FOLLOW order, then a
+    // stop_moving_request reason=cast_time_or_autorepeat killed the spline and
+    // left the bot inching or stuck.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    if (spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell)
+    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell;
+    if (requiresStationaryCast)
     {
-        LogPlayerbotStopMovingRequest(player, "cast_time_or_autorepeat", resolvedSpellId);
+        std::string stationaryDeferDiag;
+        if (!itemTarget && target && ShouldDeferStationaryCastForActiveMovement(player, target, spellInfo, context, isFoodOrDrinkSpell, &stationaryDeferDiag))
+        {
+            SetLastMovementDebugStatus(player, stationaryDeferDiag);
+            TC_LOG_DEBUG("playerbots.pvp.classspell", "PB stationary cast stop suppressed: {}", stationaryDeferDiag);
+            failureReason = "stationary_cast_deferred_for_active_movement";
+            return false;
+        }
+
         player->StopMoving();
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
         {
@@ -2639,7 +2621,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             ObjectGuid const hunterGuid = player->GetGUID();
             ObjectGuid const pressureTargetGuid = pressureTarget->GetGUID();
 
-            LogPlayerbotStopMovingRequest(player, "hunter_feign_trap_pause", context.spellId);
             player->StopMoving();
             player->SetSelection(ObjectGuid::Empty);
 
