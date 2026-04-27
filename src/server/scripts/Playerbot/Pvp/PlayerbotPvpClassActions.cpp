@@ -59,6 +59,8 @@ bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
 bool IsPrimaryMeleeClassForSpacing(uint8 classId);
+void SetLastExecutionStatus(Player const* player, std::string const& status);
+void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 
 bool IsEffectivelyOutdoors(Player const* player)
 {
@@ -351,14 +353,6 @@ bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDis
     state.lastIssueMs = nowMs;
     return true;
 }
-void SetLastMovementDebugStatus(Player const* player, std::string const& status)
-{
-    if (!player)
-        return;
-
-    g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
-}
-
 
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance)
 {
@@ -811,6 +805,14 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
         return;
 
     g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
+}
+
+void SetLastMovementDebugStatus(Player const* player, std::string const& status)
+{
+    if (!player)
+        return;
+
+    g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void ForcePlayerbotDismount(Player* player)
