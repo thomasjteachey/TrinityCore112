@@ -822,26 +822,28 @@ class spell_dru_innervate : public AuraScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetTarget();
-        if (caster->HasAura(81418))
+        if (!caster || !target)
+            return;
+
+        if (!caster->HasAura(81418))
+            return;
+
+        if (caster->GetGUID() == target->GetGUID())
+            return;
+
+        caster->AddAura(SPELL_DRUID_INNERVATE, caster);
+        if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE))
         {
-            if (caster->GetGUID() != target->GetGUID())
-            {
-                CastSpellExtraArgs args(aurEff);
-                caster->AddAura(SPELL_DRUID_INNERVATE, caster);
-                if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE))
-                {
-                    int32 newDuration = innervate->GetDuration() / 2;
-                    int32 newMaxDuration = innervate->GetMaxDuration() / 2;
+            int32 newDuration = innervate->GetDuration() / 2;
+            int32 newMaxDuration = innervate->GetMaxDuration() / 2;
 
-                    if (newDuration <= 0)
-                        newDuration = 1;
-                    if (newMaxDuration < newDuration)
-                        newMaxDuration = newDuration;
+            if (newDuration <= 0)
+                newDuration = 1;
+            if (newMaxDuration < newDuration)
+                newMaxDuration = newDuration;
 
-                    innervate->SetMaxDuration(newMaxDuration);
-                    innervate->SetDuration(newDuration);
-                }
-            }
+            innervate->SetMaxDuration(newMaxDuration);
+            innervate->SetDuration(newDuration);
         }
     }
 

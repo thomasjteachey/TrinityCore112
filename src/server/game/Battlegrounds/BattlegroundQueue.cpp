@@ -671,6 +671,12 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 aliIndex = 0;
     for (; aliIndex < aliCount; aliIndex++)
     {
+        if ((*Ali_itr)->IsInvitedToBGInstanceGUID)
+        {
+            ++Ali_itr;
+            continue;
+        }
+
         int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
         int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
         int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
@@ -707,6 +713,12 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
     uint32 hordeIndex = 0;
     for (; hordeIndex < hordeCount; hordeIndex++)
     {
+        if ((*Horde_itr)->IsInvitedToBGInstanceGUID)
+        {
+            ++Horde_itr;
+            continue;
+        }
+
         int32 projectedHordeInGame = numHordeInGame + int32(m_SelectionPools[TEAM_HORDE].GetPlayerCount());
         int32 projectedAliInGame = numAliInGame + int32(m_SelectionPools[TEAM_ALLIANCE].GetPlayerCount());
         int32 hordeFree = bg->GetMaxPlayersPerTeam() - projectedHordeInGame;
@@ -957,27 +969,6 @@ void BattlegroundQueue::BattlegroundQueueUpdate(uint32 /*diff*/, BattlegroundTyp
                 // intermediate invite wave despite queued managed bots waiting.
                 sBattlegroundMgr->ScheduleQueueUpdate(0, arenaType, BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType), bgTypeId, bracket_id);
             }
-        }
-    }
-
-    // SCM should always saturate existing free-slot instances before creating another one.
-    // This prevents queue fragmentation where late joiners get split into a second SCM while
-    // the first instance still has open seats.
-    if (bgTypeId == BATTLEGROUND_SCM)
-    {
-        for (Battleground* bg : bgQueues)
-        {
-            if (!bg)
-                continue;
-
-            if (bg->GetTypeID() != bgTypeId || bg->GetBracketId() != bracket_id)
-                continue;
-
-            if (bg->GetStatus() <= STATUS_WAIT_QUEUE || bg->GetStatus() >= STATUS_WAIT_LEAVE)
-                continue;
-
-            if (bg->HasFreeSlots())
-                return;
         }
     }
 

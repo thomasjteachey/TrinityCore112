@@ -218,6 +218,9 @@ bool ShouldPropagateCombatToOwner(Unit* owner, Unit* controlled)
 
 bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
 {
+    if (!who || who == _owner)
+        return false;
+
     // Are we already in combat? If yes, refresh pvp combat
     if (PvPCombatReference* existingPvpRef = Trinity::Containers::MapGetValuePtr(_pvpRefs, who->GetGUID()))
     {

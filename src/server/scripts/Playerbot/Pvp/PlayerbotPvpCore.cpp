@@ -3276,6 +3276,30 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (context.spellId &&
         (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
     {
+        Unit const* losRecoveryTarget = resolveTargetByGuid(context.targetGuid);
+        if (losRecoveryTarget && !player->IsWithinLOSInMap(losRecoveryTarget))
+        {
+            SpellInfo const* recoverySpellInfo = sSpellMgr->GetSpellInfo(context.spellId);
+            float const spellMaxRange = recoverySpellInfo ? player->GetSpellMaxRangeForTarget(losRecoveryTarget, recoverySpellInfo) : 0.0f;
+            float const currentDistance = player->GetDistance(losRecoveryTarget);
+            float const maxFollowRange = spellMaxRange > 0.0f
+                ? std::max(1.5f, spellMaxRange - 1.0f)
+                : std::max(1.5f, GetConfiguredSpellRange() - 1.0f);
+            float const desiredRange = std::clamp(currentDistance - 2.0f, 1.5f, maxFollowRange);
+
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, losRecoveryTarget->GetGUID(),
+                desiredRange, "recover los", "selected spell target out of line of sight", 86.0f);
+            context.spellId = 0;
+            context.itemEntry = 0;
+            context.targetMode = PvpClassSpellContext::TargetMode::None;
+            context.targetGuid = ObjectGuid::Empty;
+            context.selfCast = false;
+        }
+    }
+
+    if (context.spellId &&
+        (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
+    {
         Unit const* facingTarget = resolveTargetByGuid(context.targetGuid);
         if (facingTarget && !player->HasInArc(static_cast<float>(M_PI), facingTarget))
         {
@@ -3336,6 +3360,21 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
                     ComputeApproachFollowRange(maxRange), "reach spell", "selected spell out of range", 84.0f);
+                context.spellId = 0;
+                context.itemEntry = 0;
+                context.targetMode = PvpClassSpellContext::TargetMode::None;
+                context.targetGuid = ObjectGuid::Empty;
+                context.selfCast = false;
+            }
+            else if (maxRange > 0.0f &&
+                spellInfo->CalcCastTime() > 0 &&
+                distance > std::max(1.0f, maxRange - 2.0f))
+            {
+                // Hard-cast edge guard: repeated casts at the absolute spell
+                // ceiling can stutter on movement jitter and LOS drift. Step
+                // in slightly so caster bots do not idle at max-range fringe.
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
+                    ComputeApproachFollowRange(maxRange), "reach spell", "selected spell near max range edge", 83.0f);
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
