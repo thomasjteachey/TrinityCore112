@@ -23,6 +23,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "Movement/AbstractFollower.h"
 #include "Player.h"
 #include "Battleground.h"
 #include "PathGenerator.h"
@@ -501,6 +502,37 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
     }
+}
+
+void EnsureActiveChaseTracksTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+    if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+        return;
+
+    MovementGenerator* movement = motionMaster->GetCurrentMovementGenerator();
+    AbstractFollower* follower = movement ? dynamic_cast<AbstractFollower*>(movement) : nullptr;
+    Unit* activeTarget = follower ? follower->GetTarget() : nullptr;
+    if (activeTarget == target)
+        return;
+
+    float const reanchorRange = std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 3.0f);
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target, reanchorRange);
+    else
+        motionMaster->MoveFollow(target, reanchorRange, player->GetFollowAngle());
+
+    TC_LOG_DEBUG("playerbots.pvp.classspell",
+        "Reanchored active movement target: guid={} from={} to={} movementType={}.",
+        player->GetGUID().ToString(), activeTarget ? activeTarget->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+        target->GetGUID().ToString(), static_cast<uint32>(movementType));
 }
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
@@ -1237,6 +1269,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         else if (player->GetVictim() != target)
             player->Attack(target, false);
         CommandPetAttackTarget(player, target);
+        EnsureActiveChaseTracksTarget(player, target);
 
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
