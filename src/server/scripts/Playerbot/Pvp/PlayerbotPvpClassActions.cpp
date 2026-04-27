@@ -435,8 +435,12 @@ struct TargetRelativeMoveOrderState
     ObjectGuid targetGuid = ObjectGuid::Empty;
     float issuedRange = 0.0f;
     float lastDistance = 0.0f;
+    float lastX = 0.0f;
+    float lastY = 0.0f;
+    float lastZ = 0.0f;
     uint32 lastIssueMs = 0;
     uint32 lastProgressMs = 0;
+    uint32 lastPositionProgressMs = 0;
     uint8 mode = 0; // 1=chase, 2=follow
 };
 
@@ -451,8 +455,12 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.targetGuid = target->GetGUID();
     state.issuedRange = issuedRange;
     state.lastDistance = player->GetDistance(target);
+    state.lastX = player->GetPositionX();
+    state.lastY = player->GetPositionY();
+    state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
     state.lastProgressMs = state.lastIssueMs;
+    state.lastPositionProgressMs = state.lastIssueMs;
     state.mode = mode;
 }
 
@@ -473,34 +481,71 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
 
     TargetRelativeMoveOrderState& state = g_TargetRelativeMoveOrderByGuid[player->GetGUID().GetRawValue()];
     bool const sameTarget = state.targetGuid == target->GetGUID();
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    uint32 const ageMs = sameTarget && state.lastIssueMs != 0 && nowMs >= state.lastIssueMs ? nowMs - state.lastIssueMs : 0;
-    float const currentDistance = player->GetDistance(target);
-    bool const hasMoveState = player->isMoving() || player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
-    bool const madeProgress = sameTarget && state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
-
     if (!sameTarget)
         return false;
 
-    if (madeProgress)
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const ageMs = state.lastIssueMs != 0 && nowMs >= state.lastIssueMs ? nowMs - state.lastIssueMs : 0;
+    float const currentDistance = player->GetDistance(target);
+
+    float const dx = player->GetPositionX() - state.lastX;
+    float const dy = player->GetPositionY() - state.lastY;
+    float const dz = player->GetPositionZ() - state.lastZ;
+    float const positionDelta2D = std::sqrt(dx * dx + dy * dy);
+    float const positionDelta3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    bool const madeDistanceProgress = state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
+    bool const madePositionProgress = positionDelta2D >= 0.35f || positionDelta3D >= 0.50f;
+
+    if (madeDistanceProgress)
     {
         state.lastDistance = currentDistance;
         state.lastProgressMs = nowMs;
     }
 
-    uint32 const progressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
+    if (madePositionProgress)
+    {
+        state.lastX = player->GetPositionX();
+        state.lastY = player->GetPositionY();
+        state.lastZ = player->GetPositionZ();
+        state.lastPositionProgressMs = nowMs;
+    }
 
-    // Anti-stutter guard. Reissuing MoveChase/MoveFollow replaces the active
-    // generator and stops the current spline. If the same target-relative
-    // generator was just installed, is actively moving, or has made recent
-    // progress, let it continue instead of clearing/replacing it every tick.
-    bool const preserve = ageMs < minRunMs ||
-        hasMoveState ||
-        madeProgress ||
-        (state.lastProgressMs != 0 && progressAgeMs < minRunMs);
+    uint32 const distanceProgressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
+    uint32 const positionProgressAgeMs = state.lastPositionProgressMs != 0 && nowMs >= state.lastPositionProgressMs ? nowMs - state.lastPositionProgressMs : 0;
+
+    bool const inSettleWindow = ageMs < minRunMs;
+    bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
+    bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
+    bool const preserve = inSettleWindow || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
+    {
+        if (reasonOut)
+        {
+            std::ostringstream diag;
+            diag << (label ? label : "target_relative_motion_not_preserved")
+                 << " motion=" << uint32(motionType)
+                 << " mode=" << uint32(state.mode)
+                 << " age_ms=" << ageMs
+                 << " distance_progress_age_ms=" << distanceProgressAgeMs
+                 << " position_progress_age_ms=" << positionProgressAgeMs
+                 << " desired_range=" << desiredRange
+                 << " issued_range=" << state.issuedRange
+                 << " dist=" << currentDistance
+                 << " last_dist=" << state.lastDistance
+                 << " pos_delta_2d=" << positionDelta2D
+                 << " pos_delta_3d=" << positionDelta3D
+                 << " moving=" << (player->isMoving() ? "yes" : "no")
+                 << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+                 << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+                 << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+                 << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
+                 << " reason=no_position_or_distance_progress";
+            *reasonOut = diag.str();
+        }
         return false;
+    }
 
     if (reasonOut)
     {
@@ -509,17 +554,20 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " motion=" << uint32(motionType)
              << " mode=" << uint32(state.mode)
              << " age_ms=" << ageMs
-             << " progress_age_ms=" << progressAgeMs
+             << " distance_progress_age_ms=" << distanceProgressAgeMs
+             << " position_progress_age_ms=" << positionProgressAgeMs
              << " desired_range=" << desiredRange
              << " issued_range=" << state.issuedRange
              << " dist=" << currentDistance
              << " last_dist=" << state.lastDistance
+             << " pos_delta_2d=" << positionDelta2D
+             << " pos_delta_3d=" << positionDelta3D
              << " moving=" << (player->isMoving() ? "yes" : "no")
              << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
              << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-             << " reason=" << (ageMs < minRunMs ? "settle_window" : (hasMoveState ? "active_motion" : "recent_progress"));
+             << " reason=" << (inSettleWindow ? "settle_window" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
         *reasonOut = diag.str();
     }
 
@@ -885,6 +933,33 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
          << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
          << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
          << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
+
+    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    if (orderItr != g_TargetRelativeMoveOrderByGuid.end())
+    {
+        TargetRelativeMoveOrderState const& order = orderItr->second;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32 const orderAgeMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : 0;
+        uint32 const distanceProgressAgeMs = order.lastProgressMs != 0 && nowMs >= order.lastProgressMs ? nowMs - order.lastProgressMs : 0;
+        uint32 const positionProgressAgeMs = order.lastPositionProgressMs != 0 && nowMs >= order.lastPositionProgressMs ? nowMs - order.lastPositionProgressMs : 0;
+        float const dx = player->GetPositionX() - order.lastX;
+        float const dy = player->GetPositionY() - order.lastY;
+        float const dz = player->GetPositionZ() - order.lastZ;
+        float const positionDelta2D = std::sqrt(dx * dx + dy * dy);
+        float const positionDelta3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+        diag << " order_match=" << (order.targetGuid == target->GetGUID() ? "yes" : "no")
+             << " order_mode=" << uint32(order.mode)
+             << " order_age_ms=" << orderAgeMs
+             << " order_issued_range=" << order.issuedRange
+             << " order_last_dist=" << order.lastDistance
+             << " order_dist_progress_age_ms=" << distanceProgressAgeMs
+             << " order_pos_progress_age_ms=" << positionProgressAgeMs
+             << " order_pos_delta_2d=" << positionDelta2D
+             << " order_pos_delta_3d=" << positionDelta3D;
+    }
+    else
+        diag << " order_match=none";
 
     return diag.str();
 }
