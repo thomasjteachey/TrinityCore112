@@ -607,65 +607,68 @@ bool TryJumpOffWarsongGraveyard(Player* player)
     if (!state.active)
         return false;
 
-    static Position const hordeGraveyardTip(1066.0946404f, 1380.843994f, 340.612305f, 0.0f);
-    static Position const allianceGraveyardTip(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
     static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-    // Per-side anchors that point off the graveyard ledge into the field.
-    static Position const hordeForwardAnchor(978.20f, 1427.10f, 335.20f, 0.0f);
-    static Position const allianceForwardAnchor(1498.60f, 1484.30f, 340.20f, 0.0f);
+    uint32 const nowMs = GameTime::GetGameTimeMS();
 
-    TeamId const teamId = ResolveBotTeamId(player);
-    Position const& graveyardTip = (teamId == TEAM_HORDE) ? hordeGraveyardTip : allianceGraveyardTip;
-    Position const& forwardAnchor = (teamId == TEAM_HORDE) ? hordeForwardAnchor : allianceForwardAnchor;
-
+    // Replace rigid graveyard jump anchors with navmesh-driven pursuit:
+    // build movement toward the nearest enemy immediately after resurrection
+    // and keep issuing path segments for a short bootstrap window so bots do
+    // not tunnel through floor/wall geometry while leaving spawn platforms.
     if (state.phase == 0)
     {
-        if (!player->IsWithinDist3d(graveyardTip.GetPositionX(), graveyardTip.GetPositionY(), graveyardTip.GetPositionZ(), 2.5f))
-        {
-            IssueMovePointThrottled(player, graveyardTip, 1.0f, 300);
-            return true;
-        }
-
+        if (!state.forwardBurstEndMs)
+            state.forwardBurstEndMs = nowMs + 7000;
         state.phase = 1;
     }
 
     if (state.phase == 1)
     {
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        if (!state.forwardBurstEndMs)
-            state.forwardBurstEndMs = nowMs + 1000;
+        bool issuedMovement = false;
+        TeamId const teamId = ResolveBotTeamId(player);
+        Position const gateStagingPoint = (teamId == TEAM_HORDE)
+            ? Position(1066.0946404f, 1380.843994f, 340.612305f, 0.0f)
+            : Position(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
+        Position const gateExitPoint = (teamId == TEAM_HORDE)
+            ? Position(978.20f, 1427.10f, 335.20f, 0.0f)
+            : Position(1498.60f, 1484.30f, 340.20f, 0.0f);
 
-        // Push straight off the graveyard ledge first, then route to mid.
-        float const dx = forwardAnchor.GetPositionX() - graveyardTip.GetPositionX();
-        float const dy = forwardAnchor.GetPositionY() - graveyardTip.GetPositionY();
-        float const len = std::sqrt(dx * dx + dy * dy);
-        if (len <= 0.001f)
+        // Explicit egress routing near the spawn gate. This keeps bots from
+        // parking against the fence/gate line when direct nearest-enemy
+        // pathing fails to build a viable first segment from spawn.
+        if (!player->IsWithinDist3d(gateStagingPoint.GetPositionX(), gateStagingPoint.GetPositionY(), gateStagingPoint.GetPositionZ(), 5.0f))
         {
-            state.phase = 2;
-            return true;
+            issuedMovement = IssueMovePointThrottled(player, gateStagingPoint, 2.0f, 400);
+            if (issuedMovement)
+                return true;
         }
 
-        float const forwardDistance = player->GetSpeed(MOVE_RUN) * 1.0f;
-        Position forwardPoint(
-            graveyardTip.GetPositionX() + (dx / len) * forwardDistance,
-            graveyardTip.GetPositionY() + (dy / len) * forwardDistance,
-            graveyardTip.GetPositionZ(),
-            player->GetAbsoluteAngle(forwardAnchor.GetPositionX(), forwardAnchor.GetPositionY()));
+        if (!player->IsWithinDist3d(gateExitPoint.GetPositionX(), gateExitPoint.GetPositionY(), gateExitPoint.GetPositionZ(), 8.0f))
+        {
+            issuedMovement = IssueMovePointThrottled(player, gateExitPoint, 2.0f, 400);
+            if (issuedMovement)
+                return true;
+        }
 
-        IssueMovePointThrottled(player, forwardPoint, 0.5f, 100);
+        if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
+        {
+            issuedMovement = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
+                IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 12.0f, 500);
+            if (issuedMovement)
+                return true;
+        }
 
+        issuedMovement = IssueMovePointThrottled(player, midPoint, 4.0f, 500);
         if (nowMs >= state.forwardBurstEndMs)
             state.phase = 2;
-        return true;
+        return issuedMovement;
     }
 
     if (state.phase == 2)
     {
-        IssueMovePointThrottled(player, midPoint, 1.0f, 300);
-
-        if (player->IsWithinDist3d(midPoint.GetPositionX(), midPoint.GetPositionY(), midPoint.GetPositionZ(), 6.0f))
-            state.active = false;
-        return true;
+        state.active = false;
+        state.phase = 0;
+        state.forwardBurstEndMs = 0;
+        return false;
     }
 
     return true;
@@ -798,7 +801,10 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         Position const collisionSafeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        path.SetPathLengthLimit(90.0f);
+        // Allow long battleground routes (including spawn-to-midfield/target
+        // pursuit) to be generated in one request instead of forcing very
+        // short local segments that can stall at gate/fence bottlenecks.
+        path.SetPathLengthLimit(350.0f);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -807,7 +813,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(90.0f);
+            retryPath.SetPathLengthLimit(350.0f);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -920,10 +926,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     ClearEatDrinkAurasForMovement(player);
 
-    minReissueMs = std::max<uint32>(minReissueMs, 2000);
+    minReissueMs = std::max<uint32>(minReissueMs, 500);
 
     if (IsWarsongGulch(player))
-        minReissueMs = std::max<uint32>(minReissueMs, 2000);
+        minReissueMs = std::max<uint32>(minReissueMs, 500);
 
     struct MoveOrderState
     {
@@ -951,12 +957,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (hardThrottleActive && botCurrentlyMoving)
         return false;
-
-    if (IsWarsongGulch(player) && botCurrentlyMoving && state.lastIssueMs != 0 &&
-        nowMs < state.lastIssueMs + 8000 && player->GetDistance(state.lastDestination) > 10.0f)
-    {
-        return false;
-    }
 
     if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
         return false;
