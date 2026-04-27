@@ -366,7 +366,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     };
 
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
-    RangedApproachStallState& stallState = stallStateByGuid[player->GetGUID().GetRawValue()];
+    uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+    RangedApproachStallState& stallState = stallStateByGuid[botGuidRaw];
+    playerbot::PvpClassActions::RangedApproachDiagnostic& approachDiag = g_RangedApproachDiagnosticByGuid[botGuidRaw];
+    approachDiag.valid = true;
+    approachDiag.targetGuid = target->GetGUID();
 
     float const safeDistance = std::max(1.0f, desiredDistance);
     if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, safeDistance))
@@ -472,6 +476,13 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     stallState.targetGuid = target->GetGUID();
     stallState.lastDistance = postIssueDistance;
     stallState.lastSampleMs = nowMs;
+    approachDiag.desiredRange = safeDistance;
+    approachDiag.currentDistance = postIssueDistance;
+    approachDiag.stagnantSamples = stallState.stagnantSamples;
+    approachDiag.lastSampleMs = stallState.lastSampleMs;
+    approachDiag.lastFallbackMs = stallState.lastFallbackMs;
+    approachDiag.motionType = motionMaster->GetCurrentMovementGeneratorType();
+    approachDiag.moving = player->isMoving();
 
     // Avoid clearing active movement every tick; only recover when we have
     // repeated stagnant samples and throttle the fallback issue rate.
@@ -500,6 +511,9 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
         issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
         stallState.lastFallbackMs = nowMs;
+        approachDiag.lastFallbackMs = stallState.lastFallbackMs;
+        approachDiag.motionType = motionMaster->GetCurrentMovementGeneratorType();
+        approachDiag.moving = player->isMoving();
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
@@ -710,6 +724,7 @@ struct CasterSpellCooldownKeyHash
 
 std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
+std::unordered_map<uint64, playerbot::PvpClassActions::RangedApproachDiagnostic> g_RangedApproachDiagnosticByGuid;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -1752,6 +1767,19 @@ std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
     auto const itr = g_LastClassExecutionStatusByGuid.find(player->GetGUID().GetRawValue());
     if (itr == g_LastClassExecutionStatusByGuid.end())
         return "none";
+
+    return itr->second;
+}
+
+PvpClassActions::RangedApproachDiagnostic PvpClassActions::GetRangedApproachDiagnostic(Player const* player)
+{
+    RangedApproachDiagnostic diagnostic;
+    if (!player)
+        return diagnostic;
+
+    auto const itr = g_RangedApproachDiagnosticByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_RangedApproachDiagnosticByGuid.end())
+        return diagnostic;
 
     return itr->second;
 }
