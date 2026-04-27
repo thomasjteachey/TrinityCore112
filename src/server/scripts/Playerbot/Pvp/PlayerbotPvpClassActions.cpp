@@ -23,6 +23,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "Movement/AbstractFollower.h"
 #include "Player.h"
 #include "Battleground.h"
 #include "PathGenerator.h"
@@ -431,6 +432,25 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // no actual motion.
     float const postIssueDistance = player->GetDistance(target);
     uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (!player->isMoving() &&
+        postIssueDistance > (safeDistance + 1.0f) &&
+        (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 350)))
+    {
+        Position const forcedDestination = BuildFollowDestination(player, target, std::max(1.0f, safeDistance - 2.0f));
+        bool forcedMoveIssued = false;
+        if (RequiresStrictHumanPathing(player))
+            forcedMoveIssued = IssueStrictHumanMove(player, forcedDestination, 1.5f, 0);
+
+        if (!forcedMoveIssued)
+            motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, forcedDestination), true);
+
+        stallState.lastFallbackMs = nowMs;
+        stallState.stagnantSamples = 0;
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Ranged approach forced point fallback from idle: guid={} target={} desiredRange={} currentDistance={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance);
+    }
+
     bool const targetChanged = stallState.targetGuid != target->GetGUID();
     bool const recentlySampled = !targetChanged && stallState.lastSampleMs != 0 && nowMs <= (stallState.lastSampleMs + 1500);
     bool const distanceStagnant = recentlySampled && std::fabs(postIssueDistance - stallState.lastDistance) < 0.35f;
@@ -482,6 +502,37 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
     }
+}
+
+void EnsureActiveChaseTracksTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+    if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+        return;
+
+    MovementGenerator* movement = motionMaster->GetCurrentMovementGenerator();
+    AbstractFollower* follower = movement ? dynamic_cast<AbstractFollower*>(movement) : nullptr;
+    Unit* activeTarget = follower ? follower->GetTarget() : nullptr;
+    if (activeTarget == target)
+        return;
+
+    float const reanchorRange = std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 3.0f);
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target, reanchorRange);
+    else
+        motionMaster->MoveFollow(target, reanchorRange, player->GetFollowAngle());
+
+    TC_LOG_DEBUG("playerbots.pvp.classspell",
+        "Reanchored active movement target: guid={} from={} to={} movementType={}.",
+        player->GetGUID().ToString(), activeTarget ? activeTarget->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+        target->GetGUID().ToString(), static_cast<uint32>(movementType));
 }
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
@@ -545,7 +596,17 @@ float ComputeLosRecoveryRange(Player const* player, Unit const* target, float ma
     if (closeFloor > upperBound)
         desiredRange = upperBound;
 
-    return desiredRange;
+    // Always bias LOS recovery to move inward at least slightly. Holding a
+    // follow distance >= current separation can leave casters repeating LOS
+    // failures while standing still.
+    float const currentDistance = player->GetDistance(target);
+    if (currentDistance > 0.0f)
+    {
+        float const inwardRecoveryCap = std::max(1.0f, currentDistance - 2.0f);
+        desiredRange = std::min(desiredRange, inwardRecoveryCap);
+    }
+
+    return std::max(1.0f, desiredRange);
 }
 
 bool IsCrowdControlledForAction(Player const* player)
@@ -1208,6 +1269,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         else if (player->GetVictim() != target)
             player->Attack(target, false);
         CommandPetAttackTarget(player, target);
+        EnsureActiveChaseTracksTarget(player, target);
 
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
