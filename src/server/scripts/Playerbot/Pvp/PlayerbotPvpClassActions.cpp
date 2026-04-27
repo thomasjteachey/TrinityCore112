@@ -414,6 +414,32 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
     return TargetRelativeRangedMoveResult::FollowIssued;
 }
 
+TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* target)
+{
+    if (!player || !target)
+        return TargetRelativeRangedMoveResult::None;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return TargetRelativeRangedMoveResult::None;
+
+    if (!player->IsValidAttackTarget(target))
+    {
+        motionMaster->MoveFollow(target, 1.0f, player->GetFollowAngle());
+        return TargetRelativeRangedMoveResult::FollowIssued;
+    }
+
+    if (player->GetVictim() != target || !player->IsInCombat())
+        player->Attack(target, false);
+
+    // Still target-relative/path-generator movement; this is not a raw MovePoint.
+    // Use this only after ranged edge Chase/Follow repeatedly installs a
+    // generator but never enters CHASE_MOVE/FOLLOW_MOVE. Default MoveChase
+    // avoids the ranged stop-band math and asks the core to path to contact.
+    motionMaster->MoveChase(target);
+    return TargetRelativeRangedMoveResult::ChaseIssued;
+}
+
 std::string BuildRangedMovementDiag(Player const* player, Unit const* target, char const* label, float desiredEdgeDistance, float issuedEdgeDistance,
     bool targetLos, bool targetAttackable, bool cleared, MovementGeneratorType motionBefore, char const* issuedMode = nullptr)
 {
@@ -533,45 +559,44 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         }
 
         bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
-        // First issue is a Chase for hostile targets. If that queued Chase has
-        // had time to update and still has not launched movement, switch to
-        // Follow. If Follow also stalls, alternate back to Chase on the next
-        // stale sample. Both are target-relative; neither is a raw MovePoint.
-        bool const forceFollow = targetAttackable && staleQueuedGenerator && initialMotionType == CHASE_MOTION_TYPE;
-        float const forcedRange = std::max(1.0f, safeDistance - (staleQueuedGenerator ? 10.0f : 8.0f));
+        bool const rescueToContactChase = staleQueuedGenerator && targetAttackable && lastIssueAgeMs >= 1400;
+        float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
             player->Attack(target, false);
 
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        TargetRelativeRangedMoveResult const moveResult = IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, forceFollow);
+        TargetRelativeRangedMoveResult const moveResult = rescueToContactChase
+            ? IssueContactChaseRescue(player, target)
+            : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable);
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
         stallState.lastSampleMs = nowMs;
         stallState.lastFallbackMs = nowMs;
         stallState.lastIssueMs = nowMs;
-        stallState.lastIssuedRange = forcedRange;
+        stallState.lastIssuedRange = rescueToContactChase ? 0.0f : forcedRange;
         stallState.lastIssuedMode = moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1;
-        stallState.stagnantSamples = 0;
+        stallState.stagnantSamples = rescueToContactChase ? 1 : 0;
 
-        char const* label = staleQueuedGenerator
-            ? (forceFollow ? "near_edge_stale_chase_switched_to_follow" : "near_edge_stale_follow_switched_to_chase")
-            : "near_edge_chase_follow_nudge";
+        char const* label = rescueToContactChase
+            ? "near_edge_stale_contact_chase_rescue"
+            : (staleQueuedGenerator ? "near_edge_stale_reissued_chase" : "near_edge_chase_follow_nudge");
 
         std::string diag = BuildRangedMovementDiag(player, target, label,
-            safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType,
-            GetTargetRelativeRangedMoveResultLabel(moveResult));
+            safeDistance, rescueToContactChase ? 0.0f : forcedRange, targetLos, targetAttackable, true, initialMotionType,
+            rescueToContactChase ? "contact_chase_rescue" : GetTargetRelativeRangedMoveResultLabel(moveResult));
         std::ostringstream extra;
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
+              << " contact_rescue=" << (rescueToContactChase ? "yes" : "no")
               << " issue_age_ms=" << lastIssueAgeMs;
         SetLastMovementDebugStatus(player, extra.str());
 
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged near-edge queued target-relative movement: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} issuedMode={} stale={} issueAgeMs={} movingBefore={} motionBefore={} motionAfter={} movingAfter={} chaseMove={} followMove={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, forcedRange, targetLos, targetAttackable,
-            GetTargetRelativeRangedMoveResultLabel(moveResult), staleQueuedGenerator, lastIssueAgeMs, currentlyMoving, static_cast<uint32>(initialMotionType),
+            "Ranged near-edge queued target-relative movement: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} issuedMode={} stale={} contactRescue={} issueAgeMs={} movingBefore={} motionBefore={} motionAfter={} movingAfter={} chaseMove={} followMove={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, rescueToContactChase ? 0.0f : forcedRange, targetLos, targetAttackable,
+            rescueToContactChase ? "contact_chase_rescue" : GetTargetRelativeRangedMoveResultLabel(moveResult), staleQueuedGenerator, rescueToContactChase, lastIssueAgeMs, currentlyMoving, static_cast<uint32>(initialMotionType),
             static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()), player->isMoving(),
             player->HasUnitState(UNIT_STATE_CHASE_MOVE), player->HasUnitState(UNIT_STATE_FOLLOW_MOVE));
         return;
@@ -668,15 +693,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-        TargetRelativeRangedMoveResult const fallbackMoveResult = IssueTargetRelativeRangedMovement(player, target,
-            std::max(1.0f, safeDistance - 2.0f), player->IsValidAttackTarget(target));
+        bool const hostileTarget = player->IsValidAttackTarget(target);
+        TargetRelativeRangedMoveResult const fallbackMoveResult = hostileTarget
+            ? IssueContactChaseRescue(player, target)
+            : IssueTargetRelativeRangedMovement(player, target, std::max(1.0f, safeDistance - 2.0f), false, true);
         stallState.lastFallbackMs = nowMs;
         {
             std::ostringstream diag;
-            diag << "stagnant_forced_target_relative"
+            diag << (hostileTarget ? "stagnant_contact_chase_rescue" : "stagnant_forced_target_relative")
                  << " dist=" << postIssueDistance
                  << " desired=" << safeDistance
-                 << " issued_mode=" << GetTargetRelativeRangedMoveResultLabel(fallbackMoveResult)
+                 << " issued_mode=" << (hostileTarget ? "contact_chase_rescue" : GetTargetRelativeRangedMoveResultLabel(fallbackMoveResult))
                  << " motion_before=" << uint32(motionType)
                  << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
                  << " moving_after=" << (player->isMoving() ? "yes" : "no")
@@ -685,8 +712,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             SetLastMovementDebugStatus(player, diag.str());
         }
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
+            "Ranged approach forced target-relative fallback: guid={} target={} desiredRange={} currentDistance={} motionType={} contactRescue={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType), hostileTarget);
     }
 }
 
@@ -701,10 +728,21 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
     if (player->HasStealthAura())
     {
-        // Stealth openers (e.g., Cheap Shot) are very sensitive to smooth
-        // closing movement. Strict-human segmented MovePoint updates can look
-        // like start/stop inching while approaching. Keep a continuous follow
-        // command here so rogues fluidly close to opener distance.
+        // For hostile stealth openers, use default MoveChase instead of
+        // MoveFollow. FollowMovementGenerator can choose a behind/angle point
+        // that never launches on some BG/mmaps, leaving rogues stealthed at
+        // their base. Default MoveChase is still target-relative and pathing-
+        // aware, but it does not depend on a fragile follow angle point.
+        if (player->IsValidAttackTarget(target))
+        {
+            if (player->GetVictim() != target || !player->IsInCombat())
+                player->Attack(target, false);
+
+            motionMaster->MoveChase(target);
+            SetLastMovementDebugStatus(player, "stealth_melee_contact_chase issued_mode=contact_chase motion_after=" + std::to_string(uint32(motionMaster->GetCurrentMovementGeneratorType())));
+            return;
+        }
+
         IssueThrottledFollowMovement(player, target, 0.1f);
         return;
     }
