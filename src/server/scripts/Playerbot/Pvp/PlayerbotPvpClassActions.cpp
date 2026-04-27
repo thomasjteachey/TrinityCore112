@@ -1949,38 +1949,42 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         std::string const lastStatus = GetLastExecutionStatus(player);
         bool const previousLosFailure =
             lastStatus == "cast_failed_no_los" ||
-            lastStatus == "cast_failed_SPELL_FAILED_LINE_OF_SIGHT";
+            lastStatus == "cast_failed_SPELL_FAILED_LINE_OF_SIGHT" ||
+            lastStatus == "move_recover_los";
 
         if (previousLosFailure && !context.targetGuid.IsEmpty())
         {
             if (Unit* recoveryTarget = ObjectAccessor::GetUnit(*player, context.targetGuid); recoveryTarget && recoveryTarget->IsAlive())
             {
-                uint32 resolvedSpellId = context.spellId;
-                if (context.spellId)
+                if (!player->IsWithinLOSInMap(recoveryTarget))
                 {
-                    if (uint32 knownSpell = ResolveKnownSpellInChain(player, context.spellId))
-                        resolvedSpellId = knownSpell;
+                    uint32 resolvedSpellId = context.spellId;
+                    if (context.spellId)
+                    {
+                        if (uint32 knownSpell = ResolveKnownSpellInChain(player, context.spellId))
+                            resolvedSpellId = knownSpell;
+                    }
+
+                    SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+                    float const maxRange = spellInfo ? player->GetSpellMaxRangeForTarget(recoveryTarget, spellInfo) : 0.0f;
+                    bool const enemyMeleeSpacing =
+                        context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
+                        IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
+                        maxRange > 0.0f && maxRange <= 5.5f;
+
+                    if (enemyMeleeSpacing)
+                        IssueMeleeApproachMovement(player, recoveryTarget);
+                    else
+                    {
+                        float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+                            ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                            : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
+                        IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
+                    }
+
+                    SetLastExecutionStatus(player, "move_recover_los");
+                    return true;
                 }
-
-                SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
-                float const maxRange = spellInfo ? player->GetSpellMaxRangeForTarget(recoveryTarget, spellInfo) : 0.0f;
-                bool const enemyMeleeSpacing =
-                    context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
-                    IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
-                    maxRange > 0.0f && maxRange <= 5.5f;
-
-                if (enemyMeleeSpacing)
-                    IssueMeleeApproachMovement(player, recoveryTarget);
-                else
-                {
-                    float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
-                        ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
-                        : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
-                    IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
-                }
-
-                SetLastExecutionStatus(player, "move_recover_los");
-                return true;
             }
         }
     }
