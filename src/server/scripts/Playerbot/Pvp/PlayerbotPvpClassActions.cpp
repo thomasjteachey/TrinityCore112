@@ -422,8 +422,9 @@ MotionPrimeResult PrimeTargetRelativeMotion(Player* player)
         return result;
 
     result.attempted = true;
-    result.mmInitPendingBefore = motionMaster->HasFlag(MOTIONMASTER_FLAG_INITIALIZATION_PENDING);
-    result.mmUpdatingBefore = motionMaster->HasFlag(MOTIONMASTER_FLAG_UPDATE);
+    // MotionMaster::HasFlag(...) is private in this TrinityCore branch, so do not
+    // introspect MOTIONMASTER_FLAG_* here. We still log the public current motion
+    // and the top MovementGenerator flags, then prime one motion tick.
     result.motionBefore = motionMaster->GetCurrentMovementGeneratorType();
     result.movingBefore = player->isMoving();
     result.chaseMoveBefore = player->HasUnitState(UNIT_STATE_CHASE_MOVE);
@@ -435,28 +436,11 @@ MotionPrimeResult PrimeTargetRelativeMotion(Player* player)
         result.topDeactivatedBefore = top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     }
 
-    if (result.mmInitPendingBefore && player->IsInWorld())
-    {
-        motionMaster->AddToWorld();
-        result.addToWorldCalled = true;
-    }
-
-    if (motionMaster->HasFlag(MOTIONMASTER_FLAG_UPDATE))
-    {
-        result.skippedBecauseUpdating = true;
-    }
-    else if (motionMaster->HasFlag(MOTIONMASTER_FLAG_INITIALIZATION_PENDING))
-    {
-        result.skippedBecauseInitPending = true;
-    }
-    else
-    {
-        // Force Initialize()+first Update() for freshly queued Chase/Follow.
-        // Without this, virtual-session playerbots can show motion=chase/follow
-        // for >1s while CHASE_MOVE/FOLLOW_MOVE never gets set.
-        motionMaster->Update(1);
-        result.updateCalled = true;
-    }
+    // Force Initialize()+first Update() for freshly queued Chase/Follow.
+    // Without this, virtual-session playerbots can show motion=chase/follow
+    // for >1s while CHASE_MOVE/FOLLOW_MOVE never gets set.
+    motionMaster->Update(1);
+    result.updateCalled = true;
 
     result.motionAfter = motionMaster->GetCurrentMovementGeneratorType();
     result.movingAfter = player->isMoving();
@@ -781,7 +765,7 @@ void IssueStealthOpenerMovement(Player* player, Unit* target)
     // triangle, so FollowMovementGenerator installs but never launches. A small
     // but real follow band keeps stealth and still lets the generator produce a path.
     float constexpr stealthFollowRange = 1.5f;
-    bool const issued = IssueThrottledFollowMovement(player, target, stealthFollowRange, 0.25f, 750);
+    bool const issued = IssueThrottledFollowMovement(player, target, stealthFollowRange, 750, 0.25f);
 
     std::ostringstream diag;
     diag << "stealth_opener_follow"
