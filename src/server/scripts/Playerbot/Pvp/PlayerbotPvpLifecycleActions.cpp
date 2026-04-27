@@ -1241,6 +1241,8 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         // Execute invite acceptance directly. Managed random bots can run on
         // disconnected virtual sessions where queued outbound packets are not
         // guaranteed to be pumped like real client traffic.
+        ClearMovementBeforeBattlegroundTeleport(player);
+
         WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
         packet << arenaType << uint8(0) << uint32(packetBgTypeId) << uint16(0x1F90) << uint8(1);
         session->HandleBattleFieldPortOpcode(packet);
@@ -1249,6 +1251,7 @@ bool AcceptMatchingInvite(Player* player, bool arenaInvite)
         {
             EmitLifecycleDiagnostic(player, "invite-accept-far-teleport-pending",
                 "Issuing server-side HandleMoveWorldportAck for bot teleport finalization.");
+            ClearMovementBeforeBattlegroundTeleport(player);
             session->HandleMoveWorldportAck();
         }
 
@@ -1470,6 +1473,30 @@ void ClearActiveMovementForControlLoss(Player* player)
 
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
+}
+
+void ClearMovementBeforeBattlegroundTeleport(Player* player)
+{
+    if (!player)
+        return;
+
+    player->AttackStop();
+    player->SetSelection(ObjectGuid::Empty);
+
+    if (player->isMoving())
+        player->StopMoving();
+
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear();
+
+    // The teleport/visibility path must not inherit stale client movement
+    // flags from whatever the bot was doing before the queue invite. A stale
+    // spline flag with an interrupted/finalized MoveSpline can make object
+    // create packets assert while HandleMoveWorldportAck() rebuilds visibility.
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ELEVATION);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
 }
 
 bool CanIssueBotMovement(Player* player)

@@ -345,7 +345,23 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
     if (flags & UPDATEFLAG_LIVING)
     {
         ASSERT(unit);
-        unit->BuildMovementPacket(data);
+
+        // Defensive movement serialization:
+        // A unit can temporarily retain MOVEMENTFLAG_SPLINE_ENABLED even after
+        // its MoveSpline has been interrupted/finalized, especially during
+        // forced server-side teleport finalization for virtual playerbot
+        // sessions. If we serialize that stale flag, WriteCreate() is expected
+        // by the client but has no valid spline path to write, which trips the
+        // ByteBuffer zero-sized append assertion during visibility rebuilds.
+        bool const hasValidSpline =
+            (unit->m_movementInfo.GetMovementFlags() & MOVEMENTFLAG_SPLINE_ENABLED) &&
+            unit->IsSplineEnabled();
+
+        MovementInfo movementInfo = unit->m_movementInfo;
+        if (!hasValidSpline)
+            movementInfo.RemoveMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
+
+        Unit::BuildMovementPacket(*unit, movementInfo.transport.pos, movementInfo, data);
 
         *data << unit->GetSpeed(MOVE_WALK)
               << unit->GetSpeed(MOVE_RUN)
@@ -358,7 +374,7 @@ void Object::BuildMovementUpdate(ByteBuffer* data, uint16 flags) const
               << unit->GetSpeed(MOVE_PITCH_RATE);
 
         // 0x08000000
-        if (unit->m_movementInfo.GetMovementFlags() & MOVEMENTFLAG_SPLINE_ENABLED)
+        if (hasValidSpline)
             Movement::PacketBuilder::WriteCreate(*unit->movespline, *data);
     }
     else
