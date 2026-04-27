@@ -59,9 +59,6 @@ bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
 bool IsPrimaryMeleeClassForSpacing(uint8 classId);
-std::string BuildMovementDiagnostic(Player const* player, Unit const* target, float desiredRange, char const* stage);
-void SetLastMovementDiagnostic(Player const* player, std::string const& diagnostic);
-bool IssueDirectRangedPointFallback(Player* player, Unit* target, float desiredRange, char const* reason);
 
 bool IsEffectivelyOutdoors(Player const* player)
 {
@@ -360,6 +357,10 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!player || !target)
         return;
 
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
     struct RangedApproachStallState
     {
         ObjectGuid targetGuid = ObjectGuid::Empty;
@@ -372,28 +373,67 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
     RangedApproachStallState& stallState = stallStateByGuid[player->GetGUID().GetRawValue()];
 
-    float safeDistance = std::max(1.0f, desiredDistance);
-    float const initialDistance = player->GetDistance(target);
-    float const combinedReach = player->GetCombatReach() + target->GetCombatReach();
+    float const safeDistance = std::max(1.0f, desiredDistance);
+    float const currentDistance = player->GetDistance(target);
+    bool const targetLos = player->IsWithinLOSInMap(target);
+    bool const targetAttackable = player->IsValidAttackTarget(target);
+    MovementGeneratorType const initialMotionType = motionMaster->GetCurrentMovementGeneratorType();
+    bool const currentlyMoving = player->isMoving();
+    bool const strictPathing = RequiresStrictHumanPathing(player);
+    bool const nearRangeEdge = currentDistance > (safeDistance + 1.0f) && currentDistance <= (safeDistance + 8.0f);
 
-    // MoveChase/MoveFollow consider object combat reach when deciding whether
-    // the follower is already close enough. The old max-range edge guard often
-    // requested 27y for a 30y cast; with two player-sized combat reaches that
-    // can be treated as satisfied at ~30y, leaving the bot in CHASE motion but
-    // not physically moving. If this is only a small edge correction, pull the
-    // desired band inward enough that the movement generator must actually move.
-    if (initialDistance > safeDistance && (initialDistance - safeDistance) <= (combinedReach + 1.5f))
+    if (!currentlyMoving && initialMotionType == POINT_MOTION_TYPE && currentDistance > (safeDistance + 1.0f))
     {
-        float const adjustedDistance = std::max(1.0f, safeDistance - std::max(2.0f, combinedReach + 0.5f));
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach adjusted edge desired range: guid={} target={} originalRange={} adjustedRange={} currentDistance={} combinedReach={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, adjustedDistance, initialDistance, combinedReach);
-        safeDistance = adjustedDistance;
+            "Ranged approach cleared stalled point movement: guid={} target={} desiredRange={} currentDistance={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
-    SetLastMovementDiagnostic(player, BuildMovementDiagnostic(player, target, safeDistance, "ranged_start"));
+    // Near the maximum spell range edge, segmented strict MovePoint orders can
+    // install POINT_MOTION_TYPE but immediately report moving=no. That creates
+    // the visible loop: reach_spell + last_exec=move_executed + motion=point.
+    // For this small close-in correction, use an intentionally deeper chase
+    // radius so MotionMaster cannot treat the bot as already close enough.
+    if (strictPathing && nearRangeEdge && targetLos)
+    {
+        float const nudgeRange = std::max(1.0f, safeDistance - 5.0f);
+        if (targetAttackable)
+        {
+            if (player->GetVictim() != target || !player->IsInCombat())
+                player->Attack(target, false);
+            motionMaster->MoveChase(target, nudgeRange);
+        }
+        else
+        {
+            motionMaster->MoveFollow(target, nudgeRange, player->GetFollowAngle());
+        }
 
-    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, safeDistance))
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = GameTime::GetGameTimeMS();
+        stallState.stagnantSamples = 0;
+
+        std::ostringstream diag;
+        diag << "ranged_near_edge_nudge"
+             << " dist=" << currentDistance
+             << " desired=" << safeDistance
+             << " nudge=" << nudgeRange
+             << " los=" << (targetLos ? "yes" : "no")
+             << " attackable=" << (targetAttackable ? "yes" : "no")
+             << " moving_before=" << (currentlyMoving ? "yes" : "no")
+             << " motion_before=" << uint32(initialMotionType)
+             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+             << " moving_after=" << (player->isMoving() ? "yes" : "no");
+        SetLastMovementDebugStatus(player, diag.str());
+
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Ranged approach near-edge nudge: guid={} target={} desiredRange={} nudgeRange={} currentDistance={} los={} attackable={} movingBefore={} motionBefore={} motionAfter={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, nudgeRange, currentDistance, targetLos, targetAttackable, currentlyMoving, static_cast<uint32>(initialMotionType), static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()));
+        return;
+    }
+
+    if (strictPathing && IssueStrictHumanFollow(player, target, safeDistance))
     {
         float const postStrictDistance = player->GetDistance(target);
         stallState.stagnantSamples = 0;
@@ -401,7 +441,15 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastDistance = postStrictDistance;
         stallState.lastSampleMs = GameTime::GetGameTimeMS();
 
-        SetLastMovementDiagnostic(player, BuildMovementDiagnostic(player, target, safeDistance, "strict_follow_issued"));
+        std::ostringstream diag;
+        diag << "strict_point_issued"
+             << " dist=" << postStrictDistance
+             << " desired=" << safeDistance
+             << " los=" << (targetLos ? "yes" : "no")
+             << " attackable=" << (targetAttackable ? "yes" : "no")
+             << " moving_after=" << (player->isMoving() ? "yes" : "no")
+             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType());
+        SetLastMovementDebugStatus(player, diag.str());
 
         // Strict-human segmented movement uses point generators. If that order
         // does not result in movement while still far outside desired range,
@@ -417,18 +465,13 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // Fallback: if strict-human segment pathing cannot resolve a route this
     // tick (common around dynamic battleground geometry), still issue regular
     // chase/follow so the bot does not idle while out of range.
-    if (RequiresStrictHumanPathing(player))
+    if (strictPathing)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Strict ranged follow fallback to generic movement: guid={} target={} desiredRange={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance);
     }
 
-    MotionMaster* motionMaster = player->GetMotionMaster();
-    if (!motionMaster)
-        return;
-
-    float const currentDistance = player->GetDistance(target);
     bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f);
     if (shouldForceActiveRepath)
     {
@@ -437,37 +480,40 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
+    float const genericMoveRange = nearRangeEdge ? std::max(1.0f, safeDistance - 5.0f) : safeDistance;
     if (player->IsValidAttackTarget(target))
     {
         // Ensure hostile ranged approach can engage chase generators even when
         // the bot is currently out of combat.
         if (player->GetVictim() != target || !player->IsInCombat())
             player->Attack(target, false);
-        motionMaster->MoveChase(target, safeDistance);
+        motionMaster->MoveChase(target, genericMoveRange);
     }
     else
     {
-        motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+        motionMaster->MoveFollow(target, genericMoveRange, player->GetFollowAngle());
     }
 
-    float const postIssueDistance = player->GetDistance(target);
-    SetLastMovementDiagnostic(player, BuildMovementDiagnostic(player, target, safeDistance, "generic_chase_issued"));
-
-    // If MoveChase installed but did not produce movement while still outside
-    // the desired band, issue a real point movement this tick. This captures the
-    // exact CHASE-but-not-moving stuck state shown in PB status and gives us a
-    // path diagnostic for the destination that was requested.
-    if (!player->isMoving() && postIssueDistance > (safeDistance + 1.0f))
     {
-        float const directPointRange = std::max(1.0f, safeDistance - std::max(2.0f, combinedReach + 0.5f));
-        if (IssueDirectRangedPointFallback(player, target, directPointRange, "chase_idle_direct_point"))
-            return;
+        std::ostringstream diag;
+        diag << "generic_ranged_move"
+             << " dist=" << currentDistance
+             << " desired=" << safeDistance
+             << " issued_range=" << genericMoveRange
+             << " los=" << (targetLos ? "yes" : "no")
+             << " attackable=" << (targetAttackable ? "yes" : "no")
+             << " cleared=" << (shouldForceActiveRepath ? "yes" : "no")
+             << " motion_before=" << uint32(initialMotionType)
+             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+             << " moving_after=" << (player->isMoving() ? "yes" : "no");
+        SetLastMovementDebugStatus(player, diag.str());
     }
 
     // Some battleground edge-cases keep a stale chase/follow generator active
     // without producing displacement while we are still out of range. Fall
     // back to a direct MovePoint so "reach spell" does not loop forever with
     // no actual motion.
+    float const postIssueDistance = player->GetDistance(target);
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const targetChanged = stallState.targetGuid != target->GetGUID();
     bool const recentlySampled = !targetChanged && stallState.lastSampleMs != 0 && nowMs <= (stallState.lastSampleMs + 1500);
@@ -491,18 +537,33 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 500)))
     {
         MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
-        float const directPointRange = std::max(1.0f, safeDistance - std::max(2.0f, combinedReach + 0.5f));
-        if (IssueDirectRangedPointFallback(player, target, directPointRange, "stagnant_direct_point"))
+        if (motionType == POINT_MOTION_TYPE)
         {
+            // If we are already in a stalled point movement, prefer reissuing
+            // chase/follow instead of chaining another point destination.
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            if (player->IsValidAttackTarget(target))
+                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
+            else
+                motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+
             stallState.lastFallbackMs = nowMs;
+            {
+                std::ostringstream diag;
+                diag << "stalled_point_reissued_chase"
+                     << " dist=" << postIssueDistance
+                     << " desired=" << safeDistance
+                     << " motion_before=" << uint32(motionType)
+                     << " moving_after=" << (player->isMoving() ? "yes" : "no");
+                SetLastMovementDebugStatus(player, diag.str());
+            }
             TC_LOG_DEBUG("playerbots.pvp.classspell",
-                "Ranged approach forced direct point fallback: guid={} target={} desiredRange={} directPointRange={} currentDistance={} motionType={} samples={}.",
-                player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, directPointRange, postIssueDistance,
-                static_cast<uint32>(motionType), static_cast<uint32>(stallState.stagnantSamples));
+                "Ranged approach fallback reissued chase/follow from stalled point: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
             return;
         }
 
-        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE || motionType == POINT_MOTION_TYPE)
+        if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
         if (player->IsValidAttackTarget(target))
@@ -510,7 +571,15 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         else
             motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
         stallState.lastFallbackMs = nowMs;
-        SetLastMovementDiagnostic(player, BuildMovementDiagnostic(player, target, safeDistance, "stagnant_chase_reissue"));
+        {
+            std::ostringstream diag;
+            diag << "stagnant_forced_chase"
+                 << " dist=" << postIssueDistance
+                 << " desired=" << safeDistance
+                 << " motion_before=" << uint32(motionType)
+                 << " moving_after=" << (player->isMoving() ? "yes" : "no");
+            SetLastMovementDebugStatus(player, diag.str());
+        }
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
@@ -680,7 +749,7 @@ struct CasterSpellCooldownKeyHash
 
 std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
-std::unordered_map<uint64, std::string> g_LastClassMovementDiagnosticByGuid;
+std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -736,98 +805,12 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
-std::string BuildMovementDiagnostic(Player const* player, Unit const* target, float desiredRange, char const* stage)
-{
-    std::ostringstream diagnostic;
-    diagnostic << "stage=" << (stage ? stage : "unknown")
-               << " desired=" << desiredRange;
-
-    if (!player)
-    {
-        diagnostic << " player=none";
-        return diagnostic.str();
-    }
-
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-
-    diagnostic << " moving=" << (player->isMoving() ? "yes" : "no")
-               << " motion=" << static_cast<uint32>(motionType)
-               << " flags=0x" << std::hex << player->GetUnitMovementFlags() << std::dec
-               << " pos=(" << player->GetMapId() << ":" << player->GetPositionX() << "," << player->GetPositionY() << "," << player->GetPositionZ() << ")";
-
-    if (!target)
-    {
-        diagnostic << " target=none";
-        return diagnostic.str();
-    }
-
-    float const distance = player->GetDistance(target);
-    float const rangeDelta = distance - desiredRange;
-    float const combinedReach = player->GetCombatReach() + target->GetCombatReach();
-
-    diagnostic << " target=" << target->GetName()
-               << " target_guid=" << target->GetGUID().ToString()
-               << " dist=" << distance
-               << " delta=" << rangeDelta
-               << " combined_reach=" << combinedReach
-               << " los=" << (player->IsWithinLOSInMap(target) ? "yes" : "no")
-               << " attackable=" << (player->IsValidAttackTarget(target) ? "yes" : "no")
-               << " in_front=" << (player->HasInArc(static_cast<float>(M_PI), target) ? "yes" : "no");
-
-    Position const desiredDestination = BuildFollowDestination(const_cast<Player*>(player), const_cast<Unit*>(target), desiredRange);
-    PathGenerator path(const_cast<Player*>(player));
-    path.SetPathLengthLimit(90.0f);
-    bool const pathOk = path.CalculatePath(desiredDestination.GetPositionX(), desiredDestination.GetPositionY(), desiredDestination.GetPositionZ(), true);
-    PathType const pathType = path.GetPathType();
-    Movement::PointsArray const points = path.GetPath();
-    G3D::Vector3 const actualEnd = path.GetActualEndPosition();
-    Position actualEndPosition(actualEnd.x, actualEnd.y, actualEnd.z, desiredDestination.GetOrientation());
-
-    diagnostic << " path_ok=" << (pathOk ? "yes" : "no")
-               << " path_type=0x" << std::hex << static_cast<uint32>(pathType) << std::dec
-               << " path_points=" << points.size()
-               << " path_end_dist=" << player->GetDistance(actualEndPosition);
-
-    return diagnostic.str();
-}
-
-void SetLastMovementDiagnostic(Player const* player, std::string const& diagnostic)
+void SetLastMovementDebugStatus(Player const* player, std::string const& status)
 {
     if (!player)
         return;
 
-    g_LastClassMovementDiagnosticByGuid[player->GetGUID().GetRawValue()] = diagnostic;
-}
-
-bool IssueDirectRangedPointFallback(Player* player, Unit* target, float desiredRange, char const* reason)
-{
-    if (!player || !target || !player->IsAlive())
-        return false;
-
-    MotionMaster* motionMaster = player->GetMotionMaster();
-    if (!motionMaster)
-        return false;
-
-    float const pointRange = std::max(1.0f, desiredRange);
-    Position destination = BuildFollowDestination(player, target, pointRange);
-
-    if (RequiresStrictHumanPathing(player))
-    {
-        Position segmentDestination;
-        if (TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
-            destination = segmentDestination;
-    }
-
-    motionMaster->Clear(MOTION_SLOT_ACTIVE);
-    motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
-
-    std::string const diagnostic = BuildMovementDiagnostic(player, target, pointRange, reason);
-    SetLastMovementDiagnostic(player, diagnostic);
-    TC_LOG_DEBUG("playerbots.pvp.classspell",
-        "Ranged approach direct point fallback: guid={} target={} desiredRange={} reason={} diag={}",
-        player->GetGUID().ToString(), target->GetGUID().ToString(), pointRange, reason ? reason : "unknown", diagnostic);
-    return true;
+    g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -1820,13 +1803,13 @@ std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
     return itr->second;
 }
 
-std::string PvpClassActions::GetLastMovementDiagnostic(Player const* player)
+std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)
 {
     if (!player)
         return "none";
 
-    auto const itr = g_LastClassMovementDiagnosticByGuid.find(player->GetGUID().GetRawValue());
-    if (itr == g_LastClassMovementDiagnosticByGuid.end())
+    auto const itr = g_LastMovementDebugStatusByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_LastMovementDebugStatusByGuid.end())
         return "none";
 
     return itr->second;
@@ -1922,17 +1905,13 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 if (approachTarget)
                 {
                     float const currentDistance = player->GetDistance(approachTarget);
-                    float const combinedReach = player->GetCombatReach() + approachTarget->GetCombatReach();
                     // ReachSpellRange must always request an actual "close the
-                    // gap" distance. MoveChase/MoveFollow include combat reach
-                    // tolerance, so a small 30y -> 27y correction can be treated
-                    // as already satisfied and leave the bot motion=CHASE but
-                    // moving=no. Pull the target band inward when the requested
-                    // correction is inside that hitbox/tolerance envelope.
-                    if (desiredRange >= currentDistance ||
-                        (currentDistance > desiredRange && (currentDistance - desiredRange) <= (combinedReach + 1.5f)))
+                    // gap" distance. If desiredRange is >= current distance,
+                    // chase movement can idle and repeatedly reissue the same
+                    // directive (visible as bow-raise stutter loops).
+                    if (desiredRange >= currentDistance)
                     {
-                        float const closingRange = std::max(1.0f, currentDistance - std::max(4.0f, combinedReach + 2.0f));
+                        float const closingRange = std::max(1.0f, currentDistance - 2.0f);
                         desiredRange = std::min(desiredRange, closingRange);
                     }
                 }

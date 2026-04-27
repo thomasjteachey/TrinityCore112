@@ -248,15 +248,6 @@ std::string BuildManagedBotStatusLine(Player* bot)
     return status.str();
 }
 
-
-std::string BuildManagedBotMovementDiagnosticLine(Player* bot)
-{
-    if (!bot)
-        return "PB move diag: unavailable";
-
-    return "PB move diag: " + playerbot::PvpClassActions::GetLastMovementDiagnostic(bot);
-}
-
 std::string BuildManagedBotScmQueueDiagnosticLine(Player* bot)
 {
     if (!bot)
@@ -447,8 +438,7 @@ public:
             return;
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
-
-        receiver->Whisper(BuildManagedBotMovementDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(receiver), LANG_UNIVERSAL, sender);
 
         receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
