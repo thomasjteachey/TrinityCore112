@@ -1855,6 +1855,23 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     }
                 }
                 IssueRangedApproachMovement(player, approachTarget, desiredRange);
+                if (approachTarget)
+                {
+                    float const postIssueDistance = player->GetDistance(approachTarget);
+                    if (!player->isMoving() && postIssueDistance > (desiredRange + 1.0f))
+                    {
+                        MotionMaster* motionMaster = player->GetMotionMaster();
+                        if (motionMaster)
+                        {
+                            Position const forcedDestination = BuildFollowDestination(player, approachTarget, std::max(1.0f, desiredRange - 2.0f));
+                            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                            motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, forcedDestination), true);
+                            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                                "ReachSpellRange post-exec forced point move: guid={} target={} desiredRange={} distance={}.",
+                                player->GetGUID().ToString(), approachTarget->GetGUID().ToString(), desiredRange, postIssueDistance);
+                        }
+                    }
+                }
             }
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
