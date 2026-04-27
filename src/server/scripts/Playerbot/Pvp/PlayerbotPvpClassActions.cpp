@@ -1825,6 +1825,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         {
             case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
             {
+                EnsureActiveChaseTracksTarget(player, movementTarget);
                 IssueMeleeApproachMovement(player, movementTarget);
             }
                 break;
@@ -1857,6 +1858,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                         desiredRange = std::min(desiredRange, closingRange);
                     }
                 }
+                EnsureActiveChaseTracksTarget(player, approachTarget);
                 IssueRangedApproachMovement(player, approachTarget, desiredRange);
                 if (approachTarget)
                 {
