@@ -8712,15 +8712,9 @@ void ObjectMgr::LoadCreatureQuestEnders()
     }
 }
 
-void QuestRelationResult::Iterator::_skip()
-{
-    while ((_it != _end) && !Quest::IsTakingQuestEnabled(_it->second))
-        ++_it;
-}
-
 bool QuestRelationResult::HasQuest(uint32 questId) const
 {
-    return (std::find_if(_begin, _end, [questId](QuestRelations::value_type const& pair) { return (pair.second == questId); }) != _end) && (!_onlyActive || Quest::IsTakingQuestEnabled(questId));
+    return std::find(_questIds.begin(), _questIds.end(), questId) != _questIds.end();
 }
 
 void ObjectMgr::LoadReservedPlayersNames()

@@ -31,6 +31,66 @@
 
 namespace MMAP
 {
+    namespace
+    {
+        bool ParseMapFileName(std::string const& fileName, uint32& mapID, uint32& tileY, uint32& tileX)
+        {
+            std::string stem = fileName;
+            std::string::size_type dotPos = stem.find('.');
+            if (dotPos != std::string::npos)
+                stem = stem.substr(0, dotPos);
+
+            if (stem.size() < 5)
+                return false;
+
+            std::string mapPart = stem.substr(0, stem.size() - 4);
+            std::string tileYPart = stem.substr(stem.size() - 4, 2);
+            std::string tileXPart = stem.substr(stem.size() - 2, 2);
+
+            mapID = uint32(std::atoi(mapPart.c_str()));
+            tileY = uint32(std::atoi(tileYPart.c_str()));
+            tileX = uint32(std::atoi(tileXPart.c_str()));
+            return true;
+        }
+
+        bool ParseVMapTreeFileName(std::string const& fileName, uint32& mapID)
+        {
+            std::string stem = fileName;
+            std::string::size_type dotPos = stem.find('.');
+            if (dotPos != std::string::npos)
+                stem = stem.substr(0, dotPos);
+
+            if (stem.empty())
+                return false;
+
+            mapID = uint32(std::atoi(stem.c_str()));
+            return true;
+        }
+
+        bool ParseVMapTileFileName(std::string const& fileName, uint32& mapID, uint32& tileY, uint32& tileX)
+        {
+            std::string stem = fileName;
+            std::string::size_type dotPos = stem.find('.');
+            if (dotPos != std::string::npos)
+                stem = stem.substr(0, dotPos);
+
+            std::string::size_type firstUnderscore = stem.find('_');
+            std::string::size_type secondUnderscore = stem.find('_', firstUnderscore == std::string::npos ? firstUnderscore : firstUnderscore + 1);
+            if (firstUnderscore == std::string::npos || secondUnderscore == std::string::npos)
+                return false;
+
+            std::string mapPart = stem.substr(0, firstUnderscore);
+            std::string tileYPart = stem.substr(firstUnderscore + 1, secondUnderscore - firstUnderscore - 1);
+            std::string tileXPart = stem.substr(secondUnderscore + 1);
+            if (mapPart.empty() || tileYPart.empty() || tileXPart.empty())
+                return false;
+
+            mapID = uint32(std::atoi(mapPart.c_str()));
+            tileY = uint32(std::atoi(tileYPart.c_str()));
+            tileX = uint32(std::atoi(tileXPart.c_str()));
+            return true;
+        }
+    }
     TileBuilder::TileBuilder(MapBuilder* mapBuilder, bool skipLiquid, bool bigBaseUnit, bool debugOutput) :
         m_bigBaseUnit(bigBaseUnit),
         m_debugOutput(debugOutput),
@@ -114,13 +174,15 @@ namespace MMAP
     {
         std::vector<std::string> files;
         uint32 mapID, tileX, tileY, tileID, count = 0;
-        char filter[12];
+        char filter[32];
 
         printf("Discovering maps... ");
         getDirContents(files, "maps");
         for (uint32 i = 0; i < files.size(); ++i)
         {
-            mapID = uint32(atoi(files[i].substr(0,3).c_str()));
+            if (!ParseMapFileName(files[i], mapID, tileY, tileX))
+                continue;
+
             if (std::find(m_tiles.begin(), m_tiles.end(), mapID) == m_tiles.end())
             {
                 m_tiles.emplace_back(MapTiles(mapID, new std::set<uint32>));
@@ -132,7 +194,9 @@ namespace MMAP
         getDirContents(files, "vmaps", "*.vmtree");
         for (uint32 i = 0; i < files.size(); ++i)
         {
-            mapID = uint32(atoi(files[i].substr(0,3).c_str()));
+            if (!ParseVMapTreeFileName(files[i], mapID))
+                continue;
+
             if (std::find(m_tiles.begin(), m_tiles.end(), mapID) == m_tiles.end())
             {
                 m_tiles.emplace_back(MapTiles(mapID, new std::set<uint32>));
@@ -148,26 +212,28 @@ namespace MMAP
             std::set<uint32>* tiles = (*itr).m_tiles;
             mapID = (*itr).m_mapId;
 
-            sprintf(filter, "%03u*.vmtile", mapID);
+            sprintf(filter, "%u*.vmtile", mapID);
             files.clear();
             getDirContents(files, "vmaps", filter);
             for (uint32 i = 0; i < files.size(); ++i)
             {
-                tileX = uint32(atoi(files[i].substr(7,2).c_str()));
-                tileY = uint32(atoi(files[i].substr(4,2).c_str()));
+                if (!ParseVMapTileFileName(files[i], mapID, tileY, tileX))
+                    continue;
+
                 tileID = StaticMapTree::packTileID(tileY, tileX);
 
                 tiles->insert(tileID);
                 count++;
             }
 
-            sprintf(filter, "%03u*", mapID);
+            sprintf(filter, "%u*", mapID);
             files.clear();
             getDirContents(files, "maps", filter);
             for (uint32 i = 0; i < files.size(); ++i)
             {
-                tileY = uint32(atoi(files[i].substr(3,2).c_str()));
-                tileX = uint32(atoi(files[i].substr(5,2).c_str()));
+                if (!ParseMapFileName(files[i], mapID, tileY, tileX))
+                    continue;
+
                 tileID = StaticMapTree::packTileID(tileX, tileY);
 
                 if (tiles->insert(tileID).second)
