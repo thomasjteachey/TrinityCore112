@@ -392,35 +392,38 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
-    // Near the maximum spell range edge, segmented strict MovePoint orders can
-    // install POINT_MOTION_TYPE but immediately report moving=no. That creates
-    // the visible loop: reach_spell + last_exec=move_executed + motion=point.
-    // For this small close-in correction, use an intentionally deeper chase
-    // radius so MotionMaster cannot treat the bot as already close enough.
-    if (strictPathing && nearRangeEdge && targetLos)
+    // For target-relative ranged approach, do NOT use MovePoint here.
+    // MoveChase/MoveFollow keep the movement generator attached to the target
+    // and route through the server movement/pathing stack instead of pushing a
+    // raw destination that can ignore battleground walls/barriers.
+    //
+    // The near-edge bug is that MoveChase(target, 27) can decide that 29-30y is
+    // "close enough" after hitbox/tolerance math. Solve that by issuing the
+    // same target-relative generator with a deeper desired range for this tick.
+    if (strictPathing && nearRangeEdge)
     {
-        float const nudgeRange = std::max(1.0f, safeDistance - 5.0f);
+        float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
+
+        if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
+            player->Attack(target, false);
+
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
         if (targetAttackable)
-        {
-            if (player->GetVictim() != target || !player->IsInCombat())
-                player->Attack(target, false);
-            motionMaster->MoveChase(target, nudgeRange);
-        }
+            motionMaster->MoveChase(target, forcedRange);
         else
-        {
-            motionMaster->MoveFollow(target, nudgeRange, player->GetFollowAngle());
-        }
+            motionMaster->MoveFollow(target, forcedRange, player->GetFollowAngle());
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
         stallState.lastSampleMs = GameTime::GetGameTimeMS();
+        stallState.lastFallbackMs = stallState.lastSampleMs;
         stallState.stagnantSamples = 0;
 
         std::ostringstream diag;
-        diag << "ranged_near_edge_nudge"
+        diag << "near_edge_chase_follow_nudge"
              << " dist=" << currentDistance
              << " desired=" << safeDistance
-             << " nudge=" << nudgeRange
+             << " forced_range=" << forcedRange
              << " los=" << (targetLos ? "yes" : "no")
              << " attackable=" << (targetAttackable ? "yes" : "no")
              << " moving_before=" << (currentlyMoving ? "yes" : "no")
@@ -430,48 +433,16 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         SetLastMovementDebugStatus(player, diag.str());
 
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach near-edge nudge: guid={} target={} desiredRange={} nudgeRange={} currentDistance={} los={} attackable={} movingBefore={} motionBefore={} motionAfter={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, nudgeRange, currentDistance, targetLos, targetAttackable, currentlyMoving, static_cast<uint32>(initialMotionType), static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()));
+            "Ranged near-edge chase/follow nudge: guid={} target={} currentDistance={} desiredRange={} forcedRange={} los={} attackable={} movingBefore={} motionBefore={} motionAfter={} movingAfter={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, forcedRange, targetLos, targetAttackable, currentlyMoving, static_cast<uint32>(initialMotionType), static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()), player->isMoving());
         return;
     }
 
-    if (strictPathing && IssueStrictHumanFollow(player, target, safeDistance))
-    {
-        float const postStrictDistance = player->GetDistance(target);
-        stallState.stagnantSamples = 0;
-        stallState.targetGuid = target->GetGUID();
-        stallState.lastDistance = postStrictDistance;
-        stallState.lastSampleMs = GameTime::GetGameTimeMS();
-
-        std::ostringstream diag;
-        diag << "strict_point_issued"
-             << " dist=" << postStrictDistance
-             << " desired=" << safeDistance
-             << " los=" << (targetLos ? "yes" : "no")
-             << " attackable=" << (targetAttackable ? "yes" : "no")
-             << " moving_after=" << (player->isMoving() ? "yes" : "no")
-             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType());
-        SetLastMovementDebugStatus(player, diag.str());
-
-        // Strict-human segmented movement uses point generators. If that order
-        // does not result in movement while still far outside desired range,
-        // immediately fall through to generic chase/follow recovery.
-        if (player->isMoving() || postStrictDistance <= (safeDistance + 1.0f))
-            return;
-
-        TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Strict ranged follow issued but stalled this tick: guid={} target={} desiredRange={} currentDistance={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postStrictDistance);
-    }
-
-    // Fallback: if strict-human segment pathing cannot resolve a route this
-    // tick (common around dynamic battleground geometry), still issue regular
-    // chase/follow so the bot does not idle while out of range.
     if (strictPathing)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Strict ranged follow fallback to generic movement: guid={} target={} desiredRange={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance);
+            "Strict ranged approach using target-relative chase/follow only: guid={} target={} desiredRange={} currentDistance={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
     bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f);
@@ -512,9 +483,9 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     }
 
     // Some battleground edge-cases keep a stale chase/follow generator active
-    // without producing displacement while we are still out of range. Fall
-    // back to a direct MovePoint so "reach spell" does not loop forever with
-    // no actual motion.
+    // without producing displacement while we are still out of range. Recover
+    // by clearing and reissuing a target-relative chase/follow with a deeper
+    // range, not by using MovePoint.
     float const postIssueDistance = player->GetDistance(target);
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const targetChanged = stallState.targetGuid != target->GetGUID();
@@ -772,15 +743,18 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
         context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::ReachSpellRange ||
         context.movementDirective == playerbot::PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell;
 
-    // If we intended to travel but currently have no movement momentum, do not
-    // suppress directive execution. This keeps ranged spacing directives from
-    // idling when another system leaves us stationary with either idle or stale
-    // chase/follow generators between ticks.
+    // If we intended to travel but currently have no active travel generator,
+    // do not suppress directive execution. However, if CHASE/FOLLOW/POINT is
+    // already installed, allow the normal short throttle below to fire.
+    // Constantly clearing/reissuing a movement generator every AI tick can keep
+    // the bot in the exact visible state we are diagnosing: motion=chase/point
+    // with moving=no and no displacement. Give newly issued movement a few
+    // ticks to start before replacing it.
     if (isTravelDirective && !player->isMoving())
     {
         MotionMaster const* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const movementType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-        if (movementType == IDLE_MOTION_TYPE || movementType == CHASE_MOTION_TYPE || movementType == FOLLOW_MOTION_TYPE || movementType == POINT_MOTION_TYPE)
+        if (movementType == IDLE_MOTION_TYPE)
             return false;
     }
 
@@ -1391,10 +1365,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
         {
             float const desiredRange = std::max(1.0f, maxRange - 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
         }
 
         failureReason = "out_of_range";
@@ -1414,18 +1385,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             float const desiredRange = std::max(1.0f, minRange + 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
         {
             float const desiredRange = std::max(1.0f, minRange + 1.0f);
-            if (RequiresStrictHumanPathing(player))
-                IssueStrictHumanFollow(player, target, desiredRange);
-            else
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+            player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
         }
 
         failureReason = "too_close";
@@ -1543,10 +1508,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
                 float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
-                if (RequiresStrictHumanPathing(player))
-                    IssueStrictHumanFollow(player, target, desiredRange);
-                else
-                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
             }
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
@@ -1834,6 +1796,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     {
         if (ShouldThrottleDirective(player, context))
         {
+            MovementGeneratorType const movementType = player->GetMotionMaster()
+                ? player->GetMotionMaster()->GetCurrentMovementGeneratorType()
+                : IDLE_MOTION_TYPE;
+            std::ostringstream diag;
+            diag << "directive_throttled"
+                 << " directive=" << uint32(context.movementDirective)
+                 << " moving=" << (player->isMoving() ? "yes" : "no")
+                 << " motion=" << uint32(movementType);
+            SetLastMovementDebugStatus(player, diag.str());
             SetLastExecutionStatus(player, "move_throttled");
             return true;
         }
