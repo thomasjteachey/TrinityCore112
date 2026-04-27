@@ -402,6 +402,27 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!motionMaster)
         return;
 
+    auto issuePursuitMovement = [&](float followRange)
+    {
+        float const safeFollowRange = std::max(1.0f, followRange);
+        if (player->IsValidAttackTarget(target))
+        {
+            if (player->GetVictim() != target || !player->IsInCombat())
+                player->Attack(target, false);
+
+            // Out-of-combat chase can remain visually idle on some stale
+            // victim/combat snapshots. Prefer follow until combat is active,
+            // then hand off to chase once engagement is established.
+            if (player->IsInCombat() && player->GetVictim() == target)
+                motionMaster->MoveChase(target, safeFollowRange);
+            else
+                motionMaster->MoveFollow(target, safeFollowRange, player->GetFollowAngle());
+            return;
+        }
+
+        motionMaster->MoveFollow(target, safeFollowRange, player->GetFollowAngle());
+    };
+
     float const currentDistance = player->GetDistance(target);
     bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f);
     if (shouldForceActiveRepath)
@@ -411,18 +432,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
-    if (player->IsValidAttackTarget(target))
-    {
-        // Ensure hostile ranged approach can engage chase generators even when
-        // the bot is currently out of combat.
-        if (player->GetVictim() != target || !player->IsInCombat())
-            player->Attack(target, false);
-        motionMaster->MoveChase(target, safeDistance);
-    }
-    else
-    {
-        motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
-    }
+    issuePursuitMovement(safeDistance);
 
     // Some battleground edge-cases keep a stale chase/follow generator active
     // without producing displacement while we are still out of range. Fall
@@ -440,12 +450,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             forcedMoveIssued = IssueStrictHumanMove(player, forcedDestination, 1.5f, 0);
 
         if (!forcedMoveIssued)
-        {
-            if (player->IsValidAttackTarget(target))
-                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
-            else
-                motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
-        }
+            issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
 
         stallState.lastFallbackMs = nowMs;
         stallState.stagnantSamples = 0;
@@ -481,10 +486,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             // If we are already in a stalled point movement, prefer reissuing
             // chase/follow instead of chaining another point destination.
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
-            if (player->IsValidAttackTarget(target))
-                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
-            else
-                motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+            issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
 
             stallState.lastFallbackMs = nowMs;
             TC_LOG_DEBUG("playerbots.pvp.classspell",
@@ -496,10 +498,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-        if (player->IsValidAttackTarget(target))
-            motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
-        else
-            motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+        issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
         stallState.lastFallbackMs = nowMs;
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
