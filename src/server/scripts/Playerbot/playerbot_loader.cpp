@@ -146,6 +146,7 @@ std::string BuildManagedBotStatusLine(Player* bot)
     playerbot::RandomBotParticipationHooks const hooks = playerbot::PvpCore::BuildRandomBotParticipationHooks(bot, values);
     Unit* directiveTarget = classContext.movementTargetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, classContext.movementTargetGuid);
     std::string const lastClassExecutionStatus = playerbot::PvpClassActions::GetLastExecutionStatus(bot);
+    playerbot::PvpClassActions::RangedApproachDiagnostic const rangedApproachDiag = playerbot::PvpClassActions::GetRangedApproachDiagnostic(bot);
     bool const lifecycleEnabled = lifecycleContext.lifecycleEnabled;
     bool const managedRandomBot = playerbot::IsManagedRandomBot(bot);
     bool const canFollowCommands = bot->IsAlive() &&
@@ -189,6 +190,8 @@ std::string BuildManagedBotStatusLine(Player* bot)
            << " hooks(bg=" << (hooks.battlegroundParticipationHook ? "on" : "off")
            << ",arena=" << (hooks.arenaParticipationHook ? "on" : "off") << ")"
            << " last_exec=" << lastClassExecutionStatus
+           << " move_priority=" << classContext.movementPriority
+           << " move_target_is_spell_target=" << (!classContext.targetGuid.IsEmpty() && classContext.targetGuid == classContext.movementTargetGuid ? "yes" : "no")
            << " strict_pathing=" << (bot->InBattleground() ? "on" : "off")
            << " motion=" << uint32(motionType)
            << "/" << ToString(motionType)
@@ -223,8 +226,10 @@ std::string BuildManagedBotStatusLine(Player* bot)
 
     if (directiveTarget)
     {
+        float const directiveGap = bot->GetDistance(directiveTarget) - classContext.movementFollowRange;
         status << " directive_target=" << directiveTarget->GetName()
                << " directive_target_dist=" << bot->GetDistance(directiveTarget)
+               << " directive_gap=" << directiveGap
                << " directive_target_los=" << (bot->IsWithinLOSInMap(directiveTarget) ? "yes" : "no")
                << " directive_target_attackable=" << (bot->IsValidAttackTarget(directiveTarget) ? "yes" : "no");
     }
@@ -243,6 +248,24 @@ std::string BuildManagedBotStatusLine(Player* bot)
     else
     {
         status << " selected=none";
+    }
+
+    if (rangedApproachDiag.valid)
+    {
+        status << " approach_diag_target=" << rangedApproachDiag.targetGuid.ToString()
+               << " approach_diag_desired=" << rangedApproachDiag.desiredRange
+               << " approach_diag_dist=" << rangedApproachDiag.currentDistance
+               << " approach_diag_gap=" << (rangedApproachDiag.currentDistance - rangedApproachDiag.desiredRange)
+               << " approach_diag_stagnant=" << uint32(rangedApproachDiag.stagnantSamples)
+               << " approach_diag_last_sample_ms=" << rangedApproachDiag.lastSampleMs
+               << " approach_diag_last_fallback_ms=" << rangedApproachDiag.lastFallbackMs
+               << " approach_diag_motion=" << uint32(rangedApproachDiag.motionType)
+               << "/" << ToString(static_cast<MovementGeneratorType>(rangedApproachDiag.motionType))
+               << " approach_diag_moving=" << (rangedApproachDiag.moving ? "yes" : "no");
+    }
+    else
+    {
+        status << " approach_diag=none";
     }
 
     return status.str();
