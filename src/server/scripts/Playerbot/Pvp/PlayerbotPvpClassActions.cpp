@@ -1852,6 +1852,34 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
     }
 }
 
+void LogPlayerbotStopMovingRequest(Player const* player, char const* reason, uint32 spellId = 0)
+{
+    if (!player)
+        return;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    std::ostringstream diag;
+    diag << "stop_moving_request"
+         << " reason=" << (reason ? reason : "unknown")
+         << " spell=" << spellId
+         << " motion=" << uint32(motionType)
+         << " moving=" << (player->isMoving() ? "yes" : "no")
+         << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+         << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+         << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+         << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
+    if (player->movespline)
+        diag << " spline_init=" << (player->movespline->Initialized() ? "yes" : "no")
+             << " spline_done=" << (player->movespline->Finalized() ? "yes" : "no")
+             << " spline_started=" << (player->movespline->HasStarted() ? "yes" : "no")
+             << " spline_idx=" << player->movespline->currentPathIdx()
+             << " spline_duration=" << player->movespline->Duration()
+             << " spline_velocity=" << player->movespline->Velocity();
+    SetLastMovementDebugStatus(player, diag.str());
+    TC_LOG_DEBUG("playerbots.pvp.motion", "PB StopMoving request: bot={} guid={} {}", player->GetName(), player->GetGUID().ToString(), diag.str());
+}
+
 void ForcePlayerbotDismount(Player* player)
 {
     if (!player)
@@ -2527,6 +2555,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
     if (spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell)
     {
+        LogPlayerbotStopMovingRequest(player, "cast_time_or_autorepeat", resolvedSpellId);
         player->StopMoving();
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
         {
@@ -2610,6 +2639,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             ObjectGuid const hunterGuid = player->GetGUID();
             ObjectGuid const pressureTargetGuid = pressureTarget->GetGUID();
 
+            LogPlayerbotStopMovingRequest(player, "hunter_feign_trap_pause", context.spellId);
             player->StopMoving();
             player->SetSelection(ObjectGuid::Empty);
 

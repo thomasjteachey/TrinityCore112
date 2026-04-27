@@ -59,6 +59,34 @@ inline bool IsStatic(MovementGenerator* movement)
     return (movement == GetIdleMovementGenerator());
 }
 
+bool ShouldLogPlayerbotMotionMaster(Unit const* owner)
+{
+    Player const* player = owner ? owner->ToPlayer() : nullptr;
+    return player && player->InBattleground() && player->GetName().rfind("Bot", 0) == 0;
+}
+
+void LogPlayerbotMotionMasterTrace(Unit const* owner, char const* phase, MovementGenerator const* movement = nullptr, MovementSlot slot = MAX_MOTION_SLOT)
+{
+    if (!ShouldLogPlayerbotMotionMaster(owner))
+        return;
+
+    Player const* player = owner->ToPlayer();
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    MovementGenerator const* top = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    MovementGeneratorType const currentType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : MAX_MOTION_TYPE;
+
+    TC_LOG_DEBUG("playerbots.pvp.motion",
+        "PB MotionMaster trace: phase={} bot={} guid={} map={} pos=({}, {}, {}) slot={} size={} current_type={} top_type={} top_flags={} movement_type={} movement_flags={} movement_base_state={} moving={} chase_move={} follow_move={} not_move={} root={} stunned={} casting_prevent={} spline_init={} spline_done={} spline_started={} spline_idx={} spline_duration={} spline_velocity={}",
+        phase ? phase : "unknown", player->GetName(), player->GetGUID().ToString(), player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        uint32(slot), motionMaster ? motionMaster->Size() : 0, uint32(currentType), top ? uint32(top->GetMovementGeneratorType()) : 9999, top ? uint32(top->Flags) : 0,
+        movement ? uint32(movement->GetMovementGeneratorType()) : 9999, movement ? uint32(movement->Flags) : 0, movement ? movement->BaseUnitState : 0,
+        player->isMoving(), player->HasUnitState(UNIT_STATE_CHASE_MOVE), player->HasUnitState(UNIT_STATE_FOLLOW_MOVE), player->HasUnitState(UNIT_STATE_NOT_MOVE),
+        player->HasUnitState(UNIT_STATE_ROOT), player->HasUnitState(UNIT_STATE_STUNNED), player->IsMovementPreventedByCasting(),
+        player->movespline && player->movespline->Initialized(), player->movespline ? player->movespline->Finalized() : true,
+        player->movespline && player->movespline->HasStarted(), player->movespline ? player->movespline->currentPathIdx() : -1,
+        player->movespline ? player->movespline->Duration() : 0, player->movespline ? player->movespline->Velocity() : 0.0f);
+}
+
 inline void MovementGeneratorPointerDeleter(MovementGenerator* a)
 {
     if (a != nullptr && !IsStatic(a))
@@ -430,6 +458,7 @@ void MotionMaster::Remove(MovementGeneratorType type, MovementSlot slot/* = MOTI
 
 void MotionMaster::Clear()
 {
+    LogPlayerbotMotionMasterTrace(_owner, "clear_all_request");
     if (HasFlag(MOTIONMASTER_FLAG_DELAYED))
     {
         DelayedActionDefine action = [this]()
@@ -446,6 +475,7 @@ void MotionMaster::Clear()
 
 void MotionMaster::Clear(MovementSlot slot)
 {
+    LogPlayerbotMotionMasterTrace(_owner, "clear_slot_request", nullptr, slot);
     if (IsInvalidMovementSlot(slot))
         return;
 
@@ -1115,6 +1145,7 @@ void MotionMaster::DirectInitialize()
 
 void MotionMaster::DirectClear()
 {
+    LogPlayerbotMotionMasterTrace(_owner, "direct_clear_enter");
     // First delete Top
     if (!_generators.empty())
         Pop(true, false);
@@ -1154,6 +1185,7 @@ void MotionMaster::DirectClear(std::function<bool(MovementGenerator*)> const& fi
 
 void MotionMaster::DirectAdd(MovementGenerator* movement, MovementSlot slot/* = MOTION_SLOT_ACTIVE*/)
 {
+    LogPlayerbotMotionMasterTrace(_owner, "direct_add_enter", movement, slot);
 /*
     if (MovementGenerator* curr = _slot[slot])
     {
@@ -1228,6 +1260,7 @@ void MotionMaster::DirectAdd(MovementGenerator* movement, MovementSlot slot/* = 
 
 void MotionMaster::Delete(MovementGenerator* movement, bool active, bool movementInform)
 {
+    LogPlayerbotMotionMasterTrace(_owner, active ? "delete_active_enter" : "delete_inactive_enter", movement);
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::Delete: deleting generator (Priority: {}, Flags: {}, BaseUnitState: {}, Type: {}), owner: '{}'",
         movement->Priority, movement->Flags, movement->BaseUnitState, movement->GetMovementGeneratorType(), _owner->GetGUID().ToString());
 
@@ -1238,6 +1271,7 @@ void MotionMaster::Delete(MovementGenerator* movement, bool active, bool movemen
 
 void MotionMaster::DeleteDefault(bool active, bool movementInform)
 {
+    LogPlayerbotMotionMasterTrace(_owner, active ? "delete_default_active_enter" : "delete_default_inactive_enter", _defaultGenerator.get());
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::DeleteDefault: deleting generator (Priority: {}, Flags: {}, BaseUnitState: {}, Type: {}), owner: '{}'",
         _defaultGenerator->Priority, _defaultGenerator->Flags, _defaultGenerator->BaseUnitState, _defaultGenerator->GetMovementGeneratorType(), _owner->GetGUID().ToString());
 

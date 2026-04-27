@@ -10683,19 +10683,52 @@ MovementGeneratorType Unit::GetDefaultMovementType() const
     return IDLE_MOTION_TYPE;
 }
 
+namespace
+{
+bool ShouldLogPlayerbotMotionStop(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    return player && player->InBattleground() && player->GetName().rfind("Bot", 0) == 0;
+}
+
+void LogPlayerbotStopMovingTrace(Unit const* unit, char const* phase)
+{
+    if (!ShouldLogPlayerbotMotionStop(unit))
+        return;
+
+    Player const* player = unit->ToPlayer();
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+    TC_LOG_DEBUG("playerbots.pvp.motion",
+        "PB StopMoving trace: phase={} bot={} guid={} map={} pos=({}, {}, {}) motion={} moving={} chase_move={} follow_move={} not_move={} root={} stunned={} casting_prevent={} spline_init={} spline_done={} spline_started={} spline_idx={} spline_duration={} spline_velocity={}",
+        phase ? phase : "unknown", player->GetName(), player->GetGUID().ToString(), player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        uint32(motionType), player->isMoving(), player->HasUnitState(UNIT_STATE_CHASE_MOVE), player->HasUnitState(UNIT_STATE_FOLLOW_MOVE), player->HasUnitState(UNIT_STATE_NOT_MOVE),
+        player->HasUnitState(UNIT_STATE_ROOT), player->HasUnitState(UNIT_STATE_STUNNED), player->IsMovementPreventedByCasting(),
+        player->movespline && player->movespline->Initialized(), player->movespline ? player->movespline->Finalized() : true,
+        player->movespline && player->movespline->HasStarted(), player->movespline ? player->movespline->currentPathIdx() : -1,
+        player->movespline ? player->movespline->Duration() : 0, player->movespline ? player->movespline->Velocity() : 0.0f);
+}
+}
+
 void Unit::StopMoving()
 {
+    LogPlayerbotStopMovingTrace(this, "enter");
     ClearUnitState(UNIT_STATE_MOVING);
 
     // not need send any packets if not in world or not moving
     if (!IsInWorld() || movespline->Finalized())
+    {
+        LogPlayerbotStopMovingTrace(this, !IsInWorld() ? "exit_not_in_world" : "exit_spline_finalized");
         return;
+    }
 
     // Update position now since Stop does not start a new movement that can be updated later
     if (movespline->HasStarted())
         UpdateSplinePosition();
     Movement::MoveSplineInit init(this);
     init.Stop();
+    LogPlayerbotStopMovingTrace(this, "after_stop");
 }
 
 void Unit::PauseMovement(uint32 timer/* = 0*/, uint8 slot/* = 0*/, bool forced/* = true*/)
