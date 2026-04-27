@@ -37,7 +37,7 @@ public:
     static bool IsCasterSpellCooldownActive(Player const* player, uint32 spellId);
     static void RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown);
     static std::string GetLastExecutionStatus(Player const* player);
-    static std::string GetLastExecutionDiagnostic(Player const* player);
+    static std::string GetLastMovementDiagnostic(Player const* player);
 };
 }
 
