@@ -779,7 +779,7 @@ void IssueStealthOpenerMovement(Player* player, Unit* target)
     SetLastMovementDebugStatus(player, diag.str());
 }
 
-void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance)
+void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance, bool forceMovementWhenAlreadyInRange = false, char const* forcedReason = nullptr)
 {
     if (!player || !target)
         return;
@@ -803,13 +803,29 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
     RangedApproachStallState& stallState = stallStateByGuid[player->GetGUID().GetRawValue()];
 
-    float const safeDistance = std::max(1.0f, desiredDistance);
+    float const requestedSafeDistance = std::max(1.0f, desiredDistance);
     float const currentDistance = player->GetDistance(target);
     bool const targetLos = player->IsWithinLOSInMap(target);
     bool const targetAttackable = player->IsValidAttackTarget(target);
     MovementGeneratorType const initialMotionType = motionMaster->GetCurrentMovementGeneratorType();
     bool const currentlyMoving = player->isMoving();
     bool const strictPathing = RequiresStrictHumanPathing(player);
+
+    // Important: SPELL_FAILED_LINE_OF_SIGHT is more authoritative than the
+    // generic IsWithinLOSInMap() diagnostic. On custom BG maps/vmaps the simple
+    // LOS check can say yes while Spell::CheckCast still rejects the cast. In
+    // that case do not treat "already in range" as cast-ready; force a small
+    // target-relative reposition by asking Chase/Follow for a range inside our
+    // current distance. This keeps the movement pathing-aware and avoids raw
+    // MovePoint wall/barrier shoves.
+    float safeDistance = requestedSafeDistance;
+    bool const forcedInRangeLosRecovery = forceMovementWhenAlreadyInRange && currentDistance <= (requestedSafeDistance + 0.25f);
+    if (forcedInRangeLosRecovery)
+    {
+        float const forcedCloserDistance = currentDistance > 4.0f ? (currentDistance - 3.0f) : (currentDistance * 0.5f);
+        safeDistance = std::max(1.0f, std::min(requestedSafeDistance, forcedCloserDistance));
+    }
+
     bool const nearRangeEdge = currentDistance > (safeDistance + 1.0f) && currentDistance <= (safeDistance + 8.0f);
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
@@ -817,7 +833,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const movementGeneratorHasNotLaunched = !player->isMoving() && !player->HasUnitState(UNIT_STATE_CHASE_MOVE) && !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
     uint32 const lastIssueAgeMs = sameStallTarget && stallState.lastIssueMs != 0 && nowMs >= stallState.lastIssueMs ? nowMs - stallState.lastIssueMs : 0;
 
-    if (targetLos && currentDistance <= (safeDistance + 0.25f))
+    if (!forceMovementWhenAlreadyInRange && targetLos && currentDistance <= (safeDistance + 0.25f))
     {
         bool const clearedStale = IsStaleTargetRelativeMotion(player);
         if (clearedStale)
@@ -901,7 +917,10 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         std::ostringstream extra;
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
-              << " issue_age_ms=" << lastIssueAgeMs;
+              << " issue_age_ms=" << lastIssueAgeMs
+              << " force_in_range=" << (forceMovementWhenAlreadyInRange ? "yes" : "no")
+              << " forced_reason=" << (forcedReason ? forcedReason : "none")
+              << " requested_edge=" << requestedSafeDistance;
         AppendMotionPrimeDiag(extra, primeResult);
         AppendProbeDiag(extra, "chase_probe", chaseProbe);
         AppendProbeDiag(extra, "follow_probe", followProbe);
@@ -944,9 +963,12 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     {
         std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, "generic_ranged_move",
-            safeDistance, genericMoveRange, targetLos, targetAttackable, shouldForceActiveRepath, initialMotionType,
-            GetTargetRelativeRangedMoveResultLabel(genericMoveResult));
+        diag << BuildRangedMovementDiag(player, target, forceMovementWhenAlreadyInRange ? "generic_forced_los_recovery_move" : "generic_ranged_move",
+            forceMovementWhenAlreadyInRange ? requestedSafeDistance : safeDistance, genericMoveRange, targetLos, targetAttackable, shouldForceActiveRepath, initialMotionType,
+            GetTargetRelativeRangedMoveResultLabel(genericMoveResult))
+             << " force_in_range=" << (forceMovementWhenAlreadyInRange ? "yes" : "no")
+             << " forced_reason=" << (forcedReason ? forcedReason : "none")
+             << " requested_edge=" << requestedSafeDistance;
         AppendMotionPrimeDiag(diag, genericPrimeResult);
         SetLastMovementDebugStatus(player, diag.str());
     }
@@ -1847,7 +1869,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 float const desiredRange = (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
                     ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
                     : ComputeLosRecoveryRange(player, target, maxRange);
-                IssueRangedApproachMovement(player, target, desiredRange);
+                IssueRangedApproachMovement(player, target, desiredRange, true, "precast_generic_no_los");
             }
         }
 
@@ -2038,7 +2060,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     float const desiredRange = (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
                         ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
                         : ComputeLosRecoveryRange(player, target, maxRange);
-                    IssueRangedApproachMovement(player, target, desiredRange);
+                    IssueRangedApproachMovement(player, target, desiredRange, true, "cast_failed_spell_los");
                 }
             }
         }
@@ -2494,16 +2516,17 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 }
 
                 SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
-                if (spellInfo && IsSpellReadyAtCurrentPosition(player, recoveryTarget, spellInfo, context.targetMode))
-                    ClearStaleTargetRelativeMotionForCast(player, "los_recovery_skipped_cast_ready");
-                else
-                {
-                    float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
-                    bool const enemyMeleeSpacing =
+                float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
+                bool const genericReady = spellInfo && IsSpellReadyAtCurrentPosition(player, recoveryTarget, spellInfo, context.targetMode);
+                bool const enemyMeleeSpacing =
                     context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
                     IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
                     maxRange > 0.0f && maxRange <= 5.5f;
 
+                // Do not skip LOS recovery just because IsWithinLOSInMap() says
+                // the target is visible. The previous server cast result was
+                // SPELL_FAILED_LINE_OF_SIGHT, and Spell::CheckCast can disagree
+                // with the generic debug LOS check on custom map/vmap geometry.
                 if (enemyMeleeSpacing)
                     IssueMeleeApproachMovement(player, recoveryTarget);
                 else
@@ -2511,12 +2534,12 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
                         ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
                         : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
-                    IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
+                    IssueRangedApproachMovement(player, recoveryTarget, desiredRange, true,
+                        genericReady ? "previous_spell_los_generic_ready" : "previous_spell_los_generic_blocked");
                 }
 
                 SetLastExecutionStatus(player, "move_recover_los");
                 return true;
-                }
             }
         }
     }
