@@ -526,7 +526,6 @@ void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, ch
              << ' ' << pfx << "_spline_cyclic=" << (player->movespline->isCyclic() ? "yes" : "no")
              << ' ' << pfx << "_spline_idx=" << player->movespline->currentPathIdx()
              << ' ' << pfx << "_spline_duration=" << player->movespline->Duration()
-             << ' ' << pfx << "_spline_time=" << player->movespline->timePassed()
              << ' ' << pfx << "_spline_velocity=" << player->movespline->Velocity();
     }
     else
