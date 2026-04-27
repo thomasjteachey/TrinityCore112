@@ -371,8 +371,7 @@ enum class TargetRelativeRangedMoveResult : uint8
 {
     None,
     ChaseIssued,
-    FollowIssued,
-    ChaseIdleFollowIssued
+    FollowIssued
 };
 
 char const* GetTargetRelativeRangedMoveResultLabel(TargetRelativeRangedMoveResult result)
@@ -383,15 +382,13 @@ char const* GetTargetRelativeRangedMoveResultLabel(TargetRelativeRangedMoveResul
             return "chase";
         case TargetRelativeRangedMoveResult::FollowIssued:
             return "follow";
-        case TargetRelativeRangedMoveResult::ChaseIdleFollowIssued:
-            return "chase_idle_follow";
         case TargetRelativeRangedMoveResult::None:
         default:
             return "none";
     }
 }
 
-TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player, Unit* target, float desiredEdgeDistance, bool targetAttackable)
+TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player, Unit* target, float desiredEdgeDistance, bool targetAttackable, bool forceFollow = false)
 {
     if (!player || !target)
         return TargetRelativeRangedMoveResult::None;
@@ -402,26 +399,14 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
 
     float const safeDistance = std::max(0.5f, desiredEdgeDistance);
 
-    if (targetAttackable)
+    // Important: do not inspect player->isMoving() immediately after MoveChase
+    // or MoveFollow. Those generators normally set CHASE_MOVE/FOLLOW_MOVE from
+    // their next Update() call, not synchronously from MoveChase()/MoveFollow().
+    // Immediate "chase idle -> follow" fallbacks can therefore clear a valid
+    // newly queued generator before it ever gets a tick to launch its spline.
+    if (targetAttackable && !forceFollow)
     {
         motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(safeDistance));
-
-        // Some playerbot ranged states install CHASE_MOTION_TYPE but never set
-        // UNIT_STATE_CHASE_MOVE / movement spline, leaving the bot visibly idle
-        // at the 29-30y spell edge. Keep the movement target-relative, but
-        // switch to FollowMovementGenerator immediately when MoveChase fails to
-        // actually start a chase move. This still routes through the normal
-        // target-follow movement/pathing stack instead of raw MovePoint coords.
-        if (!player->isMoving() && !player->HasUnitState(UNIT_STATE_CHASE_MOVE))
-        {
-            MovementGeneratorType const afterChaseMotion = motionMaster->GetCurrentMovementGeneratorType();
-            if (afterChaseMotion == CHASE_MOTION_TYPE || afterChaseMotion == IDLE_MOTION_TYPE)
-                motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
-            motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
-            return TargetRelativeRangedMoveResult::ChaseIdleFollowIssued;
-        }
-
         return TargetRelativeRangedMoveResult::ChaseIssued;
     }
 
@@ -483,9 +468,12 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     {
         ObjectGuid targetGuid = ObjectGuid::Empty;
         float lastDistance = 0.0f;
+        float lastIssuedRange = 0.0f;
         uint32 lastSampleMs = 0;
         uint32 lastFallbackMs = 0;
+        uint32 lastIssueMs = 0;
         uint8 stagnantSamples = 0;
+        uint8 lastIssuedMode = 0; // 1=chase, 2=follow
     };
 
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
@@ -499,6 +487,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const currentlyMoving = player->isMoving();
     bool const strictPathing = RequiresStrictHumanPathing(player);
     bool const nearRangeEdge = currentDistance > (safeDistance + 1.0f) && currentDistance <= (safeDistance + 8.0f);
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
+    bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
+    bool const movementGeneratorHasNotLaunched = !player->isMoving() && !player->HasUnitState(UNIT_STATE_CHASE_MOVE) && !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    uint32 const lastIssueAgeMs = sameStallTarget && stallState.lastIssueMs != 0 && nowMs >= stallState.lastIssueMs ? nowMs - stallState.lastIssueMs : 0;
 
     if (!currentlyMoving && initialMotionType == POINT_MOTION_TYPE && currentDistance > (safeDistance + 1.0f))
     {
@@ -518,29 +511,67 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // same target-relative generator with a deeper desired range for this tick.
     if (strictPathing && nearRangeEdge)
     {
-        float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
+        // Let a freshly queued Chase/Follow generator get at least one movement
+        // update before we clear/reissue it. The status line reports moving=no
+        // immediately after MoveChase/MoveFollow because the spline is launched
+        // from the movement-generator Update(), not synchronously from the API
+        // call. Clearing here every lifecycle tick can permanently starve the
+        // generator and leave the bot standing still at ~30 yards.
+        if (sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs < 900)
+        {
+            std::string diag = BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
+                safeDistance, stallState.lastIssuedRange > 0.0f ? stallState.lastIssuedRange : safeDistance,
+                targetLos, targetAttackable, false, initialMotionType,
+                stallState.lastIssuedMode == 2 ? "follow_wait" : "chase_wait");
+            std::ostringstream extra;
+            extra << diag
+                  << " issue_age_ms=" << lastIssueAgeMs
+                  << " last_mode=" << uint32(stallState.lastIssuedMode)
+                  << " last_range=" << stallState.lastIssuedRange;
+            SetLastMovementDebugStatus(player, extra.str());
+            return;
+        }
+
+        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
+        // First issue is a Chase for hostile targets. If that queued Chase has
+        // had time to update and still has not launched movement, switch to
+        // Follow. If Follow also stalls, alternate back to Chase on the next
+        // stale sample. Both are target-relative; neither is a raw MovePoint.
+        bool const forceFollow = targetAttackable && staleQueuedGenerator && initialMotionType == CHASE_MOTION_TYPE;
+        float const forcedRange = std::max(1.0f, safeDistance - (staleQueuedGenerator ? 10.0f : 8.0f));
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
             player->Attack(target, false);
 
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        TargetRelativeRangedMoveResult const moveResult = IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable);
+        TargetRelativeRangedMoveResult const moveResult = IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, forceFollow);
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
-        stallState.lastSampleMs = GameTime::GetGameTimeMS();
-        stallState.lastFallbackMs = stallState.lastSampleMs;
+        stallState.lastSampleMs = nowMs;
+        stallState.lastFallbackMs = nowMs;
+        stallState.lastIssueMs = nowMs;
+        stallState.lastIssuedRange = forcedRange;
+        stallState.lastIssuedMode = moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1;
         stallState.stagnantSamples = 0;
 
-        SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target,
-            moveResult == TargetRelativeRangedMoveResult::ChaseIdleFollowIssued ? "near_edge_chase_idle_follow_nudge" : "near_edge_chase_follow_nudge",
+        char const* label = staleQueuedGenerator
+            ? (forceFollow ? "near_edge_stale_chase_switched_to_follow" : "near_edge_stale_follow_switched_to_chase")
+            : "near_edge_chase_follow_nudge";
+
+        std::string diag = BuildRangedMovementDiag(player, target, label,
             safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType,
-            GetTargetRelativeRangedMoveResultLabel(moveResult)));
+            GetTargetRelativeRangedMoveResultLabel(moveResult));
+        std::ostringstream extra;
+        extra << diag
+              << " stale=" << (staleQueuedGenerator ? "yes" : "no")
+              << " issue_age_ms=" << lastIssueAgeMs;
+        SetLastMovementDebugStatus(player, extra.str());
 
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged near-edge edge-aware chase/follow nudge: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} issuedMode={} movingBefore={} motionBefore={} motionAfter={} movingAfter={} chaseMove={} followMove={}.",
+            "Ranged near-edge queued target-relative movement: guid={} target={} currentDistance={} desiredRange={} forcedEdgeRange={} los={} attackable={} issuedMode={} stale={} issueAgeMs={} movingBefore={} motionBefore={} motionAfter={} movingAfter={} chaseMove={} followMove={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), currentDistance, safeDistance, forcedRange, targetLos, targetAttackable,
-            GetTargetRelativeRangedMoveResultLabel(moveResult), currentlyMoving, static_cast<uint32>(initialMotionType),
+            GetTargetRelativeRangedMoveResultLabel(moveResult), staleQueuedGenerator, lastIssueAgeMs, currentlyMoving, static_cast<uint32>(initialMotionType),
             static_cast<uint32>(motionMaster->GetCurrentMovementGeneratorType()), player->isMoving(),
             player->HasUnitState(UNIT_STATE_CHASE_MOVE), player->HasUnitState(UNIT_STATE_FOLLOW_MOVE));
         return;
@@ -571,17 +602,19 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     TargetRelativeRangedMoveResult const genericMoveResult = IssueTargetRelativeRangedMovement(player, target, genericMoveRange, targetAttackable);
 
-    SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target,
-        genericMoveResult == TargetRelativeRangedMoveResult::ChaseIdleFollowIssued ? "generic_chase_idle_follow_move" : "generic_ranged_move",
+    SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target, "generic_ranged_move",
         safeDistance, genericMoveRange, targetLos, targetAttackable, shouldForceActiveRepath, initialMotionType,
         GetTargetRelativeRangedMoveResultLabel(genericMoveResult)));
+
+    stallState.lastIssueMs = nowMs;
+    stallState.lastIssuedRange = genericMoveRange;
+    stallState.lastIssuedMode = genericMoveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1;
 
     // Some battleground edge-cases keep a stale chase/follow generator active
     // without producing displacement while we are still out of range. Recover
     // by clearing and reissuing a target-relative chase/follow with a deeper
     // range, not by using MovePoint.
     float const postIssueDistance = player->GetDistance(target);
-    uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const targetChanged = stallState.targetGuid != target->GetGUID();
     bool const recentlySampled = !targetChanged && stallState.lastSampleMs != 0 && nowMs <= (stallState.lastSampleMs + 1500);
     bool const distanceStagnant = recentlySampled && std::fabs(postIssueDistance - stallState.lastDistance) < 0.35f;
