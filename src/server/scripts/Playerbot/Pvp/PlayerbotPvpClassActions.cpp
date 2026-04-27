@@ -24,6 +24,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MovementDefines.h"
+#include "MoveSpline.h"
 #include "MotionMaster.h"
 #include "Player.h"
 #include "Battleground.h"
@@ -67,6 +68,7 @@ void SetLastExecutionStatus(Player const* player, std::string const& status);
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
+void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, char const* prefix);
 
 struct LastLosCastFailureState
 {
@@ -459,9 +461,76 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.lastY = player->GetPositionY();
     state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
-    state.lastProgressMs = state.lastIssueMs;
-    state.lastPositionProgressMs = state.lastIssueMs;
+    // Do not count the act of issuing MoveChase/MoveFollow as movement progress.
+    // Progress timestamps should only update after actual distance/position
+    // improvement, otherwise the preserve logic keeps dead generators alive for
+    // several seconds with moving=no.
+    state.lastProgressMs = 0;
+    state.lastPositionProgressMs = 0;
     state.mode = mode;
+}
+
+void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, char const* prefix)
+{
+    char const* pfx = prefix ? prefix : "motion";
+    if (!player)
+    {
+        diag << ' ' << pfx << "_snapshot=player_null";
+        return;
+    }
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+    {
+        diag << ' ' << pfx << "_snapshot=mm_null";
+        return;
+    }
+
+    MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
+    MovementGenerator const* top = motionMaster->GetCurrentMovementGenerator();
+
+    diag << ' ' << pfx << "_mm_size=" << motionMaster->Size()
+         << ' ' << pfx << "_slot=" << uint32(motionMaster->GetCurrentSlot())
+         << ' ' << pfx << "_type=" << uint32(motionType)
+         << ' ' << pfx << "_top=" << (top ? "yes" : "no");
+
+    if (top)
+    {
+        diag << ' ' << pfx << "_top_type=" << uint32(top->GetMovementGeneratorType())
+             << ' ' << pfx << "_top_flags=" << uint32(top->Flags)
+             << ' ' << pfx << "_top_init=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING) ? "yes" : "no")
+             << ' ' << pfx << "_top_inited=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED) ? "yes" : "no")
+             << ' ' << pfx << "_top_speed=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING) ? "yes" : "no")
+             << ' ' << pfx << "_top_interrupt=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INTERRUPTED) ? "yes" : "no")
+             << ' ' << pfx << "_top_paused=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_PAUSED) ? "yes" : "no")
+             << ' ' << pfx << "_top_timed_paused=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_TIMED_PAUSED) ? "yes" : "no")
+             << ' ' << pfx << "_top_deact=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED) ? "yes" : "no")
+             << ' ' << pfx << "_top_final=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_FINALIZED) ? "yes" : "no")
+             << ' ' << pfx << "_top_base_state=" << top->BaseUnitState;
+    }
+
+    diag << ' ' << pfx << "_unit_moving=" << (player->isMoving() ? "yes" : "no")
+         << ' ' << pfx << "_unit_chase=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+         << ' ' << pfx << "_unit_follow=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+         << ' ' << pfx << "_unit_notmove=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+         << ' ' << pfx << "_unit_root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+         << ' ' << pfx << "_unit_stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
+         << ' ' << pfx << "_casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
+
+    if (player->movespline)
+    {
+        diag << ' ' << pfx << "_spline_init=" << (player->movespline->Initialized() ? "yes" : "no")
+             << ' ' << pfx << "_spline_done=" << (player->movespline->Finalized() ? "yes" : "no")
+             << ' ' << pfx << "_spline_started=" << (player->movespline->HasStarted() ? "yes" : "no")
+             << ' ' << pfx << "_spline_falling=" << (player->movespline->isFalling() ? "yes" : "no")
+             << ' ' << pfx << "_spline_cyclic=" << (player->movespline->isCyclic() ? "yes" : "no")
+             << ' ' << pfx << "_spline_idx=" << player->movespline->currentPathIdx()
+             << ' ' << pfx << "_spline_duration=" << player->movespline->Duration()
+             << ' ' << pfx << "_spline_time=" << player->movespline->timePassed()
+             << ' ' << pfx << "_spline_velocity=" << player->movespline->Velocity();
+    }
+    else
+        diag << ' ' << pfx << "_spline=null";
 }
 
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
@@ -514,10 +583,37 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     uint32 const distanceProgressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
     uint32 const positionProgressAgeMs = state.lastPositionProgressMs != 0 && nowMs >= state.lastPositionProgressMs ? nowMs - state.lastPositionProgressMs : 0;
 
+    MovementGenerator const* top = motionMaster->GetCurrentMovementGenerator();
+    bool const topInitPending = top && top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
+    bool const topDeactivated = top && top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    bool const generatorStarted = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    bool const movementBlocked = player->HasUnitState(UNIT_STATE_NOT_MOVE) ||
+        player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->IsMovementPreventedByCasting();
+    bool const unlaunchedTargetMotion = !generatorStarted && !topInitPending && !topDeactivated && !movementBlocked;
+
+    // Do not preserve CHASE/FOLLOW for multiple seconds if the generator never
+    // actually launches. That was the visible stuck state:
+    // motion=chase/follow, moving=no, chase_move=no, follow_move=no,
+    // reason=settle_window.
+    uint32 constexpr UnlaunchedMotionGraceMs = 650;
+    uint32 constexpr StartedButUnprovenMotionGraceMs = 1200;
     bool const inSettleWindow = ageMs < minRunMs;
+    bool const inUnlaunchedGraceWindow = ageMs < UnlaunchedMotionGraceMs;
+    bool const inStartedGraceWindow = ageMs < StartedButUnprovenMotionGraceMs;
+    bool const preserveSettle = inSettleWindow && (
+        (unlaunchedTargetMotion && inUnlaunchedGraceWindow) ||
+        (generatorStarted && inStartedGraceWindow) ||
+        topInitPending ||
+        movementBlocked);
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
-    bool const preserve = inSettleWindow || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
+    bool const preserve = preserveSettle || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
     {
@@ -540,8 +636,18 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+                 << " root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+                 << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-                 << " reason=no_position_or_distance_progress";
+                 << " top_init=" << (topInitPending ? "yes" : "no")
+                 << " top_deact=" << (topDeactivated ? "yes" : "no")
+                 << " generator_started=" << (generatorStarted ? "yes" : "no")
+                 << " movement_blocked=" << (movementBlocked ? "yes" : "no")
+                 << " unlaunched=" << (unlaunchedTargetMotion ? "yes" : "no")
+                 << " unlaunched_grace=" << (inUnlaunchedGraceWindow ? "yes" : "no")
+                 << " started_grace=" << (inStartedGraceWindow ? "yes" : "no")
+                 << " reason=" << (unlaunchedTargetMotion ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
+            AppendMotionSnapshotDiag(diag, player, "preserve_fail");
             *reasonOut = diag.str();
         }
         return false;
@@ -566,8 +672,18 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
              << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+             << " root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+             << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-             << " reason=" << (inSettleWindow ? "settle_window" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
+             << " top_init=" << (topInitPending ? "yes" : "no")
+             << " top_deact=" << (topDeactivated ? "yes" : "no")
+             << " generator_started=" << (generatorStarted ? "yes" : "no")
+             << " movement_blocked=" << (movementBlocked ? "yes" : "no")
+             << " unlaunched=" << (unlaunchedTargetMotion ? "yes" : "no")
+             << " unlaunched_grace=" << (inUnlaunchedGraceWindow ? "yes" : "no")
+             << " started_grace=" << (inStartedGraceWindow ? "yes" : "no")
+             << " reason=" << (preserveSettle ? "settle_window" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
+        AppendMotionSnapshotDiag(diag, player, "preserve_ok");
         *reasonOut = diag.str();
     }
 
@@ -961,6 +1077,7 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
     else
         diag << " order_match=none";
 
+    AppendMotionSnapshotDiag(diag, player, "move");
     return diag.str();
 }
 
@@ -1186,7 +1303,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
             // Give the queued generator a settle window after a failed prime.
             // Only after that window do we clear/reissue.
-            if (lastIssueAgeMs < 2500)
+            if (lastIssueAgeMs < 900)
             {
                 std::ostringstream extra;
                 extra << BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
@@ -1263,7 +1380,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     }
 
     bool hardStaleTargetRelative = activeTargetRelativeMotion && movementGeneratorHasNotLaunched &&
-        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 3000;
+        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
 
     // Same protection for the generic ranged path: before clearing/reissuing a
     // stale Chase/Follow generator, prime the existing generator once in place.
@@ -1711,7 +1828,14 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
-    g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
+    uint64 const rawGuid = player->GetGUID().GetRawValue();
+    auto& previous = g_LastClassExecutionStatusByGuid[rawGuid];
+    if (previous != status)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.classspell", "PB exec diag: bot={} guid={} status={}",
+            player->GetName(), player->GetGUID().ToString(), status);
+        previous = status;
+    }
 }
 
 void SetLastMovementDebugStatus(Player const* player, std::string const& status)
@@ -1719,7 +1843,14 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
-    g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
+    uint64 const rawGuid = player->GetGUID().GetRawValue();
+    auto& previous = g_LastMovementDebugStatusByGuid[rawGuid];
+    if (previous != status)
+    {
+        TC_LOG_DEBUG("playerbots.pvp.classspell", "PB move diag: bot={} guid={} status={}",
+            player->GetName(), player->GetGUID().ToString(), status);
+        previous = status;
+    }
 }
 
 void ForcePlayerbotDismount(Player* player)
