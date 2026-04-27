@@ -3372,6 +3372,21 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 context.targetGuid = ObjectGuid::Empty;
                 context.selfCast = false;
             }
+            else if (maxRange > 0.0f &&
+                spellInfo->CalcCastTime() > 0 &&
+                distance > std::max(1.0f, maxRange - 2.0f))
+            {
+                // Hard-cast edge guard: repeated casts at the absolute spell
+                // ceiling can stutter on movement jitter and LOS drift. Step
+                // in slightly so caster bots do not idle at max-range fringe.
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
+                    ComputeApproachFollowRange(maxRange), "reach spell", "selected spell near max range edge", 83.0f);
+                context.spellId = 0;
+                context.itemEntry = 0;
+                context.targetMode = PvpClassSpellContext::TargetMode::None;
+                context.targetGuid = ObjectGuid::Empty;
+                context.selfCast = false;
+            }
             else if (minRange > 0.0f && distance < std::max(0.0f, minRange + kRangedSpacingEnterTooCloseBuffer))
             {
                 bool collapseToMelee = false;
