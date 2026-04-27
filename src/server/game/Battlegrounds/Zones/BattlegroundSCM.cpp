@@ -101,6 +101,8 @@ uint32 BattlegroundSCM::GetHonorRewardForTeam() const
 
     if (!_humanFaceoffEverHappened)
         reward /= 2;
+
+    return reward;
 }
 
 void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& /*loserHonor*/) const
