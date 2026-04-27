@@ -23,6 +23,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "Movement/AbstractFollower.h"
 #include "Player.h"
 #include "Battleground.h"
 #include "PathGenerator.h"
@@ -296,12 +297,10 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     if (!TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
         return false;
 
-    motionMaster->Clear(MOTION_SLOT_ACTIVE);
-    motionMaster->MovePoint(0, segmentDestination, true);
-
-    state.lastDestination = segmentDestination;
-    state.lastIssueMs = nowMs;
-    return true;
+    // Policy: avoid direct point-move orders and keep movement anchored to
+    // navmesh-aware chase/follow generators.
+    (void)segmentDestination;
+    return false;
 }
 
 bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
@@ -403,6 +402,27 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!motionMaster)
         return;
 
+    auto issuePursuitMovement = [&](float followRange)
+    {
+        float const safeFollowRange = std::max(1.0f, followRange);
+        if (player->IsValidAttackTarget(target))
+        {
+            if (player->GetVictim() != target || !player->IsInCombat())
+                player->Attack(target, false);
+
+            // Out-of-combat chase can remain visually idle on some stale
+            // victim/combat snapshots. Prefer follow until combat is active,
+            // then hand off to chase once engagement is established.
+            if (player->IsInCombat() && player->GetVictim() == target)
+                motionMaster->MoveChase(target, safeFollowRange);
+            else
+                motionMaster->MoveFollow(target, safeFollowRange, player->GetFollowAngle());
+            return;
+        }
+
+        motionMaster->MoveFollow(target, safeFollowRange, player->GetFollowAngle());
+    };
+
     float const currentDistance = player->GetDistance(target);
     bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f);
     if (shouldForceActiveRepath)
@@ -412,18 +432,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
-    if (player->IsValidAttackTarget(target))
-    {
-        // Ensure hostile ranged approach can engage chase generators even when
-        // the bot is currently out of combat.
-        if (player->GetVictim() != target || !player->IsInCombat())
-            player->Attack(target, false);
-        motionMaster->MoveChase(target, safeDistance);
-    }
-    else
-    {
-        motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
-    }
+    issuePursuitMovement(safeDistance);
 
     // Some battleground edge-cases keep a stale chase/follow generator active
     // without producing displacement while we are still out of range. Fall
@@ -431,6 +440,25 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     // no actual motion.
     float const postIssueDistance = player->GetDistance(target);
     uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (!player->isMoving() &&
+        postIssueDistance > (safeDistance + 1.0f) &&
+        (stallState.lastFallbackMs == 0 || nowMs >= (stallState.lastFallbackMs + 350)))
+    {
+        Position const forcedDestination = BuildFollowDestination(player, target, std::max(1.0f, safeDistance - 2.0f));
+        bool forcedMoveIssued = false;
+        if (RequiresStrictHumanPathing(player))
+            forcedMoveIssued = IssueStrictHumanMove(player, forcedDestination, 1.5f, 0);
+
+        if (!forcedMoveIssued)
+            issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
+
+        stallState.lastFallbackMs = nowMs;
+        stallState.stagnantSamples = 0;
+        TC_LOG_DEBUG("playerbots.pvp.classspell",
+            "Ranged approach forced chase/follow fallback from idle: guid={} target={} desiredRange={} currentDistance={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance);
+    }
+
     bool const targetChanged = stallState.targetGuid != target->GetGUID();
     bool const recentlySampled = !targetChanged && stallState.lastSampleMs != 0 && nowMs <= (stallState.lastSampleMs + 1500);
     bool const distanceStagnant = recentlySampled && std::fabs(postIssueDistance - stallState.lastDistance) < 0.35f;
@@ -458,10 +486,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             // If we are already in a stalled point movement, prefer reissuing
             // chase/follow instead of chaining another point destination.
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
-            if (player->IsValidAttackTarget(target))
-                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
-            else
-                motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+            issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
 
             stallState.lastFallbackMs = nowMs;
             TC_LOG_DEBUG("playerbots.pvp.classspell",
@@ -473,15 +498,43 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         if (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE || motionType == IDLE_MOTION_TYPE)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-        if (player->IsValidAttackTarget(target))
-            motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
-        else
-            motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+        issuePursuitMovement(std::max(1.0f, safeDistance - 2.0f));
         stallState.lastFallbackMs = nowMs;
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach forced chase/follow fallback: guid={} target={} desiredRange={} currentDistance={} motionType={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance, static_cast<uint32>(motionType));
     }
+}
+
+void EnsureActiveChaseTracksTarget(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+    if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+        return;
+
+    MovementGenerator* movement = motionMaster->GetCurrentMovementGenerator();
+    AbstractFollower* follower = movement ? dynamic_cast<AbstractFollower*>(movement) : nullptr;
+    Unit* activeTarget = follower ? follower->GetTarget() : nullptr;
+    if (activeTarget == target)
+        return;
+
+    float const reanchorRange = std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 3.0f);
+    if (player->IsValidAttackTarget(target))
+        motionMaster->MoveChase(target, reanchorRange);
+    else
+        motionMaster->MoveFollow(target, reanchorRange, player->GetFollowAngle());
+
+    TC_LOG_DEBUG("playerbots.pvp.classspell",
+        "Reanchored active movement target: guid={} from={} to={} movementType={}.",
+        player->GetGUID().ToString(), activeTarget ? activeTarget->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+        target->GetGUID().ToString(), static_cast<uint32>(movementType));
 }
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
@@ -545,7 +598,17 @@ float ComputeLosRecoveryRange(Player const* player, Unit const* target, float ma
     if (closeFloor > upperBound)
         desiredRange = upperBound;
 
-    return desiredRange;
+    // Always bias LOS recovery to move inward at least slightly. Holding a
+    // follow distance >= current separation can leave casters repeating LOS
+    // failures while standing still.
+    float const currentDistance = player->GetDistance(target);
+    if (currentDistance > 0.0f)
+    {
+        float const inwardRecoveryCap = std::max(1.0f, currentDistance - 2.0f);
+        desiredRange = std::min(desiredRange, inwardRecoveryCap);
+    }
+
+    return std::max(1.0f, desiredRange);
 }
 
 bool IsCrowdControlledForAction(Player const* player)
@@ -992,7 +1055,7 @@ void RepositionDruidAfterTravelFormRecovery(Player* player)
     if (RequiresStrictHumanPathing(player))
         IssueStrictHumanMove(player, destination);
     else
-        player->GetMotionMaster()->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+        player->GetMotionMaster()->MoveFollow(nearestEnemy, retreatDistance, angleToEnemy + static_cast<float>(M_PI));
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -1060,7 +1123,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 return false;
             }
 
-            float const maxRange = spellInfo->GetMaxRange(false);
+            float const maxRange = petCaster->GetSpellMaxRangeForTarget(target, spellInfo);
             if (maxRange > 0.0f && !petCaster->IsWithinDistInMap(target, maxRange))
             {
                 failureReason = "out_of_range";
@@ -1208,6 +1271,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         else if (player->GetVictim() != target)
             player->Attack(target, false);
         CommandPetAttackTarget(player, target);
+        EnsureActiveChaseTracksTarget(player, target);
 
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
@@ -1229,7 +1293,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    float const maxRange = spellInfo->GetMaxRange(false);
+    float const maxRange = player->GetSpellMaxRangeForTarget(target, spellInfo);
     bool const shouldUseMeleeApproachForEnemySpell =
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
@@ -1760,6 +1824,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         {
             case PvpClassSpellContext::MovementDirective::ReachMeleeRange:
             {
+                EnsureActiveChaseTracksTarget(player, movementTarget);
                 IssueMeleeApproachMovement(player, movementTarget);
             }
                 break;
@@ -1791,8 +1856,36 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                         float const closingRange = std::max(1.0f, currentDistance - 2.0f);
                         desiredRange = std::min(desiredRange, closingRange);
                     }
+
+                    float const minimumClosingDelta = 6.0f;
+                    if ((currentDistance - desiredRange) < minimumClosingDelta)
+                    {
+                        float const closingRange = std::max(1.0f, currentDistance - minimumClosingDelta);
+                        desiredRange = std::min(desiredRange, closingRange);
+                    }
                 }
+                EnsureActiveChaseTracksTarget(player, approachTarget);
                 IssueRangedApproachMovement(player, approachTarget, desiredRange);
+                if (approachTarget)
+                {
+                    float const postIssueDistance = player->GetDistance(approachTarget);
+                    if (!player->isMoving() && postIssueDistance > (desiredRange + 1.0f))
+                    {
+                        MotionMaster* motionMaster = player->GetMotionMaster();
+                        if (motionMaster)
+                        {
+                            Position const forcedDestination = BuildFollowDestination(player, approachTarget, std::max(1.0f, desiredRange - 2.0f));
+                            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                            if (player->IsValidAttackTarget(approachTarget))
+                                motionMaster->MoveChase(approachTarget, std::max(1.0f, desiredRange - 2.0f));
+                            else
+                                motionMaster->MoveFollow(approachTarget, std::max(1.0f, desiredRange - 2.0f), player->GetFollowAngle());
+                            TC_LOG_DEBUG("playerbots.pvp.classspell",
+                                "ReachSpellRange post-exec forced chase/follow move: guid={} target={} desiredRange={} distance={}.",
+                                player->GetGUID().ToString(), approachTarget->GetGUID().ToString(), desiredRange, postIssueDistance);
+                        }
+                    }
+                }
             }
                 break;
             case PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell:
@@ -1807,19 +1900,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 {
                     if (!IssueStrictHumanMove(player, destination))
                     {
-                        // Strict segment pathing can fail to resolve around
-                        // battleground geometry. Fall back to a direct point
-                        // move so flee directives never devolve into idle.
+                        // If strict pathing could not issue this tick, keep
+                        // flee behavior on follow/chase generators.
                         MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
                         if (fallbackMotionMaster)
-                            fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+                            fallbackMotionMaster->MoveFollow(movementTarget, fleeDistance, angleToTarget + static_cast<float>(M_PI));
                     }
                 }
                 else
                 {
                     MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
                     if (fallbackMotionMaster)
-                        fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+                        fallbackMotionMaster->MoveFollow(movementTarget, fleeDistance, angleToTarget + static_cast<float>(M_PI));
                 }
                 break;
             }
@@ -1865,38 +1957,42 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         std::string const lastStatus = GetLastExecutionStatus(player);
         bool const previousLosFailure =
             lastStatus == "cast_failed_no_los" ||
-            lastStatus == "cast_failed_SPELL_FAILED_LINE_OF_SIGHT";
+            lastStatus == "cast_failed_SPELL_FAILED_LINE_OF_SIGHT" ||
+            lastStatus == "move_recover_los";
 
         if (previousLosFailure && !context.targetGuid.IsEmpty())
         {
             if (Unit* recoveryTarget = ObjectAccessor::GetUnit(*player, context.targetGuid); recoveryTarget && recoveryTarget->IsAlive())
             {
-                uint32 resolvedSpellId = context.spellId;
-                if (context.spellId)
+                if (!player->IsWithinLOSInMap(recoveryTarget))
                 {
-                    if (uint32 knownSpell = ResolveKnownSpellInChain(player, context.spellId))
-                        resolvedSpellId = knownSpell;
+                    uint32 resolvedSpellId = context.spellId;
+                    if (context.spellId)
+                    {
+                        if (uint32 knownSpell = ResolveKnownSpellInChain(player, context.spellId))
+                            resolvedSpellId = knownSpell;
+                    }
+
+                    SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+                    float const maxRange = spellInfo ? player->GetSpellMaxRangeForTarget(recoveryTarget, spellInfo) : 0.0f;
+                    bool const enemyMeleeSpacing =
+                        context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
+                        IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
+                        maxRange > 0.0f && maxRange <= 5.5f;
+
+                    if (enemyMeleeSpacing)
+                        IssueMeleeApproachMovement(player, recoveryTarget);
+                    else
+                    {
+                        float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
+                            ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                            : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
+                        IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
+                    }
+
+                    SetLastExecutionStatus(player, "move_recover_los");
+                    return true;
                 }
-
-                SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
-                float const maxRange = spellInfo ? spellInfo->GetMaxRange(false) : 0.0f;
-                bool const enemyMeleeSpacing =
-                    context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
-                    IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
-                    maxRange > 0.0f && maxRange <= 5.5f;
-
-                if (enemyMeleeSpacing)
-                    IssueMeleeApproachMovement(player, recoveryTarget);
-                else
-                {
-                    float const desiredRange = (context.targetMode == PvpClassSpellContext::TargetMode::Ally)
-                        ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
-                        : ComputeLosRecoveryRange(player, recoveryTarget, maxRange);
-                    IssueRangedApproachMovement(player, recoveryTarget, desiredRange);
-                }
-
-                SetLastExecutionStatus(player, "move_recover_los");
-                return true;
             }
         }
     }
