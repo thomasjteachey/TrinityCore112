@@ -247,6 +247,22 @@ std::string BuildManagedBotStatusLine(Player* bot)
         status << " directive_target=none";
     }
 
+    Unit* spellTarget = classContext.targetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*bot, classContext.targetGuid);
+    if (spellTarget)
+    {
+        status << " spell_target=" << spellTarget->GetName()
+               << " spell_target_dist=" << bot->GetDistance(spellTarget)
+               << " spell_target_exact=" << bot->GetExactDist(spellTarget)
+               << " spell_target_hitbox_sum=" << (bot->GetCombatReach() + spellTarget->GetCombatReach())
+               << " spell_target_los=" << (bot->IsWithinLOSInMap(spellTarget) ? "yes" : "no")
+               << " spell_target_attackable=" << (bot->IsValidAttackTarget(spellTarget) ? "yes" : "no")
+               << " spell_target_in_front=" << (bot->HasInArc(static_cast<float>(M_PI), spellTarget) ? "yes" : "no");
+    }
+    else
+    {
+        status << " spell_target=none";
+    }
+
     if (Unit* selected = bot->GetSelectedUnit())
     {
         constexpr float kHalfCircleArc = 3.14159265358979323846f;
@@ -453,6 +469,7 @@ public:
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
         receiver->Whisper(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(std::string("PB cast diag: ") + playerbot::PvpClassActions::GetLastCastDebugStatus(receiver), LANG_UNIVERSAL, sender);
 
         receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }
