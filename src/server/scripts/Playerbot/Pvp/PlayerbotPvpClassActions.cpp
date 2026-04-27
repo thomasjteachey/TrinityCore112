@@ -66,6 +66,24 @@ void SetLastExecutionStatus(Player const* player, std::string const& status);
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void SetLastCastDebugStatus(Player const* player, std::string const& status);
 
+struct LastLosCastFailureState
+{
+    ObjectGuid targetGuid = ObjectGuid::Empty;
+    uint32 spellId = 0;
+    uint32 failureMs = 0;
+    float botX = 0.0f;
+    float botY = 0.0f;
+    float botZ = 0.0f;
+    float targetX = 0.0f;
+    float targetY = 0.0f;
+    float targetZ = 0.0f;
+    float edgeDistance = 0.0f;
+    float exactDistance = 0.0f;
+    float requestedRecoveryRange = 0.0f;
+};
+
+std::unordered_map<uint64, LastLosCastFailureState> g_LastLosCastFailureByGuid;
+
 bool IsEffectivelyOutdoors(Player const* player)
 {
     if (!player)
@@ -943,23 +961,6 @@ std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastCastDebugStatusByGuid;
 
-struct LastLosCastFailureState
-{
-    ObjectGuid targetGuid = ObjectGuid::Empty;
-    uint32 spellId = 0;
-    uint32 failureMs = 0;
-    float botX = 0.0f;
-    float botY = 0.0f;
-    float botZ = 0.0f;
-    float targetX = 0.0f;
-    float targetY = 0.0f;
-    float targetZ = 0.0f;
-    float edgeDistance = 0.0f;
-    float exactDistance = 0.0f;
-    float requestedRecoveryRange = 0.0f;
-};
-
-std::unordered_map<uint64, LastLosCastFailureState> g_LastLosCastFailureByGuid;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
