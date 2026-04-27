@@ -102,7 +102,7 @@ uint32 BattlegroundSCM::GetHonorRewardForTeam() const
     if (!_humanFaceoffEverHappened)
         reward /= 2;
 
-    return reward;
+    return (reward * 2) / 5;
 }
 
 void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& /*loserHonor*/) const
@@ -115,6 +115,8 @@ void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, u
 
     if (!_humanFaceoffEverHappened)
         winnerHonor /= 2;
+
+    winnerHonor = (winnerHonor * 2) / 5;
 }
 
 bool BattlegroundSCM::SetupBattleground()
@@ -283,6 +285,7 @@ void BattlegroundSCM::UpdateTeamScoreWorldStates()
     UpdateWorldState(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
     UpdateWorldState(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
     UpdateWorldState(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
+    UpdateWorldState(BG_SCM_WORLDSTATE_MAX_KILLS_UI, BG_SCM_KILL_LIMIT);
 }
 
 void BattlegroundSCM::HandleKillPlayer(Player* victim, Player* killer)
@@ -329,6 +332,7 @@ void BattlegroundSCM::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_HORDE_SCORE, _hordeKills);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_SCORE, BG_SCM_KILL_LIMIT);
+    packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_MAX_KILLS_UI, BG_SCM_KILL_LIMIT);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER_ACTIVE, 0);
     packet.Worldstates.emplace_back(BG_SCM_WORLDSTATE_TIMER, 0);
 }
