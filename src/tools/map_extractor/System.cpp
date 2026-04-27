@@ -90,6 +90,8 @@ const char *CONF_mpq_list[]={
     "patch-3.MPQ",
     "patch-4.MPQ",
     "patch-5.MPQ",
+    "patch-6.MPQ",
+    "patch-Z.MPQ",
 };
 
 static char const* const langs[] = {"enGB", "enUS", "deDE", "esES", "frFR", "koKR", "zhCN", "zhTW", "enCN", "enTW", "esMX", "ruRU" };
@@ -1090,7 +1092,7 @@ void LoadLocaleMPQFiles(int const locale)
 
     new MPQArchive(fileName.c_str());
 
-    for(int i = 1; i < 5; ++i)
+    for(int i = 1; i < 20; ++i)
     {
         std::string ext;
         if (i > 1)
