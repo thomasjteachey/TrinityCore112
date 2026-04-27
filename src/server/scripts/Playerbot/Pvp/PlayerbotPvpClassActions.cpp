@@ -297,12 +297,10 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     if (!TryBuildStrictHumanSegmentDestination(player, destination, segmentDestination))
         return false;
 
-    motionMaster->Clear(MOTION_SLOT_ACTIVE);
-    motionMaster->MovePoint(0, segmentDestination, true);
-
-    state.lastDestination = segmentDestination;
-    state.lastIssueMs = nowMs;
-    return true;
+    // Policy: avoid direct point-move orders and keep movement anchored to
+    // navmesh-aware chase/follow generators.
+    (void)segmentDestination;
+    return false;
 }
 
 bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
@@ -442,12 +440,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             forcedMoveIssued = IssueStrictHumanMove(player, forcedDestination, 1.5f, 0);
 
         if (!forcedMoveIssued)
-            motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, forcedDestination), true);
+        {
+            if (player->IsValidAttackTarget(target))
+                motionMaster->MoveChase(target, std::max(1.0f, safeDistance - 2.0f));
+            else
+                motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
+        }
 
         stallState.lastFallbackMs = nowMs;
         stallState.stagnantSamples = 0;
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Ranged approach forced point fallback from idle: guid={} target={} desiredRange={} currentDistance={}.",
+            "Ranged approach forced chase/follow fallback from idle: guid={} target={} desiredRange={} currentDistance={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, postIssueDistance);
     }
 
@@ -1053,7 +1056,7 @@ void RepositionDruidAfterTravelFormRecovery(Player* player)
     if (RequiresStrictHumanPathing(player))
         IssueStrictHumanMove(player, destination);
     else
-        player->GetMotionMaster()->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+        player->GetMotionMaster()->MoveFollow(nearestEnemy, retreatDistance, angleToEnemy + static_cast<float>(M_PI));
 }
 
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
@@ -1865,9 +1868,12 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                         {
                             Position const forcedDestination = BuildFollowDestination(player, approachTarget, std::max(1.0f, desiredRange - 2.0f));
                             motionMaster->Clear(MOTION_SLOT_ACTIVE);
-                            motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, forcedDestination), true);
+                            if (player->IsValidAttackTarget(approachTarget))
+                                motionMaster->MoveChase(approachTarget, std::max(1.0f, desiredRange - 2.0f));
+                            else
+                                motionMaster->MoveFollow(approachTarget, std::max(1.0f, desiredRange - 2.0f), player->GetFollowAngle());
                             TC_LOG_DEBUG("playerbots.pvp.classspell",
-                                "ReachSpellRange post-exec forced point move: guid={} target={} desiredRange={} distance={}.",
+                                "ReachSpellRange post-exec forced chase/follow move: guid={} target={} desiredRange={} distance={}.",
                                 player->GetGUID().ToString(), approachTarget->GetGUID().ToString(), desiredRange, postIssueDistance);
                         }
                     }
@@ -1886,19 +1892,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 {
                     if (!IssueStrictHumanMove(player, destination))
                     {
-                        // Strict segment pathing can fail to resolve around
-                        // battleground geometry. Fall back to a direct point
-                        // move so flee directives never devolve into idle.
+                        // If strict pathing could not issue this tick, keep
+                        // flee behavior on follow/chase generators.
                         MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
                         if (fallbackMotionMaster)
-                            fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+                            fallbackMotionMaster->MoveFollow(movementTarget, fleeDistance, angleToTarget + static_cast<float>(M_PI));
                     }
                 }
                 else
                 {
                     MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
                     if (fallbackMotionMaster)
-                        fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+                        fallbackMotionMaster->MoveFollow(movementTarget, fleeDistance, angleToTarget + static_cast<float>(M_PI));
                 }
                 break;
             }
