@@ -3050,6 +3050,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
             {
+                // Root-cause fix for rogue opener stalls:
+                // LOS recovery can emit ReachSpellRange with a tiny range (e.g. 4y)
+                // while stealthed, but stealth opener movement should use the
+                // deterministic melee chase path. Routing this through ranged
+                // approach caused repeated slow/stale reissues in BG starts.
+                if (player->GetClass() == CLASS_ROGUE && player->HasStealthAura() &&
+                    movementTarget && player->IsValidAttackTarget(movementTarget))
+                {
+                    IssueMeleeApproachMovement(player, movementTarget);
+                    break;
+                }
+
                 float desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
                 Unit* approachTarget = movementTarget;
