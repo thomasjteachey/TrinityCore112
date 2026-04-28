@@ -2233,7 +2233,7 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
     // Class spell actions can issue target-relative chase/follow in the same
     // scheduler frame. Do not immediately override those orders from lifecycle
     // distance-band helpers (follow/stop), or bots can visibly inch/stop.
-    if (playerbot::PvpClassActions::HasRecentTargetRelativeMovementOrder(player, target, 1500))
+    if (playerbot::PvpClassActions::HasRecentTargetRelativeMovementOrder(player, nullptr, 1500))
         return true;
 
     float const distance = player->GetDistance(target);
