@@ -1581,17 +1581,27 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             }
 
             bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
-            motionMaster->MoveChase(target);
-            RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
+            bool const hasVictimLink = player->GetVictim() == target;
+            if (hasVictimLink)
+            {
+                motionMaster->MoveChase(target);
+                RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
+            }
+            else
+            {
+                motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
+                RecordTargetRelativeMovementOrder(player, target, 1.5f, 2);
+            }
             MotionPrimeResult stealthPrimeResult = PrimeTargetRelativeMotion(player);
             MarkTargetRelativeMovementLaunch(player);
             stealthPrimeResult.addToWorldCalled = preparedMotionMaster;
 
             std::ostringstream diag;
             diag << "stealth_melee_chase"
-                 << " issued_mode=chase"
+                 << " issued_mode=" << (hasVictimLink ? "chase" : "follow_no_victim")
                  << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
                  << " moving_after=" << (player->isMoving() ? "yes" : "no")
+                 << " target_is_victim=" << (hasVictimLink ? "yes" : "no")
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
             AppendMotionPrimeDiag(diag, stealthPrimeResult);
