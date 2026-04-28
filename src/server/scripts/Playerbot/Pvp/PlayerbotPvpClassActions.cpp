@@ -556,6 +556,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     uint32 const effectiveSettleMs = hasMovementSignal ? minRunMs : std::min<uint32>(minRunMs, 350);
     bool inSettleWindow = ageMs < effectiveSettleMs;
     bool const recentLaunch = state.lastLaunchMs != 0 && launchAgeMs < 1200;
+    bool const credibleRecentLaunch = recentLaunch && (hasMovementSignal || splineStarted);
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
     bool const credibleRecentDistanceProgress = recentDistanceProgress && (hasMovementSignal || recentPositionProgress || madePositionProgress);
@@ -565,10 +566,10 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     // if we are still significantly outside desired range and have neither
     // recent launch nor distance progress, stop preserving and reissue a fresh
     // target-relative order immediately.
-    if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !recentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
+    if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !credibleRecentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
         inSettleWindow = false;
 
-    bool const preserve = inSettleWindow || recentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
+    bool const preserve = inSettleWindow || credibleRecentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
     {
@@ -580,6 +581,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " mode=" << uint32(state.mode)
                  << " age_ms=" << ageMs
                  << " launch_age_ms=" << launchAgeMs
+                 << " launch_credible=" << (credibleRecentLaunch ? "yes" : "no")
                  << " distance_progress_age_ms=" << distanceProgressAgeMs
                  << " position_progress_age_ms=" << positionProgressAgeMs
                  << " desired_range=" << desiredRange
@@ -613,6 +615,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " mode=" << uint32(state.mode)
              << " age_ms=" << ageMs
              << " launch_age_ms=" << launchAgeMs
+             << " launch_credible=" << (credibleRecentLaunch ? "yes" : "no")
              << " distance_progress_age_ms=" << distanceProgressAgeMs
              << " position_progress_age_ms=" << positionProgressAgeMs
              << " desired_range=" << desiredRange
@@ -634,7 +637,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
              << " reason=" << (inSettleWindow
                     ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle")
-                    : (recentLaunch ? "recent_launch" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress")));
+                    : (credibleRecentLaunch ? "recent_launch" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress")));
         *reasonOut = diag.str();
     }
 
