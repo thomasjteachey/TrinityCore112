@@ -2943,6 +2943,24 @@ std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)
     return itr->second;
 }
 
+bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player, Unit const* target, uint32 maxAgeMs)
+{
+    if (!player)
+        return false;
+
+    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    if (orderItr == g_TargetRelativeMoveOrderByGuid.end())
+        return false;
+
+    TargetRelativeMoveOrderState const& order = orderItr->second;
+    if (target && order.targetGuid != target->GetGUID())
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const ageMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : std::numeric_limits<uint32>::max();
+    return ageMs <= maxAgeMs;
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
