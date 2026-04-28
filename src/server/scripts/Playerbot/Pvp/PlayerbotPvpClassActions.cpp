@@ -1300,7 +1300,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
         RangedPathProbeResult const followProbe = targetAttackable ? RangedPathProbeResult() : FindBestFollowProbe(player, target, forcedRange);
 
-        if (shouldEscalateContactRescue || !(activeTargetRelativeMotion && (player->isMoving() || player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE))))
+        bool const shouldClearBeforeIssue = initialMotionType == POINT_MOTION_TYPE;
+        if (shouldClearBeforeIssue)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
         MotionPrimeResult primeResult;
         TargetRelativeRangedMoveResult const moveResult = shouldEscalateContactRescue
@@ -1338,6 +1339,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
               << " issue_age_ms=" << lastIssueAgeMs
+              << " cleared_before_issue=" << (shouldClearBeforeIssue ? "yes" : "no")
               << " contact_rescue_allowed=" << (prefersContactRescue ? "yes" : "no")
               << " rescue_prev_mode=" << uint32(prevIssuedMode)
               << " mm_size_before_issue=" << mmSizeBeforeIssue
