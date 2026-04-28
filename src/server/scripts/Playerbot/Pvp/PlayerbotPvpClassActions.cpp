@@ -520,8 +520,15 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     float const positionDelta2D = std::sqrt(dx * dx + dy * dy);
     float const positionDelta3D = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-    bool const madeDistanceProgress = state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
     bool const madePositionProgress = positionDelta2D >= 0.35f || positionDelta3D >= 0.50f;
+    bool const splineInitialized = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const splineStarted = splineInitialized && player->movespline->HasStarted();
+    bool const hasMovementSignal = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        splineInitialized;
+    bool const rawDistanceProgress = state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
+    bool const madeDistanceProgress = rawDistanceProgress && (hasMovementSignal || madePositionProgress);
 
     if (madeDistanceProgress)
     {
@@ -541,13 +548,6 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     uint32 const positionProgressAgeMs = state.lastPositionProgressMs != 0 && nowMs >= state.lastPositionProgressMs ? nowMs - state.lastPositionProgressMs : 0;
     uint32 const launchAgeMs = state.lastLaunchMs != 0 && nowMs >= state.lastLaunchMs ? nowMs - state.lastLaunchMs : 0;
 
-    bool const splineInitialized = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
-    bool const splineStarted = splineInitialized && player->movespline->HasStarted();
-    bool const hasMovementSignal = player->isMoving() ||
-        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
-        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
-        splineInitialized;
-
     // Do not keep a dead CHASE/FOLLOW generator alive for the whole normal
     // settle window. The bad screenshots show motion=CHASE/FOLLOW with
     // moving=no, chase_move=no, follow_move=no, and spline_started=no. In that
@@ -558,16 +558,17 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     bool const recentLaunch = state.lastLaunchMs != 0 && launchAgeMs < 1200;
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
+    bool const credibleRecentDistanceProgress = recentDistanceProgress && (hasMovementSignal || recentPositionProgress || madePositionProgress);
     bool const farFromDesiredRange = desiredRange > 0.0f && currentDistance > (desiredRange + 4.0f);
 
     // Elegant fail-safe for the "stuck but preserved" state:
     // if we are still significantly outside desired range and have neither
     // recent launch nor distance progress, stop preserving and reissue a fresh
     // target-relative order immediately.
-    if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !recentLaunch && !madeDistanceProgress && !recentDistanceProgress)
+    if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !recentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
         inSettleWindow = false;
 
-    bool const preserve = inSettleWindow || recentLaunch || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
+    bool const preserve = inSettleWindow || recentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
     {
@@ -593,6 +594,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " spline_init=" << (splineInitialized ? "yes" : "no")
                  << " spline_started=" << (splineStarted ? "yes" : "no")
                  << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
+                 << " raw_dist_progress=" << (rawDistanceProgress ? "yes" : "no")
                  << " effective_settle_ms=" << effectiveSettleMs
                  << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
@@ -625,6 +627,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " spline_init=" << (splineInitialized ? "yes" : "no")
              << " spline_started=" << (splineStarted ? "yes" : "no")
              << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
+             << " raw_dist_progress=" << (rawDistanceProgress ? "yes" : "no")
              << " effective_settle_ms=" << effectiveSettleMs
              << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
@@ -1281,6 +1284,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
         bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
+        bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 1400;
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
             player->Attack(target, false);
@@ -1288,12 +1292,14 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
         RangedPathProbeResult const followProbe = targetAttackable ? RangedPathProbeResult() : FindBestFollowProbe(player, target, forcedRange);
 
-        if (!(activeTargetRelativeMotion && (player->isMoving() || player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE))))
+        if (shouldEscalateContactRescue || !(activeTargetRelativeMotion && (player->isMoving() || player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE))))
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
         MotionPrimeResult primeResult;
-        TargetRelativeRangedMoveResult const moveResult = (!targetAttackable && staleQueuedGenerator && IsUsableProbePath(followProbe))
+        TargetRelativeRangedMoveResult const moveResult = shouldEscalateContactRescue
+            ? IssueContactChaseRescue(player, target)
+            : ((!targetAttackable && staleQueuedGenerator && IsUsableProbePath(followProbe))
             ? IssuePathProbedFollow(player, target, followProbe, forcedRange, &primeResult)
-            : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, false, &primeResult);
+            : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, false, &primeResult));
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -1305,7 +1311,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
         char const* label = staleQueuedGenerator
-            ? (!targetAttackable && IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase")
+            ? (shouldEscalateContactRescue ? "near_edge_stale_contact_rescue"
+                : (!targetAttackable && IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase"))
             : "near_edge_chase_nudge";
 
         std::string diag = BuildRangedMovementDiag(player, target, label,
