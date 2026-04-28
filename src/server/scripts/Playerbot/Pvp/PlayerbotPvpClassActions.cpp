@@ -2961,6 +2961,7 @@ std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)
     return itr->second;
 }
 
+
 bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player, Unit const* target, uint32 maxAgeMs)
 {
     if (!player)
