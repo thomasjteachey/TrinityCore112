@@ -2442,9 +2442,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // stealth early, but continue issuing movement so rogues still
             // close to opener distance instead of idling in place.
             //
-            // AttackStop can clear active movement intent in some states, so
-            // only call it when we are actively swinging a victim.
-            if (player->GetVictim())
+            // AttackStop can clear victim linkage that MoveChase relies on.
+            // Only stop attacks when already in melee contact where an actual
+            // swing could break stealth; keep victim linkage while closing.
+            if (player->GetVictim() && target && player->IsWithinMeleeRange(target))
                 player->AttackStop();
 
             if (CanIssueFollowCommands(player))
