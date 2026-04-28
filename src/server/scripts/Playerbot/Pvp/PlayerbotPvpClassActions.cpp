@@ -913,7 +913,14 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
     }
 
     bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
-    if (targetAttackable && !forceFollow)
+    bool canUseHostileChase = targetAttackable && !forceFollow;
+    if (canUseHostileChase && player->GetVictim() != target)
+    {
+        player->Attack(target, false);
+        canUseHostileChase = player->GetVictim() == target;
+    }
+
+    if (canUseHostileChase)
     {
         motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(safeDistance));
         RecordTargetRelativeMovementOrder(player, target, safeDistance, 1);
