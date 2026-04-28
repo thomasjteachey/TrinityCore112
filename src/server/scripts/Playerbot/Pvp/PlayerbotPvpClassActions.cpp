@@ -1288,7 +1288,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
         bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
-        bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 1400;
+        bool const prefersContactRescue = requestedSafeDistance <= 8.0f;
+        bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 1400 && prefersContactRescue;
         uint8 const prevIssuedMode = stallState.lastIssuedMode;
         uint32 const mmSizeBeforeIssue = motionMaster->Size();
         MovementGeneratorType const mmMotionBeforeIssue = motionMaster->GetCurrentMovementGeneratorType();
@@ -1337,6 +1338,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
               << " issue_age_ms=" << lastIssueAgeMs
+              << " contact_rescue_allowed=" << (prefersContactRescue ? "yes" : "no")
               << " rescue_prev_mode=" << uint32(prevIssuedMode)
               << " mm_size_before_issue=" << mmSizeBeforeIssue
               << " mm_size_after_issue=" << mmSizeAfterIssue
