@@ -1582,15 +1582,18 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
             bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
             bool const hasVictimLink = player->GetVictim() == target;
-            if (hasVictimLink)
+            float const stealthTravelDistance = player->GetDistance(target);
+            bool const useStealthTravelFollow = stealthTravelDistance > 45.0f;
+            if (hasVictimLink && !useStealthTravelFollow)
             {
                 motionMaster->MoveChase(target);
                 RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
             }
             else
             {
-                motionMaster->MoveFollow(target, 1.5f, player->GetFollowAngle());
-                RecordTargetRelativeMovementOrder(player, target, 1.5f, 2);
+                float const stealthFollowRange = useStealthTravelFollow ? 3.0f : 1.5f;
+                motionMaster->MoveFollow(target, stealthFollowRange, player->GetFollowAngle());
+                RecordTargetRelativeMovementOrder(player, target, stealthFollowRange, 2);
             }
             MotionPrimeResult stealthPrimeResult = PrimeTargetRelativeMotion(player);
             MarkTargetRelativeMovementLaunch(player);
@@ -1598,10 +1601,12 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
             std::ostringstream diag;
             diag << "stealth_melee_chase"
-                 << " issued_mode=" << (hasVictimLink ? "chase" : "follow_no_victim")
+                 << " issued_mode=" << (hasVictimLink ? (useStealthTravelFollow ? "follow_stealth_travel" : "chase") : "follow_no_victim")
                  << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
                  << " moving_after=" << (player->isMoving() ? "yes" : "no")
                  << " target_is_victim=" << (hasVictimLink ? "yes" : "no")
+                 << " stealth_travel_follow=" << (useStealthTravelFollow ? "yes" : "no")
+                 << " travel_dist=" << stealthTravelDistance
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
             AppendMotionPrimeDiag(diag, stealthPrimeResult);
