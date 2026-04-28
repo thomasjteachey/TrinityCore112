@@ -2455,8 +2455,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target)
     Unit const* fearTarget = IsSpellReady(player, 6215) ? SelectWarlockFearTarget(player, 20.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, player->HealthBelowPct(45) && hasLivingPet && IsPetSpellReady(player, 19443), 55.0f,
-        { "warlock sacrifice", "consume voidwalker shield under low health pressure", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, player->HealthBelowPct(25) && hasLivingPet && IsPetSpellReady(player, 19443), 70.0f,
+        { "warlock sacrifice", "emergency voidwalker sacrifice at or below 25 percent health", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, target->HasUnitState(UNIT_STATE_CASTING) && IsPetSpellReady(player, 19244), 54.0f,
         { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, fearTarget, 53.0f,
