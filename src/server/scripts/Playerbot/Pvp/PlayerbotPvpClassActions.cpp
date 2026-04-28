@@ -1208,9 +1208,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
                 return;
             }
 
-            // Give the queued generator a settle window after a failed prime.
-            // Only after that window do we clear/reissue.
-            if (lastIssueAgeMs < 2500)
+            // Give the queued generator a short settle window after a failed
+            // prime, then force a reissue if still unlaunched. Waiting ~2.5s
+            // here left bots visibly stuck with motion=follow/chase but
+            // moving=no, no spline, and no CHASE_MOVE/FOLLOW_MOVE state.
+            if (lastIssueAgeMs < 900)
             {
                 std::ostringstream extra;
                 extra << BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
@@ -1226,7 +1228,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             }
         }
 
-        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 2500;
+        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
