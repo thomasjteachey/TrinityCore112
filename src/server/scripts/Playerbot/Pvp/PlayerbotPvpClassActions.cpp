@@ -932,7 +932,7 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
     return TargetRelativeRangedMoveResult::FollowIssued;
 }
 
-TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* target)
+TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* target, MotionPrimeResult* primeOut = nullptr)
 {
     if (!player || !target)
         return TargetRelativeRangedMoveResult::None;
@@ -950,6 +950,8 @@ TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* tar
         MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
         MarkTargetRelativeMovementLaunch(player);
         prime.addToWorldCalled = preparedMotionMaster;
+        if (primeOut)
+            *primeOut = prime;
         return TargetRelativeRangedMoveResult::FollowIssued;
     }
 
@@ -965,6 +967,8 @@ TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* tar
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
     MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
+    if (primeOut)
+        *primeOut = prime;
     return TargetRelativeRangedMoveResult::ChaseIssued;
 }
 
@@ -1151,7 +1155,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         uint32 lastFallbackMs = 0;
         uint32 lastIssueMs = 0;
         uint8 stagnantSamples = 0;
-        uint8 lastIssuedMode = 0; // 1=chase, 2=follow
+        uint8 lastIssuedMode = 0; // 1=chase, 2=follow, 3=contact_rescue
     };
 
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
@@ -1285,6 +1289,9 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
         bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 1400;
+        uint8 const prevIssuedMode = stallState.lastIssuedMode;
+        uint32 const mmSizeBeforeIssue = motionMaster->Size();
+        MovementGeneratorType const mmMotionBeforeIssue = motionMaster->GetCurrentMovementGeneratorType();
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
             player->Attack(target, false);
@@ -1296,10 +1303,12 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
         MotionPrimeResult primeResult;
         TargetRelativeRangedMoveResult const moveResult = shouldEscalateContactRescue
-            ? IssueContactChaseRescue(player, target)
+            ? IssueContactChaseRescue(player, target, &primeResult)
             : ((!targetAttackable && staleQueuedGenerator && IsUsableProbePath(followProbe))
             ? IssuePathProbedFollow(player, target, followProbe, forcedRange, &primeResult)
             : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, false, &primeResult));
+        uint32 const mmSizeAfterIssue = motionMaster->Size();
+        MovementGeneratorType const mmMotionAfterIssue = motionMaster->GetCurrentMovementGeneratorType();
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -1307,13 +1316,19 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastFallbackMs = nowMs;
         stallState.lastIssueMs = nowMs;
         stallState.lastIssuedRange = forcedRange;
-        stallState.lastIssuedMode = moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1;
+        stallState.lastIssuedMode = shouldEscalateContactRescue ? 3 : (moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1);
         stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
-        char const* label = staleQueuedGenerator
-            ? (shouldEscalateContactRescue ? "near_edge_stale_contact_rescue"
-                : (!targetAttackable && IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase"))
-            : "near_edge_chase_nudge";
+        char const* label = "near_edge_chase_nudge";
+        if (staleQueuedGenerator)
+        {
+            if (shouldEscalateContactRescue)
+                label = "near_edge_stale_contact_rescue";
+            else if (!targetAttackable && IsUsableProbePath(followProbe))
+                label = "near_edge_stale_pathprobed_follow";
+            else
+                label = "near_edge_stale_reissued_chase";
+        }
 
         std::string diag = BuildRangedMovementDiag(player, target, label,
             safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType,
@@ -1322,6 +1337,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
               << " issue_age_ms=" << lastIssueAgeMs
+              << " rescue_prev_mode=" << uint32(prevIssuedMode)
+              << " mm_size_before_issue=" << mmSizeBeforeIssue
+              << " mm_size_after_issue=" << mmSizeAfterIssue
+              << " mm_motion_before_issue=" << uint32(mmMotionBeforeIssue)
+              << " mm_motion_after_issue=" << uint32(mmMotionAfterIssue)
               << " force_in_range=" << (forceMovementWhenAlreadyInRange ? "yes" : "no")
               << " forced_reason=" << (forcedReason ? forcedReason : "none")
               << " requested_edge=" << requestedSafeDistance;
