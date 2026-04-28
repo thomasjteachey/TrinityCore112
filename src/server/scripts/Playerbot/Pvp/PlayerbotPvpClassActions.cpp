@@ -67,6 +67,7 @@ bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo
 void SetLastExecutionStatus(Player const* player, std::string const& status);
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
+void MarkTargetRelativeMovementLaunch(Player const* player);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
 
 struct LastLosCastFailureState
@@ -440,6 +441,7 @@ struct TargetRelativeMoveOrderState
     float lastY = 0.0f;
     float lastZ = 0.0f;
     uint32 lastIssueMs = 0;
+    uint32 lastLaunchMs = 0;
     uint32 lastProgressMs = 0;
     uint32 lastPositionProgressMs = 0;
     uint8 mode = 0; // 1=chase, 2=follow
@@ -460,11 +462,32 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.lastY = player->GetPositionY();
     state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
+    state.lastLaunchMs = 0;
     // Do not treat order issuance itself as progress. These are updated only
     // after observed distance/position gains in ShouldPreserve... .
     state.lastProgressMs = 0;
     state.lastPositionProgressMs = 0;
     state.mode = mode;
+}
+
+void MarkTargetRelativeMovementLaunch(Player const* player)
+{
+    if (!player)
+        return;
+
+    auto itr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_TargetRelativeMoveOrderByGuid.end())
+        return;
+
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const launched = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        hasActiveSpline;
+    if (!launched)
+        return;
+
+    itr->second.lastLaunchMs = GameTime::GetGameTimeMS();
 }
 
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
@@ -516,6 +539,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
 
     uint32 const distanceProgressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
     uint32 const positionProgressAgeMs = state.lastPositionProgressMs != 0 && nowMs >= state.lastPositionProgressMs ? nowMs - state.lastPositionProgressMs : 0;
+    uint32 const launchAgeMs = state.lastLaunchMs != 0 && nowMs >= state.lastLaunchMs ? nowMs - state.lastLaunchMs : 0;
 
     bool const splineInitialized = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
     bool const splineStarted = splineInitialized && player->movespline->HasStarted();
@@ -531,9 +555,10 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     // pins rogues/casters at spawn or makes ranged bots appear stuck.
     uint32 const effectiveSettleMs = hasMovementSignal ? minRunMs : std::min<uint32>(minRunMs, 350);
     bool const inSettleWindow = ageMs < effectiveSettleMs;
+    bool const recentLaunch = state.lastLaunchMs != 0 && launchAgeMs < 1200;
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
-    bool const preserve = inSettleWindow || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
+    bool const preserve = inSettleWindow || recentLaunch || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
     {
@@ -544,6 +569,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " motion=" << uint32(motionType)
                  << " mode=" << uint32(state.mode)
                  << " age_ms=" << ageMs
+                 << " launch_age_ms=" << launchAgeMs
                  << " distance_progress_age_ms=" << distanceProgressAgeMs
                  << " position_progress_age_ms=" << positionProgressAgeMs
                  << " desired_range=" << desiredRange
@@ -574,6 +600,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " motion=" << uint32(motionType)
              << " mode=" << uint32(state.mode)
              << " age_ms=" << ageMs
+             << " launch_age_ms=" << launchAgeMs
              << " distance_progress_age_ms=" << distanceProgressAgeMs
              << " position_progress_age_ms=" << positionProgressAgeMs
              << " desired_range=" << desiredRange
@@ -591,7 +618,9 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " effective_settle_ms=" << effectiveSettleMs
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-             << " reason=" << (inSettleWindow ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle") : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
+             << " reason=" << (inSettleWindow
+                    ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle")
+                    : (recentLaunch ? "recent_launch" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress")));
         *reasonOut = diag.str();
     }
 
@@ -833,6 +862,7 @@ TargetRelativeRangedMoveResult IssuePathProbedFollow(Player* player, Unit* targe
     motionMaster->MoveFollow(target, safeRange, ChaseAngle(angle, float(M_PI_4)));
     RecordTargetRelativeMovementOrder(player, target, safeRange, 2);
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
     if (primeOut)
         *primeOut = prime;
@@ -871,6 +901,7 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
         motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(safeDistance));
         RecordTargetRelativeMovementOrder(player, target, safeDistance, 1);
         MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+        MarkTargetRelativeMovementLaunch(player);
         prime.addToWorldCalled = preparedMotionMaster;
         if (primeOut)
             *primeOut = prime;
@@ -880,6 +911,7 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
     motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
     RecordTargetRelativeMovementOrder(player, target, safeDistance, 2);
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
     if (primeOut)
         *primeOut = prime;
@@ -902,6 +934,7 @@ TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* tar
         motionMaster->MoveFollow(target, 1.0f, player->GetFollowAngle());
         RecordTargetRelativeMovementOrder(player, target, 1.0f, 2);
         MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+        MarkTargetRelativeMovementLaunch(player);
         prime.addToWorldCalled = preparedMotionMaster;
         return TargetRelativeRangedMoveResult::FollowIssued;
     }
@@ -916,6 +949,7 @@ TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* tar
     motionMaster->MoveChase(target);
     RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
     return TargetRelativeRangedMoveResult::ChaseIssued;
 }
@@ -995,10 +1029,12 @@ bool IsStaleTargetRelativeMotion(Player const* player)
 
     MotionMaster const* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
     return (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE) &&
         !player->isMoving() &&
         !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
+        !hasActiveSpline &&
         !player->HasUnitState(UNIT_STATE_NOT_MOVE) &&
         !player->IsMovementPreventedByCasting();
 }
