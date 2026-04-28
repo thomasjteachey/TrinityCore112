@@ -460,8 +460,10 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.lastY = player->GetPositionY();
     state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
-    state.lastProgressMs = state.lastIssueMs;
-    state.lastPositionProgressMs = state.lastIssueMs;
+    // Do not treat order issuance itself as progress. These are updated only
+    // after observed distance/position gains in ShouldPreserve... .
+    state.lastProgressMs = 0;
+    state.lastPositionProgressMs = 0;
     state.mode = mode;
 }
 
@@ -2081,11 +2083,17 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
     uint32 const orderAgeMs = order && order->lastIssueMs != 0 && nowMs >= order->lastIssueMs ? nowMs - order->lastIssueMs : 0;
+    bool const moveOrderMatchesCastTarget = moveTarget && moveTarget == castTarget;
 
-    // Defer only when a target-relative move is actually active/recent and not
-    // done. This prevents indefinite suppression if a stale order was already
-    // cleared by the movement code.
-    bool const shouldDefer = (activeTargetRelativeMotion || moveOrderStillOutside) && activeMoveOrder && orderAgeMs < 6000;
+    std::string preserveDiag;
+    bool const preservingTargetRelativeMotion = moveOrderMatchesCastTarget &&
+        ShouldPreserveTargetRelativeMovement(player, castTarget, order ? order->issuedRange : 0.0f, 1800,
+            "stationary_cast_defer_motion_preserved", &preserveDiag);
+
+    // Defer only while the active CHASE/FOLLOW order is still making progress
+    // (or inside a short launch window). This avoids repeated defer loops when
+    // a movement generator exists but never launched (moving=no/spline=no).
+    bool const shouldDefer = preservingTargetRelativeMotion || (moveOrderStillOutside && orderAgeMs < 6000);
     if (!shouldDefer)
         return false;
 
@@ -2130,11 +2138,14 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
              << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
              << " move_signal=" << (hasMoveSignal ? "yes" : "no")
              << " order_present=" << (activeMoveOrder ? "yes" : "no")
+             << " order_matches_cast_target=" << (moveOrderMatchesCastTarget ? "yes" : "no")
              << " order_age_ms=" << orderAgeMs
              << " order_range=" << (order ? order->issuedRange : 0.0f)
              << " order_target=" << (moveTarget ? moveTarget->GetGUID().ToString() : "none")
              << " order_target_dist=" << moveTargetDistance
-             << " order_outside=" << (moveOrderStillOutside ? "yes" : "no");
+             << " order_outside=" << (moveOrderStillOutside ? "yes" : "no")
+             << " motion_preserve=" << (preservingTargetRelativeMotion ? "yes" : "no")
+             << " preserve_diag=" << (preserveDiag.empty() ? "none" : preserveDiag);
         *diagOut = diag.str();
     }
 
