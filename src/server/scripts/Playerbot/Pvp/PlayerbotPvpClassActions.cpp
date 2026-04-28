@@ -460,8 +460,10 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.lastY = player->GetPositionY();
     state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
-    state.lastProgressMs = state.lastIssueMs;
-    state.lastPositionProgressMs = state.lastIssueMs;
+    // Do not treat order issuance itself as progress. These are updated only
+    // after observed distance/position gains in ShouldPreserve... .
+    state.lastProgressMs = 0;
+    state.lastPositionProgressMs = 0;
     state.mode = mode;
 }
 
