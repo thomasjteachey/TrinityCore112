@@ -522,7 +522,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     bool const hasMovementSignal = player->isMoving() ||
         player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
         player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
-        splineStarted;
+        splineInitialized;
 
     // Do not keep a dead CHASE/FOLLOW generator alive for the whole normal
     // settle window. The bad screenshots show motion=CHASE/FOLLOW with
@@ -1134,7 +1134,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
-    bool const movementGeneratorHasNotLaunched = !player->isMoving() && !player->HasUnitState(UNIT_STATE_CHASE_MOVE) && !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const movementGeneratorHasNotLaunched = !player->isMoving() &&
+        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
+        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
+        !hasActiveSpline;
     uint32 const lastIssueAgeMs = sameStallTarget && stallState.lastIssueMs != 0 && nowMs >= stallState.lastIssueMs ? nowMs - stallState.lastIssueMs : 0;
 
     if (!forceMovementWhenAlreadyInRange && activeTargetRelativeMotion && currentDistance > (safeDistance + 0.75f))
