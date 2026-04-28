@@ -105,15 +105,19 @@ uint32 BattlegroundSCM::GetHonorRewardForTeam() const
     return reward;
 }
 
-void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& /*loserHonor*/) const
+void BattlegroundSCM::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const
 {
     if (winner != ALLIANCE && winner != HORDE)
         return;
 
     if (!_humanFaceoffEverHappened)
+    {
         winnerHonor /= 2;
+        loserHonor /= 2;
+    }
 
     winnerHonor = (winnerHonor * 3.5) / 5;
+    loserHonor = (loserHonor * 3.5) / 5;
 }
 
 bool BattlegroundSCM::SetupBattleground()
