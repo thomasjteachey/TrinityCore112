@@ -2303,6 +2303,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+            target = petCaster;
+
         if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             if (!petCaster->IsValidAttackTarget(target, spellInfo))
