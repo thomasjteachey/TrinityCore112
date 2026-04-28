@@ -554,10 +554,19 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     // state the order has not actually launched; preserving it for 1.5-3s
     // pins rogues/casters at spawn or makes ranged bots appear stuck.
     uint32 const effectiveSettleMs = hasMovementSignal ? minRunMs : std::min<uint32>(minRunMs, 350);
-    bool const inSettleWindow = ageMs < effectiveSettleMs;
+    bool inSettleWindow = ageMs < effectiveSettleMs;
     bool const recentLaunch = state.lastLaunchMs != 0 && launchAgeMs < 1200;
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
+    bool const farFromDesiredRange = desiredRange > 0.0f && currentDistance > (desiredRange + 4.0f);
+
+    // Elegant fail-safe for the "stuck but preserved" state:
+    // if we are still significantly outside desired range and have neither
+    // recent launch nor distance progress, stop preserving and reissue a fresh
+    // target-relative order immediately.
+    if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !recentLaunch && !madeDistanceProgress && !recentDistanceProgress)
+        inSettleWindow = false;
+
     bool const preserve = inSettleWindow || recentLaunch || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
@@ -585,6 +594,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " spline_started=" << (splineStarted ? "yes" : "no")
                  << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
                  << " effective_settle_ms=" << effectiveSettleMs
+                 << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
                  << " reason=" << (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
@@ -616,6 +626,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " spline_started=" << (splineStarted ? "yes" : "no")
              << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
              << " effective_settle_ms=" << effectiveSettleMs
+             << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
              << " reason=" << (inSettleWindow
@@ -1275,12 +1286,12 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->Attack(target, false);
 
         RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
-        RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, forcedRange);
+        RangedPathProbeResult const followProbe = targetAttackable ? RangedPathProbeResult() : FindBestFollowProbe(player, target, forcedRange);
 
         if (!(activeTargetRelativeMotion && (player->isMoving() || player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE))))
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
         MotionPrimeResult primeResult;
-        TargetRelativeRangedMoveResult const moveResult = staleQueuedGenerator && IsUsableProbePath(followProbe)
+        TargetRelativeRangedMoveResult const moveResult = (!targetAttackable && staleQueuedGenerator && IsUsableProbePath(followProbe))
             ? IssuePathProbedFollow(player, target, followProbe, forcedRange, &primeResult)
             : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, false, &primeResult);
 
@@ -1294,8 +1305,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
         char const* label = staleQueuedGenerator
-            ? (IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase_no_follow_path")
-            : "near_edge_chase_follow_nudge";
+            ? (!targetAttackable && IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase")
+            : "near_edge_chase_nudge";
 
         std::string diag = BuildRangedMovementDiag(player, target, label,
             safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType,
@@ -1473,15 +1484,15 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         bool const hostileTarget = player->IsValidAttackTarget(target);
         float const fallbackRange = std::max(1.0f, safeDistance - 2.0f);
         RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
-        RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, fallbackRange);
+        RangedPathProbeResult const followProbe = hostileTarget ? RangedPathProbeResult() : FindBestFollowProbe(player, target, fallbackRange);
         MotionPrimeResult fallbackPrimeResult;
-        TargetRelativeRangedMoveResult const fallbackMoveResult = IsUsableProbePath(followProbe)
+        TargetRelativeRangedMoveResult const fallbackMoveResult = (!hostileTarget && IsUsableProbePath(followProbe))
             ? IssuePathProbedFollow(player, target, followProbe, fallbackRange, &fallbackPrimeResult)
-            : IssueTargetRelativeRangedMovement(player, target, fallbackRange, hostileTarget, !hostileTarget, &fallbackPrimeResult);
+            : IssueTargetRelativeRangedMovement(player, target, fallbackRange, hostileTarget, false, &fallbackPrimeResult);
         stallState.lastFallbackMs = nowMs;
         {
             std::ostringstream diag;
-            diag << (IsUsableProbePath(followProbe) ? "stagnant_pathprobed_follow" : "stagnant_reissued_target_relative_no_follow_path")
+            diag << (!hostileTarget && IsUsableProbePath(followProbe) ? "stagnant_pathprobed_follow" : "stagnant_reissued_target_relative_chase")
                  << " dist=" << postIssueDistance
                  << " desired=" << safeDistance
                  << " issued_range=" << fallbackRange
@@ -1513,11 +1524,9 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
     if (player->HasStealthAura())
     {
-        // For hostile stealth openers, use default MoveChase instead of
-        // MoveFollow. FollowMovementGenerator can choose a behind/angle point
-        // that never launches on some BG/mmaps, leaving rogues stealthed at
-        // their base. Default MoveChase is still target-relative and pathing-
-        // aware, but it does not depend on a fragile follow angle point.
+        // For hostile stealth openers, always use default MoveChase.
+        // This keeps the behavior deterministic and avoids fragile
+        // angle/near-point follow probes that can stall in BGs.
         if (player->IsValidAttackTarget(target))
         {
             if (player->GetVictim() != target || !player->IsInCombat())
@@ -1530,28 +1539,21 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
                 return;
             }
 
-            RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, 1.5f);
-            MotionPrimeResult stealthPrimeResult;
-            if (IsUsableProbePath(followProbe))
-                IssuePathProbedFollow(player, target, followProbe, 1.5f, &stealthPrimeResult);
-            else
-            {
-                bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
-                motionMaster->MoveChase(target);
-                RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
-                stealthPrimeResult = PrimeTargetRelativeMotion(player);
-                stealthPrimeResult.addToWorldCalled = preparedMotionMaster;
-            }
+            bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
+            motionMaster->MoveChase(target);
+            RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
+            MotionPrimeResult stealthPrimeResult = PrimeTargetRelativeMotion(player);
+            MarkTargetRelativeMovementLaunch(player);
+            stealthPrimeResult.addToWorldCalled = preparedMotionMaster;
 
             std::ostringstream diag;
-            diag << (IsUsableProbePath(followProbe) ? "stealth_melee_pathprobed_follow" : "stealth_melee_chase_no_follow_path")
-                 << " issued_mode=" << (IsUsableProbePath(followProbe) ? "follow" : "chase")
+            diag << "stealth_melee_chase"
+                 << " issued_mode=chase"
                  << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
                  << " moving_after=" << (player->isMoving() ? "yes" : "no")
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
             AppendMotionPrimeDiag(diag, stealthPrimeResult);
-            AppendProbeDiag(diag, "follow_probe", followProbe);
             SetLastMovementDebugStatus(player, diag.str());
             return;
         }
