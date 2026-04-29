@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "SpellHistory.h"
 #include "BattlegroundMgr.h"
@@ -2228,6 +2229,12 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 {
     if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
         return false;
+
+    // Class spell actions can issue target-relative chase/follow in the same
+    // scheduler frame. Do not immediately override those orders from lifecycle
+    // distance-band helpers (follow/stop), or bots can visibly inch/stop.
+    if (playerbot::PvpClassActions::HasRecentTargetRelativeMovementOrder(player, nullptr, 1500))
+        return true;
 
     float const distance = player->GetDistance(target);
     bool const hasLos = player->IsWithinLOSInMap(target);
