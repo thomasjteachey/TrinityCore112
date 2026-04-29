@@ -2303,6 +2303,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+            target = petCaster;
+
         if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             if (!petCaster->IsValidAttackTarget(target, spellInfo))
@@ -2809,18 +2812,39 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
     }
 
-    // Charge/Intercept target switching: when bots are already attacking one
-    // unit and gap-close a different unit, preserve the charge destination by
-    // immediately promoting the spell target to combat/selection context.
-    // Otherwise downstream pursuit logic can snap movement back to the old
-    // victim in the same tick, which looks like "stun/sound with no charge".
+    // Charge/Intercept target switching: preserve the intended enemy target in
+    // selection/combat context, but do not immediately override an active
+    // charge movement generator. For playerbot sessions an eager Attack() call
+    // can replace the charge spline with chase in the same tick, which looks
+    // like "charge debuff landed but the warrior never moved".
     if (hasChargeEffect &&
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         target && target->IsAlive())
     {
         player->SetSelection(target->GetGUID());
         if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
-            player->Attack(target, true);
+        {
+            if (player->HasUnitState(UNIT_STATE_CHARGING))
+            {
+                ObjectGuid const playerGuid = player->GetGUID();
+                ObjectGuid const targetGuid = target->GetGUID();
+                player->m_Events.AddEventAtOffset([playerGuid, targetGuid]()
+                {
+                    Player* delayedAttacker = ObjectAccessor::FindConnectedPlayer(playerGuid);
+                    if (!delayedAttacker || !delayedAttacker->IsInWorld() || !delayedAttacker->IsAlive())
+                        return;
+
+                    Unit* delayedTarget = ObjectAccessor::GetUnit(*delayedAttacker, targetGuid);
+                    if (!delayedTarget || !delayedTarget->IsAlive())
+                        return;
+
+                    if (delayedAttacker->GetVictim() != delayedTarget || !delayedAttacker->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+                        delayedAttacker->Attack(delayedTarget, true);
+                }, std::chrono::milliseconds(250));
+            }
+            else
+                player->Attack(target, true);
+        }
     }
 
     // Avoid immediate reapplication loops after quick dispels by imposing
