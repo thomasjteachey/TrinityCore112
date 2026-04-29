@@ -10509,6 +10509,13 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMa
             }
             else // For attacker
             {
+                // Revenge on target dodge/parry/block if Revenge trigger aura is active
+                if ((hitMask & (PROC_HIT_DODGE | PROC_HIT_PARRY | PROC_HIT_BLOCK)) && GetTypeId() == TYPEID_PLAYER && HasAura(12800))
+                {
+                    ModifyAuraState(AURA_STATE_DEFENSE, true);
+                    StartReactiveTimer(REACTIVE_DEFENSE);
+                }
+
                 // Overpower on victim dodge
                 if ((hitMask & PROC_HIT_DODGE) && GetTypeId() == TYPEID_PLAYER && GetClass() == CLASS_WARRIOR)
                 {
