@@ -1583,7 +1583,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
             bool const hasVictimLink = player->GetVictim() == target;
             float const stealthTravelDistance = player->GetDistance(target);
-            bool const useStealthTravelFollow = stealthTravelDistance > 45.0f;
+            bool const useStealthTravelFollow = stealthTravelDistance > 8.0f;
             if (hasVictimLink && !useStealthTravelFollow)
             {
                 motionMaster->MoveChase(target);
