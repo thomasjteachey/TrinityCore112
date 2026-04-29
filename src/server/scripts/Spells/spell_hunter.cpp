@@ -92,6 +92,7 @@ enum HunterSpells
     SPELL_HUNTER_ROUGH_PLAY_BUFF_R1 = 81294,
     SPELL_HUNTER_ROUGH_PLAY_BUFF_R2 = 81295,
     SPELL_HUNTER_OUTMANEUVER = 81297,
+    SPELL_TELEPORT_VISUAL_GURUBASHI = 64446,
     SPELL_HUNTER_WEAVING_R1 = 81288,
     SPELL_HUNTER_WEAVING_R2 = 81289,
     SPELL_HUNTER_WEAVING_AUTOSHOT_R1 = 81290,
@@ -1666,9 +1667,9 @@ class spell_hun_outmaneuver : public SpellScript
         pet->GetCharmInfo()->SetIsCommandAttack(false);
         pet->GetCharmInfo()->SetIsCommandFollow(false);
 
-        //blink graphic
-        player->CastSpell(player, 81358);
-        pet->CastSpell(pet, 81358);
+        // Gurubashi chest teleport visual
+        player->CastSpell(player, SPELL_TELEPORT_VISUAL_GURUBASHI, TRIGGERED_FULL_MASK);
+        pet->CastSpell(pet, SPELL_TELEPORT_VISUAL_GURUBASHI, TRIGGERED_FULL_MASK);
     }
 
     void Register() override
