@@ -1738,6 +1738,27 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             }
         }
 
+        // Custom: Improved Revenge (12800) makes Revenge bypass all armor.
+        if (spellInfo && attacker->GetTypeId() == TYPEID_PLAYER && attacker->HasAura(12800))
+        {
+            switch (spellInfo->Id)
+            {
+                case 6572:   // Revenge (Rank 1)
+                case 6574:   // Revenge (Rank 2)
+                case 7379:   // Revenge (Rank 3)
+                case 11600:  // Revenge (Rank 4)
+                case 11601:  // Revenge (Rank 5)
+                case 25288:  // Revenge (Rank 6)
+                case 25269:  // Revenge (Rank 7)
+                case 30357:  // Revenge (Rank 8)
+                case 57823:  // Revenge (Rank 9)
+                    armor = 0.0f;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         // Apply Player CR_ARMOR_PENETRATION rating and buffs from stances\specializations etc.
         if (attacker->GetTypeId() == TYPEID_PLAYER)
         {
