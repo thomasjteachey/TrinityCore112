@@ -92,8 +92,14 @@ public:
         m_objects.fastClear();
         m_obj2Idx.getKeys(m_objects);
         m_objects_to_push.getMembers(m_objects);
-        //assert that m_obj2Idx has all the keys
 
+        // Rebuild index table from the currently live object list and reset the pending insert set.
+        m_obj2Idx.clear();
+        for (uint32 i = 0; i < m_objects.size(); ++i)
+            if (m_objects[i])
+                m_obj2Idx.set(m_objects[i], i);
+
+        m_objects_to_push.clear();
         m_tree.build(m_objects, BoundsFunc::getBounds2);
     }
 
