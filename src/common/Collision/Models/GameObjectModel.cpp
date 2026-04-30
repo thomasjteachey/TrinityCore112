@@ -124,6 +124,12 @@ bool GameObjectModel::initialize(std::unique_ptr<GameObjectModelOwnerBase> model
     iPos = modelOwner->GetPosition();
     phasemask = modelOwner->GetPhaseMask();
     iScale = modelOwner->GetScale();
+    if (iScale == 0.0f)
+    {
+        TC_LOG_ERROR("misc", "GameObject model {} has zero scale, loading skipped", it->second.name);
+        return false;
+    }
+
     iInvScale = 1.f / iScale;
 
     G3D::Matrix3 iRotation = G3D::Matrix3::fromEulerAnglesZYX(modelOwner->GetOrientation(), 0, 0);
@@ -163,7 +169,7 @@ GameObjectModel* GameObjectModel::Create(std::unique_ptr<GameObjectModelOwnerBas
 
 bool GameObjectModel::intersectRay(const G3D::Ray& ray, float& MaxDist, bool StopAtFirstHit, uint32 ph_mask, VMAP::ModelIgnoreFlags ignoreFlags) const
 {
-    if (!(phasemask & ph_mask) || !owner->IsSpawned())
+    if (!iModel || !owner || !(phasemask & ph_mask) || !owner->IsSpawned())
         return false;
 
     float time = ray.intersectionTime(iBound);
@@ -185,7 +191,7 @@ bool GameObjectModel::intersectRay(const G3D::Ray& ray, float& MaxDist, bool Sto
 
 void GameObjectModel::intersectPoint(G3D::Vector3 const& point, VMAP::AreaInfo& info, uint32 ph_mask) const
 {
-    if (!(phasemask & ph_mask) || !owner->IsSpawned() || !isMapObject())
+    if (!iModel || !owner || !(phasemask & ph_mask) || !owner->IsSpawned() || !isMapObject())
         return;
 
     if (!iBound.contains(point))
@@ -206,7 +212,7 @@ void GameObjectModel::intersectPoint(G3D::Vector3 const& point, VMAP::AreaInfo& 
 
 bool GameObjectModel::GetLocationInfo(G3D::Vector3 const& point, VMAP::LocationInfo& info, uint32 ph_mask) const
 {
-    if (!(phasemask & ph_mask) || !owner->IsSpawned() || !isMapObject())
+    if (!iModel || !owner || !(phasemask & ph_mask) || !owner->IsSpawned() || !isMapObject())
         return false;
 
     if (!iBound.contains(point))
