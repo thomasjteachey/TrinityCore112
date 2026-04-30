@@ -10360,7 +10360,8 @@ Item* Player::GetWeaponForAttack(WeaponAttackType attackType, bool useable /*= f
         item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, slot);
     else
         item = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-    if (!item || item->GetTemplate()->Class != ITEM_CLASS_WEAPON)
+    ItemTemplate const* itemTemplate = item ? item->GetTemplate() : nullptr;
+    if (!itemTemplate || itemTemplate->Class != ITEM_CLASS_WEAPON)
         return nullptr;
 
     if (!useable)
@@ -10379,7 +10380,8 @@ Item* Player::GetShield(bool useable) const
         item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
     else
         item = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
-    if (!item || item->GetTemplate()->Class != ITEM_CLASS_ARMOR)
+    ItemTemplate const* itemTemplate = item ? item->GetTemplate() : nullptr;
+    if (!itemTemplate || itemTemplate->Class != ITEM_CLASS_ARMOR)
         return nullptr;
 
     if (!useable)
