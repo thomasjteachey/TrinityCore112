@@ -11776,7 +11776,10 @@ void Unit::SetControlled(bool apply, UnitState state)
                     ClearUnitState(UNIT_STATE_MELEE_ATTACKING);
                     SendMeleeAttackStop();
                     // SendAutoRepeatCancel ?
-                    SetFeared(true);
+                    if (HasAttackMeFearAura())
+                        SetTaunted(true);
+                    else
+                        SetFeared(true);
                 }
                 break;
             case UNIT_STATE_TAUNTED:
@@ -11849,7 +11852,12 @@ void Unit::ApplyControlStatesIfNeeded()
         SetConfused(true);
 
     if (HasUnitState(UNIT_STATE_FLEEING) || HasAuraType(SPELL_AURA_MOD_FEAR))
-        SetFeared(true);
+    {
+        if (HasAttackMeFearAura())
+            SetTaunted(true);
+        else
+            SetFeared(true);
+    }
 
     if (HasUnitState(UNIT_STATE_TAUNTED) || HasAttackMeFearAura())
         SetTaunted(true);
