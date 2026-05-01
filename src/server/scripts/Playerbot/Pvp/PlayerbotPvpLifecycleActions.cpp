@@ -423,94 +423,86 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
     if (!player || !IsWarsongGulch(player))
         return false;
 
-    static std::unordered_map<uint64, ObjectGuid> chaseTargetByBotGuid;
-    static std::unordered_map<uint64, uint32> chaseTargetSetMsByBotGuid;
-
-    auto const isValidChaseTarget = [player](Player* candidate) -> bool
-    {
-        if (!candidate || candidate == player)
-            return false;
-        if (!candidate->IsAlive() || !candidate->IsInWorld())
-            return false;
-        if (candidate->GetMapId() != player->GetMapId())
-            return false;
-        if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
-            return false;
-        return player->IsValidAttackTarget(candidate);
-    };
-
     uint32 scannedPlayers = 0;
     uint32 attackableEnemies = 0;
     Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
-    uint64 const botGuid = player->GetGUID().GetRawValue();
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    Player* selectedEnemy = nearestEnemy;
-    bool stickyTargetHeld = false;
-
-    std::unordered_map<uint64, ObjectGuid>::const_iterator stickyItr = chaseTargetByBotGuid.find(botGuid);
-    if (stickyItr != chaseTargetByBotGuid.end() && !stickyItr->second.IsEmpty())
+    if (!nearestEnemy)
     {
-        Player* stickyEnemy = ObjectAccessor::FindConnectedPlayer(stickyItr->second);
-        if (isValidChaseTarget(stickyEnemy))
+        uint32 const battlegroundId = player->GetBattlegroundId();
+        float bestKnownDistance = std::numeric_limits<float>::max();
+        std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+        for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
         {
-            uint32 const setMs = chaseTargetSetMsByBotGuid[botGuid];
-            uint32 const stickyAgeMs = nowMs - setMs;
-            float const stickyDist = player->GetDistance(stickyEnemy);
-            float const nearestDist = nearestEnemy ? player->GetDistance(nearestEnemy) : std::numeric_limits<float>::max();
-            bool const withinStickyWindow = stickyAgeMs < 6000;
-            bool const nearestNotMeaningfullyBetter = nearestDist + 12.0f >= stickyDist;
+            if (!participant || participant == player)
+                continue;
+            if (!participant->IsAlive() || !participant->IsInWorld())
+                continue;
+            if (participant->GetBattlegroundId() != battlegroundId)
+                continue;
+            if (participant->GetMapId() != player->GetMapId())
+                continue;
+            if (!player->IsValidAttackTarget(participant))
+                continue;
 
-            if (withinStickyWindow && nearestNotMeaningfullyBetter)
-            {
-                selectedEnemy = stickyEnemy;
-                stickyTargetHeld = true;
-            }
+            float const distance = player->GetDistance(participant);
+            if (distance >= bestKnownDistance)
+                continue;
+
+            bestKnownDistance = distance;
+            nearestEnemy = participant;
         }
     }
 
-    if (!selectedEnemy)
+    if (!nearestEnemy)
     {
-        chaseTargetByBotGuid.erase(botGuid);
-        chaseTargetSetMsByBotGuid.erase(botGuid);
+        Battleground* battleground = player->GetBattleground();
+        if (battleground && CanIssueBotMovement(player))
+        {
+            TeamId const botTeam = ResolveBotTeamId(player);
+            TeamId const enemyTeam = botTeam == TEAM_ALLIANCE ? TEAM_HORDE : (botTeam == TEAM_HORDE ? TEAM_ALLIANCE : TEAM_NEUTRAL);
+            if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
+            {
+                bool const advancedTowardEnemyBase = IssueMovePointThrottled(player, *enemyStart, 20.0f, 1500) || player->isMoving();
+                EmitBattlegroundGmDebug(player,
+                    "wsg-pursuit=advance-to-enemy-base issued=" + std::to_string(advancedTowardEnemyBase ? 1 : 0) +
+                    " scanned=" + std::to_string(scannedPlayers) +
+                    " attackable=" + std::to_string(attackableEnemies) +
+                    " fallback=known-enemy-none", 1200);
+                return advancedTowardEnemyBase;
+            }
+        }
+
         EmitBattlegroundGmDebug(player,
             "wsg-pursuit=no-enemy scanned=" + std::to_string(scannedPlayers) +
             " attackable=" + std::to_string(attackableEnemies), 1500);
         return false;
     }
 
-    if (!stickyTargetHeld || chaseTargetByBotGuid[botGuid] != selectedEnemy->GetGUID())
-    {
-        chaseTargetByBotGuid[botGuid] = selectedEnemy->GetGUID();
-        chaseTargetSetMsByBotGuid[botGuid] = nowMs;
-    }
-
-    float const distanceToEnemy = player->GetDistance(selectedEnemy);
+    float const distanceToEnemy = player->GetDistance(nearestEnemy);
     float const combatEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
     if (distanceToEnemy <= combatEngageDistance)
     {
         EmitBattlegroundGmDebug(player,
-            "wsg-pursuit=engage target=" + selectedEnemy->GetName() +
+            "wsg-pursuit=engage target=" + nearestEnemy->GetName() +
             " dist=" + std::to_string(int32(distanceToEnemy)) +
             " scan=" + std::to_string(scannedPlayers) +
-            " attackable=" + std::to_string(attackableEnemies) +
-            " sticky=" + std::to_string(stickyTargetHeld ? 1 : 0), 1200);
+            " attackable=" + std::to_string(attackableEnemies), 1200);
         return playerbot::EngageNearestEnemyPlayer(player, combatEngageDistance);
     }
 
-    bool chaseIssued = MoveTowardUnit(player, selectedEnemy, 20.0f);
+    bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
     if (!chaseIssued && CanIssueBotMovement(player))
     {
         // Last-resort kick in case pursuit helper declines movement while the
         // bot is otherwise free to move.
-        chaseIssued = IssueMovePointThrottled(player, selectedEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
+        chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
     }
 
     EmitBattlegroundGmDebug(player,
-        "wsg-pursuit=chase target=" + selectedEnemy->GetName() +
+        "wsg-pursuit=chase target=" + nearestEnemy->GetName() +
         " dist=" + std::to_string(int32(distanceToEnemy)) +
         " scan=" + std::to_string(scannedPlayers) +
         " attackable=" + std::to_string(attackableEnemies) +
-        " sticky=" + std::to_string(stickyTargetHeld ? 1 : 0) +
         " issued=" + std::to_string(chaseIssued ? 1 : 0), 1200);
     return chaseIssued;
 }
