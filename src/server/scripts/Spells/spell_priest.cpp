@@ -1490,7 +1490,7 @@ class spell_pri_silence : public AuraScript
         if (!caster || !target)
             return;
 
-        if (caster->HasAura(81431))
+        if (caster->HasAura(81431) && caster->HasAura(15473))
         {
             caster->CastSpell(target, 81430, true);
         }
