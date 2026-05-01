@@ -458,7 +458,8 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
         Battleground* battleground = player->GetBattleground();
         if (battleground && CanIssueBotMovement(player))
         {
-            TeamId const enemyTeam = ResolveTeamId(player, true);
+            TeamId const botTeam = ResolveBotTeamId(player);
+            TeamId const enemyTeam = botTeam == TEAM_ALLIANCE ? TEAM_HORDE : (botTeam == TEAM_HORDE ? TEAM_ALLIANCE : TEAM_NEUTRAL);
             if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
             {
                 bool const advancedTowardEnemyBase = IssueMovePointThrottled(player, *enemyStart, 20.0f, 1500) || player->isMoving();
