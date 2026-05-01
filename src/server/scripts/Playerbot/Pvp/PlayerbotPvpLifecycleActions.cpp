@@ -432,8 +432,12 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
         return false;
 
     bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
-    if (!chaseIssued && CanIssueBotMovement(player))
+    if (!chaseIssued)
     {
+        // If direct pursuit did not issue movement, clear stale motion so a new
+        // path request can be accepted even when the bot is parked at gate edge.
+        player->GetMotionMaster()->Clear();
+
         PathGenerator path(player);
         bool const hasPath = path.CalculatePath(
             nearestEnemy->GetPositionX(), nearestEnemy->GetPositionY(), nearestEnemy->GetPositionZ(), false);
