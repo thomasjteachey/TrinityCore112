@@ -21,6 +21,7 @@
 #include "Globals/ObjectAccessor.h"
 #include "Item.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "Movement/AbstractFollower.h"
 #include "Player.h"
 #include "BattlegroundMgr.h"
@@ -38,6 +39,8 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
+#include <unordered_map>
+#include <cmath>
 #include <algorithm>
 #include <cctype>
 
@@ -133,6 +136,192 @@ char const* ToString(MovementGeneratorType motionType)
         default:
             return "unknown";
     }
+}
+
+struct ManagedBotUpdatePulseState
+{
+    uint64 tickCount = 0;
+    uint32 lastUpdateMs = 0;
+    uint32 lastDiff = 0;
+    uint32 lastProgressMs = 0;
+    uint32 lastLogMs = 0;
+    ObjectGuid motionTargetGuid = ObjectGuid::Empty;
+    float lastX = 0.0f;
+    float lastY = 0.0f;
+    float lastZ = 0.0f;
+    float lastDistance = 0.0f;
+    float lastProgressX = 0.0f;
+    float lastProgressY = 0.0f;
+    float lastProgressZ = 0.0f;
+    MovementGeneratorType lastMotionType = IDLE_MOTION_TYPE;
+    bool lastMoving = false;
+    bool lastChaseMove = false;
+    bool lastFollowMove = false;
+    bool lastSplineInitialized = false;
+    bool lastSplineFinalized = true;
+    bool lastSplineStarted = false;
+    int32 lastSplineIndex = 0;
+    int32 lastSplineDuration = 0;
+    float lastSplineVelocity = 0.0f;
+};
+
+std::unordered_map<uint64, ManagedBotUpdatePulseState> g_ManagedBotUpdatePulseByGuid;
+
+Unit* GetCurrentMotionTarget(Player* bot)
+{
+    if (!bot)
+        return nullptr;
+
+    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        if (MovementGenerator* movement = motionMaster->GetCurrentMovementGenerator())
+            if (AbstractFollower* follower = dynamic_cast<AbstractFollower*>(movement))
+                return follower->GetTarget();
+
+    return nullptr;
+}
+
+void AppendSplineSnapshot(std::ostringstream& os, Player const* bot, char const* prefix)
+{
+    char const* pfx = prefix ? prefix : "spline";
+    if (!bot || !bot->movespline)
+    {
+        os << ' ' << pfx << "_spline=null";
+        return;
+    }
+
+    os << ' ' << pfx << "_spline_init=" << (bot->movespline->Initialized() ? "yes" : "no")
+       << ' ' << pfx << "_spline_done=" << (bot->movespline->Finalized() ? "yes" : "no")
+       << ' ' << pfx << "_spline_started=" << (bot->movespline->HasStarted() ? "yes" : "no")
+       << ' ' << pfx << "_spline_idx=" << bot->movespline->currentPathIdx()
+       << ' ' << pfx << "_spline_duration=" << bot->movespline->Duration()
+       << ' ' << pfx << "_spline_velocity=" << bot->movespline->Velocity();
+}
+
+void RecordManagedBotUpdatePulse(Player* bot, uint32 diff)
+{
+    if (!bot || !playerbot::IsManagedRandomBot(bot))
+        return;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    ManagedBotUpdatePulseState& state = g_ManagedBotUpdatePulseByGuid[bot->GetGUID().GetRawValue()];
+    Unit* motionTarget = GetCurrentMotionTarget(bot);
+    ObjectGuid const motionTargetGuid = motionTarget ? motionTarget->GetGUID() : ObjectGuid::Empty;
+    float const currentDistance = motionTarget ? bot->GetDistance(motionTarget) : 0.0f;
+    MovementGeneratorType const motionType = bot->GetMotionMaster() ? bot->GetMotionMaster()->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+    bool const firstSample = state.tickCount == 0;
+    bool const targetChanged = state.motionTargetGuid != motionTargetGuid;
+    float const dx = bot->GetPositionX() - state.lastX;
+    float const dy = bot->GetPositionY() - state.lastY;
+    float const dz = bot->GetPositionZ() - state.lastZ;
+    float const posDelta2D = std::sqrt(dx * dx + dy * dy);
+    float const posDelta3D = std::sqrt(dx * dx + dy * dy + dz * dz);
+    bool const distanceImproved = motionTarget && state.lastDistance > 0.0f && currentDistance + 0.10f < state.lastDistance;
+    bool const positionMoved = !firstSample && (posDelta2D >= 0.05f || posDelta3D >= 0.10f);
+
+    if (firstSample || targetChanged || distanceImproved || positionMoved)
+    {
+        state.lastProgressMs = nowMs;
+        state.lastProgressX = bot->GetPositionX();
+        state.lastProgressY = bot->GetPositionY();
+        state.lastProgressZ = bot->GetPositionZ();
+    }
+
+    state.tickCount++;
+    state.lastUpdateMs = nowMs;
+    state.lastDiff = diff;
+    state.motionTargetGuid = motionTargetGuid;
+    state.lastX = bot->GetPositionX();
+    state.lastY = bot->GetPositionY();
+    state.lastZ = bot->GetPositionZ();
+    state.lastDistance = currentDistance;
+    state.lastMotionType = motionType;
+    state.lastMoving = bot->isMoving();
+    state.lastChaseMove = bot->HasUnitState(UNIT_STATE_CHASE_MOVE);
+    state.lastFollowMove = bot->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    state.lastSplineInitialized = bot->movespline && bot->movespline->Initialized();
+    state.lastSplineFinalized = !bot->movespline || bot->movespline->Finalized();
+    state.lastSplineStarted = bot->movespline && bot->movespline->HasStarted();
+    state.lastSplineIndex = bot->movespline ? bot->movespline->currentPathIdx() : -1;
+    state.lastSplineDuration = bot->movespline ? bot->movespline->Duration() : 0;
+    state.lastSplineVelocity = bot->movespline ? bot->movespline->Velocity() : 0.0f;
+
+    bool const targetRelativeMotion = motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE;
+    bool const claimsMovement = bot->isMoving() || bot->HasUnitState(UNIT_STATE_CHASE_MOVE) || bot->HasUnitState(UNIT_STATE_FOLLOW_MOVE) || (bot->movespline && !bot->movespline->Finalized());
+    uint32 const noProgressMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
+    if (targetRelativeMotion && claimsMovement && noProgressMs >= 1000 && (state.lastLogMs == 0 || nowMs >= state.lastLogMs + 1000))
+    {
+        state.lastLogMs = nowMs;
+        std::ostringstream diag;
+        diag << "PB update pulse stalled: bot=" << bot->GetName()
+             << " guid=" << bot->GetGUID().ToString()
+             << " diff=" << diff
+             << " ticks=" << state.tickCount
+             << " no_progress_ms=" << noProgressMs
+             << " motion=" << uint32(motionType)
+             << " moving=" << (bot->isMoving() ? "yes" : "no")
+             << " chase_move=" << (bot->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+             << " follow_move=" << (bot->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+             << " not_move=" << (bot->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
+             << " root=" << (bot->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
+             << " stunned=" << (bot->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
+             << " casting_prevent=" << (bot->IsMovementPreventedByCasting() ? "yes" : "no")
+             << " pos=(" << bot->GetMapId() << ':' << bot->GetPositionX() << ',' << bot->GetPositionY() << ',' << bot->GetPositionZ() << ')';
+        if (motionTarget)
+            diag << " motion_target=" << motionTarget->GetName() << " motion_target_dist=" << currentDistance;
+        else
+            diag << " motion_target=none";
+        AppendSplineSnapshot(diag, bot, "pulse");
+        TC_LOG_DEBUG("playerbots.pvp.motion", "{}", diag.str());
+    }
+}
+
+std::string BuildManagedBotUpdateDiagnosticLine(Player* bot)
+{
+    if (!bot)
+        return "PB update diag unavailable.";
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    auto itr = g_ManagedBotUpdatePulseByGuid.find(bot->GetGUID().GetRawValue());
+    if (itr == g_ManagedBotUpdatePulseByGuid.end())
+        return "PB update diag: no-update-pulse-recorded";
+
+    ManagedBotUpdatePulseState const& state = itr->second;
+    uint32 const updateAgeMs = state.lastUpdateMs != 0 && nowMs >= state.lastUpdateMs ? nowMs - state.lastUpdateMs : 0;
+    uint32 const progressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
+    float const progressDx = bot->GetPositionX() - state.lastProgressX;
+    float const progressDy = bot->GetPositionY() - state.lastProgressY;
+    float const progressDz = bot->GetPositionZ() - state.lastProgressZ;
+    float const progressDelta2D = std::sqrt(progressDx * progressDx + progressDy * progressDy);
+    float const progressDelta3D = std::sqrt(progressDx * progressDx + progressDy * progressDy + progressDz * progressDz);
+
+    std::ostringstream diag;
+    diag << "PB update diag:"
+         << " ticks=" << state.tickCount
+         << " last_update_age_ms=" << updateAgeMs
+         << " last_diff=" << state.lastDiff
+         << " progress_age_ms=" << progressAgeMs
+         << " progress_delta_2d=" << progressDelta2D
+         << " progress_delta_3d=" << progressDelta3D
+         << " last_motion=" << uint32(state.lastMotionType)
+         << " last_moving=" << (state.lastMoving ? "yes" : "no")
+         << " last_chase=" << (state.lastChaseMove ? "yes" : "no")
+         << " last_follow=" << (state.lastFollowMove ? "yes" : "no")
+         << " last_spline_init=" << (state.lastSplineInitialized ? "yes" : "no")
+         << " last_spline_done=" << (state.lastSplineFinalized ? "yes" : "no")
+         << " last_spline_started=" << (state.lastSplineStarted ? "yes" : "no")
+         << " last_spline_idx=" << state.lastSplineIndex
+         << " last_spline_duration=" << state.lastSplineDuration
+         << " last_spline_velocity=" << state.lastSplineVelocity;
+
+    Unit* motionTarget = GetCurrentMotionTarget(bot);
+    if (motionTarget)
+        diag << " motion_target=" << motionTarget->GetName() << " motion_target_dist=" << bot->GetDistance(motionTarget);
+    else
+        diag << " motion_target=none";
+
+    AppendSplineSnapshot(diag, bot, "now");
+    return diag.str();
 }
 
 std::string BuildManagedBotStatusLine(Player* bot)
@@ -402,8 +591,9 @@ class PlayerbotLifecyclePlayerScript final : public PlayerScript
 public:
     PlayerbotLifecyclePlayerScript() : PlayerScript("PlayerbotLifecyclePlayerScript") { }
 
-    void OnUpdate(Player* player, uint32 /*diff*/) override
+    void OnUpdate(Player* player, uint32 diff) override
     {
+        RecordManagedBotUpdatePulse(player, diff);
         playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
     }
 
@@ -453,6 +643,7 @@ public:
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
         receiver->Whisper(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(receiver), LANG_UNIVERSAL, sender);
+        receiver->Whisper(BuildManagedBotUpdateDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
 
         receiver->Whisper(BuildManagedBotScmQueueDiagnosticLine(receiver), LANG_UNIVERSAL, sender);
     }

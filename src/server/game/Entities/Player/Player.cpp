@@ -136,8 +136,12 @@ namespace HiddenSets
 
 namespace
 {
-    bool IsBattlegroundEquipChangeAllowed(uint8 slot)
+    bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
+        if (Battleground const* battleground = player->GetBattleground())
+            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM)
+                return true;
+
         switch (slot)
         {
         case EQUIPMENT_SLOT_TRINKET1:
@@ -10356,7 +10360,8 @@ Item* Player::GetWeaponForAttack(WeaponAttackType attackType, bool useable /*= f
         item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, slot);
     else
         item = GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
-    if (!item || item->GetTemplate()->Class != ITEM_CLASS_WEAPON)
+    ItemTemplate const* itemTemplate = item ? item->GetTemplate() : nullptr;
+    if (!itemTemplate || itemTemplate->Class != ITEM_CLASS_WEAPON)
         return nullptr;
 
     if (!useable)
@@ -10375,7 +10380,8 @@ Item* Player::GetShield(bool useable) const
         item = GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
     else
         item = GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
-    if (!item || item->GetTemplate()->Class != ITEM_CLASS_ARMOR)
+    ItemTemplate const* itemTemplate = item ? item->GetTemplate() : nullptr;
+    if (!itemTemplate || itemTemplate->Class != ITEM_CLASS_ARMOR)
         return nullptr;
 
     if (!useable)
@@ -11781,7 +11787,7 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16& dest, Item* pItem, bool
             if (not_loading)
             {
                 if (Battleground* battleground = GetBattleground())
-                    if (!IsBattlegroundEquipChangeAllowed(eslot))
+                    if (!IsBattlegroundEquipChangeAllowed(this, eslot))
                         return EQUIP_ERR_CANT_DO_RIGHT_NOW;
             }
 
@@ -11936,7 +11942,7 @@ InventoryResult Player::CanUnequipItem(uint16 pos, bool swap) const
     uint8 slot = pos & 255;
     if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
         if (Battleground* battleground = GetBattleground())
-            if (!IsBattlegroundEquipChangeAllowed(slot))
+            if (!IsBattlegroundEquipChangeAllowed(this, slot))
                 return EQUIP_ERR_CANT_DO_RIGHT_NOW;
 
     return EQUIP_ERR_OK;
@@ -26154,9 +26160,14 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
 {
     uint32 CurTalentPoints = GetFreeTalentPoints();
 
-    if (InBattleground() || InArena())
-    {
+    if (InArena())
         return;
+
+    if (InBattleground())
+    {
+        Battleground const* battleground = GetBattleground();
+        if (!battleground || battleground->GetTypeID(true) != BATTLEGROUND_SCM)
+            return;
     }
 
     if (CurTalentPoints == 0)

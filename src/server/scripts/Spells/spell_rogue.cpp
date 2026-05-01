@@ -154,34 +154,39 @@ class spell_rog_garrote : public SpellScript
         if (!player->HasAura(SPELL_ROGUE_GARROTE_POISON))
             return;
 
-        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
-        if (!item)
-            return;
-
-        for (uint8 slot = 0; slot < MAX_ENCHANTMENT_SLOT; ++slot)
+        auto applyWeaponPoisons = [player, target](Item* weapon) -> void
         {
-            SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(item->GetEnchantmentId(EnchantmentSlot(slot)));
-            if (!enchant)
-                continue;
+            if (!weapon)
+                return;
 
-            for (uint8 s = 0; s < 3; ++s)
+            for (uint8 slot = 0; slot < MAX_ENCHANTMENT_SLOT; ++slot)
             {
-                if (enchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
+                SpellItemEnchantmentEntry const* enchant = sSpellItemEnchantmentStore.LookupEntry(weapon->GetEnchantmentId(EnchantmentSlot(slot)));
+                if (!enchant)
                     continue;
 
-                SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(enchant->EffectArg[s]);
-                if (!spellInfo)
+                for (uint8 s = 0; s < 3; ++s)
                 {
-                    TC_LOG_ERROR("spells", "Player::CastItemCombatSpell Enchant {}, player (Name: {}, {}) cast unknown spell {}", enchant->ID, player->GetName(), player->GetGUID().ToString(), enchant->EffectArg[s]);
-                    continue;
+                    if (enchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
+                        continue;
+
+                    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(enchant->EffectArg[s]);
+                    if (!spellInfo)
+                    {
+                        TC_LOG_ERROR("spells", "Player::CastItemCombatSpell Enchant {}, player (Name: {}, {}) cast unknown spell {}", enchant->ID, player->GetName(), player->GetGUID().ToString(), enchant->EffectArg[s]);
+                        continue;
+                    }
+
+                    if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE || spellInfo->Dispel != DISPEL_POISON)
+                        continue;
+
+                    player->CastSpell(target, enchant->EffectArg[s], weapon);
                 }
-
-                if (spellInfo->SpellFamilyName != SPELLFAMILY_ROGUE || spellInfo->Dispel != DISPEL_POISON)
-                    continue;
-
-                player->CastSpell(target, enchant->EffectArg[s], item);
             }
-        }
+        };
+
+        applyWeaponPoisons(player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND));
+        applyWeaponPoisons(player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND));
     }
 
     void Register() override

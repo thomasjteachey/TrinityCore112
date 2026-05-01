@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "SpellHistory.h"
 #include "BattlegroundMgr.h"
@@ -422,95 +423,36 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
     if (!player || !IsWarsongGulch(player))
         return false;
 
-    static std::unordered_map<uint64, ObjectGuid> chaseTargetByBotGuid;
-    static std::unordered_map<uint64, uint32> chaseTargetSetMsByBotGuid;
-
-    auto const isValidChaseTarget = [player](Player* candidate) -> bool
-    {
-        if (!candidate || candidate == player)
-            return false;
-        if (!candidate->IsAlive() || !candidate->IsInWorld())
-            return false;
-        if (candidate->GetMapId() != player->GetMapId())
-            return false;
-        if (candidate->GetBattlegroundId() != player->GetBattlegroundId())
-            return false;
-        return player->IsValidAttackTarget(candidate);
-    };
-
-    uint32 scannedPlayers = 0;
-    uint32 attackableEnemies = 0;
-    Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
-    uint64 const botGuid = player->GetGUID().GetRawValue();
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-    Player* selectedEnemy = nearestEnemy;
-    bool stickyTargetHeld = false;
-
-    std::unordered_map<uint64, ObjectGuid>::const_iterator stickyItr = chaseTargetByBotGuid.find(botGuid);
-    if (stickyItr != chaseTargetByBotGuid.end() && !stickyItr->second.IsEmpty())
-    {
-        Player* stickyEnemy = ObjectAccessor::FindConnectedPlayer(stickyItr->second);
-        if (isValidChaseTarget(stickyEnemy))
-        {
-            uint32 const setMs = chaseTargetSetMsByBotGuid[botGuid];
-            uint32 const stickyAgeMs = nowMs - setMs;
-            float const stickyDist = player->GetDistance(stickyEnemy);
-            float const nearestDist = nearestEnemy ? player->GetDistance(nearestEnemy) : std::numeric_limits<float>::max();
-            bool const withinStickyWindow = stickyAgeMs < 6000;
-            bool const nearestNotMeaningfullyBetter = nearestDist + 12.0f >= stickyDist;
-
-            if (withinStickyWindow && nearestNotMeaningfullyBetter)
-            {
-                selectedEnemy = stickyEnemy;
-                stickyTargetHeld = true;
-            }
-        }
-    }
-
-    if (!selectedEnemy)
-    {
-        chaseTargetByBotGuid.erase(botGuid);
-        chaseTargetSetMsByBotGuid.erase(botGuid);
-        EmitBattlegroundGmDebug(player,
-            "wsg-pursuit=no-enemy scanned=" + std::to_string(scannedPlayers) +
-            " attackable=" + std::to_string(attackableEnemies), 1500);
-        return false;
-    }
-
-    if (!stickyTargetHeld || chaseTargetByBotGuid[botGuid] != selectedEnemy->GetGUID())
-    {
-        chaseTargetByBotGuid[botGuid] = selectedEnemy->GetGUID();
-        chaseTargetSetMsByBotGuid[botGuid] = nowMs;
-    }
-
-    float const distanceToEnemy = player->GetDistance(selectedEnemy);
     float const combatEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
-    if (distanceToEnemy <= combatEngageDistance)
-    {
-        EmitBattlegroundGmDebug(player,
-            "wsg-pursuit=engage target=" + selectedEnemy->GetName() +
-            " dist=" + std::to_string(int32(distanceToEnemy)) +
-            " scan=" + std::to_string(scannedPlayers) +
-            " attackable=" + std::to_string(attackableEnemies) +
-            " sticky=" + std::to_string(stickyTargetHeld ? 1 : 0), 1200);
-        return playerbot::EngageNearestEnemyPlayer(player, combatEngageDistance);
-    }
+    if (playerbot::EngageNearestEnemyPlayer(player, combatEngageDistance))
+        return true;
 
-    bool chaseIssued = MoveTowardUnit(player, selectedEnemy, 20.0f);
-    if (!chaseIssued && CanIssueBotMovement(player))
-    {
-        // Last-resort kick in case pursuit helper declines movement while the
-        // bot is otherwise free to move.
-        chaseIssued = IssueMovePointThrottled(player, selectedEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
-    }
+    Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr);
+    if (!nearestEnemy)
+        return false;
 
-    EmitBattlegroundGmDebug(player,
-        "wsg-pursuit=chase target=" + selectedEnemy->GetName() +
-        " dist=" + std::to_string(int32(distanceToEnemy)) +
-        " scan=" + std::to_string(scannedPlayers) +
-        " attackable=" + std::to_string(attackableEnemies) +
-        " sticky=" + std::to_string(stickyTargetHeld ? 1 : 0) +
-        " issued=" + std::to_string(chaseIssued ? 1 : 0), 1200);
+    bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
+    if (!chaseIssued)
+    {
+        // If direct pursuit did not issue movement, clear stale motion so a new
+        // path request can be accepted even when the bot is parked at gate edge.
+        player->GetMotionMaster()->Clear();
+
+        PathGenerator path(player);
+        bool const hasPath = path.CalculatePath(
+            nearestEnemy->GetPositionX(), nearestEnemy->GetPositionY(), nearestEnemy->GetPositionZ(), false);
+
+        if (!hasPath || (path.GetPathType() & PATHFIND_NOPATH))
+        {
+            // Gate/fence geometry can block direct first-segment pursuit from
+            // the spawn berm. Nudge toward midfield, then resume enemy pursuit.
+            static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
+            chaseIssued = IssueMovePointThrottled(player, midPoint, 8.0f, 700) || player->isMoving();
+        }
+
+        if (!chaseIssued)
+            chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
+    }
     return chaseIssued;
 }
 
@@ -2228,6 +2170,12 @@ bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfi
 {
     if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
         return false;
+
+    // Class spell actions can issue target-relative chase/follow in the same
+    // scheduler frame. Do not immediately override those orders from lifecycle
+    // distance-band helpers (follow/stop), or bots can visibly inch/stop.
+    if (playerbot::PvpClassActions::HasRecentTargetRelativeMovementOrder(player, nullptr, 1500))
+        return true;
 
     float const distance = player->GetDistance(target);
     bool const hasLos = player->IsWithinLOSInMap(target);

@@ -1738,6 +1738,27 @@ void Unit::HandleEmoteCommand(Emote emoteId)
             }
         }
 
+        // Custom: Improved Revenge (12800) makes Revenge bypass all armor.
+        if (spellInfo && attacker->GetTypeId() == TYPEID_PLAYER && attacker->HasAura(12800))
+        {
+            switch (spellInfo->Id)
+            {
+                case 6572:   // Revenge (Rank 1)
+                case 6574:   // Revenge (Rank 2)
+                case 7379:   // Revenge (Rank 3)
+                case 11600:  // Revenge (Rank 4)
+                case 11601:  // Revenge (Rank 5)
+                case 25288:  // Revenge (Rank 6)
+                case 25269:  // Revenge (Rank 7)
+                case 30357:  // Revenge (Rank 8)
+                case 57823:  // Revenge (Rank 9)
+                    armor = 0.0f;
+                    break;
+                default:
+                    break;
+            }
+        }
+
         // Apply Player CR_ARMOR_PENETRATION rating and buffs from stances\specializations etc.
         if (attacker->GetTypeId() == TYPEID_PLAYER)
         {
@@ -10509,6 +10530,13 @@ void Unit::ProcSkillsAndReactives(bool isVictim, Unit* procTarget, uint32 typeMa
             }
             else // For attacker
             {
+                // Revenge on target dodge/parry/block if Revenge trigger aura is active
+                if ((hitMask & (PROC_HIT_DODGE | PROC_HIT_PARRY | PROC_HIT_BLOCK)) && GetTypeId() == TYPEID_PLAYER && HasAura(12800))
+                {
+                    ModifyAuraState(AURA_STATE_DEFENSE, true);
+                    StartReactiveTimer(REACTIVE_DEFENSE);
+                }
+
                 // Overpower on victim dodge
                 if ((hitMask & PROC_HIT_DODGE) && GetTypeId() == TYPEID_PLAYER && GetClass() == CLASS_WARRIOR)
                 {
@@ -10683,19 +10711,52 @@ MovementGeneratorType Unit::GetDefaultMovementType() const
     return IDLE_MOTION_TYPE;
 }
 
+namespace
+{
+bool ShouldLogPlayerbotMotionStop(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    return player && player->InBattleground() && player->GetName().rfind("Bot", 0) == 0;
+}
+
+void LogPlayerbotStopMovingTrace(Unit const* unit, char const* phase)
+{
+    if (!ShouldLogPlayerbotMotionStop(unit))
+        return;
+
+    Player const* player = unit->ToPlayer();
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+    TC_LOG_DEBUG("playerbots.pvp.motion",
+        "PB StopMoving trace: phase={} bot={} guid={} map={} pos=({}, {}, {}) motion={} moving={} chase_move={} follow_move={} not_move={} root={} stunned={} casting_prevent={} spline_init={} spline_done={} spline_started={} spline_idx={} spline_duration={} spline_velocity={}",
+        phase ? phase : "unknown", player->GetName(), player->GetGUID().ToString(), player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+        uint32(motionType), player->isMoving(), player->HasUnitState(UNIT_STATE_CHASE_MOVE), player->HasUnitState(UNIT_STATE_FOLLOW_MOVE), player->HasUnitState(UNIT_STATE_NOT_MOVE),
+        player->HasUnitState(UNIT_STATE_ROOT), player->HasUnitState(UNIT_STATE_STUNNED), player->IsMovementPreventedByCasting(),
+        player->movespline && player->movespline->Initialized(), player->movespline ? player->movespline->Finalized() : true,
+        player->movespline && player->movespline->HasStarted(), player->movespline ? player->movespline->currentPathIdx() : -1,
+        player->movespline ? player->movespline->Duration() : 0, player->movespline ? player->movespline->Velocity() : 0.0f);
+}
+}
+
 void Unit::StopMoving()
 {
+    LogPlayerbotStopMovingTrace(this, "enter");
     ClearUnitState(UNIT_STATE_MOVING);
 
     // not need send any packets if not in world or not moving
     if (!IsInWorld() || movespline->Finalized())
+    {
+        LogPlayerbotStopMovingTrace(this, !IsInWorld() ? "exit_not_in_world" : "exit_spline_finalized");
         return;
+    }
 
     // Update position now since Stop does not start a new movement that can be updated later
     if (movespline->HasStarted())
         UpdateSplinePosition();
     Movement::MoveSplineInit init(this);
     init.Stop();
+    LogPlayerbotStopMovingTrace(this, "after_stop");
 }
 
 void Unit::PauseMovement(uint32 timer/* = 0*/, uint8 slot/* = 0*/, bool forced/* = true*/)
@@ -11715,7 +11776,10 @@ void Unit::SetControlled(bool apply, UnitState state)
                     ClearUnitState(UNIT_STATE_MELEE_ATTACKING);
                     SendMeleeAttackStop();
                     // SendAutoRepeatCancel ?
-                    SetFeared(true);
+                    if (HasAttackMeFearAura())
+                        SetTaunted(true);
+                    else
+                        SetFeared(true);
                 }
                 break;
             case UNIT_STATE_TAUNTED:
@@ -11788,7 +11852,12 @@ void Unit::ApplyControlStatesIfNeeded()
         SetConfused(true);
 
     if (HasUnitState(UNIT_STATE_FLEEING) || HasAuraType(SPELL_AURA_MOD_FEAR))
-        SetFeared(true);
+    {
+        if (HasAttackMeFearAura())
+            SetTaunted(true);
+        else
+            SetFeared(true);
+    }
 
     if (HasUnitState(UNIT_STATE_TAUNTED) || HasAttackMeFearAura())
         SetTaunted(true);
@@ -11973,7 +12042,8 @@ void Unit::SetTaunted(bool apply)
         {
             ToPlayer()->Dismount();
             ToPlayer()->RemoveAurasByType(SPELL_AURA_MOUNTED);
-            ToPlayer()->SetFacingToObject(caster, true);
+            if (caster)
+                ToPlayer()->SetFacingToObject(caster, true);
         }
         if (caster)
         {
@@ -13821,6 +13891,9 @@ void Unit::SetFacingTo(float ori, bool force)
 
 void Unit::SetFacingToObject(WorldObject const* object, bool force)
 {
+    if (!object)
+        return;
+
     // do not face when already moving
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;

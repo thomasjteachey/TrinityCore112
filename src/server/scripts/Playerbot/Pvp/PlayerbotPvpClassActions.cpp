@@ -67,8 +67,8 @@ bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo
 void SetLastExecutionStatus(Player const* player, std::string const& status);
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
+void MarkTargetRelativeMovementLaunch(Player const* player);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
-void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, char const* prefix);
 
 struct LastLosCastFailureState
 {
@@ -441,6 +441,7 @@ struct TargetRelativeMoveOrderState
     float lastY = 0.0f;
     float lastZ = 0.0f;
     uint32 lastIssueMs = 0;
+    uint32 lastLaunchMs = 0;
     uint32 lastProgressMs = 0;
     uint32 lastPositionProgressMs = 0;
     uint8 mode = 0; // 1=chase, 2=follow
@@ -461,75 +462,32 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     state.lastY = player->GetPositionY();
     state.lastZ = player->GetPositionZ();
     state.lastIssueMs = GameTime::GetGameTimeMS();
-    // Do not count the act of issuing MoveChase/MoveFollow as movement progress.
-    // Progress timestamps should only update after actual distance/position
-    // improvement, otherwise the preserve logic keeps dead generators alive for
-    // several seconds with moving=no.
+    state.lastLaunchMs = 0;
+    // Do not treat order issuance itself as progress. These are updated only
+    // after observed distance/position gains in ShouldPreserve... .
     state.lastProgressMs = 0;
     state.lastPositionProgressMs = 0;
     state.mode = mode;
 }
 
-void AppendMotionSnapshotDiag(std::ostringstream& diag, Player const* player, char const* prefix)
+void MarkTargetRelativeMovementLaunch(Player const* player)
 {
-    char const* pfx = prefix ? prefix : "motion";
     if (!player)
-    {
-        diag << ' ' << pfx << "_snapshot=player_null";
         return;
-    }
 
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    if (!motionMaster)
-    {
-        diag << ' ' << pfx << "_snapshot=mm_null";
+    auto itr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    if (itr == g_TargetRelativeMoveOrderByGuid.end())
         return;
-    }
 
-    MovementGeneratorType const motionType = motionMaster->GetCurrentMovementGeneratorType();
-    MovementGenerator const* top = motionMaster->GetCurrentMovementGenerator();
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const launched = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        hasActiveSpline;
+    if (!launched)
+        return;
 
-    diag << ' ' << pfx << "_mm_size=" << motionMaster->Size()
-         << ' ' << pfx << "_slot=" << uint32(motionMaster->GetCurrentSlot())
-         << ' ' << pfx << "_type=" << uint32(motionType)
-         << ' ' << pfx << "_top=" << (top ? "yes" : "no");
-
-    if (top)
-    {
-        diag << ' ' << pfx << "_top_type=" << uint32(top->GetMovementGeneratorType())
-             << ' ' << pfx << "_top_flags=" << uint32(top->Flags)
-             << ' ' << pfx << "_top_init=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING) ? "yes" : "no")
-             << ' ' << pfx << "_top_inited=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZED) ? "yes" : "no")
-             << ' ' << pfx << "_top_speed=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING) ? "yes" : "no")
-             << ' ' << pfx << "_top_interrupt=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_INTERRUPTED) ? "yes" : "no")
-             << ' ' << pfx << "_top_paused=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_PAUSED) ? "yes" : "no")
-             << ' ' << pfx << "_top_timed_paused=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_TIMED_PAUSED) ? "yes" : "no")
-             << ' ' << pfx << "_top_deact=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED) ? "yes" : "no")
-             << ' ' << pfx << "_top_final=" << (top->HasFlag(MOVEMENTGENERATOR_FLAG_FINALIZED) ? "yes" : "no")
-             << ' ' << pfx << "_top_base_state=" << top->BaseUnitState;
-    }
-
-    diag << ' ' << pfx << "_unit_moving=" << (player->isMoving() ? "yes" : "no")
-         << ' ' << pfx << "_unit_chase=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
-         << ' ' << pfx << "_unit_follow=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
-         << ' ' << pfx << "_unit_notmove=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-         << ' ' << pfx << "_unit_root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
-         << ' ' << pfx << "_unit_stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
-         << ' ' << pfx << "_casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
-
-    if (player->movespline)
-    {
-        diag << ' ' << pfx << "_spline_init=" << (player->movespline->Initialized() ? "yes" : "no")
-             << ' ' << pfx << "_spline_done=" << (player->movespline->Finalized() ? "yes" : "no")
-             << ' ' << pfx << "_spline_started=" << (player->movespline->HasStarted() ? "yes" : "no")
-             << ' ' << pfx << "_spline_falling=" << (player->movespline->isFalling() ? "yes" : "no")
-             << ' ' << pfx << "_spline_cyclic=" << (player->movespline->isCyclic() ? "yes" : "no")
-             << ' ' << pfx << "_spline_idx=" << player->movespline->currentPathIdx()
-             << ' ' << pfx << "_spline_duration=" << player->movespline->Duration()
-             << ' ' << pfx << "_spline_velocity=" << player->movespline->Velocity();
-    }
-    else
-        diag << ' ' << pfx << "_spline=null";
+    itr->second.lastLaunchMs = GameTime::GetGameTimeMS();
 }
 
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
@@ -562,8 +520,15 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     float const positionDelta2D = std::sqrt(dx * dx + dy * dy);
     float const positionDelta3D = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-    bool const madeDistanceProgress = state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
     bool const madePositionProgress = positionDelta2D >= 0.35f || positionDelta3D >= 0.50f;
+    bool const splineInitialized = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const splineStarted = splineInitialized && player->movespline->HasStarted();
+    bool const hasMovementSignal = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        splineInitialized;
+    bool const rawDistanceProgress = state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
+    bool const madeDistanceProgress = rawDistanceProgress && (hasMovementSignal || madePositionProgress);
 
     if (madeDistanceProgress)
     {
@@ -581,38 +546,30 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
 
     uint32 const distanceProgressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
     uint32 const positionProgressAgeMs = state.lastPositionProgressMs != 0 && nowMs >= state.lastPositionProgressMs ? nowMs - state.lastPositionProgressMs : 0;
+    uint32 const launchAgeMs = state.lastLaunchMs != 0 && nowMs >= state.lastLaunchMs ? nowMs - state.lastLaunchMs : 0;
 
-    MovementGenerator const* top = motionMaster->GetCurrentMovementGenerator();
-    bool const topInitPending = top && top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
-    bool const topDeactivated = top && top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
-    bool const generatorStarted = player->isMoving() ||
-        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
-        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
-    bool const movementBlocked = player->HasUnitState(UNIT_STATE_NOT_MOVE) ||
-        player->HasUnitState(UNIT_STATE_ROOT) ||
-        player->HasUnitState(UNIT_STATE_STUNNED) ||
-        player->HasUnitState(UNIT_STATE_CONFUSED) ||
-        player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->IsMovementPreventedByCasting();
-    bool const unlaunchedTargetMotion = !generatorStarted && !topInitPending && !topDeactivated && !movementBlocked;
-
-    // Do not preserve CHASE/FOLLOW for multiple seconds if the generator never
-    // actually launches. That was the visible stuck state:
-    // motion=chase/follow, moving=no, chase_move=no, follow_move=no,
-    // reason=settle_window.
-    uint32 constexpr UnlaunchedMotionGraceMs = 650;
-    uint32 constexpr StartedButUnprovenMotionGraceMs = 1200;
-    bool const inSettleWindow = ageMs < minRunMs;
-    bool const inUnlaunchedGraceWindow = ageMs < UnlaunchedMotionGraceMs;
-    bool const inStartedGraceWindow = ageMs < StartedButUnprovenMotionGraceMs;
-    bool const preserveSettle = inSettleWindow && (
-        (unlaunchedTargetMotion && inUnlaunchedGraceWindow) ||
-        (generatorStarted && inStartedGraceWindow) ||
-        topInitPending ||
-        movementBlocked);
+    // Do not keep a dead CHASE/FOLLOW generator alive for the whole normal
+    // settle window. The bad screenshots show motion=CHASE/FOLLOW with
+    // moving=no, chase_move=no, follow_move=no, and spline_started=no. In that
+    // state the order has not actually launched; preserving it for 1.5-3s
+    // pins rogues/casters at spawn or makes ranged bots appear stuck.
+    uint32 const effectiveSettleMs = hasMovementSignal ? minRunMs : std::min<uint32>(minRunMs, 350);
+    bool inSettleWindow = ageMs < effectiveSettleMs;
+    bool const recentLaunch = state.lastLaunchMs != 0 && launchAgeMs < 1200;
+    bool const credibleRecentLaunch = recentLaunch && (hasMovementSignal || splineStarted);
     bool const recentDistanceProgress = state.lastProgressMs != 0 && distanceProgressAgeMs < minRunMs;
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
-    bool const preserve = preserveSettle || madeDistanceProgress || madePositionProgress || recentDistanceProgress || recentPositionProgress;
+    bool const credibleRecentDistanceProgress = recentDistanceProgress && (hasMovementSignal || recentPositionProgress || madePositionProgress);
+    bool const farFromDesiredRange = desiredRange > 0.0f && currentDistance > (desiredRange + 4.0f);
+
+    // Elegant fail-safe for the "stuck but preserved" state:
+    // if we are still significantly outside desired range and have neither
+    // recent launch nor distance progress, stop preserving and reissue a fresh
+    // target-relative order immediately.
+    if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !credibleRecentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
+        inSettleWindow = false;
+
+    bool const preserve = inSettleWindow || credibleRecentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
 
     if (!preserve)
     {
@@ -623,6 +580,8 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " motion=" << uint32(motionType)
                  << " mode=" << uint32(state.mode)
                  << " age_ms=" << ageMs
+                 << " launch_age_ms=" << launchAgeMs
+                 << " launch_credible=" << (credibleRecentLaunch ? "yes" : "no")
                  << " distance_progress_age_ms=" << distanceProgressAgeMs
                  << " position_progress_age_ms=" << positionProgressAgeMs
                  << " desired_range=" << desiredRange
@@ -634,19 +593,15 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " moving=" << (player->isMoving() ? "yes" : "no")
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+                 << " spline_init=" << (splineInitialized ? "yes" : "no")
+                 << " spline_started=" << (splineStarted ? "yes" : "no")
+                 << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
+                 << " raw_dist_progress=" << (rawDistanceProgress ? "yes" : "no")
+                 << " effective_settle_ms=" << effectiveSettleMs
+                 << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-                 << " root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
-                 << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-                 << " top_init=" << (topInitPending ? "yes" : "no")
-                 << " top_deact=" << (topDeactivated ? "yes" : "no")
-                 << " generator_started=" << (generatorStarted ? "yes" : "no")
-                 << " movement_blocked=" << (movementBlocked ? "yes" : "no")
-                 << " unlaunched=" << (unlaunchedTargetMotion ? "yes" : "no")
-                 << " unlaunched_grace=" << (inUnlaunchedGraceWindow ? "yes" : "no")
-                 << " started_grace=" << (inStartedGraceWindow ? "yes" : "no")
-                 << " reason=" << (unlaunchedTargetMotion ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
-            AppendMotionSnapshotDiag(diag, player, "preserve_fail");
+                 << " reason=" << (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
             *reasonOut = diag.str();
         }
         return false;
@@ -659,6 +614,8 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " motion=" << uint32(motionType)
              << " mode=" << uint32(state.mode)
              << " age_ms=" << ageMs
+             << " launch_age_ms=" << launchAgeMs
+             << " launch_credible=" << (credibleRecentLaunch ? "yes" : "no")
              << " distance_progress_age_ms=" << distanceProgressAgeMs
              << " position_progress_age_ms=" << positionProgressAgeMs
              << " desired_range=" << desiredRange
@@ -670,19 +627,17 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " moving=" << (player->isMoving() ? "yes" : "no")
              << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
              << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+             << " spline_init=" << (splineInitialized ? "yes" : "no")
+             << " spline_started=" << (splineStarted ? "yes" : "no")
+             << " movement_signal=" << (hasMovementSignal ? "yes" : "no")
+             << " raw_dist_progress=" << (rawDistanceProgress ? "yes" : "no")
+             << " effective_settle_ms=" << effectiveSettleMs
+             << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
-             << " root=" << (player->HasUnitState(UNIT_STATE_ROOT) ? "yes" : "no")
-             << " stunned=" << (player->HasUnitState(UNIT_STATE_STUNNED) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-             << " top_init=" << (topInitPending ? "yes" : "no")
-             << " top_deact=" << (topDeactivated ? "yes" : "no")
-             << " generator_started=" << (generatorStarted ? "yes" : "no")
-             << " movement_blocked=" << (movementBlocked ? "yes" : "no")
-             << " unlaunched=" << (unlaunchedTargetMotion ? "yes" : "no")
-             << " unlaunched_grace=" << (inUnlaunchedGraceWindow ? "yes" : "no")
-             << " started_grace=" << (inStartedGraceWindow ? "yes" : "no")
-             << " reason=" << (preserveSettle ? "settle_window" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress"));
-        AppendMotionSnapshotDiag(diag, player, "preserve_ok");
+             << " reason=" << (inSettleWindow
+                    ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle")
+                    : (credibleRecentLaunch ? "recent_launch" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress")));
         *reasonOut = diag.str();
     }
 
@@ -924,6 +879,7 @@ TargetRelativeRangedMoveResult IssuePathProbedFollow(Player* player, Unit* targe
     motionMaster->MoveFollow(target, safeRange, ChaseAngle(angle, float(M_PI_4)));
     RecordTargetRelativeMovementOrder(player, target, safeRange, 2);
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
     if (primeOut)
         *primeOut = prime;
@@ -957,11 +913,19 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
     }
 
     bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
-    if (targetAttackable && !forceFollow)
+    bool canUseHostileChase = targetAttackable && !forceFollow;
+    if (canUseHostileChase && player->GetVictim() != target)
+    {
+        player->Attack(target, false);
+        canUseHostileChase = player->GetVictim() == target;
+    }
+
+    if (canUseHostileChase)
     {
         motionMaster->MoveChase(target, BuildEdgeDistanceChaseRange(safeDistance));
         RecordTargetRelativeMovementOrder(player, target, safeDistance, 1);
         MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+        MarkTargetRelativeMovementLaunch(player);
         prime.addToWorldCalled = preparedMotionMaster;
         if (primeOut)
             *primeOut = prime;
@@ -971,13 +935,14 @@ TargetRelativeRangedMoveResult IssueTargetRelativeRangedMovement(Player* player,
     motionMaster->MoveFollow(target, safeDistance, player->GetFollowAngle());
     RecordTargetRelativeMovementOrder(player, target, safeDistance, 2);
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
     if (primeOut)
         *primeOut = prime;
     return TargetRelativeRangedMoveResult::FollowIssued;
 }
 
-TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* target)
+TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* target, MotionPrimeResult* primeOut = nullptr)
 {
     if (!player || !target)
         return TargetRelativeRangedMoveResult::None;
@@ -993,7 +958,10 @@ TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* tar
         motionMaster->MoveFollow(target, 1.0f, player->GetFollowAngle());
         RecordTargetRelativeMovementOrder(player, target, 1.0f, 2);
         MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+        MarkTargetRelativeMovementLaunch(player);
         prime.addToWorldCalled = preparedMotionMaster;
+        if (primeOut)
+            *primeOut = prime;
         return TargetRelativeRangedMoveResult::FollowIssued;
     }
 
@@ -1007,7 +975,10 @@ TargetRelativeRangedMoveResult IssueContactChaseRescue(Player* player, Unit* tar
     motionMaster->MoveChase(target);
     RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
     MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     prime.addToWorldCalled = preparedMotionMaster;
+    if (primeOut)
+        *primeOut = prime;
     return TargetRelativeRangedMoveResult::ChaseIssued;
 }
 
@@ -1076,7 +1047,6 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
     else
         diag << " order_match=none";
 
-    AppendMotionSnapshotDiag(diag, player, "move");
     return diag.str();
 }
 
@@ -1087,10 +1057,12 @@ bool IsStaleTargetRelativeMotion(Player const* player)
 
     MotionMaster const* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
     return (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE) &&
         !player->isMoving() &&
         !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
+        !hasActiveSpline &&
         !player->HasUnitState(UNIT_STATE_NOT_MOVE) &&
         !player->IsMovementPreventedByCasting();
 }
@@ -1193,7 +1165,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         uint32 lastFallbackMs = 0;
         uint32 lastIssueMs = 0;
         uint8 stagnantSamples = 0;
-        uint8 lastIssuedMode = 0; // 1=chase, 2=follow
+        uint8 lastIssuedMode = 0; // 1=chase, 2=follow, 3=contact_rescue
     };
 
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
@@ -1226,7 +1198,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
-    bool const movementGeneratorHasNotLaunched = !player->isMoving() && !player->HasUnitState(UNIT_STATE_CHASE_MOVE) && !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const movementGeneratorHasNotLaunched = !player->isMoving() &&
+        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
+        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
+        !hasActiveSpline;
     uint32 const lastIssueAgeMs = sameStallTarget && stallState.lastIssueMs != 0 && nowMs >= stallState.lastIssueMs ? nowMs - stallState.lastIssueMs : 0;
 
     if (!forceMovementWhenAlreadyInRange && activeTargetRelativeMotion && currentDistance > (safeDistance + 0.75f))
@@ -1300,8 +1276,10 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
                 return;
             }
 
-            // Give the queued generator a settle window after a failed prime.
-            // Only after that window do we clear/reissue.
+            // Give the queued generator a short settle window after a failed
+            // prime, then force a reissue if still unlaunched. Waiting ~2.5s
+            // here left bots visibly stuck with motion=follow/chase but
+            // moving=no, no spline, and no CHASE_MOVE/FOLLOW_MOVE state.
             if (lastIssueAgeMs < 900)
             {
                 std::ostringstream extra;
@@ -1318,21 +1296,31 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             }
         }
 
-        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 2500;
+        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
+        bool const prefersContactRescue = requestedSafeDistance <= 8.0f;
+        bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 1400 && prefersContactRescue;
+        uint8 const prevIssuedMode = stallState.lastIssuedMode;
+        uint32 const mmSizeBeforeIssue = motionMaster->Size();
+        MovementGeneratorType const mmMotionBeforeIssue = motionMaster->GetCurrentMovementGeneratorType();
 
         if (targetAttackable && (player->GetVictim() != target || !player->IsInCombat()))
             player->Attack(target, false);
 
         RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
-        RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, forcedRange);
+        RangedPathProbeResult const followProbe = targetAttackable ? RangedPathProbeResult() : FindBestFollowProbe(player, target, forcedRange);
 
-        if (!(activeTargetRelativeMotion && (player->isMoving() || player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE))))
+        bool const shouldClearBeforeIssue = initialMotionType == POINT_MOTION_TYPE;
+        if (shouldClearBeforeIssue)
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
         MotionPrimeResult primeResult;
-        TargetRelativeRangedMoveResult const moveResult = staleQueuedGenerator && IsUsableProbePath(followProbe)
+        TargetRelativeRangedMoveResult const moveResult = shouldEscalateContactRescue
+            ? IssueContactChaseRescue(player, target, &primeResult)
+            : ((!targetAttackable && staleQueuedGenerator && IsUsableProbePath(followProbe))
             ? IssuePathProbedFollow(player, target, followProbe, forcedRange, &primeResult)
-            : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, false, &primeResult);
+            : IssueTargetRelativeRangedMovement(player, target, forcedRange, targetAttackable, false, &primeResult));
+        uint32 const mmSizeAfterIssue = motionMaster->Size();
+        MovementGeneratorType const mmMotionAfterIssue = motionMaster->GetCurrentMovementGeneratorType();
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -1340,12 +1328,19 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastFallbackMs = nowMs;
         stallState.lastIssueMs = nowMs;
         stallState.lastIssuedRange = forcedRange;
-        stallState.lastIssuedMode = moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1;
+        stallState.lastIssuedMode = shouldEscalateContactRescue ? 3 : (moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1);
         stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
-        char const* label = staleQueuedGenerator
-            ? (IsUsableProbePath(followProbe) ? "near_edge_stale_pathprobed_follow" : "near_edge_stale_reissued_chase_no_follow_path")
-            : "near_edge_chase_follow_nudge";
+        char const* label = "near_edge_chase_nudge";
+        if (staleQueuedGenerator)
+        {
+            if (shouldEscalateContactRescue)
+                label = "near_edge_stale_contact_rescue";
+            else if (!targetAttackable && IsUsableProbePath(followProbe))
+                label = "near_edge_stale_pathprobed_follow";
+            else
+                label = "near_edge_stale_reissued_chase";
+        }
 
         std::string diag = BuildRangedMovementDiag(player, target, label,
             safeDistance, forcedRange, targetLos, targetAttackable, true, initialMotionType,
@@ -1354,6 +1349,13 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         extra << diag
               << " stale=" << (staleQueuedGenerator ? "yes" : "no")
               << " issue_age_ms=" << lastIssueAgeMs
+              << " cleared_before_issue=" << (shouldClearBeforeIssue ? "yes" : "no")
+              << " contact_rescue_allowed=" << (prefersContactRescue ? "yes" : "no")
+              << " rescue_prev_mode=" << uint32(prevIssuedMode)
+              << " mm_size_before_issue=" << mmSizeBeforeIssue
+              << " mm_size_after_issue=" << mmSizeAfterIssue
+              << " mm_motion_before_issue=" << uint32(mmMotionBeforeIssue)
+              << " mm_motion_after_issue=" << uint32(mmMotionAfterIssue)
               << " force_in_range=" << (forceMovementWhenAlreadyInRange ? "yes" : "no")
               << " forced_reason=" << (forcedReason ? forcedReason : "none")
               << " requested_edge=" << requestedSafeDistance;
@@ -1379,7 +1381,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     }
 
     bool hardStaleTargetRelative = activeTargetRelativeMotion && movementGeneratorHasNotLaunched &&
-        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
+        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 3000;
 
     // Same protection for the generic ranged path: before clearing/reissuing a
     // stale Chase/Follow generator, prime the existing generator once in place.
@@ -1523,15 +1525,15 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         bool const hostileTarget = player->IsValidAttackTarget(target);
         float const fallbackRange = std::max(1.0f, safeDistance - 2.0f);
         RangedPathProbeResult const chaseProbe = ProbeChasePath(player, target);
-        RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, fallbackRange);
+        RangedPathProbeResult const followProbe = hostileTarget ? RangedPathProbeResult() : FindBestFollowProbe(player, target, fallbackRange);
         MotionPrimeResult fallbackPrimeResult;
-        TargetRelativeRangedMoveResult const fallbackMoveResult = IsUsableProbePath(followProbe)
+        TargetRelativeRangedMoveResult const fallbackMoveResult = (!hostileTarget && IsUsableProbePath(followProbe))
             ? IssuePathProbedFollow(player, target, followProbe, fallbackRange, &fallbackPrimeResult)
-            : IssueTargetRelativeRangedMovement(player, target, fallbackRange, hostileTarget, !hostileTarget, &fallbackPrimeResult);
+            : IssueTargetRelativeRangedMovement(player, target, fallbackRange, hostileTarget, false, &fallbackPrimeResult);
         stallState.lastFallbackMs = nowMs;
         {
             std::ostringstream diag;
-            diag << (IsUsableProbePath(followProbe) ? "stagnant_pathprobed_follow" : "stagnant_reissued_target_relative_no_follow_path")
+            diag << (!hostileTarget && IsUsableProbePath(followProbe) ? "stagnant_pathprobed_follow" : "stagnant_reissued_target_relative_chase")
                  << " dist=" << postIssueDistance
                  << " desired=" << safeDistance
                  << " issued_range=" << fallbackRange
@@ -1563,11 +1565,9 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
     if (player->HasStealthAura())
     {
-        // For hostile stealth openers, use default MoveChase instead of
-        // MoveFollow. FollowMovementGenerator can choose a behind/angle point
-        // that never launches on some BG/mmaps, leaving rogues stealthed at
-        // their base. Default MoveChase is still target-relative and pathing-
-        // aware, but it does not depend on a fragile follow angle point.
+        // For hostile stealth openers, always use default MoveChase.
+        // This keeps the behavior deterministic and avoids fragile
+        // angle/near-point follow probes that can stall in BGs.
         if (player->IsValidAttackTarget(target))
         {
             if (player->GetVictim() != target || !player->IsInCombat())
@@ -1580,28 +1580,36 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
                 return;
             }
 
-            RangedPathProbeResult const followProbe = FindBestFollowProbe(player, target, 1.5f);
-            MotionPrimeResult stealthPrimeResult;
-            if (IsUsableProbePath(followProbe))
-                IssuePathProbedFollow(player, target, followProbe, 1.5f, &stealthPrimeResult);
-            else
+            bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
+            bool const hasVictimLink = player->GetVictim() == target;
+            float const stealthTravelDistance = player->GetDistance(target);
+            bool const useStealthTravelFollow = stealthTravelDistance > 8.0f;
+            if (hasVictimLink && !useStealthTravelFollow)
             {
-                bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
                 motionMaster->MoveChase(target);
                 RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
-                stealthPrimeResult = PrimeTargetRelativeMotion(player);
-                stealthPrimeResult.addToWorldCalled = preparedMotionMaster;
             }
+            else
+            {
+                float const stealthFollowRange = useStealthTravelFollow ? 3.0f : 1.5f;
+                motionMaster->MoveFollow(target, stealthFollowRange, player->GetFollowAngle());
+                RecordTargetRelativeMovementOrder(player, target, stealthFollowRange, 2);
+            }
+            MotionPrimeResult stealthPrimeResult = PrimeTargetRelativeMotion(player);
+            MarkTargetRelativeMovementLaunch(player);
+            stealthPrimeResult.addToWorldCalled = preparedMotionMaster;
 
             std::ostringstream diag;
-            diag << (IsUsableProbePath(followProbe) ? "stealth_melee_pathprobed_follow" : "stealth_melee_chase_no_follow_path")
-                 << " issued_mode=" << (IsUsableProbePath(followProbe) ? "follow" : "chase")
+            diag << "stealth_melee_chase"
+                 << " issued_mode=" << (hasVictimLink ? (useStealthTravelFollow ? "follow_stealth_travel" : "chase") : "follow_no_victim")
                  << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
                  << " moving_after=" << (player->isMoving() ? "yes" : "no")
+                 << " target_is_victim=" << (hasVictimLink ? "yes" : "no")
+                 << " stealth_travel_follow=" << (useStealthTravelFollow ? "yes" : "no")
+                 << " travel_dist=" << stealthTravelDistance
                  << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
                  << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
             AppendMotionPrimeDiag(diag, stealthPrimeResult);
-            AppendProbeDiag(diag, "follow_probe", followProbe);
             SetLastMovementDebugStatus(player, diag.str());
             return;
         }
@@ -1827,14 +1835,7 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
-    uint64 const rawGuid = player->GetGUID().GetRawValue();
-    auto& previous = g_LastClassExecutionStatusByGuid[rawGuid];
-    if (previous != status)
-    {
-        TC_LOG_DEBUG("playerbots.pvp.classspell", "PB exec diag: bot={} guid={} status={}",
-            player->GetName(), player->GetGUID().ToString(), status);
-        previous = status;
-    }
+    g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void SetLastMovementDebugStatus(Player const* player, std::string const& status)
@@ -1842,14 +1843,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
-    uint64 const rawGuid = player->GetGUID().GetRawValue();
-    auto& previous = g_LastMovementDebugStatusByGuid[rawGuid];
-    if (previous != status)
-    {
-        TC_LOG_DEBUG("playerbots.pvp.classspell", "PB move diag: bot={} guid={} status={}",
-            player->GetName(), player->GetGUID().ToString(), status);
-        previous = status;
-    }
+    g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
 void ForcePlayerbotDismount(Player* player)
@@ -2145,6 +2139,119 @@ void RepositionDruidAfterTravelFormRecovery(Player* player)
         player->GetMotionMaster()->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
 }
 
+
+bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget, SpellInfo const* spellInfo,
+    playerbot::PvpClassSpellContext const& context, bool isFoodOrDrinkSpell, std::string* diagOut)
+{
+    if (!player || !castTarget || !spellInfo || isFoodOrDrinkSpell)
+        return false;
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    // If this spell is genuinely ready from the current position, stopping is
+    // correct. The bug we are chasing is a cast-time/autorepeat spell stopping
+    // an active range/LOS movement order before the bot can actually reach the
+    // target it is trying to move toward.
+    bool const genericLos = player->IsWithinLOSInMap(castTarget);
+    float const maxRange = spellInfo->GetMaxRange(false);
+    float const minRange = spellInfo->GetMinRange(false);
+    bool const maxOk = maxRange <= 0.0f || player->IsWithinDistInMap(castTarget, maxRange);
+    bool const minOk = minRange <= 0.0f || !player->IsWithinDistInMap(castTarget, minRange);
+    bool const genericReady = genericLos && maxOk && minOk;
+    if (genericReady)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    bool const activeTargetRelativeMotion = motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE;
+
+    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    TargetRelativeMoveOrderState const* order = orderItr != g_TargetRelativeMoveOrderByGuid.end() ? &orderItr->second : nullptr;
+
+    Unit* moveTarget = nullptr;
+    if (order && !order->targetGuid.IsEmpty())
+        moveTarget = ObjectAccessor::GetUnit(*player, order->targetGuid);
+
+    float moveTargetDistance = moveTarget ? player->GetDistance(moveTarget) : 0.0f;
+    bool const activeMoveOrder = order && !order->targetGuid.IsEmpty();
+    bool const moveOrderStillOutside = activeMoveOrder && moveTarget && order->issuedRange > 0.0f && moveTargetDistance > order->issuedRange + 0.75f;
+    bool const hasMoveSignal = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const orderAgeMs = order && order->lastIssueMs != 0 && nowMs >= order->lastIssueMs ? nowMs - order->lastIssueMs : 0;
+    bool const moveOrderMatchesCastTarget = moveTarget && moveTarget == castTarget;
+
+    std::string preserveDiag;
+    bool const preservingTargetRelativeMotion = moveOrderMatchesCastTarget &&
+        ShouldPreserveTargetRelativeMovement(player, castTarget, order ? order->issuedRange : 0.0f, 1800,
+            "stationary_cast_defer_motion_preserved", &preserveDiag);
+
+    // Defer only while the active CHASE/FOLLOW order is still making progress
+    // (or inside a short launch window). This avoids repeated defer loops when
+    // a movement generator exists but never launched (moving=no/spline=no).
+    bool const shouldDefer = preservingTargetRelativeMotion || (moveOrderStillOutside && orderAgeMs < 6000);
+    if (!shouldDefer)
+        return false;
+
+    if (CanIssueFollowCommands(player))
+    {
+        if (!genericLos)
+        {
+            float const desiredRange = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally
+                ? std::max(1.5f, std::min(8.0f, maxRange > 0.0f ? (maxRange - 1.0f) : 8.0f))
+                : ComputeLosRecoveryRange(player, castTarget, maxRange);
+            IssueRangedApproachMovement(player, castTarget, desiredRange, true, "stationary_cast_deferred_no_los");
+        }
+        else if (!maxOk)
+        {
+            float const desiredRange = maxRange > 0.0f ? std::max(1.0f, maxRange - 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().spellRange - 1.0f);
+            IssueRangedApproachMovement(player, castTarget, desiredRange, false, "stationary_cast_deferred_out_of_range");
+        }
+        else if (!minOk)
+        {
+            float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+            player->GetMotionMaster()->MoveFollow(castTarget, desiredRange, player->GetFollowAngle());
+        }
+    }
+
+    if (diagOut)
+    {
+        std::ostringstream diag;
+        diag << "stationary_cast_stop_suppressed"
+             << " spell=" << spellInfo->Id
+             << " action=" << (context.actionName ? context.actionName : "none")
+             << " reason=" << (context.reason ? context.reason : "none")
+             << " cast_target=" << castTarget->GetGUID().ToString()
+             << " cast_dist=" << player->GetDistance(castTarget)
+             << " cast_los=" << (genericLos ? "yes" : "no")
+             << " cast_max=" << maxRange
+             << " cast_max_ok=" << (maxOk ? "yes" : "no")
+             << " cast_min=" << minRange
+             << " cast_min_ok=" << (minOk ? "yes" : "no")
+             << " motion=" << uint32(motionType)
+             << " moving=" << (player->isMoving() ? "yes" : "no")
+             << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+             << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+             << " move_signal=" << (hasMoveSignal ? "yes" : "no")
+             << " order_present=" << (activeMoveOrder ? "yes" : "no")
+             << " order_matches_cast_target=" << (moveOrderMatchesCastTarget ? "yes" : "no")
+             << " order_age_ms=" << orderAgeMs
+             << " order_range=" << (order ? order->issuedRange : 0.0f)
+             << " order_target=" << (moveTarget ? moveTarget->GetGUID().ToString() : "none")
+             << " order_target_dist=" << moveTargetDistance
+             << " order_outside=" << (moveOrderStillOutside ? "yes" : "no")
+             << " motion_preserve=" << (preservingTargetRelativeMotion ? "yes" : "no")
+             << " preserve_diag=" << (preserveDiag.empty() ? "none" : preserveDiag);
+        *diagOut = diag.str();
+    }
+
+    return true;
+}
+
 bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& context, std::string& failureReason)
 {
     failureReason.clear();
@@ -2195,6 +2302,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             failureReason = "pet_missing";
             return false;
         }
+
+        if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+            target = petCaster;
 
         if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
@@ -2340,9 +2450,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // stealth early, but continue issuing movement so rogues still
             // close to opener distance instead of idling in place.
             //
-            // AttackStop can clear active movement intent in some states, so
-            // only call it when we are actively swinging a victim.
-            if (player->GetVictim())
+            // AttackStop can clear victim linkage that MoveChase relies on.
+            // Only stop attacks when already in melee contact where an actual
+            // swing could break stealth; keep victim linkage while closing.
+            if (player->GetVictim() && target && player->IsWithinMeleeRange(target))
                 player->AttackStop();
 
             if (CanIssueFollowCommands(player))
@@ -2524,9 +2635,25 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
+    //
+    // Important: do not stop an active range/LOS movement order for a stationary
+    // spell that is not ready yet. The stopper diagnostics showed exactly this
+    // failure mode: PB move diag had a live CHASE/FOLLOW order, then a
+    // stop_moving_request reason=cast_time_or_autorepeat killed the spline and
+    // left the bot inching or stuck.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    if (spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell)
+    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell;
+    if (requiresStationaryCast)
     {
+        std::string stationaryDeferDiag;
+        if (!itemTarget && target && ShouldDeferStationaryCastForActiveMovement(player, target, spellInfo, context, isFoodOrDrinkSpell, &stationaryDeferDiag))
+        {
+            SetLastMovementDebugStatus(player, stationaryDeferDiag);
+            TC_LOG_DEBUG("playerbots.pvp.classspell", "PB stationary cast stop suppressed: {}", stationaryDeferDiag);
+            failureReason = "stationary_cast_deferred_for_active_movement";
+            return false;
+        }
+
         player->StopMoving();
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
         {
@@ -2685,18 +2812,39 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
     }
 
-    // Charge/Intercept target switching: when bots are already attacking one
-    // unit and gap-close a different unit, preserve the charge destination by
-    // immediately promoting the spell target to combat/selection context.
-    // Otherwise downstream pursuit logic can snap movement back to the old
-    // victim in the same tick, which looks like "stun/sound with no charge".
+    // Charge/Intercept target switching: preserve the intended enemy target in
+    // selection/combat context, but do not immediately override an active
+    // charge movement generator. For playerbot sessions an eager Attack() call
+    // can replace the charge spline with chase in the same tick, which looks
+    // like "charge debuff landed but the warrior never moved".
     if (hasChargeEffect &&
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         target && target->IsAlive())
     {
         player->SetSelection(target->GetGUID());
         if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
-            player->Attack(target, true);
+        {
+            if (player->HasUnitState(UNIT_STATE_CHARGING))
+            {
+                ObjectGuid const playerGuid = player->GetGUID();
+                ObjectGuid const targetGuid = target->GetGUID();
+                player->m_Events.AddEventAtOffset([playerGuid, targetGuid]()
+                {
+                    Player* delayedAttacker = ObjectAccessor::FindConnectedPlayer(playerGuid);
+                    if (!delayedAttacker || !delayedAttacker->IsInWorld() || !delayedAttacker->IsAlive())
+                        return;
+
+                    Unit* delayedTarget = ObjectAccessor::GetUnit(*delayedAttacker, targetGuid);
+                    if (!delayedTarget || !delayedTarget->IsAlive())
+                        return;
+
+                    if (delayedAttacker->GetVictim() != delayedTarget || !delayedAttacker->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+                        delayedAttacker->Attack(delayedTarget, true);
+                }, std::chrono::milliseconds(250));
+            }
+            else
+                player->Attack(target, true);
+        }
     }
 
     // Avoid immediate reapplication loops after quick dispels by imposing
@@ -2842,6 +2990,25 @@ std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)
     return itr->second;
 }
 
+
+bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player, Unit const* target, uint32 maxAgeMs)
+{
+    if (!player)
+        return false;
+
+    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    if (orderItr == g_TargetRelativeMoveOrderByGuid.end())
+        return false;
+
+    TargetRelativeMoveOrderState const& order = orderItr->second;
+    if (target && order.targetGuid != target->GetGUID())
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const ageMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : std::numeric_limits<uint32>::max();
+    return ageMs <= maxAgeMs;
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
@@ -2924,6 +3091,18 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 break;
             case PvpClassSpellContext::MovementDirective::ReachSpellRange:
             {
+                // Root-cause fix for rogue opener stalls:
+                // LOS recovery can emit ReachSpellRange with a tiny range (e.g. 4y)
+                // while stealthed, but stealth opener movement should use the
+                // deterministic melee chase path. Routing this through ranged
+                // approach caused repeated slow/stale reissues in BG starts.
+                if (player->GetClass() == CLASS_ROGUE && player->HasStealthAura() &&
+                    movementTarget && player->IsValidAttackTarget(movementTarget))
+                {
+                    IssueMeleeApproachMovement(player, movementTarget);
+                    break;
+                }
+
                 float desiredRange = std::max(1.0f,
                     context.movementFollowRange > 0.0f ? context.movementFollowRange : (PvpCore::GetConfig().spellRange - 1.0f));
                 Unit* approachTarget = movementTarget;
