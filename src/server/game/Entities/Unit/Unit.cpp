@@ -12042,7 +12042,8 @@ void Unit::SetTaunted(bool apply)
         {
             ToPlayer()->Dismount();
             ToPlayer()->RemoveAurasByType(SPELL_AURA_MOUNTED);
-            ToPlayer()->SetFacingToObject(caster, true);
+            if (caster)
+                ToPlayer()->SetFacingToObject(caster, true);
         }
         if (caster)
         {
@@ -13890,6 +13891,9 @@ void Unit::SetFacingTo(float ori, bool force)
 
 void Unit::SetFacingToObject(WorldObject const* object, bool force)
 {
+    if (!object)
+        return;
+
     // do not face when already moving
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
