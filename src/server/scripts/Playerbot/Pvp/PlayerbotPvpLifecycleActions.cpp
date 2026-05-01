@@ -433,7 +433,22 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
 
     bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
     if (!chaseIssued && CanIssueBotMovement(player))
-        chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
+    {
+        PathGenerator path(player);
+        bool const hasPath = path.CalculatePath(
+            nearestEnemy->GetPositionX(), nearestEnemy->GetPositionY(), nearestEnemy->GetPositionZ(), false);
+
+        if (!hasPath || (path.GetPathType() & PATHFIND_NOPATH))
+        {
+            // Gate/fence geometry can block direct first-segment pursuit from
+            // the spawn berm. Nudge toward midfield, then resume enemy pursuit.
+            static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
+            chaseIssued = IssueMovePointThrottled(player, midPoint, 8.0f, 700) || player->isMoving();
+        }
+
+        if (!chaseIssued)
+            chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
+    }
     return chaseIssued;
 }
 
