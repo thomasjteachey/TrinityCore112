@@ -12048,6 +12048,7 @@ void Unit::SetTaunted(bool apply)
         if (caster)
         {
             // AttackMe fear should force immediate chase/attack behavior instead of continuing to flee.
+            ClearUnitState(UNIT_STATE_FLEEING);
             GetMotionMaster()->Remove(FLEEING_MOTION_TYPE);
             GetMotionMaster()->MoveChase(caster);
             CastStop();
