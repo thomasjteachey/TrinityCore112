@@ -425,23 +425,29 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
 
     uint32 scannedPlayers = 0;
     uint32 attackableEnemies = 0;
-    Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
-    if (!nearestEnemy)
+    Player* nearestEnemy = nullptr;
+
+    // WSG priority: select from battleground-known participants first, not
+    // visibility-limited target scans. The server already knows who is in the
+    // match, and bots should always advance toward an enemy player slot.
+    if (Battleground* battleground = player->GetBattleground())
     {
-        uint32 const battlegroundId = player->GetBattlegroundId();
+        TeamId const botTeam = ResolveBotTeamId(player);
         float bestKnownDistance = std::numeric_limits<float>::max();
         std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
-        for (auto const& [guid, participant] : ObjectAccessor::GetPlayers())
+        for (auto const& [guid, bgData] : battleground->GetPlayers())
         {
+            Player* participant = ObjectAccessor::FindConnectedPlayer(guid);
             if (!participant || participant == player)
                 continue;
             if (!participant->IsAlive() || !participant->IsInWorld())
                 continue;
-            if (participant->GetBattlegroundId() != battlegroundId)
+            if (participant->GetBattlegroundId() != player->GetBattlegroundId())
                 continue;
             if (participant->GetMapId() != player->GetMapId())
                 continue;
-            if (!player->IsValidAttackTarget(participant))
+            TeamId const participantTeam = ResolveTeamId(battleground->GetPlayerTeam(participant->GetGUID()));
+            if (participantTeam == TEAM_NEUTRAL || participantTeam == botTeam)
                 continue;
 
             float const distance = player->GetDistance(participant);
@@ -451,7 +457,13 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
             bestKnownDistance = distance;
             nearestEnemy = participant;
         }
+
+        scannedPlayers = static_cast<uint32>(battleground->GetPlayersSize());
+        attackableEnemies = nearestEnemy ? 1u : 0u;
     }
+
+    if (!nearestEnemy)
+        nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), &scannedPlayers, &attackableEnemies);
 
     if (!nearestEnemy)
     {
@@ -459,6 +471,30 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
         if (battleground && CanIssueBotMovement(player))
         {
             TeamId const botTeam = ResolveBotTeamId(player);
+            Position const gateStagingPoint = (botTeam == TEAM_HORDE)
+                ? Position(1066.0946404f, 1380.843994f, 340.612305f, 0.0f)
+                : Position(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
+            Position const gateExitPoint = (botTeam == TEAM_HORDE)
+                ? Position(978.20f, 1427.10f, 335.20f, 0.0f)
+                : Position(1498.60f, 1484.30f, 340.20f, 0.0f);
+
+            // If we are still around the spawn gate lane, force an egress point
+            // first. Direct routes to enemy positions can snap into fence/gate
+            // collision here, leaving bots idle against the wall.
+            bool const nearGateLane = player->IsWithinDist3d(
+                gateStagingPoint.GetPositionX(), gateStagingPoint.GetPositionY(), gateStagingPoint.GetPositionZ(), 55.0f);
+            if (nearGateLane && !player->IsWithinDist3d(
+                    gateExitPoint.GetPositionX(), gateExitPoint.GetPositionY(), gateExitPoint.GetPositionZ(), 8.0f))
+            {
+                bool const issuedGateEgress = IssueMovePointThrottled(player, gateExitPoint, 2.0f, 500) || player->isMoving();
+                EmitBattlegroundGmDebug(player,
+                    "wsg-pursuit=gate-egress issued=" + std::to_string(issuedGateEgress ? 1 : 0) +
+                    " scanned=" + std::to_string(scannedPlayers) +
+                    " attackable=" + std::to_string(attackableEnemies), 1000);
+                if (issuedGateEgress)
+                    return true;
+            }
+
             TeamId const enemyTeam = botTeam == TEAM_ALLIANCE ? TEAM_HORDE : (botTeam == TEAM_HORDE ? TEAM_ALLIANCE : TEAM_NEUTRAL);
             if (Position const* enemyStart = battleground->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(enemyTeam)))
             {
