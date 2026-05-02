@@ -617,7 +617,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -678,7 +678,7 @@ bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
     if (!player || !player->IsInWorld())
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return false;
 
@@ -709,7 +709,7 @@ bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
     if (mountSpellInfo->CheckLocation(player->GetMapId(), zoneId, areaId, player, false) != SPELL_CAST_OK)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return false;
 
@@ -787,9 +787,9 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     // combat, allow drink selection so they can recover instead of idling in a
     // perpetual "combat posture" loop.
     float const nearbyHostileCombatBoundary = std::max(GetConfiguredLongRange(), 35.0f);
-    if (player->GetMap())
+    if (player->FindMap())
     {
-        Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
         for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         {
             Player* candidate = itr->GetSource();
@@ -990,7 +990,7 @@ bool HasActivePaladinSeal(Player const* player)
 
 ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance, bool includeSelf)
 {
-    if (!player || !player->GetMap() || !baseSpellId)
+    if (!player || !player->FindMap() || !baseSpellId)
         return ObjectGuid::Empty;
 
     auto isEligible = [&](Player* candidate)
@@ -1018,7 +1018,7 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
 
     Player* bestTarget = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1193,7 +1193,7 @@ uint8 GetArmorPriority(Unit const* unit)
 
 Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1215,7 +1215,7 @@ Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* prefer
         bestDistance = player->GetDistance(preferredTarget);
     }
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1237,7 +1237,7 @@ Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* prefer
 
 Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1254,7 +1254,7 @@ Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredT
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1274,7 +1274,7 @@ Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredT
 
 Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1290,7 +1290,7 @@ Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredT
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1310,7 +1310,7 @@ Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredT
 
 Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* preferredTarget, float maxDistance, float minManaPct)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1330,7 +1330,7 @@ Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* prefer
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1350,11 +1350,11 @@ Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* prefer
 
 uint32 CountNearbyUnsNaredEnemies(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return 0;
 
     uint32 count = 0;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1455,12 +1455,12 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
 
 Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1489,7 +1489,7 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
 
 Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1507,7 +1507,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1527,10 +1527,10 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
 
 bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return false;
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1547,7 +1547,7 @@ bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
 
 Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     SpellInfo const* polymorphInfo = sSpellMgr->GetSpellInfo(12826);
@@ -1555,7 +1555,7 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
 
     std::vector<Unit const*> preferredTargets;
     std::vector<Unit const*> fallbackTargets;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1591,7 +1591,7 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
 
 Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto hasDispellableCurse = [&](Unit const* target)
@@ -1606,7 +1606,7 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1635,7 +1635,7 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
 
 Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isPriorityBlindTarget = [&](Unit const* candidate)
@@ -1657,7 +1657,7 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
 
     Unit const* bestSecondary = nullptr;
     float bestSecondaryDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1680,7 +1680,7 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
 
 Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     SpellInfo const* fearInfo = sSpellMgr->GetSpellInfo(6215);
@@ -1700,7 +1700,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         return false;
     };
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1754,12 +1754,12 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
 
 Unit const* SelectEnemyClassTarget(Player const* player, uint8 classId, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1785,7 +1785,7 @@ Unit const* SelectEnemyClassTarget(Player const* player, uint8 classId, float ma
 
 Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, float maxHealthPct)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
@@ -1823,7 +1823,7 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
 
     evaluateCandidate(player);
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         evaluateCandidate(itr->GetSource());
 
@@ -1832,7 +1832,7 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
 
 Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelType, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto hasDispellableAura = [&](Unit const* target)
@@ -1847,7 +1847,7 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1876,7 +1876,7 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
 
 Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
@@ -1887,7 +1887,7 @@ Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, floa
         (1 << MECHANIC_FREEZE) |
         (1 << MECHANIC_SNARE);
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1915,7 +1915,7 @@ Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, floa
 
 Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto hasDispellableAura = [&](Unit const* target)
@@ -1937,7 +1937,7 @@ Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType,
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1957,7 +1957,7 @@ Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType,
 
 Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance, float maxManaPct)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
@@ -1989,7 +1989,7 @@ Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance,
     };
 
     evaluateCandidate(player);
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         evaluateCandidate(itr->GetSource());
 
@@ -1998,7 +1998,7 @@ Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance,
 
 Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isSnared = [](Unit const* target)
@@ -2014,7 +2014,7 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2040,11 +2040,11 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 
 uint32 CountNearbyEnemies(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return 0;
 
     uint32 count = 0;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2062,11 +2062,11 @@ uint32 CountNearbyEnemies(Player const* player, float maxDistance)
 
 uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return 0;
 
     uint32 count = 0;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2905,7 +2905,7 @@ namespace playerbot
 {
 uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
 {
-    if (!player || !player->InBattleground() || !player->GetMap())
+    if (!player || !player->InBattleground() || !player->FindMap())
         return 0;
 
     Battleground const* battleground = player->GetBattleground();
@@ -2915,7 +2915,7 @@ uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
     uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
     uint32 humanCount = 0;
 
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player const* teammate = itr->GetSource();
