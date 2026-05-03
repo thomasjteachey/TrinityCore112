@@ -5,7 +5,6 @@
 #include "GameObject.h"
 #include "Log.h"
 #include "Player.h"
-#include "Random.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
@@ -25,6 +24,8 @@ BattlegroundSCM::BattlegroundSCM()
     _allianceHumanParticipants = 0;
     _hordeHumanParticipants = 0;
     _humanFaceoffEverHappened = false;
+    _usePrimaryGraveyard = true;
+    _graveyardSwapTimer = 0;
     m_BuffChange = true;
 }
 
@@ -55,6 +56,21 @@ void BattlegroundSCM::Reset()
     _allianceHumanParticipants = 0;
     _hordeHumanParticipants = 0;
     _humanFaceoffEverHappened = false;
+    _usePrimaryGraveyard = true;
+    _graveyardSwapTimer = 0;
+}
+
+void BattlegroundSCM::PostUpdateImpl(uint32 diff)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    _graveyardSwapTimer += diff;
+    if (_graveyardSwapTimer >= GetResurrectionInterval())
+    {
+        _graveyardSwapTimer = 0;
+        _usePrimaryGraveyard = !_usePrimaryGraveyard;
+    }
 }
 
 void BattlegroundSCM::TrackHumanParticipantAdded(Player const* player, bool isInBattleground)
@@ -251,14 +267,14 @@ void BattlegroundSCM::StartingEventOpenDoors()
     ApplyNonInteractableObjectFlags();
 }
 
-WorldSafeLocsEntry const* BattlegroundSCM::GetRandomTeamGraveyard(TeamId teamId) const
+WorldSafeLocsEntry const* BattlegroundSCM::GetCurrentTeamGraveyard(TeamId teamId) const
 {
     if (teamId == TEAM_ALLIANCE)
-        return urand(0, 1) == 0 ? sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_A)
-                                 : sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_B);
+        return _usePrimaryGraveyard ? sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_A)
+                                    : sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_B);
 
-    return urand(0, 1) == 0 ? sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_A)
-                             : sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_B);
+    return _usePrimaryGraveyard ? sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_A)
+                                : sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_B);
 }
 
 WorldSafeLocsEntry const* BattlegroundSCM::GetClosestGraveyard(Player* player)
@@ -269,13 +285,13 @@ WorldSafeLocsEntry const* BattlegroundSCM::GetClosestGraveyard(Player* player)
     if (player->GetTeam() == ALLIANCE)
     {
         if (GetStatus() == STATUS_IN_PROGRESS)
-            return GetRandomTeamGraveyard(TEAM_ALLIANCE);
+            return GetCurrentTeamGraveyard(TEAM_ALLIANCE);
 
         return sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_ALLIANCE_START);
     }
 
     if (GetStatus() == STATUS_IN_PROGRESS)
-        return GetRandomTeamGraveyard(TEAM_HORDE);
+        return GetCurrentTeamGraveyard(TEAM_HORDE);
 
     return sWorldSafeLocsStore.LookupEntry(BG_SCM_GY_HORDE_START);
 }
