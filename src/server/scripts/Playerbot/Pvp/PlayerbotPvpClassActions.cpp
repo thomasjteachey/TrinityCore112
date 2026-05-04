@@ -93,7 +93,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -108,7 +108,7 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -1964,7 +1964,7 @@ void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellCo
     if (!bot || castResult == SPELL_CAST_OK || castResult == SPELL_FAILED_SPELL_IN_PROGRESS)
         return;
 
-    Map* map = bot->GetMap();
+    Map* map = bot->FindMap();
     if (!map)
         return;
 
@@ -2100,12 +2100,12 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
 
 void RepositionDruidAfterTravelFormRecovery(Player* player)
 {
-    if (!player || !player->GetMap() || !CanIssueFollowCommands(player))
+    if (!player || !player->FindMap() || !CanIssueFollowCommands(player))
         return;
 
     Unit* nearestEnemy = nullptr;
     float nearestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();

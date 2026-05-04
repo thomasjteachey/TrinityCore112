@@ -271,7 +271,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -1709,7 +1709,7 @@ std::unordered_map<uint64, uint32> g_WsgReturnAttemptNotBeforeMsByGuid;
 
 GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
 {
-    if (!player || !bgWs || !player->GetMap())
+    if (!player || !bgWs || !player->FindMap())
         return nullptr;
 
     TeamId const botBgTeam = ResolveBotTeamId(player);
@@ -1720,18 +1720,18 @@ GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
     if (droppedFlagGuid.IsEmpty())
         return nullptr;
 
-    return player->GetMap()->GetGameObject(droppedFlagGuid);
+    return player->FindMap()->GetGameObject(droppedFlagGuid);
 }
 
 bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag, float veryCloseDistance)
 {
-    if (!player || !droppedFlag || !player->GetMap())
+    if (!player || !droppedFlag || !player->FindMap())
         return false;
 
     TeamId const botBgTeam = ResolveBotTeamId(player);
     float const botDistance = player->GetDistance(droppedFlag);
 
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player* teammate = itr->GetSource();
@@ -1756,11 +1756,11 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
 
 bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
 {
-    if (!player || !player->InBattleground() || !player->GetMap())
+    if (!player || !player->InBattleground() || !player->FindMap())
         return false;
 
     uint32 const battlegroundId = player->GetBattlegroundId();
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player const* participant = itr->GetSource();
@@ -2090,7 +2090,7 @@ bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 
 Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers, uint32* attackableEnemies)
 {
-    if (!player || !player->InBattleground() || !player->GetMap())
+    if (!player || !player->InBattleground() || !player->FindMap())
         return nullptr;
 
     Battleground* battleground = player->GetBattleground();
@@ -2106,7 +2106,7 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, ui
     float nearestDistance = std::numeric_limits<float>::max();
     Player* nearestEnemy = nullptr;
 
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
