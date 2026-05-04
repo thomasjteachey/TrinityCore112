@@ -1929,7 +1929,21 @@ Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType,
 
         DispelChargesList dispelList;
         target->GetDispellableAuraList(player, (1 << dispelType), dispelList);
-        return !dispelList.empty();
+        for (DispelableAura const& dispelable : dispelList)
+        {
+            Aura const* aura = dispelable.GetAura();
+            if (!aura)
+                continue;
+
+            // Sweeping Strikes should never be a valid offensive-dispel target
+            // for playerbots, even if external spell data marks it dispellable.
+            if (HasAuraFromSpellChain(target, 12328) && HasAuraFromSpellChain(target, aura->GetId()))
+                continue;
+
+            return true;
+        }
+
+        return false;
     };
 
     if (hasDispellableAura(preferredTarget))
@@ -2201,7 +2215,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, GetConfiguredMeleeRange());
     float const manaPct = player->GetPowerPct(POWER_MANA);
-    Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    Unit const* cursedTarget = (!dispelThrottleActive && IsSpellReady(player, 475)) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
     Unit const* castingTarget = IsSpellReady(player, 2139) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* polymorphTarget =
         (IsSpellReady(player, 12826) && !AnyEnemyPolymorphed(player, 40.0f)) ? SelectPolymorphTarget(player, target, 30.0f) : nullptr;
@@ -2250,8 +2265,9 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         return decision;
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
-    Unit const* debuffedAlly = IsSpellReady(player, 988) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
-    Unit const* enemyBuffedTarget = (IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    Unit const* debuffedAlly = (!dispelThrottleActive && IsSpellReady(player, 988)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
+    Unit const* enemyBuffedTarget = (!dispelThrottleActive && IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
     Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f) : nullptr;
     Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
@@ -2322,8 +2338,9 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
         !player->IsPolymorphed();
 
     Unit const* lowManaAlly = IsSpellReady(player, 29166) ? SelectFriendlyLowManaTarget(player, 40.0f, 10.0f) : nullptr;
-    Unit const* cursedTarget = IsSpellReady(player, 2782) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
-    Unit const* poisonedTarget = IsSpellReady(player, 2893) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    Unit const* cursedTarget = (!dispelThrottleActive && IsSpellReady(player, 2782)) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
+    Unit const* poisonedTarget = (!dispelThrottleActive && IsSpellReady(player, 2893)) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
     Unit const* swiftmendTarget = IsSpellReady(player, 18562) ? SelectFriendlyHealthTarget(player, 40.0f, 50.0f) : nullptr;
     Unit const* emergencyLowTarget = (IsSpellReady(player, 17116) && IsSpellReady(player, 25297)) ? SelectFriendlyHealthTarget(player, 40.0f, 25.0f) : nullptr;
     Unit const* emergencyTarget = IsSpellReady(player, 25297) ? SelectFriendlyHealthTarget(player, 40.0f, 50.0f) : nullptr;
@@ -2378,7 +2395,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
 
     Unit const* emergencyLowAlly = SelectFriendlyHealthTarget(player, 15.0f, 25.0f);
     Unit const* cleanseTarget = nullptr;
-    if (IsSpellReady(player, 4987))
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    if (!dispelThrottleActive && IsSpellReady(player, 4987))
     {
         cleanseTarget = SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f);
         if (!cleanseTarget)

@@ -2867,6 +2867,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (context.spellId == 6940)
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
 
+    // Shared tactical throttle for all dispel/decurse effects to prevent
+    // spam-casting into protected/undispellable auras.
+    if (context.spellId == 475 ||   // Remove Lesser Curse
+        context.spellId == 988 ||   // Dispel Magic
+        context.spellId == 2782 ||  // Remove Curse
+        context.spellId == 2893 ||  // Abolish Poison
+        context.spellId == 4987)    // Cleanse
+    {
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, 900004, std::chrono::seconds(3));
+    }
+
     // Warlock curse openers are instant and can leave the bot with an idle
     // motion generator while still in combat against a moving target. Re-issue
     // ranged approach pressure so follow-up casts do not stall.
