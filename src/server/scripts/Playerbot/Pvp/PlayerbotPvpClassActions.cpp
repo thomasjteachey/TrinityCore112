@@ -2632,6 +2632,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+    // Auto-repeat spells (wand Shoot / Auto Shot) should not be re-cast every
+    // AI tick when already channeling on the same target. Reissuing the spell
+    // repeatedly restarts the opener and causes "startup only" behavior where
+    // bots appear to idle after the start sound.
+    if (spellInfo->IsAutoRepeatRangedSpell())
+        if (Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+            if (SpellInfo const* activeAutoRepeatInfo = autoRepeat->GetSpellInfo())
+                if (activeAutoRepeatInfo->Id == resolvedSpellId &&
+                    autoRepeat->m_targets.GetUnitTargetGUID() == target->GetGUID())
+                    return true;
+
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
