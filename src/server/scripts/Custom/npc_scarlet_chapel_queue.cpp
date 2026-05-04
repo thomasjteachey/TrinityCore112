@@ -3,6 +3,7 @@
 #include "BattlegroundQueue.h"
 #include "Group.h"
 #include "GroupReference.h"
+#include "DBCStores.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
