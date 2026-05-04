@@ -9,6 +9,7 @@
 #include "ScriptedGossip.h"
 #include "SharedDefines.h"
 #include "WorldSession.h"
+#include <DBCStores.h>
 
 namespace
 {
