@@ -229,7 +229,11 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     // For battlegrounds we use synthetic queue sides instead of the player's real faction.
     // This keeps the first waiting team on one side and pushes the next waiting team to the
     // opposite side so cross-faction queues can always produce a match.
-    if (!ArenaType)
+    //
+    // Scarlet Chapel may explicitly request a side via Player::GetBGTeam() before queueing.
+    // If set to ALLIANCE/HORDE, honor that request and skip synthetic side assignment.
+    bool const hasForcedQueueTeam = (BgTypeId == BATTLEGROUND_SCM) && (leader->GetBGTeam() == ALLIANCE || leader->GetBGTeam() == HORDE);
+    if (!ArenaType && !hasForcedQueueTeam)
     {
         uint32 alliancePlayers = 0;
         uint32 hordePlayers = 0;
@@ -295,6 +299,10 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
                 break;
             }
         }
+    }
+    else if (hasForcedQueueTeam)
+    {
+        ginfo->Team = leader->GetBGTeam();
     }
 
     ginfo->Players.clear();

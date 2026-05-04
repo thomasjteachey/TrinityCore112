@@ -3,7 +3,6 @@
 #include "BattlegroundQueue.h"
 #include "Group.h"
 #include "GroupReference.h"
-#include "DBCStores.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
@@ -54,8 +53,7 @@ bool QueueSinglePlayer(Player* player, uint32 forcedTeam)
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, BATTLEGROUND_SCM, bracketEntry, 0, false, false, 0, 0);
 
-    if (forcedTeam == TEAM_NEUTRAL)
-        player->SetBGTeam(previousBgTeam);
+    player->SetBGTeam(previousBgTeam);
 
     if (!ginfo)
         return false;
