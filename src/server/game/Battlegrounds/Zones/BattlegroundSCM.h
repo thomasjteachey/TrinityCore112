@@ -98,6 +98,7 @@ public:
     void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
     void Reset() override;
     bool SetupBattleground() override;
+    void PostUpdateImpl(uint32 diff) override;
 
     void StartingEventCloseDoors() override;
     void StartingEventOpenDoors() override;
@@ -110,7 +111,7 @@ public:
     uint32 GetBuffRespawnTime(uint32 type) const override;
 
 private:
-    WorldSafeLocsEntry const* GetRandomTeamGraveyard(TeamId teamId) const;
+    WorldSafeLocsEntry const* GetCurrentTeamGraveyard(TeamId teamId) const;
     void UpdateTeamScoreWorldStates();
     void ApplyNonInteractableObjectFlags();
     void SpawnRandomBuffSet(uint32 speedTypeIndex);
@@ -125,6 +126,8 @@ private:
     uint32 _allianceHumanParticipants;
     uint32 _hordeHumanParticipants;
     bool _humanFaceoffEverHappened;
+    bool _usePrimaryGraveyard;
+    uint32 _graveyardSwapTimer;
 };
 
 #endif
