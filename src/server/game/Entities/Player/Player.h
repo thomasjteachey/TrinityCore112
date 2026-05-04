@@ -1990,6 +1990,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         void SetBGTeam(uint32 team);
         uint32 GetBGTeam() const;
+        uint32 GetBGTeamOverride() const { return m_bgData.bgTeam; }
 
         void LeaveBattleground(bool teleportToEntryPoint = true);
         bool CanJoinToBattleground(Battleground const* bg) const;

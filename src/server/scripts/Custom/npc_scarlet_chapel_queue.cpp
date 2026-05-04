@@ -45,11 +45,13 @@ bool QueueSinglePlayer(Player* player, uint32 forcedTeam)
     if (!bracketEntry)
         return false;
 
-    uint32 const previousBgTeam = player->GetBGTeam();
+    uint32 const previousBgTeam = player->GetBGTeamOverride();
     if (forcedTeam == TEAM_ALLIANCE)
         player->SetBGTeam(ALLIANCE);
     else if (forcedTeam == TEAM_HORDE)
         player->SetBGTeam(HORDE);
+    else
+        player->SetBGTeam(0);
 
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, BATTLEGROUND_SCM, bracketEntry, 0, false, false, 0, 0);

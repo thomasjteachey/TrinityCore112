@@ -1067,6 +1067,12 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     if (!bracketEntry)
         return false;
 
+    // Playerbots should never request a fixed Scarlet Chapel side. Only the custom queue NPC
+    // should set ALLIANCE/HORDE explicitly. Clear any stale raw override before AddGroup so
+    // BattlegroundQueue can assign a synthetic balanced side.
+    if (bgTypeId == BATTLEGROUND_SCM)
+        player->SetBGTeam(0);
+
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
     if (!ginfo)
