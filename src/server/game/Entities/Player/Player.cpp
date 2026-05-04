@@ -12610,6 +12610,10 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
             if (pProto && IsInCombat() && (pProto->Class == ITEM_CLASS_WEAPON || pProto->InventoryType == INVTYPE_RELIC) && m_weaponChangeTimer == 0)
             {
                 uint32 cooldownSpell = GetClass() == CLASS_ROGUE ? 6123 : 6119;
+
+                if (HasAura(89743))
+                    cooldownSpell = 89749;
+
                 SpellInfo const* spellProto = sSpellMgr->GetSpellInfo(cooldownSpell);
 
                 if (!spellProto)
