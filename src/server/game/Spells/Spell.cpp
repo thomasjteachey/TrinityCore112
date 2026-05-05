@@ -2298,7 +2298,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
         {
             unitCaster = ASSERT_NOTNULL(m_caster->ToUnit());
         }
-        targetInfo.ReflectResult = unitCaster->SpellHitResult(unitCaster, m_spellInfo, false); // can't reflect twice
+        targetInfo.ReflectResult = unitCaster->SpellHitResult(unitCaster, m_spellInfo, false, &targetInfo.heartbeatResistChance); // can't reflect twice
 
         // Proc spell reflect aura when missile hits the original target
         target->m_Events.AddEvent(new ProcReflectDelayed(target, m_originalCasterGUID), target->m_Events.CalculateTime(Milliseconds(targetInfo.TimeDelay)));
