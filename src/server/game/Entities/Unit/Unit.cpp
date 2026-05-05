@@ -3456,7 +3456,15 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
 
     // remove appropriate auras if we are swimming/not swimming respectively
     if (IsInWater())
-        RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+    {
+        Player* player = ToPlayer();
+        Battleground const* battleground = player ? player->GetBattleground() : nullptr;
+
+        // Scarlet Chapel's shallow water is part of the intended battleground pathing and
+        // should not force players out of mounts or Travel Form when they cross it.
+        if (!battleground || battleground->GetTypeID(true) != BATTLEGROUND_SCM)
+            RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+    }
     else
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
 
