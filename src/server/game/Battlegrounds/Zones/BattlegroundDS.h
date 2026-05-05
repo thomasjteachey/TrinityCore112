@@ -70,6 +70,7 @@ enum BattlegroundDSData
     BG_DS_PIPE_KNOCKBACK_FIRST_DELAY    = 5000,
     BG_DS_PIPE_KNOCKBACK_DELAY          = 3000,
     BG_DS_PIPE_KNOCKBACK_TOTAL_COUNT    = 2,
+    BG_DS_PIPE_KNOCKBACK_RESET_COOLDOWN = 10000,
 };
 
 // These values are NOT blizzlike... need the correct data!
@@ -108,6 +109,7 @@ class BattlegroundDS : public Arena
         EventMap _events;
 
         uint32 _pipeKnockBackTimer;
+        uint32 _pipeKnockBackResetTimer;
         uint8 _pipeKnockBackCount;
 };
 

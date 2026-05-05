@@ -35,6 +35,7 @@
 #include "LFGMgr.h"
 #include "Log.h"
 #include "MotionMaster.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Pet.h"
 #include "PathGenerator.h"
@@ -1538,6 +1539,40 @@ class spell_gen_divine_storm_cd_reset : public SpellScript
     }
 };
 
+namespace DalaranSewersFlush
+{
+    constexpr uint32 MapId = 671;
+    constexpr float AlliancePipeX = 1369.977f;
+    constexpr float AlliancePipeY = 817.2882f;
+    constexpr float HordePipeX = 1212.833f;
+    constexpr float HordePipeY = 765.3871f;
+    constexpr float PipeOpeningRadius = 35.0f;
+    constexpr float PipeOpeningRadiusSq = PipeOpeningRadius * PipeOpeningRadius;
+    constexpr float ArenaCenterX = 1291.7f;
+    constexpr float ArenaCenterY = 790.2205f;
+    constexpr float ArenaCenterZ = 7.19796f;
+    constexpr float ArenaCenterO = 3.054326f;
+
+    bool IsStillInPipeOpening(Player const* player)
+    {
+        if (!player || player->GetMapId() != MapId)
+            return false;
+
+        float const allianceDistSq = player->GetExactDist2dSq(AlliancePipeX, AlliancePipeY);
+        float const hordeDistSq = player->GetExactDist2dSq(HordePipeX, HordePipeY);
+        return allianceDistSq <= PipeOpeningRadiusSq || hordeDistSq <= PipeOpeningRadiusSq;
+    }
+
+    void TeleportToArenaCenterIfStillInPipe(ObjectGuid playerGuid)
+    {
+        Player* player = ObjectAccessor::FindPlayer(playerGuid);
+        if (!IsStillInPipeOpening(player))
+            return;
+
+        player->TeleportTo(MapId, ArenaCenterX, ArenaCenterY, ArenaCenterZ, ArenaCenterO);
+    }
+}
+
 class spell_gen_ds_flush_knockback : public SpellScript
 {
     PrepareSpellScript(spell_gen_ds_flush_knockback);
@@ -1554,6 +1589,12 @@ class spell_gen_ds_flush_knockback : public SpellScript
                 // This method relies on the Dalaran Sewer map disposition and Water Spout position
                 // What we do is knock the player from a position exactly behind him and at the end of the pipe
                 player->KnockbackFrom(target->GetPositionX(), player->GetPositionY(), horizontalSpeed, verticalSpeed);
+
+                ObjectGuid playerGuid = player->GetGUID();
+                player->m_Events.AddEventAtOffset([playerGuid]()
+                {
+                    DalaranSewersFlush::TeleportToArenaCenterIfStillInPipe(playerGuid);
+                }, 2s);
             }
         }
     }
