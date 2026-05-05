@@ -1705,16 +1705,18 @@ public:
 
     void Visit(std::unordered_map<ObjectGuid, Creature*>& creatureMap)
     {
-        for (auto const& p : creatureMap)
-            if (p.second->IsInWorld() && p.second->IsAIEnabled())
-                p.second->AI()->OnGameEvent(_activate, _eventId);
+        for (auto const& pair : creatureMap)
+            if (Creature* creature = pair.second; creature && creature->IsInWorld() && creature->IsAIEnabled())
+                if (CreatureAI* ai = creature->AI())
+                    ai->OnGameEvent(_activate, _eventId);
     }
 
     void Visit(std::unordered_map<ObjectGuid, GameObject*>& gameObjectMap)
     {
-        for (auto const& p : gameObjectMap)
-            if (p.second->IsInWorld())
-                p.second->AI()->OnGameEvent(_activate, _eventId);
+        for (auto const& pair : gameObjectMap)
+            if (GameObject* gameObject = pair.second; gameObject && gameObject->IsInWorld())
+                if (GameObjectAI* ai = gameObject->AI())
+                    ai->OnGameEvent(_activate, _eventId);
     }
 
     template<class T>
