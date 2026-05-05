@@ -442,7 +442,14 @@ void SpellMgr::GetSetOfSpellsInSpellGroup(SpellGroup group_id, std::set<uint32>&
 
 bool SpellMgr::AddSameEffectStackRuleSpellGroups(SpellInfo const* spellInfo, uint32 auraType, int32 amount, std::map<SpellGroup, int32>& groups) const
 {
-    uint32 spellId = spellInfo->GetFirstRankSpell()->Id;
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRankSpell = spellInfo->GetFirstRankSpell();
+    if (!firstRankSpell)
+        return false;
+
+    uint32 spellId = firstRankSpell->Id;
     auto spellGroupBounds = GetSpellSpellGroupMapBounds(spellId);
     // Find group with SPELL_GROUP_STACK_RULE_EXCLUSIVE_SAME_EFFECT if it belongs to one
     for (auto itr = spellGroupBounds.first; itr != spellGroupBounds.second; ++itr)
