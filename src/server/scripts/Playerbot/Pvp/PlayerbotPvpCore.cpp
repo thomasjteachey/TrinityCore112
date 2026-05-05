@@ -1830,6 +1830,55 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
     return best ? best : selfCandidate;
 }
 
+Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, float maxHealthPct)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    Unit const* best = nullptr;
+    Unit const* selfCandidate = nullptr;
+    float bestHealth = 101.0f;
+    float bestDistance = std::numeric_limits<float>::max();
+
+    auto evaluateCandidate = [&](Unit const* candidate)
+    {
+        if (!candidate || !candidate->IsAlive())
+            return;
+        if (!IsCasterClass(candidate))
+            return;
+        if (!IsFriendlySupportTarget(player, candidate))
+            return;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return;
+
+        float const healthPct = candidate->GetHealthPct();
+        if (healthPct > maxHealthPct)
+            return;
+
+        float const distance = player->GetDistance(candidate);
+        if (candidate == player)
+        {
+            selfCandidate = player;
+            return;
+        }
+
+        if (healthPct < bestHealth || (std::abs(healthPct - bestHealth) < 0.1f && distance < bestDistance))
+        {
+            best = candidate;
+            bestHealth = healthPct;
+            bestDistance = distance;
+        }
+    };
+
+    evaluateCandidate(player);
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        evaluateCandidate(itr->GetSource());
+
+    return best ? best : selfCandidate;
+}
+
 Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelType, float maxDistance)
 {
     if (!player || !player->FindMap())
@@ -2272,7 +2321,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
     Unit const* emergencyLowAlly = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, 15.0f, 25.0f) : nullptr;
-    Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
+    Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyCasterTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
     Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
     Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
     Unit const* rogueTarget = IsSpellReady(player, 27605) ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr;
@@ -2289,7 +2338,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             { "priest dispel magic enemy", "prioritize dispelling magic buffs from enemies", 988, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyBuffedTarget ? enemyBuffedTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, shieldTarget && !HasAuraFromSpellChain(shieldTarget, 10901), 44.0f,
             { "priest power word shield ally", "protect ally below 50 percent health", 10901, shieldTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, shieldTarget ? shieldTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, casterAlly && casterAlly->GetPowerType() == POWER_MANA, 30.0f,
+        AddDecisionCandidate(candidates, casterAlly, 30.0f,
             { "priest power infusion", "boost nearby caster throughput in combat", 10060, casterAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, casterAlly ? casterAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(10938) && IsSpellReady(player, 10938), 14.0f,
             { "priest power word fortitude", "maintain fortitude out of combat", 10938, playerbot::PvpClassSpellContext::TargetMode::Self });
