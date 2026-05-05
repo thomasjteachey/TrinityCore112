@@ -498,6 +498,7 @@ Player::~Player()
     delete m_achievementMgr;
     delete m_reputationMgr;
     delete _cinematicMgr;
+    _cinematicMgr = nullptr;
 
     sWorld->DecreasePlayerCount();
 }
@@ -1093,11 +1094,14 @@ void Player::Update(uint32 p_time)
     }
 
     // Update cinematic location, if 500ms have passed and we're doing a cinematic now.
-    _cinematicMgr->m_cinematicDiff += p_time;
-    if (_cinematicMgr->m_cinematicCamera && _cinematicMgr->m_activeCinematicCameraId && GetMSTimeDiffToNow(_cinematicMgr->m_lastCinematicCheck) > CINEMATIC_UPDATEDIFF)
+    if (_cinematicMgr)
     {
-        _cinematicMgr->m_lastCinematicCheck = GameTime::GetGameTimeMS();
-        _cinematicMgr->UpdateCinematicLocation(p_time);
+        _cinematicMgr->m_cinematicDiff += p_time;
+        if (_cinematicMgr->m_cinematicCamera && _cinematicMgr->m_activeCinematicCameraId && GetMSTimeDiffToNow(_cinematicMgr->m_lastCinematicCheck) > CINEMATIC_UPDATEDIFF)
+        {
+            _cinematicMgr->m_lastCinematicCheck = GameTime::GetGameTimeMS();
+            _cinematicMgr->UpdateCinematicLocation(p_time);
+        }
     }
 
     //used to implement delayed far teleports
