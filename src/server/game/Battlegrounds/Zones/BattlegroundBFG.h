@@ -42,16 +42,6 @@ enum BG_BFG_Misc
 };
 
 
-enum BG_BFG_CriteriaId
-{
-    BG_CRITERIA_CHECK_RESILIENT_VICTORY,
-    BG_CRITERIA_CHECK_SAVE_THE_DAY,
-    BG_CRITERIA_CHECK_EVERYTHING_COUNTS,
-    BG_CRITERIA_CHECK_AV_PERFECTION,
-    BG_CRITERIA_CHECK_DEFENSE_OF_THE_ANCIENTS,
-    BG_CRITERIA_CHECK_NOT_EVEN_A_SCRATCH,
-};
-
 enum BattleForGilneasStrings {
     // Battle For Gilneas
     LANG_BG_BFG_START_TWO_MINUTES           = 12015,
@@ -303,21 +293,21 @@ public:
     void AddPlayer(Player* player) override;
     void StartingEventCloseDoors() override;
     void StartingEventOpenDoors() override;
-    void RemovePlayer(Player* player) override;
+    void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
     void HandleAreaTrigger(Player* player, uint32 trigger) override;
     bool SetupBattleground() override;
-    void Init() override;
-    void EndBattleground(TeamId winnerTeamId) override;
+    void Init();
+    void EndBattleground(uint32 winnerTeamId) override;
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
 
     bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true) override;
-    void FillInitialWorldStates(WorldPacket& data)  override;
+    void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
     void EventPlayerClickedOnFlag(Player* source, GameObject* gameObject) override;
 
-    bool AllNodesConrolledByTeam(TeamId teamId) const override;
+    bool AllNodesConrolledByTeam(TeamId teamId) const;
     bool IsTeamScores500Disadvantage(TeamId teamId) const { return _teamScores500Disadvantage[teamId]; }
 
-    TeamId GetPrematureWinner() override;
+    uint32 GetPrematureWinner() override;
 private:
     void PostUpdateImpl(uint32 diff) override;
 

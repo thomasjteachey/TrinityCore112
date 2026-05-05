@@ -228,10 +228,10 @@ void BattlegroundSV::UpdateWorldStates()
 }
 
 // done when player leaves the battleground
-void BattlegroundSV::RemovePlayer(Player *player)
+void BattlegroundSV::RemovePlayer(Player *player, ObjectGuid /*guid*/, uint32 /*team*/)
 {
-	player->RemoveAurasDueToSpell(BG_SV_BOSS_BUFF);
-	player->RemoveAurasDueToSpell(BG_SV_MINE_BUFF);
+	if (player) player->RemoveAurasDueToSpell(BG_SV_BOSS_BUFF);
+	if (player) player->RemoveAurasDueToSpell(BG_SV_MINE_BUFF);
 }
 
 // unusued
@@ -241,7 +241,7 @@ void BattlegroundSV::HandleAreaTrigger(Player * /* player */, uint32 /* trigger 
 		return;
 }
 
-void BattlegroundSV::FillInitialWorldStates(WorldPacket &data)
+void BattlegroundSV::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
 	// set score
 	packet.Worldstates.emplace_back(BG_SV_WS_ALLIANCE_SCORE, TeamScore[TEAM_ALLIANCE]);
@@ -427,7 +427,7 @@ void BattlegroundSV::HandleKillPlayer(Player *player, Player *killer)
 		EndBattleground(killer->GetTeamId());
 }
 
-void BattlegroundSV::EndBattleground(TeamId winner)
+void BattlegroundSV::EndBattleground(uint32 winner)
 {
 	RemoveAuraOnTeam(BG_SV_MINE_BUFF, TEAM_ALLIANCE);
 	RemoveAuraOnTeam(BG_SV_MINE_BUFF, TEAM_HORDE);

@@ -40,16 +40,6 @@ enum BG_TP_Events
     BG_TP_EVENT_BOTH_FLAGS_KEPT15   = 7
 };
 
-enum BG_TP_CriteriaId
-{
-    BG_CRITERIA_CHECK_RESILIENT_VICTORY,
-    BG_CRITERIA_CHECK_SAVE_THE_DAY,
-    BG_CRITERIA_CHECK_EVERYTHING_COUNTS,
-    BG_CRITERIA_CHECK_AV_PERFECTION,
-    BG_CRITERIA_CHECK_DEFENSE_OF_THE_ANCIENTS,
-    BG_CRITERIA_CHECK_NOT_EVEN_A_SCRATCH,
-};
-
 enum BG_TP_TimerOrScore
 {
     BG_TP_MAX_TEAM_SCORE    = 3,
@@ -224,12 +214,12 @@ class BattlegroundTP : public Battleground
         void EventPlayerClickedOnFlag(Player* player, GameObject* gameObject) override;
         void EventPlayerCapturedFlag(Player* player);
 
-        void RemovePlayer(Player* player) override;
+        void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
         void HandleAreaTrigger(Player* player, uint32 trigger) override;
         void HandleKillPlayer(Player* player, Player* killer) override;
         bool SetupBattleground() override;
-        void Init() override;
-        void EndBattleground(TeamId winnerTeamId) override;
+        void Init();
+        void EndBattleground(uint32 winnerTeamId) override;
         WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
 
         void UpdateFlagState(TeamId teamId, uint32 value);
@@ -241,13 +231,13 @@ class BattlegroundTP : public Battleground
         /* Scorekeeping */
         void AddPoints(TeamId teamId, uint32 points) { m_TeamScores[teamId] += points; }
 
-        TeamId GetPrematureWinner() override;
+        uint32 GetPrematureWinner() override;
         uint32 GetMatchTime() const { return 1 + (BG_TP_TOTAL_GAME_TIME - GetStartTime()) / (MINUTE*IN_MILLISECONDS); }
         uint32 GetAssaultSpellId() const;
         void RemoveAssaultAuras();
 
         /* Achievements*/
-        bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = NULL, uint32 miscvalue1 = 0);
+        bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
 
     private:
         EventMap _bgEvents;

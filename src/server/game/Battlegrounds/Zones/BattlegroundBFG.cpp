@@ -177,7 +177,7 @@ void BattlegroundBFG::AddPlayer(Player* player)
     PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundBFGScore(player->GetGUID()));
 }
 
-void BattlegroundBFG::RemovePlayer(Player* player) {
+void BattlegroundBFG::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/) {
     player->SetPhaseMask(1, false);
 }
 
@@ -365,7 +365,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
     // SendBroadcastText(message, player->GetTeamId() == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, LANG_BG_BFG_NODE_LIGHTHOUSE + node, message2);
 }
 
-TeamId BattlegroundBFG::GetPrematureWinner()
+uint32 BattlegroundBFG::GetPrematureWinner()
 {
     if (_controlledPoints[TEAM_ALLIANCE] > _controlledPoints[TEAM_HORDE])
         return TEAM_ALLIANCE;
@@ -409,7 +409,6 @@ void BattlegroundBFG::Init()
 {
 
       //call parent's class reset
-    Battleground::Init();
 
     _bgEvents.Reset();
 
@@ -424,7 +423,7 @@ void BattlegroundBFG::Init()
     _capturePointInfo[GILNEAS_BG_NODE_MINE]._iconCapture       = GILNEAS_BG_OP_MINE_STATE_ALLIANCE;
 }
 
-void BattlegroundBFG::EndBattleground(TeamId winnerTeamId)
+void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
 {
     RewardHonorToTeam(GetBonusHonorFromKill(1), winnerTeamId);
     RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_HORDE);

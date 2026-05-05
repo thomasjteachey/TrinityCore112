@@ -366,9 +366,9 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
     }
 }
 
-void BattlegroundTP::RemovePlayer(Player* player)
+void BattlegroundTP::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
 {
-    if (GetFlagPickerGUID(TEAM_ALLIANCE) == player->GetGUID() || GetFlagPickerGUID(TEAM_HORDE) == player->GetGUID())
+    if (player && (GetFlagPickerGUID(TEAM_ALLIANCE) == player->GetGUID() || GetFlagPickerGUID(TEAM_HORDE) == player->GetGUID()))
         EventPlayerDroppedFlag(player);
 }
 
@@ -465,7 +465,6 @@ bool BattlegroundTP::SetupBattleground()
 void BattlegroundTP::Init()
 {
     //call parent's class reset
-    Battleground::Init();
 
     _bgEvents.Reset();
     _flagKeepers[TEAM_ALLIANCE].Clear();
@@ -490,7 +489,7 @@ void BattlegroundTP::Init()
     }
 }
 
-void BattlegroundTP::EndBattleground(TeamId winnerTeamId)
+void BattlegroundTP::EndBattleground(uint32 winnerTeamId)
 {
     // Win reward
     RewardHonorToTeam(GetBonusHonorFromKill(_honorWinKills), winnerTeamId);
@@ -552,7 +551,7 @@ void BattlegroundTP::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
   packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_ALLIANCE, GetFlagState(TEAM_ALLIANCE));
 }
 
-TeamId BattlegroundTP::GetPrematureWinner()
+uint32 BattlegroundTP::GetPrematureWinner()
 {
     if (GetTeamScore(TEAM_ALLIANCE) > GetTeamScore(TEAM_HORDE))
         return TEAM_ALLIANCE;
