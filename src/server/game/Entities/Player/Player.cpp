@@ -9655,6 +9655,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             packet.Worldstates.emplace_back(3610, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
         }
         break;
+    case 5005: // Twin Peaks
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TP)
+            battleground->FillInitialWorldStates(packet);
+        break;
+    case 5449: // Battle for Gilneas
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BFG)
+            battleground->FillInitialWorldStates(packet);
+        break;
     case 4384: // Strand of the Ancients
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SA)
             battleground->FillInitialWorldStates(packet);
