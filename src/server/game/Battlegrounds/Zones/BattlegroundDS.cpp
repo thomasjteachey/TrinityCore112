@@ -29,6 +29,7 @@ BattlegroundDS::BattlegroundDS()
     BgCreatures.resize(BG_DS_NPC_MAX);
 
     _pipeKnockBackTimer = 0;
+    _pipeKnockBackResetTimer = 0;
     _pipeKnockBackCount = 0;
 }
 
@@ -75,6 +76,14 @@ void BattlegroundDS::PostUpdateImpl(uint32 diff)
         }
     }
 
+    if (_pipeKnockBackResetTimer)
+    {
+        if (_pipeKnockBackResetTimer <= diff)
+            _pipeKnockBackResetTimer = 0;
+        else
+            _pipeKnockBackResetTimer -= diff;
+    }
+
     if (_pipeKnockBackCount < BG_DS_PIPE_KNOCKBACK_TOTAL_COUNT)
     {
         if (_pipeKnockBackTimer < diff)
@@ -85,6 +94,9 @@ void BattlegroundDS::PostUpdateImpl(uint32 diff)
 
             ++_pipeKnockBackCount;
             _pipeKnockBackTimer = BG_DS_PIPE_KNOCKBACK_DELAY;
+
+            if (_pipeKnockBackCount >= BG_DS_PIPE_KNOCKBACK_TOTAL_COUNT)
+                _pipeKnockBackResetTimer = BG_DS_PIPE_KNOCKBACK_RESET_COOLDOWN;
         }
         else
             _pipeKnockBackTimer -= diff;
@@ -111,6 +123,7 @@ void BattlegroundDS::StartingEventOpenDoors()
 
     _pipeKnockBackCount = 0;
     _pipeKnockBackTimer = BG_DS_PIPE_KNOCKBACK_FIRST_DELAY;
+    _pipeKnockBackResetTimer = 0;
 
     SpawnBGObject(BG_DS_OBJECT_WATER_2, RESPAWN_IMMEDIATELY);
 
@@ -137,8 +150,14 @@ void BattlegroundDS::HandleAreaTrigger(Player* player, uint32 trigger)
 
             // Someone has get back into the pipes and the knockback has already been performed,
             // so we reset the knockback count for kicking the player again into the arena.
-            if (_pipeKnockBackCount >= BG_DS_PIPE_KNOCKBACK_TOTAL_COUNT)
+            // Area triggers can fire repeatedly while a player remains in the pipe, so throttle
+            // resets to avoid re-casting the pipe knockback every update and overloading the map.
+            if (_pipeKnockBackCount >= BG_DS_PIPE_KNOCKBACK_TOTAL_COUNT && !_pipeKnockBackResetTimer)
+            {
                 _pipeKnockBackCount = 0;
+                _pipeKnockBackTimer = 0;
+                _pipeKnockBackResetTimer = BG_DS_PIPE_KNOCKBACK_RESET_COOLDOWN;
+            }
             break;
         default:
             Battleground::HandleAreaTrigger(player, trigger);
