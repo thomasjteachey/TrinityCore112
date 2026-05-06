@@ -296,6 +296,7 @@ public:
     void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
     void HandleAreaTrigger(Player* player, uint32 trigger) override;
     bool SetupBattleground() override;
+    void Reset() override;
     void Init();
     void EndBattleground(uint32 winnerTeamId) override;
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
