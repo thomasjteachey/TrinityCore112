@@ -106,17 +106,17 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                         break;
                     }
 
-                    // uint8 honorRewards = uint8(m_TeamScores[teamId] / _honorTics);
-                    // uint8 reputationRewards = uint8(m_TeamScores[teamId] / _reputationTics);
+                    uint8 honorRewards = uint8(m_TeamScores[teamId] / _honorTics);
+                    uint8 reputationRewards = uint8(m_TeamScores[teamId] / _reputationTics);
                     uint8 information = uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
                     m_TeamScores[teamId] += GILNEAS_BG_TickPoints[controlledPoints];
                     if (m_TeamScores[teamId] > GILNEAS_BG_MAX_TEAM_SCORE)
                         m_TeamScores[teamId] = GILNEAS_BG_MAX_TEAM_SCORE;
 
-                    // if (honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
-                    //     RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
-                    // if (reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
-                    //     RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
+                    if (honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
+                        RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
+                    if (reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
+                        RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
 
                     if (information < uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE))
                     {
@@ -425,8 +425,8 @@ void BattlegroundBFG::Init()
 
     _bgEvents.Reset();
 
-    // _honorTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? BG_AB_HONOR_TICK_WEEKEND : BG_AB_HONOR_TICK_NORMAL;
-    // _reputationTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? BG_AB_REP_TICK_WEEKEND : BG_AB_REP_TICK_NORMAL;
+    _honorTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendHonorTicks : GILNEAS_BG_NotBGWeekendHonorTicks;
+    _reputationTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendRepTicks : GILNEAS_BG_NotBGWeekendRepTicks;
 
     _capturePointInfo[GILNEAS_BG_NODE_LIGHTHOUSE]._iconNone    = GILNEAS_BG_OP_LIGHTHOUSE_ICON;
     _capturePointInfo[GILNEAS_BG_NODE_WATERWORKS]._iconNone    = GILNEAS_BG_OP_WATERWORKS_ICON;

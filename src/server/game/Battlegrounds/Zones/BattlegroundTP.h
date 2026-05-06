@@ -235,6 +235,7 @@ class BattlegroundTP : public Battleground
         uint32 GetMatchTime() const { return 1 + (BG_TP_TOTAL_GAME_TIME - GetStartTime()) / (MINUTE*IN_MILLISECONDS); }
         uint32 GetAssaultSpellId() const;
         void RemoveAssaultAuras();
+        void HandleFlagRoomCapturePoint(TeamId teamId);
 
         /* Achievements*/
         bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
