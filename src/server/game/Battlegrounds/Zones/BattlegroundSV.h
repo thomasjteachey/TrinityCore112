@@ -31,6 +31,16 @@ enum SlaveryValleyStrings
     LANG_BG_SV_BOSS_INC_NOW                     = 3010
 };
 
+// StartMessageIds are sent through Battleground::SendBroadcastText(),
+// so they must point at lplusworld.broadcast_text rows, not trinity_string rows.
+enum SlaveryValleyBroadcastTexts
+{
+    BG_SV_BROADCAST_START_TWO_MINUTES           = 910060,
+    BG_SV_BROADCAST_START_ONE_MINUTE            = 910061,
+    BG_SV_BROADCAST_START_HALF_MINUTE           = 910062,
+    BG_SV_BROADCAST_HAS_BEGUN                   = 910063
+};
+
 enum BG_SV_Creatures
 {
     BG_SV_DEVELOPER                             = 129999,

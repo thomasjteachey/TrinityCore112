@@ -11,22 +11,22 @@
 #include "WorldStatePackets.h"
 
 enum TwinPeaksStrings {
-    LANG_BG_TP_START_TWO_MINUTES        = 1230,
-    LANG_BG_TP_START_ONE_MINUTE         = 1231,
-    LANG_BG_TP_START_HALF_MINUTE        = 1232,
-    LANG_BG_TP_HAS_BEGUN                = 1233,
-    LANG_BG_TP_CAPTURED_HF              = 1234,
-    LANG_BG_TP_CAPTURED_AF              = 1235,
-    LANG_BG_TP_DROPPED_HF               = 1236,
-    LANG_BG_TP_DROPPED_AF               = 1237,
-    LANG_BG_TP_RETURNED_AF              = 1238,
-    LANG_BG_TP_RETURNED_HF              = 1239,
-    LANG_BG_TP_PICKEDUP_HF              = 1240,
-    LANG_BG_TP_PICKEDUP_AF              = 1241,
-    LANG_BG_TP_F_PLACED                 = 1242,
-    LANG_BG_TP_ALLIANCE_FLAG_RESPAWNED  = 1243,
-    LANG_BG_TP_HORDE_FLAG_RESPAWNED     = 1244
-    // FREE IDS 1245-1249
+    LANG_BG_TP_START_TWO_MINUTES        = 910020,
+    LANG_BG_TP_START_ONE_MINUTE         = 910021,
+    LANG_BG_TP_START_HALF_MINUTE        = 910022,
+    LANG_BG_TP_HAS_BEGUN                = 910023,
+    LANG_BG_TP_CAPTURED_HF              = 910024,
+    LANG_BG_TP_CAPTURED_AF              = 910025,
+    LANG_BG_TP_DROPPED_HF               = 910026,
+    LANG_BG_TP_DROPPED_AF               = 910027,
+    LANG_BG_TP_RETURNED_AF              = 910028,
+    LANG_BG_TP_RETURNED_HF              = 910029,
+    LANG_BG_TP_PICKEDUP_HF              = 910030,
+    LANG_BG_TP_PICKEDUP_AF              = 910031,
+    LANG_BG_TP_F_PLACED                 = 910032,
+    LANG_BG_TP_ALLIANCE_FLAG_RESPAWNED  = 910033,
+    LANG_BG_TP_HORDE_FLAG_RESPAWNED     = 910034
+    // Custom broadcast_text IDs. Keep in sync with lplusworld.broadcast_text.
 };
 
 enum BG_TP_Events
