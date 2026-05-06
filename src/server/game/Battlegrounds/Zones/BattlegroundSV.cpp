@@ -1,7 +1,6 @@
 #include "BattlegroundSV.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
-#include "GameGraveyard.h"
 #include "GameObject.h"
 #include "Language.h"
 #include "ObjectMgr.h"
@@ -278,7 +277,7 @@ bool BattlegroundSV::SetupBattleground()
 
 	for (uint8 i = 0; i < BG_SV_MAX_BUFF_SPAWNS; ++i)
 	{
-		if (!AddObject(BG_SV_BuffSpawnlocs[i].type, BG_SV_BuffSpawnlocs[i].entry, BG_SV_BuffSpawnlocs[i].x, BG_SV_BuffSpawnlocs[i].y, BG_SV_BuffSpawnlocs[i].z, BG_SV_BuffSpawnlocs[i].o, 0, 0, 0, 0, SPEED_BUFF_RESPAWN_TIME))
+		if (!AddObject(BG_SV_BuffSpawnlocs[i].type, BG_SV_BuffSpawnlocs[i].entry, BG_SV_BuffSpawnlocs[i].x, BG_SV_BuffSpawnlocs[i].y, BG_SV_BuffSpawnlocs[i].z, BG_SV_BuffSpawnlocs[i].o, 0, 0, 0, 0, BUFF_RESPAWN_TIME))
 		{
 			TC_LOG_INFO("module", "Slavery Valley: There was an error spawning buff {}", BG_SV_BuffSpawnlocs[i].entry);
 			return false;
