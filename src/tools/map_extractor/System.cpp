@@ -36,6 +36,9 @@
 
 #include <G3D/Plane.h>
 #include <boost/filesystem.hpp>
+#include <algorithm>
+#include <cctype>
+#include <vector>
 
 extern ArchiveSet gOpenArchives;
 
@@ -79,23 +82,61 @@ float CONF_float_to_int16_limit = 2048.0f;   // Max accuracy = val/65536
 float CONF_flat_height_delta_limit = 0.005f; // If max - min less this value - surface is flat
 float CONF_flat_liquid_delta_limit = 0.001f; // If max - min less this value - liquid surface is flat
 
-// List MPQ for extract from
-const char *CONF_mpq_list[]={
-    "common.MPQ",
-    "common-2.MPQ",
-    "lichking.MPQ",
-    "expansion.MPQ",
-    "patch.MPQ",
-    "patch-2.MPQ",
-    "patch-3.MPQ",
-    "patch-4.MPQ",
-    "patch-5.MPQ",
-    "patch-6.MPQ",
-    "patch-Z.MPQ",
-};
-
 static char const* const langs[] = {"enGB", "enUS", "deDE", "esES", "frFR", "koKR", "zhCN", "zhTW", "enCN", "enTW", "esMX", "ruRU" };
 #define LANG_COUNT 12
+
+namespace
+{
+    std::string ToLower(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        return value;
+    }
+
+    boost::filesystem::path ResolveExistingPath(boost::filesystem::path const& path)
+    {
+        namespace fs = boost::filesystem;
+
+        if (fs::exists(path))
+            return path;
+
+        fs::path parent = path.parent_path();
+        if (parent.empty())
+            parent = ".";
+
+        if (!fs::exists(parent) || !fs::is_directory(parent))
+            return path;
+
+        std::string target = ToLower(path.filename().string());
+        for (fs::directory_iterator itr(parent), end; itr != end; ++itr)
+            if (ToLower(itr->path().filename().string()) == target)
+                return itr->path();
+
+        return path;
+    }
+
+    bool OpenArchiveIfExists(boost::filesystem::path const& path)
+    {
+        boost::filesystem::path resolved = ResolveExistingPath(path);
+        if (!boost::filesystem::exists(resolved))
+            return false;
+
+        new MPQArchive(resolved.string().c_str());
+        return true;
+    }
+
+    void AddPatchArchiveNames(std::vector<std::string>& names, std::string const& prefix)
+    {
+        names.emplace_back(prefix + ".MPQ");
+
+        for (int i = 2; i <= 99; ++i)
+            names.emplace_back(Trinity::StringFormat("{}-{}.MPQ", prefix, i));
+
+        for (char suffix = 'A'; suffix <= 'Z'; ++suffix)
+            names.emplace_back(Trinity::StringFormat("{}-{}.MPQ", prefix, suffix));
+    }
+}
+
 
 void CreateDir(boost::filesystem::path const& path)
 {
@@ -1088,32 +1129,33 @@ void ExtractCameraFiles(int locale, bool basicLocale)
 
 void LoadLocaleMPQFiles(int const locale)
 {
-    std::string fileName = Trinity::StringFormat("{}/Data/{}/locale-{}.MPQ", input_path, langs[locale], langs[locale]);
+    OpenArchiveIfExists(Trinity::StringFormat("{}/Data/{}/locale-{}.MPQ", input_path, langs[locale], langs[locale]));
 
-    new MPQArchive(fileName.c_str());
+    std::vector<std::string> localePatchNames;
+    AddPatchArchiveNames(localePatchNames, Trinity::StringFormat("patch-{}", langs[locale]));
 
-    for(int i = 1; i < 20; ++i)
-    {
-        std::string ext;
-        if (i > 1)
-            ext = Trinity::StringFormat("-{}", i);
-
-        fileName = Trinity::StringFormat("{}/Data/{}/patch-{}{}.MPQ", input_path, langs[locale], langs[locale], ext);
-        if (boost::filesystem::exists(fileName))
-            new MPQArchive(fileName.c_str());
-    }
+    for (std::string const& patchName : localePatchNames)
+        OpenArchiveIfExists(Trinity::StringFormat("{}/Data/{}/{}", input_path, langs[locale], patchName));
 }
 
 void LoadCommonMPQFiles()
 {
-    std::string fileName;
-    int count = sizeof(CONF_mpq_list)/sizeof(char*);
-    for(int i = 0; i < count; ++i)
+    static char const* const baseArchiveNames[] =
     {
-        fileName = Trinity::StringFormat("{}/Data/{}", input_path, CONF_mpq_list[i]);
-        if (boost::filesystem::exists(fileName))
-            new MPQArchive(fileName.c_str());
-    }
+        "common.MPQ",
+        "common-2.MPQ",
+        "lichking.MPQ",
+        "expansion.MPQ"
+    };
+
+    for (char const* archiveName : baseArchiveNames)
+        OpenArchiveIfExists(Trinity::StringFormat("{}/Data/{}", input_path, archiveName));
+
+    std::vector<std::string> patchNames;
+    AddPatchArchiveNames(patchNames, "patch");
+
+    for (std::string const& patchName : patchNames)
+        OpenArchiveIfExists(Trinity::StringFormat("{}/Data/{}", input_path, patchName));
 }
 
 inline void CloseMPQFiles()
@@ -1137,7 +1179,7 @@ int main(int argc, char * arg[])
 
     for (int i = 0; i < LANG_COUNT; i++)
     {
-        std::string filename = Trinity::StringFormat("{}/Data/{}/locale-{}.MPQ", input_path, langs[i], langs[i]);
+        boost::filesystem::path filename = ResolveExistingPath(Trinity::StringFormat("{}/Data/{}/locale-{}.MPQ", input_path, langs[i], langs[i]));
         if (boost::filesystem::exists(filename))
         {
             printf("Detected locale: %s\n", langs[i]);

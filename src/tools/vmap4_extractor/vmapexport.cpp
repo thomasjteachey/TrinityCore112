@@ -34,6 +34,8 @@
 #include <vector>
 #include <cstdio>
 #include <cerrno>
+#include <algorithm>
+#include <cctype>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -69,6 +71,44 @@ std::unordered_map<std::string, WMODoodadData> WmoDoodads;
 char const* szWorkDirWmo = "./Buildings";
 
 std::map<std::pair<uint32, uint16>, uint32> uniqueObjectIds;
+
+namespace
+{
+    std::string ToLower(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        return value;
+    }
+
+    std::string ResolveExistingPath(std::string const& path)
+    {
+        boost::filesystem::path requested(path);
+        if (boost::filesystem::exists(requested))
+            return requested.string();
+
+        boost::filesystem::path parent = requested.parent_path();
+        if (parent.empty())
+            parent = ".";
+
+        if (!boost::filesystem::exists(parent) || !boost::filesystem::is_directory(parent))
+            return path;
+
+        std::string target = ToLower(requested.filename().string());
+        for (boost::filesystem::directory_iterator itr(parent), end; itr != end; ++itr)
+            if (ToLower(itr->path().filename().string()) == target)
+                return itr->path().string();
+
+        return path;
+    }
+
+    void AddArchiveIfExists(std::vector<std::string>& archiveNames, std::string const& path)
+    {
+        std::string resolvedPath = ResolveExistingPath(path);
+        if (boost::filesystem::exists(resolvedPath))
+            archiveNames.push_back(resolvedPath);
+    }
+}
+
 
 uint32 GenerateUniqueObjectId(uint32 clientId, uint16 clientDoodadId)
 {
@@ -236,32 +276,20 @@ void getGamePath()
 
 bool scan_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames)
 {
-    int i;
-    char path[512];
-
-    for (i = 1; i <= 99; i++)
+    auto addIfExists = [&](std::string const& path)
     {
-        if (i != 1)
-        {
-            sprintf(path, "%s-%d.MPQ", scanmatch, i);
-        }
-        else
-        {
-            sprintf(path, "%s.MPQ", scanmatch);
-        }
-#ifdef __linux__
-        if(FILE* h = fopen64(path, "rb"))
-#else
-        if(FILE* h = fopen(path, "rb"))
-#endif
-        {
-            fclose(h);
-            //matches.push_back(path);
-            pArchiveNames.push_back(path);
-        }
-    }
+        AddArchiveIfExists(pArchiveNames, path);
+    };
 
-    return(true);
+    addIfExists(Trinity::StringFormat("{}.MPQ", scanmatch));
+
+    for (int i = 2; i <= 99; ++i)
+        addIfExists(Trinity::StringFormat("{}-{}.MPQ", scanmatch, i));
+
+    for (char suffix = 'A'; suffix <= 'Z'; ++suffix)
+        addIfExists(Trinity::StringFormat("{}-{}.MPQ", scanmatch, suffix));
+
+    return true;
 }
 
 bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
@@ -305,16 +333,16 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
     printf("Adding data files from locale directories.\n");
     for (std::vector<std::string>::iterator i = locales.begin(); i != locales.end(); ++i)
     {
-        pArchiveNames.push_back(in_path + *i + "/locale-" + *i + ".MPQ");
-        pArchiveNames.push_back(in_path + *i + "/expansion-locale-" + *i + ".MPQ");
-        pArchiveNames.push_back(in_path + *i + "/lichking-locale-" + *i + ".MPQ");
+        AddArchiveIfExists(pArchiveNames, in_path + *i + "/locale-" + *i + ".MPQ");
+        AddArchiveIfExists(pArchiveNames, in_path + *i + "/expansion-locale-" + *i + ".MPQ");
+        AddArchiveIfExists(pArchiveNames, in_path + *i + "/lichking-locale-" + *i + ".MPQ");
     }
 
     // open expansion and common files
-    pArchiveNames.push_back(input_path + std::string("common.MPQ"));
-    pArchiveNames.push_back(input_path + std::string("common-2.MPQ"));
-    pArchiveNames.push_back(input_path + std::string("expansion.MPQ"));
-    pArchiveNames.push_back(input_path + std::string("lichking.MPQ"));
+    AddArchiveIfExists(pArchiveNames, input_path + std::string("common.MPQ"));
+    AddArchiveIfExists(pArchiveNames, input_path + std::string("common-2.MPQ"));
+    AddArchiveIfExists(pArchiveNames, input_path + std::string("expansion.MPQ"));
+    AddArchiveIfExists(pArchiveNames, input_path + std::string("lichking.MPQ"));
 
     // now, scan for the patch levels in the core dir
     printf("Scanning patch levels from data directory.\n");
