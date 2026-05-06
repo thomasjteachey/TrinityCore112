@@ -92,14 +92,7 @@ void BattlegroundTP::PostUpdateImpl(uint32 diff)
         switch (_bgEvents.ExecuteEvent())
         {
             case BG_TP_EVENT_UPDATE_GAME_TIME:
-                UpdateWorldState(BG_TP_STATE_TIMER, GetMatchTime());
-                _bgEvents.ScheduleEvent(BG_TP_EVENT_UPDATE_GAME_TIME, Milliseconds(((BG_TP_TOTAL_GAME_TIME - GetStartTime()) % (MINUTE * IN_MILLISECONDS)) + 1));
-                break;
             case BG_TP_EVENT_NO_TIME_LEFT:
-                if (GetTeamScore(TEAM_ALLIANCE) == GetTeamScore(TEAM_HORDE))
-                    EndBattleground(_lastFlagCaptureTeam);
-                else
-                    EndBattleground(GetTeamScore(TEAM_HORDE) > GetTeamScore(TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE);
                 break;
             case BG_TP_EVENT_RESPAWN_BOTH_FLAGS:
                 SpawnBGObject(BG_TP_OBJECT_H_FLAG, RESPAWN_IMMEDIATELY);
@@ -161,9 +154,7 @@ void BattlegroundTP::StartingEventOpenDoors()
 
     // players joining later are not egible
     //StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, TP_EVENT_START_BATTLE);
-    UpdateWorldState(BG_TP_STATE_TIMER_ACTIVE, 1);
-    _bgEvents.ScheduleEvent(BG_TP_EVENT_UPDATE_GAME_TIME, 0ms);
-    _bgEvents.ScheduleEvent(BG_TP_EVENT_NO_TIME_LEFT, Milliseconds(BG_TP_TOTAL_GAME_TIME - 2 * MINUTE * IN_MILLISECONDS)); // 27 - 2 = 25 minutes
+    UpdateWorldState(BG_TP_STATE_TIMER_ACTIVE, 0);
 }
 
 void BattlegroundTP::AddPlayer(Player* player)
@@ -189,6 +180,7 @@ void BattlegroundTP::RespawnFlagAfterDrop(TeamId teamId)
     _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT10);
     _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
     RemoveAssaultAuras();
+    HandleFlagRoomCapturePoint(GetOtherTwinPeaksTeamId(teamId));
 }
 
 void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
@@ -236,6 +228,14 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
     _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
 }
 
+void BattlegroundTP::HandleFlagRoomCapturePoint(TeamId teamId)
+{
+    Player* flagCarrier = ObjectAccessor::GetPlayer(GetBgMap(), GetFlagPickerGUID(teamId));
+    uint32 areaTrigger = teamId == TEAM_ALLIANCE ? 5905 : 5904;
+    if (flagCarrier && flagCarrier->IsInAreaTriggerRadius(sAreaTriggerStore.LookupEntry(areaTrigger)))
+        EventPlayerCapturedFlag(flagCarrier);
+}
+
 void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
 {
     if (GetFlagPickerGUID(TEAM_HORDE) != player->GetGUID() && GetFlagPickerGUID(TEAM_ALLIANCE) != player->GetGUID())
@@ -243,13 +243,13 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
 
     SetFlagPicker(ObjectGuid::Empty, GetOtherTwinPeaksTeamId(player->GetTeamId()));
     player->RemoveAurasDueToSpell(BG_TP_SPELL_HORDE_FLAG);
+    player->RemoveAurasDueToSpell(BG_TP_SPELL_ALLIANCE_FLAG);
     player->RemoveAurasDueToSpell(BG_TP_SPELL_FOCUSED_ASSAULT);
     player->RemoveAurasDueToSpell(BG_TP_SPELL_BRUTAL_ASSAULT);
 
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
-    player->CastSpell(player, SPELL_RECENTLY_DROPPED_FLAG, true);
     if (player->GetTeamId() == TEAM_ALLIANCE)
     {
         UpdateFlagState(TEAM_HORDE, BG_TP_FLAG_STATE_ON_GROUND);
@@ -332,6 +332,7 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
             _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT10);
             _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
             RemoveAssaultAuras();
+            HandleFlagRoomCapturePoint(TEAM_HORDE);
             return;
         }
         else
@@ -363,6 +364,7 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
             _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT10);
             _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
             RemoveAssaultAuras();
+            HandleFlagRoomCapturePoint(TEAM_ALLIANCE);
             return;
         }
         else
@@ -558,8 +560,7 @@ void BattlegroundTP::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
   packet.Worldstates.emplace_back(BG_TP_FLAG_CAPTURES_HORDE, GetTeamScore(TEAM_HORDE));
   packet.Worldstates.emplace_back(BG_TP_FLAG_CAPTURES_MAX, BG_TP_MAX_TEAM_SCORE);
 
-  packet.Worldstates.emplace_back(BG_TP_STATE_TIMER_ACTIVE, uint32(GetStatus() == STATUS_IN_PROGRESS));
-  packet.Worldstates.emplace_back(BG_TP_STATE_TIMER, GetMatchTime());
+  packet.Worldstates.emplace_back(BG_TP_STATE_TIMER_ACTIVE, 0);
 
   packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_HORDE, GetFlagState(TEAM_HORDE));
   packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_ALLIANCE, GetFlagState(TEAM_ALLIANCE));
