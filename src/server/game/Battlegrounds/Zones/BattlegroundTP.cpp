@@ -7,6 +7,7 @@
 #include "Creature.h"
 #include "GameObject.h"
 #include "Language.h"
+#include "Log.h"
 #include "Object.h"
 #include "ObjectMgr.h"
 #include "ObjectAccessor.h"

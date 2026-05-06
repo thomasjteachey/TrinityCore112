@@ -1,9 +1,12 @@
 #include "BattlegroundSV.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "DBCStores.h"
 #include "GameObject.h"
 #include "Language.h"
+#include "Log.h"
 #include "ObjectMgr.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
 #include "Transport.h"
@@ -30,7 +33,7 @@ BattlegroundSV::BattlegroundSV()
 
 	//	Set score
 	for (uint8 i = 0; i < 2; ++i)
-		TeamScore[i] = sConfigMgr->GetOption<uint32>("InitialPoints", 80);
+		TeamScore[i] = uint32(sConfigMgr->GetIntDefault("InitialPoints", 80));
 
 	// Set timer
 	ReloadTimer = BG_SV_RELOAD_TIME;
@@ -104,7 +107,7 @@ void BattlegroundSV::PostUpdateImpl(uint32 diff)
 						BG_SV_UpdateNodeWorldState(&nodePoint[i]);
 						BG_SV_HandleCapturedNodes(&nodePoint[i], false);
 
-						SendMessage2ToAll(LANG_BG_SV_TAKEN, nodePoint[i].faction == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, NULL, (nodePoint[i].faction == TEAM_ALLIANCE ? LANG_BG_SV_ALLY : LANG_BG_SV_HORDE), nodePoint[i].string);
+						PSendMessageToAll(LANG_BG_SV_TAKEN, nodePoint[i].faction == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, nullptr, (nodePoint[i].faction == TEAM_ALLIANCE ? LANG_BG_SV_ALLY : LANG_BG_SV_HORDE), nodePoint[i].string);
 						PlaySoundToAll(nodePoint[i].faction == TEAM_ALLIANCE ? BG_SV_SOUND_NODE_CAPTURED_ALLIANCE : BG_SV_SOUND_NODE_CAPTURED_HORDE);
 
 						nodePoint[i].needChange = false;
@@ -131,7 +134,7 @@ void BattlegroundSV::PostUpdateImpl(uint32 diff)
 			if (BossSpawnTimer <= diff)
 			{
 				SpawnBoss();
-				SendMessage2ToAll(LANG_BG_SV_BOSS_INC_NOW, CHAT_MSG_BG_SYSTEM_NEUTRAL, NULL);
+				SendMessageToAll(LANG_BG_SV_BOSS_INC_NOW, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
 				PlaySoundToAll(BG_SV_SOUND_BOSS_INC);
 				BossSpawnTimer = BG_SV_BOSS_SPAWN_TIMER;
 				BossSpawnAllowed = false;
@@ -141,7 +144,7 @@ void BattlegroundSV::PostUpdateImpl(uint32 diff)
 
 			if (BossWarningTimer <= diff)
 			{
-				SendMessage2ToAll(LANG_BG_SV_BOSS_INC_1MIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, NULL);
+				SendMessageToAll(LANG_BG_SV_BOSS_INC_1MIN, CHAT_MSG_BG_SYSTEM_NEUTRAL, nullptr);
 				BossWarningTimer = BG_SV_BOSS_SPAWN_TIMER;
 			}
 			else
@@ -268,7 +271,7 @@ bool BattlegroundSV::SetupBattleground()
 
 	for (uint8 i = 0; i < 1; ++i)
 	{
-		if (!AddCreature(BG_SV_BossSpawnlocs[i].entry, BG_SV_BossSpawnlocs[i].type, BG_SV_BossSpawnlocs[i].x, BG_SV_BossSpawnlocs[i].y, BG_SV_BossSpawnlocs[i].z, BG_SV_BossSpawnlocs[i].o, /*BG_SV_BossSpawnlocs[i].team,*/ RESPAWN_ONE_DAY))
+		if (!AddCreature(BG_SV_BossSpawnlocs[i].entry, BG_SV_BossSpawnlocs[i].type, BG_SV_BossSpawnlocs[i].x, BG_SV_BossSpawnlocs[i].y, BG_SV_BossSpawnlocs[i].z, BG_SV_BossSpawnlocs[i].o, BG_SV_BossSpawnlocs[i].team, RESPAWN_ONE_DAY))
 		{
 			TC_LOG_INFO("module", "Slavery Valley: There was an error spawning creature {}", BG_SV_BossSpawnlocs[i].entry);
 			return false;
@@ -284,7 +287,7 @@ bool BattlegroundSV::SetupBattleground()
 		}
 	}
 
-	if (!AddSpiritGuide(BG_SV_NPC_SPIRIT_GUIDE_1 + 2, BG_SV_SpiritGuidePos[4].m_positionX, BG_SV_SpiritGuidePos[4].m_positionY, BG_SV_SpiritGuidePos[4].m_positionZ, BG_SV_SpiritGuidePos[4].m_orientation, TEAM_ALLIANCE) || !AddSpiritGuide(BG_SV_NPC_SPIRIT_GUIDE_1 + 3, BG_SV_SpiritGuidePos[5].m_positionX, BG_SV_SpiritGuidePos[5].m_positionY, BG_SV_SpiritGuidePos[5].m_positionZ, BG_SV_SpiritGuidePos[5].m_orientation, TEAM_HORDE))
+	if (!AddSpiritGuide(BG_SV_NPC_SPIRIT_GUIDE_1 + 2, BG_SV_SpiritGuidePos[4].m_positionX, BG_SV_SpiritGuidePos[4].m_positionY, BG_SV_SpiritGuidePos[4].m_positionZ, BG_SV_SpiritGuidePos[4].GetOrientation(), TEAM_ALLIANCE) || !AddSpiritGuide(BG_SV_NPC_SPIRIT_GUIDE_1 + 3, BG_SV_SpiritGuidePos[5].m_positionX, BG_SV_SpiritGuidePos[5].m_positionY, BG_SV_SpiritGuidePos[5].m_positionZ, BG_SV_SpiritGuidePos[5].GetOrientation(), TEAM_HORDE))
 	{
 		TC_LOG_INFO("module", "Slavery Valley: Failed to spawn initial spirit guide!");
 		return false;
@@ -303,7 +306,7 @@ void BattlegroundSV::SpawnBoss()
 
 	for (uint8 i = 1; i < BG_SV_MAX_CREATURE_SPAWNS; ++i)
 	{
-		if (!AddCreature(BG_SV_BossSpawnlocs[i].entry, BG_SV_BossSpawnlocs[i].type, BG_SV_BossSpawnlocs[i].x, BG_SV_BossSpawnlocs[i].y, BG_SV_BossSpawnlocs[i].z, BG_SV_BossSpawnlocs[i].o, /*BG_SV_BossSpawnlocs[i].team,*/ RESPAWN_ONE_DAY))
+		if (!AddCreature(BG_SV_BossSpawnlocs[i].entry, BG_SV_BossSpawnlocs[i].type, BG_SV_BossSpawnlocs[i].x, BG_SV_BossSpawnlocs[i].y, BG_SV_BossSpawnlocs[i].z, BG_SV_BossSpawnlocs[i].o, BG_SV_BossSpawnlocs[i].team, RESPAWN_ONE_DAY))
 		{
 			TC_LOG_INFO("module", "Slavery Valley: There was an error spawning creature {}", BG_SV_BossSpawnlocs[i].entry);
 		}
@@ -482,7 +485,7 @@ void BattlegroundSV::EventPlayerClickedOnFlag(Player *player, GameObject *target
 					if (BgCreatures[BG_SV_NPC_SPIRIT_GUIDE_1 + (nodePoint[i].nodeType) - 2])
 						DelCreature(BG_SV_NPC_SPIRIT_GUIDE_1 + (nodePoint[i].nodeType) - 2);
 
-				SendMessage2ToAll(LANG_BG_SV_ASSAULTED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, nodePoint[i].string);
+				PSendMessageToAll(LANG_BG_SV_ASSAULTED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, nodePoint[i].string);
 				PlaySoundToAll(nodePoint[i].faction == TEAM_ALLIANCE ? BG_SV_SOUND_NODE_ASSAULTED_ALLIANCE : BG_SV_SOUND_NODE_ASSAULTED_HORDE);
 				BG_SV_HandleContestedNodes(&nodePoint[i]);
 			}
@@ -490,7 +493,7 @@ void BattlegroundSV::EventPlayerClickedOnFlag(Player *player, GameObject *target
 			{
 				nodePoint[i].timer = BG_SV_BANNER_STATE_CHANGE_TIME;
 				nodePoint[i].needChange = false;
-				SendMessage2ToAll(LANG_BG_SV_DEFENDED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, nodePoint[i].string);
+				PSendMessageToAll(LANG_BG_SV_DEFENDED, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, nodePoint[i].string);
 				PlaySoundToAll(nodePoint[i].faction == TEAM_ALLIANCE ? BG_SV_SOUND_NODE_CAPTURED_ALLIANCE : BG_SV_SOUND_NODE_CAPTURED_HORDE);
 				BG_SV_HandleCapturedNodes(&nodePoint[i], true);
 			}
@@ -596,7 +599,7 @@ void BattlegroundSV::BG_SV_HandleCapturedNodes(BG_SV_NodePoint *node, bool /* re
 {
 	if (node->nodeType != NODE_TYPE_FIX && node->nodeType != NODE_TYPE_PRISON)
 	{
-		if (!AddSpiritGuide(BG_SV_NPC_SPIRIT_GUIDE_1 + node->nodeType - 2, BG_SV_SpiritGuidePos[node->nodeType].m_positionX, BG_SV_SpiritGuidePos[node->nodeType].m_positionY, BG_SV_SpiritGuidePos[node->nodeType].m_positionZ, BG_SV_SpiritGuidePos[node->nodeType].m_orientation, node->faction))
+		if (!AddSpiritGuide(BG_SV_NPC_SPIRIT_GUIDE_1 + node->nodeType - 2, BG_SV_SpiritGuidePos[node->nodeType].m_positionX, BG_SV_SpiritGuidePos[node->nodeType].m_positionY, BG_SV_SpiritGuidePos[node->nodeType].m_positionZ, BG_SV_SpiritGuidePos[node->nodeType].GetOrientation(), node->faction))
 			TC_LOG_INFO("module", "Slavery Valley Failed to spawn spirit guide! point: {}, team: {}, ", node->nodeType, node->faction);
 	}
 

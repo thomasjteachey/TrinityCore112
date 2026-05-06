@@ -14,6 +14,7 @@
 #include "Duration.h"
 #include "Map.h"
 #include "Creature.h"
+#include "GameObject.h"
 #include "Language.h"
 #include "Object.h"
 #include "ObjectAccessor.h"
