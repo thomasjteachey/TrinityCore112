@@ -17,6 +17,12 @@
 #include "Config.h"
 #include "ScriptMgr.h"
 
+void BattlegroundSVScore::BuildObjectivesBlock(WorldPacket& data)
+{
+    data << uint32(1);
+    data << uint32(KillingPoints);
+}
+
 BattlegroundSV::BattlegroundSV()
 {
 	BgObjects.resize(MAX_OBJECT_BANNER_SPAWNS + BG_SV_MAX_BUFF_SPAWNS);

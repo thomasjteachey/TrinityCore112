@@ -291,7 +291,7 @@ struct BattlegroundSVScore final : public BattlegroundScore
     friend class BattlegroundSV;
 
     protected:
-        explicit BattlegroundSVScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid) { }
+        explicit BattlegroundSVScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid), KillingPoints(0) { }
 
         void UpdateScore(uint32 type, uint32 value) override
         {
@@ -301,12 +301,12 @@ struct BattlegroundSVScore final : public BattlegroundScore
                 KillingPoints += value;
                 break;
             default:
-                UpdateScore(type, value);
+                BattlegroundScore::UpdateScore(type, value);
                 break;
             }
         }
 
-        void BuildObjectivesBlock(WorldPacket& data) final;
+        void BuildObjectivesBlock(WorldPacket& data) final override;
 
         uint32 GetAttr1() const final override { return KillingPoints; }
 
