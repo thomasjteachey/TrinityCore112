@@ -188,8 +188,10 @@ void BattlegroundBFG::AddPlayer(Player* player)
     PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundBFGScore(player->GetGUID()));
 }
 
-void BattlegroundBFG::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/) {
-    player->SetPhaseMask(1, false);
+void BattlegroundBFG::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
+{
+    if (player)
+        player->SetPhaseMask(1, false);
 }
 
 void BattlegroundBFG::HandleAreaTrigger(Player* /* player*/, uint32 trigger)
