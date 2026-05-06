@@ -25,6 +25,64 @@ void SendQueueError(Player* player, char const* text)
         session->SendNotification("%s", text);
 }
 
+bool CanQueuePlayerForScm(Player* player, BattlegroundQueueTypeId queueTypeId)
+{
+    return player && player->GetBGAccessByLevel(BATTLEGROUND_SCM) && player->HasFreeBattlegroundQueueId() &&
+        player->GetBattlegroundQueueIndex(queueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES;
+}
+
+bool QueueGroup(Player* leader, Group* group, uint32 forcedTeam)
+{
+    if (!leader || !group)
+        return false;
+
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BATTLEGROUND_SCM);
+    if (!bgTemplate)
+        return false;
+
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(BATTLEGROUND_SCM, 0);
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), leader->GetLevel());
+    if (!bracketEntry)
+        return false;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!CanQueuePlayerForScm(member, queueTypeId))
+            return false;
+
+        PvPDifficultyEntry const* memberBracket = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), member->GetLevel());
+        if (!memberBracket || memberBracket->GetBracketId() != bracketEntry->GetBracketId())
+            return false;
+    }
+
+    uint32 const previousBgTeam = leader->GetBGTeamOverride();
+    if (forcedTeam == TEAM_ALLIANCE)
+        leader->SetBGTeam(ALLIANCE);
+    else if (forcedTeam == TEAM_HORDE)
+        leader->SetBGTeam(HORDE);
+    else
+        leader->SetBGTeam(0);
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+    GroupQueueInfo* ginfo = bgQueue.AddGroup(leader, group, BATTLEGROUND_SCM, bracketEntry, 0, false, false, 0, 0);
+
+    leader->SetBGTeam(previousBgTeam);
+
+    if (!ginfo)
+        return false;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        if (Player* member = ref->GetSource())
+            member->AddBattlegroundQueueId(queueTypeId);
+
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, queueTypeId, BATTLEGROUND_SCM, bracketEntry->GetBracketId());
+    return true;
+}
+
 bool QueueSinglePlayer(Player* player, uint32 forcedTeam)
 {
     if (!player || !player->GetBGAccessByLevel(BATTLEGROUND_SCM) || !player->HasFreeBattlegroundQueueId())
@@ -128,15 +186,7 @@ public:
                 }
             }
 
-            bool anyFailed = false;
-            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-            {
-                Player* member = ref->GetSource();
-                if (!QueueSinglePlayer(member, forcedTeam))
-                    anyFailed = true;
-            }
-
-            if (anyFailed)
+            if (!QueueGroup(player, group, forcedTeam))
                 SendQueueError(player, "One or more party members could not be queued.");
             else
                 CloseGossipMenuFor(player);

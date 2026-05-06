@@ -95,6 +95,7 @@ std::unordered_map<uint64, uint32> g_BattlegroundQueuedNoInviteSinceMsByGuid;
 uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
 uint32 g_LastScmSlotRefillAttemptMs = 0;
 bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
+bool HasPendingRealHumanInviteForBattleground(Battleground const* battleground);
 bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate);
 
 bool IsScmManagedBotCandidate(Player const* player)
@@ -122,6 +123,9 @@ uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground cons
 bool ShouldManagedBotLeaveForOverstack(Player* player, Battleground* battleground)
 {
     if (!player || !battleground || !IsScmManagedBotCandidate(player))
+        return false;
+
+    if (HasPendingRealHumanInviteForBattleground(battleground))
         return false;
 
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
@@ -219,6 +223,9 @@ bool ShouldManagedBotLeaveForQueuedHuman(Player* player, Battleground* battlegro
 bool TryRefillManagedScmSlots(Player* player, Battleground* battleground)
 {
     if (!player || !battleground || battleground->GetTypeID() != BATTLEGROUND_SCM)
+        return false;
+
+    if (HasPendingRealHumanInviteForBattleground(battleground))
         return false;
 
     uint32 const maxPlayers = battleground->GetMaxPlayers();
@@ -1776,6 +1783,39 @@ bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
         WorldSession const* session = participant->GetSession();
         bool const isVirtualSession = session && session->IsVirtualSession();
         if (!isVirtualSession && !playerbot::IsManagedRandomBot(participant))
+            return true;
+    }
+
+    return false;
+}
+
+
+bool HasPendingRealHumanInviteForBattleground(Battleground const* battleground)
+{
+    if (!battleground || battleground->GetTypeID() != BATTLEGROUND_SCM)
+        return false;
+
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(battleground->GetTypeID(), battleground->GetArenaType());
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+    for (auto const& [queuedGuid, queueInfo] : bgQueue.m_QueuedPlayers)
+    {
+        GroupQueueInfo const* groupInfo = queueInfo.GroupInfo;
+        if (!groupInfo || groupInfo->IsInvitedToBGInstanceGUID != battleground->GetInstanceID())
+            continue;
+
+        Player* participant = ObjectAccessor::FindConnectedPlayer(queuedGuid);
+        if (!participant)
+            continue;
+
+        WorldSession const* session = participant->GetSession();
+        bool const isVirtualSession = session && session->IsVirtualSession();
+        if (isVirtualSession || playerbot::IsManagedRandomBot(participant))
+            continue;
+
+        if (!participant->InBattleground() || participant->GetBattlegroundId() != battleground->GetInstanceID())
             return true;
     }
 
