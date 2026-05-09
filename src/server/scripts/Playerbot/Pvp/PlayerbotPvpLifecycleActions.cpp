@@ -418,9 +418,9 @@ bool IsCrowdControlledForAction(Player const* player)
     return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
-bool TryPursueNearestEnemyInWarsong(Player* player)
+bool TryPursueNearestEnemyInBattleground(Player* player)
 {
-    if (!player || !IsWarsongGulch(player))
+    if (!player || !player->InBattleground())
         return false;
 
     float const combatEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
@@ -432,27 +432,15 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
         return false;
 
     bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
-    if (!chaseIssued)
+    if (!chaseIssued && !player->isMoving())
     {
         // If direct pursuit did not issue movement, clear stale motion so a new
-        // path request can be accepted even when the bot is parked at gate edge.
+        // navmesh-segmented path request can be accepted. The MovePoint helper
+        // still validates battleground navigation and refuses no-path segments.
         player->GetMotionMaster()->Clear();
-
-        PathGenerator path(player);
-        bool const hasPath = path.CalculatePath(
-            nearestEnemy->GetPositionX(), nearestEnemy->GetPositionY(), nearestEnemy->GetPositionZ(), false);
-
-        if (!hasPath || (path.GetPathType() & PATHFIND_NOPATH))
-        {
-            // Gate/fence geometry can block direct first-segment pursuit from
-            // the spawn berm. Nudge toward midfield, then resume enemy pursuit.
-            static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-            chaseIssued = IssueMovePointThrottled(player, midPoint, 8.0f, 700) || player->isMoving();
-        }
-
-        if (!chaseIssued)
-            chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
+        chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 700) || player->isMoving();
     }
+
     return chaseIssued;
 }
 
@@ -758,6 +746,8 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
     return (pathType & forbiddenPathFlags) != 0;
 }
 
+constexpr float PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT = 700.0f;
+
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
     if (!player)
@@ -768,10 +758,10 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         Position const collisionSafeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        // Allow long battleground routes (including spawn-to-midfield/target
-        // pursuit) to be generated in one request instead of forcing very
-        // short local segments that can stall at gate/fence bottlenecks.
-        path.SetPathLengthLimit(350.0f);
+        // Allow longer battleground route segments so bots can commit to
+        // meaningful navmesh progress toward distant enemies instead of
+        // repeatedly selecting tiny local hops that catch on terrain.
+        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -780,7 +770,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(350.0f);
+            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -841,14 +831,16 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
     if (planarDistance < 1.0f)
         return false;
 
-    std::array<float, 6> const probeDistances =
+    std::array<float, 8> const probeDistances =
     {
-        24.0f,
-        18.0f,
+        80.0f,
+        60.0f,
+        45.0f,
+        30.0f,
+        20.0f,
         12.0f,
         8.0f,
-        5.0f,
-        3.0f
+        5.0f
     };
 
     PathType probePathType = PathType(0);
@@ -1674,12 +1666,12 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     }
 
     float const distanceToTarget = player->GetDistance(target);
-    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    if (player->InBattleground() && distanceToTarget > desiredDistance)
     {
         Position destination = target->GetPosition();
         bool const moved = IssueMovePointThrottled(player, destination, 30.0f, 2000);
         EmitBattlegroundGmDebug(player,
-            "move-toward-unit mode=segmented target=" + target->GetName() +
+            "move-toward-unit mode=battleground-segmented target=" + target->GetName() +
             " dist=" + std::to_string(int32(distanceToTarget)) +
             " issued=" + std::to_string(moved ? 1 : 0), 1200);
         return moved || player->isMoving();
@@ -2838,13 +2830,14 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
+
+    if (TryPursueNearestEnemyInBattleground(player))
+        return true;
+
     if (TryJumpOffWarsongGraveyard(player))
         return true;
 
-    if (TryPursueNearestEnemyInWarsong(player))
-        return true;
-
-    // Evaluate combat/WSG post-res logic before this guard so stale movement
+    // Evaluate combat/post-res logic before this guard so stale movement
     // flags do not suppress target pursuit immediately after graveyard rez.
     if (player->isMoving())
         return false;
@@ -2921,25 +2914,10 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
-    if (IsWarsongGulch(player))
-    {
-        if (EngageNearestEnemyPlayer(player, 60.0f))
-            return true;
-
-        if (TryPursueNearestEnemyInWarsong(player) || MoveToClosestBattlegroundGraveyard(player))
-            return true;
-
-        return false;
-    }
-
-    float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
-    if (EngageNearestEnemyPlayer(player, engageDistance))
+    if (TryPursueNearestEnemyInBattleground(player))
         return true;
 
-    if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-        return MoveTowardUnit(player, nearestEnemy, 20.0f);
-
-    return false;
+    return MoveToClosestBattlegroundGraveyard(player);
 }
 
 bool BattlegroundTacticalActions::ResetObjectiveForcePrimitive(Player* player)
