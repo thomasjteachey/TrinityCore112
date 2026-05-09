@@ -35,6 +35,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSplineInit.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Item.h"
@@ -632,7 +633,93 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
     return (pathType & forbiddenPathFlags) != 0;
 }
 
-constexpr float PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT = 700.0f;
+constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
+constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
+constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 6.0f;
+
+bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
+{
+    if (!player || points.size() < 2)
+        return false;
+
+    G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+    float traversedDistance = 0.0f;
+
+    for (std::size_t i = 1; i < points.size(); ++i)
+    {
+        G3D::Vector3 const& point = points[i];
+        G3D::Vector3 const delta = point - previous;
+        float const segmentLength = delta.length();
+        if (segmentLength <= 0.01f)
+        {
+            previous = point;
+            continue;
+        }
+
+        if (traversedDistance + segmentLength >= PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE)
+        {
+            float const fraction = (PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE - traversedDistance) / segmentLength;
+            G3D::Vector3 const selected = previous + delta * fraction;
+            segmentDestination.Relocate(selected.x, selected.y, selected.z, orientation);
+            return true;
+        }
+
+        traversedDistance += segmentLength;
+        previous = point;
+    }
+
+    G3D::Vector3 const& finalPoint = points.back();
+    segmentDestination.Relocate(finalPoint.x, finalPoint.y, finalPoint.z, orientation);
+    return player->GetDistance(segmentDestination) > 0.5f;
+}
+
+bool TryBuildBattlegroundFallShortcutDestination(Player const* player, Position const& destination, Position& fallDestination)
+{
+    if (!player || !player->InBattleground() || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+        return false;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 2.0f)
+        return false;
+
+    if (player->GetPositionZ() - destination.GetPositionZ() < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+        return false;
+
+    std::array<float, 5> const probeDistances =
+    {
+        12.0f,
+        20.0f,
+        30.0f,
+        45.0f,
+        60.0f
+    };
+
+    for (float probeDistance : probeDistances)
+    {
+        float const cappedDistance = std::min(planarDistance, probeDistance);
+        if (cappedDistance < 1.0f)
+            continue;
+
+        float const fraction = cappedDistance / planarDistance;
+        float const probeX = player->GetPositionX() + dx * fraction;
+        float const probeY = player->GetPositionY() + dy * fraction;
+        float probeZ = player->GetPositionZ();
+        player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
+
+        if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+            continue;
+
+        if (!player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
+            continue;
+
+        fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
+        return true;
+    }
+
+    return false;
+}
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
@@ -647,7 +734,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         // Allow longer battleground route segments so bots can commit to
         // meaningful navmesh progress toward distant enemies instead of
         // repeatedly selecting tiny local hops that catch on terrain.
-        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
+        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -656,7 +743,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
+            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -672,10 +759,8 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
             return false;
 
         bool haveResolvedDestination = false;
-        if (points.size() > 1)
+        if (BuildNavPathSegmentDestination(player, points, collisionSafeDestination.GetOrientation(), resolvedDestination))
         {
-            G3D::Vector3 const& lastPoint = points.back();
-            resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, collisionSafeDestination.GetOrientation());
             haveResolvedDestination = true;
         }
         else
@@ -845,20 +930,36 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        Position segmentDestination;
-        PathType pathType = PathType(0);
-        if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
+        Position fallDestination;
+        if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
         {
+            motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
+            {
+                init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
+                init.SetFall();
+            }, 0, MOTION_PRIORITY_NORMAL, EFFECT_MOTION_TYPE);
+            issuedDestination = fallDestination;
             EmitBattlegroundGmDebug(player,
-                "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
-            return false;
+                "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
+                " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
         }
+        else
+        {
+            Position segmentDestination;
+            PathType pathType = PathType(0);
+            if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
+            {
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
+                return false;
+            }
 
-        motionMaster->MovePoint(0, segmentDestination, true);
-        issuedDestination = segmentDestination;
-        EmitBattlegroundGmDebug(player,
-            "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
-            " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+            motionMaster->MovePoint(0, segmentDestination, true);
+            issuedDestination = segmentDestination;
+            EmitBattlegroundGmDebug(player,
+                "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
+                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+        }
     }
     else
     {
@@ -1566,17 +1667,6 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
-
-    // WSG should not avoid fall damage while pursuing enemies.
-    if (IsWarsongGulch(player) &&
-        target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
-        player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
-    {
-        if (!CanIssueMovementCommand(player, 500))
-            return false;
-        ClearEatDrinkAurasForMovement(player);
-        return IssueMovePointThrottled(player, target->GetPosition(), 30.0f, 500);
-    }
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
     {
