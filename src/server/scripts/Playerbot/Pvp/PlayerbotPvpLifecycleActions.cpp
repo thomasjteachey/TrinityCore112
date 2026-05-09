@@ -490,120 +490,6 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     return false;
 }
 
-bool TryJumpOffWarsongGraveyard(Player* player)
-{
-    if (!player || !IsWarsongGulch(player))
-        return false;
-
-    struct PostResurrectRouteState
-    {
-        uint32 battlegroundInstanceId = 0;
-        bool wasAlive = true;
-        bool active = false;
-        uint8 phase = 0; // 0 = move to tip, 1 = run forward burst, 2 = move to mid
-        uint32 forwardBurstEndMs = 0;
-    };
-
-    static std::unordered_map<uint64, PostResurrectRouteState> stateByGuid;
-    PostResurrectRouteState& state = stateByGuid[player->GetGUID().GetRawValue()];
-
-    Battleground* battleground = player->GetBattleground();
-    if (!battleground)
-        return false;
-
-    if (state.battlegroundInstanceId != battleground->GetInstanceID())
-    {
-        state = {};
-        state.battlegroundInstanceId = battleground->GetInstanceID();
-        state.wasAlive = player->IsAlive();
-    }
-
-    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-    {
-        state.wasAlive = false;
-        state.active = false;
-        return false;
-    }
-
-    bool const justResurrected = !state.wasAlive;
-    state.wasAlive = true;
-    if (justResurrected)
-    {
-        state.active = true;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
-    }
-
-    if (!state.active)
-        return false;
-
-    static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-
-    // Replace rigid graveyard jump anchors with navmesh-driven pursuit:
-    // build movement toward the nearest enemy immediately after resurrection
-    // and keep issuing path segments for a short bootstrap window so bots do
-    // not tunnel through floor/wall geometry while leaving spawn platforms.
-    if (state.phase == 0)
-    {
-        if (!state.forwardBurstEndMs)
-            state.forwardBurstEndMs = nowMs + 7000;
-        state.phase = 1;
-    }
-
-    if (state.phase == 1)
-    {
-        bool issuedMovement = false;
-        TeamId const teamId = ResolveBotTeamId(player);
-        Position const gateStagingPoint = (teamId == TEAM_HORDE)
-            ? Position(1066.0946404f, 1380.843994f, 340.612305f, 0.0f)
-            : Position(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
-        Position const gateExitPoint = (teamId == TEAM_HORDE)
-            ? Position(978.20f, 1427.10f, 335.20f, 0.0f)
-            : Position(1498.60f, 1484.30f, 340.20f, 0.0f);
-
-        // Explicit egress routing near the spawn gate. This keeps bots from
-        // parking against the fence/gate line when direct nearest-enemy
-        // pathing fails to build a viable first segment from spawn.
-        if (!player->IsWithinDist3d(gateStagingPoint.GetPositionX(), gateStagingPoint.GetPositionY(), gateStagingPoint.GetPositionZ(), 5.0f))
-        {
-            issuedMovement = IssueMovePointThrottled(player, gateStagingPoint, 2.0f, 400);
-            if (issuedMovement)
-                return true;
-        }
-
-        if (!player->IsWithinDist3d(gateExitPoint.GetPositionX(), gateExitPoint.GetPositionY(), gateExitPoint.GetPositionZ(), 8.0f))
-        {
-            issuedMovement = IssueMovePointThrottled(player, gateExitPoint, 2.0f, 400);
-            if (issuedMovement)
-                return true;
-        }
-
-        if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-        {
-            issuedMovement = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
-                IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 12.0f, 500);
-            if (issuedMovement)
-                return true;
-        }
-
-        issuedMovement = IssueMovePointThrottled(player, midPoint, 4.0f, 500);
-        if (nowMs >= state.forwardBurstEndMs)
-            state.phase = 2;
-        return issuedMovement;
-    }
-
-    if (state.phase == 2)
-    {
-        state.active = false;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
-        return false;
-    }
-
-    return true;
-}
-
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -2834,11 +2720,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (TryPursueNearestEnemyInBattleground(player))
         return true;
 
-    if (TryJumpOffWarsongGraveyard(player))
-        return true;
-
-    // Evaluate combat/post-res logic before this guard so stale movement
-    // flags do not suppress target pursuit immediately after graveyard rez.
+    // Evaluate target pursuit before this guard so stale movement flags do not
+    // suppress nearest-enemy pathing after battleground resurrection.
     if (player->isMoving())
         return false;
 
