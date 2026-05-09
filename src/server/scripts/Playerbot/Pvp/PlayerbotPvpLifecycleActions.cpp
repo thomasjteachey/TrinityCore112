@@ -636,6 +636,7 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 6.0f;
+constexpr uint32 PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS = 4000;
 
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
 {
@@ -673,18 +674,25 @@ bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray 
     return player->GetDistance(segmentDestination) > 0.5f;
 }
 
-bool TryBuildBattlegroundFallShortcutDestination(Player const* player, Position const& destination, Position& fallDestination)
+bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
 {
     if (!player || !player->InBattleground() || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+        return false;
+
+    if (player->IsFalling())
+        return false;
+
+    static std::unordered_map<uint64, uint32> nextAllowedFallShortcutMsByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const nextAllowedMs = nextAllowedFallShortcutMsByGuid[botGuid];
+    if (nowMs < nextAllowedMs)
         return false;
 
     float const dx = destination.GetPositionX() - player->GetPositionX();
     float const dy = destination.GetPositionY() - player->GetPositionY();
     float const planarDistance = std::sqrt(dx * dx + dy * dy);
     if (planarDistance < 2.0f)
-        return false;
-
-    if (player->GetPositionZ() - destination.GetPositionZ() < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
         return false;
 
     std::array<float, 5> const probeDistances =
@@ -715,6 +723,7 @@ bool TryBuildBattlegroundFallShortcutDestination(Player const* player, Position 
             continue;
 
         fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
+        nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
         return true;
     }
 
@@ -907,6 +916,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+    if (player->InBattleground() && botCurrentlyMoving && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+        return true;
+
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
         motionMaster->Clear();
