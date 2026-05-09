@@ -746,6 +746,8 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
     return (pathType & forbiddenPathFlags) != 0;
 }
 
+constexpr float PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT = 700.0f;
+
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
     if (!player)
@@ -756,10 +758,10 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         Position const collisionSafeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        // Allow long battleground routes (including spawn-to-midfield/target
-        // pursuit) to be generated in one request instead of forcing very
-        // short local segments that can stall at gate/fence bottlenecks.
-        path.SetPathLengthLimit(350.0f);
+        // Allow longer battleground route segments so bots can commit to
+        // meaningful navmesh progress toward distant enemies instead of
+        // repeatedly selecting tiny local hops that catch on terrain.
+        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -768,7 +770,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(350.0f);
+            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -829,14 +831,16 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
     if (planarDistance < 1.0f)
         return false;
 
-    std::array<float, 6> const probeDistances =
+    std::array<float, 8> const probeDistances =
     {
-        24.0f,
-        18.0f,
+        80.0f,
+        60.0f,
+        45.0f,
+        30.0f,
+        20.0f,
         12.0f,
         8.0f,
-        5.0f,
-        3.0f
+        5.0f
     };
 
     PathType probePathType = PathType(0);
