@@ -93,8 +93,9 @@ void WorldSession::HandleAutostoreLootItemOpcode(WorldPacket& recvData)
 
     player->StoreLootItem(lootSlot, loot);
 
-    // If player is removing the last LootItem, delete the empty container.
-    if (loot->isLooted() && lguid.IsItem())
+    // If player is removing the last LootItem, delete the empty container or
+    // clear the completed player-corpse loot state immediately.
+    if (loot->isLooted() && (lguid.IsItem() || lguid.IsCorpse()))
         player->GetSession()->DoLootRelease(lguid);
 }
 
@@ -210,8 +211,8 @@ void WorldSession::HandleLootMoneyOpcode(WorldPacket& /*recvData*/)
         if (loot->containerID > 0)
             sLootItemStorage->RemoveStoredMoneyForContainer(loot->containerID);
 
-        // Delete container if empty
-        if (loot->isLooted() && guid.IsItem())
+        // Delete container if empty, or clear completed player-corpse loot state.
+        if (loot->isLooted() && (guid.IsItem() || guid.IsCorpse()))
             player->GetSession()->DoLootRelease(guid);
     }
 }
@@ -306,7 +307,7 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
     else if (lguid.IsCorpse())        // ONLY remove insignia at BG
     {
         Corpse* corpse = ObjectAccessor::GetCorpse(*player, lguid);
-        if (!corpse || !corpse->IsWithinDistInMap(_player, INTERACTION_DISTANCE))
+        if (!corpse)
             return;
 
         loot = &corpse->loot;
@@ -315,6 +316,7 @@ void WorldSession::DoLootRelease(ObjectGuid lguid)
         {
             loot->clear();
             corpse->RemoveFlag(CORPSE_FIELD_DYNAMIC_FLAGS, CORPSE_DYNFLAG_LOOTABLE);
+            corpse->lootRecipient = nullptr;
         }
     }
     else if (lguid.IsItem())
