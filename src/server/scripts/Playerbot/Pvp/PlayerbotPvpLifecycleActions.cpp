@@ -635,8 +635,7 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
-constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 3.0f;
-constexpr float PLAYERBOT_BG_MAX_FALL_SHORTCUT_DROP = 60.0f;
+constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 6.0f;
 constexpr uint32 PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS = 4000;
 
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
@@ -690,118 +689,45 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (nowMs < nextAllowedMs)
         return false;
 
-    float const playerX = player->GetPositionX();
-    float const playerY = player->GetPositionY();
-    float const startZ = player->GetPositionZ();
-    float const dx = destination.GetPositionX() - playerX;
-    float const dy = destination.GetPositionY() - playerY;
-    float const currentDestinationDistance = player->GetExactDist2d(destination);
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
     float const planarDistance = std::sqrt(dx * dx + dy * dy);
     if (planarDistance < 2.0f)
         return false;
 
-    float const baseAngle = std::atan2(dy, dx);
-
-    std::array<float, 13> const probeDistances =
+    std::array<float, 5> const probeDistances =
     {
-        6.0f,
-        9.0f,
         12.0f,
-        16.0f,
         20.0f,
-        26.0f,
-        34.0f,
+        30.0f,
         45.0f,
-        60.0f,
-        80.0f,
-        100.0f,
-        120.0f,
-        150.0f
+        60.0f
     };
 
-    // Generic ledge shortcut: scan a narrow cone toward the movement target.
-    // This intentionally does not depend on battleground type/map id because
-    // WSG, custom BGs, and other maps can all have graveyard/ramp navmesh paths
-    // where the human-correct move is simply to step off the ledge.
-    std::array<float, 9> const angleOffsets =
+    for (float probeDistance : probeDistances)
     {
-        0.0f,
-        0.174533f,  // 10 deg
-       -0.174533f,
-        0.349066f,  // 20 deg
-       -0.349066f,
-        0.523599f,  // 30 deg
-       -0.523599f,
-        0.785398f,  // 45 deg
-       -0.785398f
-    };
+        float const cappedDistance = std::min(planarDistance, probeDistance);
+        if (cappedDistance < 1.0f)
+            continue;
 
-    bool haveCandidate = false;
-    Position bestCandidate;
-    float bestScore = std::numeric_limits<float>::max();
+        float const fraction = cappedDistance / planarDistance;
+        float const probeX = player->GetPositionX() + dx * fraction;
+        float const probeY = player->GetPositionY() + dy * fraction;
+        float probeZ = player->GetPositionZ();
+        player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
 
-    for (float angleOffset : angleOffsets)
-    {
-        float const angle = baseAngle + angleOffset;
-        float const directionX = std::cos(angle);
-        float const directionY = std::sin(angle);
+        if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+            continue;
 
-        for (float probeDistance : probeDistances)
-        {
-            float const cappedDistance = std::min(planarDistance, probeDistance);
-            if (cappedDistance < 1.0f)
-                continue;
+        if (!player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
+            continue;
 
-            float const probeX = playerX + directionX * cappedDistance;
-            float const probeY = playerY + directionY * cappedDistance;
-            float probeZ = startZ;
-            player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
-
-            float const drop = startZ - probeZ;
-            if (drop < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP || drop > PLAYERBOT_BG_MAX_FALL_SHORTCUT_DROP)
-                continue;
-
-            // Do not jump sideways/backward just because there is a lower floor.
-            // The sampled landing must be meaningfully in the same direction as
-            // the requested destination.
-            float const forwardDot = ((probeX - playerX) * dx + (probeY - playerY) * dy) / (cappedDistance * planarDistance);
-            if (forwardDot < 0.5f)
-                continue;
-
-            Position candidate(probeX, probeY, probeZ, destination.GetOrientation());
-            float const candidateDestinationDistance = candidate.GetExactDist2d(destination);
-            float const progress = currentDestinationDistance - candidateDestinationDistance;
-            float const requiredProgress = std::max(6.0f, cappedDistance * 0.25f);
-            if (progress < requiredProgress)
-                continue;
-
-            // Strict LOS from the graveyard lip to the landing often fails on
-            // legitimate drops because the edge/ramp collision intersects the
-            // ray. Prefer geometry/progress guards instead of BG-specific LOS
-            // exceptions. Still reject tiny non-LOS drops, which are more likely
-            // to be blocked terrain than intentional ledges.
-            if (drop < 10.0f && !player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
-                continue;
-
-            float const anglePenalty = std::fabs(angleOffset) * 16.0f;
-            float const distancePenalty = cappedDistance * 0.04f;
-            float const dropBonus = drop * 0.15f;
-            float const score = candidateDestinationDistance + anglePenalty + distancePenalty - dropBonus;
-            if (score >= bestScore)
-                continue;
-
-            bestScore = score;
-            bestCandidate = candidate;
-            haveCandidate = true;
-        }
+        fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
+        nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
+        return true;
     }
 
-    if (!haveCandidate)
-        return false;
-
-    fallDestination = bestCandidate;
-    nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
-    return true;
+    return false;
 }
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
