@@ -173,6 +173,14 @@ float GetConfiguredMeleeRange() { return g_PvpCoreConfig.meleeRange; }
 float GetConfiguredCloseRange() { return g_PvpCoreConfig.closeRange; }
 float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
 
+float GetConfiguredCombatRange()
+{
+    float range = std::max(GetConfiguredLongRange(), GetConfiguredSpellRange());
+    range = std::max(range, GetConfiguredCloseRange());
+    range = std::max(range, GetConfiguredMeleeRange());
+    return std::max(range, 0.0f);
+}
+
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
     return config.moduleEnabled && config.pvpCoreEnabled && config.pvpLifecycleEnabled;
@@ -3203,6 +3211,38 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
+
+    // Reference parity guard: never allow mounted state indoors. In addition,
+    // while in combat always force mount-state correction immediately. When a
+    // mounted bot is simply traveling, do not let class spell selection break
+    // the mount unless an enemy has actually entered the combat envelope.
+    bool const outdoors = IsEffectivelyOutdoors(player);
+    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
+    if (player->IsMounted())
+    {
+        if (sustainedIndoorMounted || player->IsInCombat())
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
+            context.actionName = "check mount state";
+            context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
+            context.shouldExecute = true;
+            return context;
+        }
+
+        if (hasInvalidSelectedTarget)
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
+            context.actionName = "drop target";
+            context.reason = "invalid target";
+            context.shouldExecute = true;
+            context.movementTargetGuid = selectedTargetGuid;
+            return context;
+        }
+
+        if (!HasNearbyAttackableEnemyPlayer(player, GetConfiguredCombatRange()))
+            return context;
+    }
+
     bool const criticalLowMana = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
     // Hard-priority mana preservation policy: below 10% mana, disengage from
@@ -3260,19 +3300,6 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     else
     {
         ResetCombatNoTargetTicks(player);
-    }
-
-    // Reference parity guard: never allow mounted state indoors. In addition,
-    // while in combat always force mount-state correction immediately.
-    bool const outdoors = IsEffectivelyOutdoors(player);
-    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
-    if (player->IsMounted() && (sustainedIndoorMounted || player->IsInCombat()))
-    {
-        context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
-        context.actionName = "check mount state";
-        context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
-        context.shouldExecute = true;
-        return context;
     }
 
     if (hasInvalidSelectedTarget)
