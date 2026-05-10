@@ -747,49 +747,76 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (horizontalSpeed <= 0.0f)
         return false;
 
-    std::array<float, 8> const probeDistances =
+    std::array<float, 5> const edgeProbeDistances =
     {
         3.0f,
         5.0f,
         8.0f,
         12.0f,
-        20.0f,
-        30.0f,
-        45.0f,
-        60.0f
+        16.0f
     };
 
-    for (float probeDistance : probeDistances)
+    for (float edgeProbeDistance : edgeProbeDistances)
     {
-        float const cappedDistance = std::min(planarDistance, probeDistance);
-        if (cappedDistance < 1.0f)
+        float const edgeDistance = std::min(planarDistance, edgeProbeDistance);
+        if (edgeDistance < 1.0f)
             continue;
 
-        float const fraction = cappedDistance / planarDistance;
-        float const probeX = player->GetPositionX() + dx * fraction;
-        float const probeY = player->GetPositionY() + dy * fraction;
-        float probeZ = player->GetPositionZ();
-        player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
+        float const edgeFraction = edgeDistance / planarDistance;
+        float const edgeX = player->GetPositionX() + dx * edgeFraction;
+        float const edgeY = player->GetPositionY() + dy * edgeFraction;
+        float edgeZ = player->GetPositionZ();
+        player->UpdateAllowedPositionZ(edgeX, edgeY, edgeZ);
 
-        float const drop = player->GetPositionZ() - probeZ;
+        float const edgeDrop = player->GetPositionZ() - edgeZ;
+        if (edgeDrop < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+            continue;
+
+        // Step only far enough over the ledge to prove there is a drop, then
+        // project the rest of the fall using the bot's current horizontal speed.
+        // Do not keep probing toward the tactical destination: that turns a
+        // graveyard cliff drop into a long, destination-directed glide.
+        float const edgeFallTimeSeconds = Movement::computeFallTime(edgeDrop, false);
+        float const naturalHorizontalDistance = edgeDistance + horizontalSpeed * edgeFallTimeSeconds;
+        float const landingDistance = std::min(planarDistance, naturalHorizontalDistance);
+        float const landingFraction = landingDistance / planarDistance;
+        float const landingX = player->GetPositionX() + dx * landingFraction;
+        float const landingY = player->GetPositionY() + dy * landingFraction;
+        float landingZ = player->GetPositionZ();
+        player->UpdateAllowedPositionZ(landingX, landingY, landingZ);
+
+        float const drop = player->GetPositionZ() - landingZ;
         if (drop < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
             continue;
 
-        // A falling spline derives total duration from vertical gravity.  If we
-        // choose a far-away landing point for a shallow drop, the bot is forced
-        // to cover that horizontal distance during the short gravity duration,
-        // producing the visible "rocket forward, then stop" behavior.  Keep
-        // horizontal travel close to the speed the bot already had, matching how
-        // a real client preserves horizontal velocity after stepping off a ledge.
         float const fallTimeSeconds = Movement::computeFallTime(drop, false);
         float const maxHumanLikeHorizontalDistance = horizontalSpeed * fallTimeSeconds + PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE;
-        if (cappedDistance > maxHumanLikeHorizontalDistance)
+        if (landingDistance > maxHumanLikeHorizontalDistance)
+        {
+            float const cappedLandingDistance = std::min(planarDistance, maxHumanLikeHorizontalDistance);
+            if (cappedLandingDistance <= edgeDistance)
+                continue;
+
+            float const cappedFraction = cappedLandingDistance / planarDistance;
+            float cappedZ = player->GetPositionZ();
+            float const cappedX = player->GetPositionX() + dx * cappedFraction;
+            float const cappedY = player->GetPositionY() + dy * cappedFraction;
+            player->UpdateAllowedPositionZ(cappedX, cappedY, cappedZ);
+            if (player->GetPositionZ() - cappedZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+                continue;
+
+            if (!player->IsWithinLOS(cappedX, cappedY, cappedZ + 1.0f))
+                continue;
+
+            fallDestination.Relocate(cappedX, cappedY, cappedZ, destination.GetOrientation());
+            nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
+            return true;
+        }
+
+        if (!player->IsWithinLOS(landingX, landingY, landingZ + 1.0f))
             continue;
 
-        if (!player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
-            continue;
-
-        fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
+        fallDestination.Relocate(landingX, landingY, landingZ, destination.GetOrientation());
         nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
         return true;
     }
@@ -923,11 +950,7 @@ bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, f
     return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
 }
 
-} // namespace
-
-namespace playerbot
-{
-bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason /*= nullptr*/)
+bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason = nullptr)
 {
     if (!player || !player->IsAlive())
         return false;
@@ -945,6 +968,15 @@ bool TryIssueBattlegroundFallMovement(Player* player, Position const& destinatio
         return false;
 
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    // Keep the unit movement state in sync with the fall spline.  The spline
+    // packet alone is not enough for player-controlled bots: without the falling
+    // movement flag, combat movement can queue fresh chase/follow orders while
+    // the visual fall is still in progress, which makes observers see the bot
+    // snap back up and restart the fall repeatedly.
+    player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
+    player->SetFallInformation(0, player->GetPositionZ());
+
     motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
     {
         init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
@@ -959,10 +991,6 @@ bool TryIssueBattlegroundFallMovement(Player* player, Position const& destinatio
     EmitBattlegroundGmDebug(player, detail.str(), 1000);
     return true;
 }
-}
-
-namespace
-{
 
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
 {
@@ -1059,7 +1087,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        if (playerbot::TryIssueBattlegroundFallMovement(player, safeDestination, "move-point"))
+        if (TryIssueBattlegroundFallMovement(player, safeDestination, "move-point"))
         {
             issuedDestination = safeDestination;
         }
