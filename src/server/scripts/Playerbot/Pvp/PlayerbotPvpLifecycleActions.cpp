@@ -78,6 +78,13 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+
+struct PendingBattlegroundFallShortcut
+{
+    Position landing;
+};
+
+std::unordered_map<uint64, PendingBattlegroundFallShortcut> g_PendingBattlegroundFallShortcutByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
@@ -389,6 +396,7 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
 float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
 bool CanIssueBotMovement(Player* player);
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
+bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
 Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
 bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
 void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
@@ -473,7 +481,7 @@ bool RecoverStaleBattlegroundState(Player* player)
     return true;
 }
 
-bool MoveToClosestBattlegroundGraveyard(Player* player)
+bool MoveToBattlegroundObjectivePosition(Player* player)
 {
     if (!player || !player->InBattleground())
         return false;
@@ -482,15 +490,17 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     if (!battleground)
         return false;
 
-    if (WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player))
+    Position destination;
+    if (!TryGetObjectivePosition(battleground, player, destination))
+        return false;
+
+    if (player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
     {
-        Position destination(graveyard->Loc.X, graveyard->Loc.Y, graveyard->Loc.Z, player->GetOrientation());
-        if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
-            IssueMovePointThrottled(player, destination, 6.0f, 2000);
+        EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12", 1000);
         return true;
     }
 
-    return false;
+    return IssueMovePointThrottled(player, destination);
 }
 
 bool IsLifecycleGateEnabled()
@@ -566,6 +576,8 @@ void ClearMovementBeforeBattlegroundTeleport(Player* player)
     if (!player)
         return;
 
+    g_PendingBattlegroundFallShortcutByGuid.erase(player->GetGUID().GetRawValue());
+
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
 
@@ -597,20 +609,64 @@ bool IsResolvingBattlegroundGravityFall(Player const* player)
 
 bool FinishCompletedBattlegroundGravityFall(Player* player)
 {
-    if (!IsResolvingBattlegroundGravityFall(player))
+    if (!player)
+        return false;
+
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    auto pendingItr = g_PendingBattlegroundFallShortcutByGuid.find(botGuid);
+    bool const hasPendingShortcut = pendingItr != g_PendingBattlegroundFallShortcutByGuid.end();
+
+    if (!IsResolvingBattlegroundGravityFall(player) && !hasPendingShortcut)
         return false;
 
     if (player->movespline && !player->movespline->Finalized())
         return false;
 
-    float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
-    if (groundZ <= INVALID_HEIGHT || std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
-        return false;
+    if (hasPendingShortcut)
+    {
+        Position landing = pendingItr->second.landing;
+        float landingZ = landing.GetPositionZ();
+        player->UpdateAllowedPositionZ(landing.GetPositionX(), landing.GetPositionY(), landingZ);
+        landing.Relocate(landing.GetPositionX(), landing.GetPositionY(), landingZ, landing.GetOrientation());
+
+        // Player MoveSpline finalization for virtual-session bots can leave the
+        // authoritative server position at the takeoff ledge while observers see
+        // the falling spline below. Commit the server position to the spline's
+        // landing point once the spline is done; otherwise the next movement tick
+        // starts from the graveyard again and appears as an endless fall/snap loop.
+        player->UpdatePosition(landing, true);
+        g_PendingBattlegroundFallShortcutByGuid.erase(pendingItr);
+    }
+    else
+    {
+        float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
+        if (groundZ <= INVALID_HEIGHT)
+            return false;
+
+        float const airborneDistance = player->GetPositionZ() - groundZ;
+        if (std::fabs(airborneDistance) > 1.0f)
+        {
+            // A virtual-session bot can occasionally keep the falling flag after
+            // its spline has finalized without a pending shortcut record (for
+            // example after a movement-generator clear or reload while dropping
+            // from battleground terrain).  If the bot is still suspended above
+            // valid terrain with no active spline left to advance, settle the
+            // authoritative position to that terrain so normal movement can
+            // resume instead of blocking every follow/chase command forever.
+            if (airborneDistance <= 0.0f)
+                return false;
+
+            Position landing(player->GetPositionX(), player->GetPositionY(), groundZ, player->GetOrientation());
+            player->UpdatePosition(landing, true);
+        }
+    }
 
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FORWARD);
     player->SetFallInformation(0, player->GetPositionZ());
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        player->SendMovementFlagUpdate();
     return true;
 }
 
@@ -747,13 +803,16 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (horizontalSpeed <= 0.0f)
         return false;
 
-    std::array<float, 5> const edgeProbeDistances =
+    std::array<float, 8> const edgeProbeDistances =
     {
         3.0f,
         5.0f,
         8.0f,
         12.0f,
-        16.0f
+        16.0f,
+        24.0f,
+        32.0f,
+        40.0f
     };
 
     for (float edgeProbeDistance : edgeProbeDistances)
@@ -790,7 +849,11 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
             continue;
 
         float const fallTimeSeconds = Movement::computeFallTime(drop, false);
-        float const maxHumanLikeHorizontalDistance = horizontalSpeed * fallTimeSeconds + PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE;
+        // The ledge can be several yards away from the bot's current position.
+        // Allow the shortcut to cover the run-up to the edge plus the natural
+        // horizontal travel during the drop; otherwise bots stop just short of
+        // wider graveyard shelves and never get a chance to fall.
+        float const maxHumanLikeHorizontalDistance = edgeDistance + horizontalSpeed * fallTimeSeconds + PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE;
         if (landingDistance > maxHumanLikeHorizontalDistance)
         {
             float const cappedLandingDistance = std::min(planarDistance, maxHumanLikeHorizontalDistance);
@@ -819,6 +882,56 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
         fallDestination.Relocate(landingX, landingY, landingZ, destination.GetOrientation());
         nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
         return true;
+    }
+
+    return false;
+}
+
+bool TryBuildBattlegroundGraveyardFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player);
+    if (!graveyard)
+        return false;
+
+    float const graveyardDx = player->GetPositionX() - graveyard->Loc.X;
+    float const graveyardDy = player->GetPositionY() - graveyard->Loc.Y;
+    float const graveyardDistance2D = std::sqrt(graveyardDx * graveyardDx + graveyardDy * graveyardDy);
+    if (graveyardDistance2D > 80.0f || std::fabs(player->GetPositionZ() - graveyard->Loc.Z) > 35.0f)
+        return false;
+
+    float const destinationAngle = player->GetAbsoluteAngle(destination);
+    float const awayFromGraveyardAngle = graveyardDistance2D > 1.0f ? std::atan2(graveyardDy, graveyardDx) : destinationAngle;
+    std::array<float, 10> const probeAngles =
+    {
+        destinationAngle,
+        awayFromGraveyardAngle,
+        player->GetOrientation(),
+        awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.25f,
+        awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.25f,
+        awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.5f,
+        awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.5f,
+        awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.75f,
+        awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.75f,
+        awayFromGraveyardAngle + static_cast<float>(M_PI)
+    };
+
+    for (float angle : probeAngles)
+    {
+        Position probeDestination(
+            player->GetPositionX() + std::cos(angle) * 40.0f,
+            player->GetPositionY() + std::sin(angle) * 40.0f,
+            player->GetPositionZ(),
+            angle);
+
+        if (TryBuildBattlegroundFallShortcutDestination(player, probeDestination, fallDestination))
+            return true;
     }
 
     return false;
@@ -960,7 +1073,8 @@ bool TryIssueBattlegroundFallMovementInternal(Player* player, Position const& de
         return true;
 
     Position fallDestination;
-    if (!TryBuildBattlegroundFallShortcutDestination(player, destination, fallDestination))
+    if (!TryBuildBattlegroundFallShortcutDestination(player, destination, fallDestination) &&
+        !TryBuildBattlegroundGraveyardFallShortcutDestination(player, destination, fallDestination))
         return false;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -976,6 +1090,7 @@ bool TryIssueBattlegroundFallMovementInternal(Player* player, Position const& de
     // snap back up and restart the fall repeatedly.
     player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
     player->SetFallInformation(0, player->GetPositionZ());
+    g_PendingBattlegroundFallShortcutByGuid[player->GetGUID().GetRawValue()] = { fallDestination };
 
     motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
     {
@@ -999,6 +1114,11 @@ namespace playerbot
 bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason /*= nullptr*/)
 {
     return TryIssueBattlegroundFallMovementInternal(player, destination, reason);
+}
+
+bool FinishBattlegroundFallMovement(Player* player)
+{
+    return FinishCompletedBattlegroundGravityFall(player);
 }
 }
 
@@ -1096,14 +1216,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
     Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
-    Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        if (TryIssueBattlegroundFallMovementInternal(player, safeDestination, "move-point"))
-        {
-            issuedDestination = safeDestination;
-        }
-        else
+        if (!TryIssueBattlegroundFallMovementInternal(player, safeDestination, "move-point"))
         {
             Position segmentDestination;
             PathType pathType = PathType(0);
@@ -1115,7 +1230,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
 
             motionMaster->MovePoint(0, segmentDestination, true);
-            issuedDestination = segmentDestination;
             EmitBattlegroundGmDebug(player,
                 "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
                 " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
@@ -1124,10 +1238,14 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     else
     {
         motionMaster->MovePoint(0, safeDestination, generatePath);
-        issuedDestination = safeDestination;
     }
 
-    state.lastDestination = issuedDestination;
+    // Throttle against the caller's tactical destination, not the intermediate
+    // navmesh segment we just issued. Battleground segment walking intentionally
+    // advances in chunks; storing the chunk endpoint here made the next tick see
+    // the real objective as a different destination, clear the active spline,
+    // and reinstall a fresh segment before bots could make visible progress.
+    state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
 }
@@ -2874,7 +2992,7 @@ bool BattlegroundLifecycleActions::HandleInProgressStatusPrimitive(Player* playe
     }
 
     // Reference module parity: in-progress movement/combat are handled by
-    // tactical actions (move to objective / check objective), not lifecycle.
+    // tactical actions (enemy pursuit / movement), not lifecycle.
     return false;
 }
 
@@ -2909,10 +3027,10 @@ bool BattlegroundTacticalActions::Execute(Player* player, BattlegroundTacticalCo
 
     if (IsTacticalAction(context.actionName, "bg move to start"))
         return MoveToStartPrimitive(player);
+    if (IsTacticalAction(context.actionName, "bg pursue enemy"))
+        return PursueEnemyPrimitive(player);
     if (IsTacticalAction(context.actionName, "bg move to objective"))
         return MoveToObjectivePrimitive(player, context);
-    if (IsTacticalAction(context.actionName, "bg check objective"))
-        return CheckObjectivePrimitive(player, context);
     if (IsTacticalAction(context.actionName, "bg reset objective force"))
         return ResetObjectiveForcePrimitive(player);
     if (IsTacticalAction(context.actionName, "bg use buff"))
@@ -3028,7 +3146,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 if (!withinObjectiveRange)
                     IssueMovePointThrottled(player, destination);
                 else
-                    EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
+                    EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12", 1000);
                 return true;
             }
 
@@ -3049,17 +3167,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     return false;
 }
 
-bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context)
+bool BattlegroundTacticalActions::PursueEnemyPrimitive(Player* player)
 {
-    (void)context;
-
     if (!player || !player->InBattleground())
         return false;
 
-    if (TryPursueNearestEnemyInBattleground(player))
-        return true;
-
-    return MoveToClosestBattlegroundGraveyard(player);
+    return TryPursueNearestEnemyInBattleground(player);
 }
 
 bool BattlegroundTacticalActions::ResetObjectiveForcePrimitive(Player* player)
