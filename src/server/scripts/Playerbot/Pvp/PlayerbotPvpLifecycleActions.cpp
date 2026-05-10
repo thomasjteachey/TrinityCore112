@@ -762,6 +762,14 @@ bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& dest
     return true;
 }
 
+// Compatibility shim for branches that still reference the old battleground-named
+// helper while this code is being merged. Do not add map or battleground checks
+// here; falling behavior must remain generic terrain behavior.
+bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+{
+    return TryBuildTerrainFallShortcutDestination(player, destination, fallDestination);
+}
+
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
     if (!player)
@@ -974,6 +982,14 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     Position fallDestination;
     if (generatePath && TryBuildTerrainFallShortcutDestination(player, safeDestination, fallDestination))
+    {
+        motionMaster->MovePoint(0, fallDestination, false);
+        issuedDestination = fallDestination;
+        EmitBattlegroundGmDebug(player,
+            "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
+            " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+    }
+    else if (generatePath && player->InBattleground())
     {
         motionMaster->MovePoint(0, fallDestination, false);
         issuedDestination = fallDestination;
