@@ -584,6 +584,15 @@ void ClearMovementBeforeBattlegroundTeleport(Player* player)
 }
 
 
+bool IsResolvingBattlegroundGravityFall(Player const* player)
+{
+    return player &&
+        player->InBattleground() &&
+        player->IsFalling() &&
+        !player->IsFlying() &&
+        !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+}
+
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
 {
     if (!player)
@@ -860,6 +869,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 {
     if (!player)
         return false;
+
+    if (IsResolvingBattlegroundGravityFall(player))
+        return true;
+
     if (!CanIssueMovementCommand(player, 500))
         return false;
 
@@ -916,7 +929,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (player->InBattleground() && botCurrentlyMoving && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+    if (IsResolvingBattlegroundGravityFall(player))
+        return true;
+
+    if (player->InBattleground() && botCurrentlyMoving && currentMovement == EFFECT_MOTION_TYPE)
         return true;
 
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
@@ -1442,6 +1458,13 @@ void ClearActiveMovementForControlLoss(Player* player)
 bool CanIssueBotMovement(Player* player)
 {
     if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+        return false;
+
+    // Once a bot has stepped off battleground terrain (for example graveyard
+    // cliffs), do not let combat/objective steering replace the fall with a
+    // fresh ground-snapped MovePoint/Follow/Chase order. The core fall state
+    // should resolve at normal gravity, after which pathing can resume.
+    if (IsResolvingBattlegroundGravityFall(player))
         return false;
 
     if (IsCrowdControlledForAction(player))
