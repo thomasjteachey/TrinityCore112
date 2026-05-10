@@ -2096,9 +2096,20 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
     }
 }
 
+bool IsPlayerbotActivelyFalling(Player const* player)
+{
+    // Use Unit::IsFalling() instead of Player::IsFalling() so server-authored
+    // falling splines (MoveSplineInit::SetFall) are treated as real gravity
+    // movement and are not interrupted by fresh MovePoint/repath orders.
+    return player && player->Unit::IsFalling();
+}
+
 bool CanIssueFollowCommands(Player const* player)
 {
     if (!player || !player->IsAlive())
+        return false;
+
+    if (IsPlayerbotActivelyFalling(player))
         return false;
 
     if (IsCrowdControlledForAction(player) ||

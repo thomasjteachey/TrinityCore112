@@ -584,9 +584,20 @@ void ClearMovementBeforeBattlegroundTeleport(Player* player)
 }
 
 
+bool IsPlayerbotActivelyFalling(Player const* player)
+{
+    // Use Unit::IsFalling() instead of Player::IsFalling() so server-authored
+    // falling splines (MoveSplineInit::SetFall) are treated as real gravity
+    // movement and are not interrupted by fresh MovePoint/repath orders.
+    return player && player->Unit::IsFalling();
+}
+
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
 {
     if (!player)
+        return false;
+
+    if (IsPlayerbotActivelyFalling(player))
         return false;
 
     static std::unordered_map<uint64, uint32> nextAllowedMoveCommandMsByGuid;
@@ -679,7 +690,7 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (!player || !player->InBattleground() || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
         return false;
 
-    if (player->IsFalling())
+    if (IsPlayerbotActivelyFalling(player))
         return false;
 
     static std::unordered_map<uint64, uint32> nextAllowedFallShortcutMsByGuid;
@@ -916,7 +927,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (player->InBattleground() && botCurrentlyMoving && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+    if (player->InBattleground() && botCurrentlyMoving && (IsPlayerbotActivelyFalling(player) || currentMovement == EFFECT_MOTION_TYPE))
         return true;
 
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
