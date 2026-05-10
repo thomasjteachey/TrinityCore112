@@ -156,8 +156,8 @@ enum GILNEAS_BG_Timers
 
 enum GILNEAS_BG_Score
 {
-    GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE = 1400,
-    GILNEAS_BG_MAX_TEAM_SCORE             = 1600
+    GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE = 1800,
+    GILNEAS_BG_MAX_TEAM_SCORE             = 2000
 };
 
 enum GILNEAS_BG_BattlegroundNodes
@@ -222,8 +222,8 @@ const float GILNEAS_BG_DoorPositions[4][8] =
     { 1396.15f, 977.014f, 0.33169f, 6.27043f, 0.0f, 0.0f, 0.006378f, -0.99998f }
 };
 
-const uint32 GILNEAS_BG_TickIntervals[4] = { 0, 12000, 9000, 6000 };
-const uint32 GILNEAS_BG_TickPoints[4] = { 0, 10, 10, 10 };
+const uint32 GILNEAS_BG_TickIntervals[4] = { 0, 12000, 6000, 1000 };
+const uint32 GILNEAS_BG_TickPoints[4] = { 0, 10, 10, 30 };
 
 const uint32 GILNEAS_BG_GraveyardIds[GILNEAS_BG_ALL_NODES_COUNT] = { 1736, 1737, 1735, 1739, 1738 };
 
