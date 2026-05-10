@@ -56,12 +56,35 @@ constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
+constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
+
+bool IsPlayerbotDispelSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+
+    switch (firstRankSpellId)
+    {
+        case 370:  // Purge
+        case 475:  // Remove Lesser Curse
+        case 527:  // Dispel Magic
+        case 2782: // Remove Curse
+        case 2893: // Abolish Poison
+        case 4987: // Cleanse
+            return true;
+        default:
+            return false;
+    }
+}
 
 bool IsHunterInRangedMode(Player const* player)
 {
@@ -172,6 +195,14 @@ float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
 float GetConfiguredMeleeRange() { return g_PvpCoreConfig.meleeRange; }
 float GetConfiguredCloseRange() { return g_PvpCoreConfig.closeRange; }
 float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
+
+float GetConfiguredCombatRange()
+{
+    float range = std::max(GetConfiguredLongRange(), GetConfiguredSpellRange());
+    range = std::max(range, GetConfiguredCloseRange());
+    range = std::max(range, GetConfiguredMeleeRange());
+    return std::max(range, 0.0f);
+}
 
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
@@ -389,6 +420,13 @@ SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpell
 bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& decision, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget)
 {
     if (!player || !decision.spellId || !player->HasSpell(decision.spellId))
+        return false;
+
+    // Treat the shared playerbot dispel cooldown as an immediate castability
+    // failure so the same decision pass suppresses this dispel and selects the
+    // next available action instead of returning an idle cooldown attempt.
+    if (IsPlayerbotDispelSpell(decision.spellId) &&
+        playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken))
         return false;
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(decision.spellId);
@@ -2264,7 +2302,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, GetConfiguredMeleeRange());
     float const manaPct = player->GetPowerPct(POWER_MANA);
-    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     Unit const* cursedTarget = (!dispelThrottleActive && IsSpellReady(player, 475)) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
     Unit const* castingTarget = IsSpellReady(player, 2139) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* polymorphTarget =
@@ -2314,7 +2352,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         return decision;
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
-    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     Unit const* debuffedAlly = (!dispelThrottleActive && IsSpellReady(player, 988)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
     Unit const* enemyBuffedTarget = (!dispelThrottleActive && IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
     Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f) : nullptr;
@@ -2387,7 +2425,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
         !player->IsPolymorphed();
 
     Unit const* lowManaAlly = IsSpellReady(player, 29166) ? SelectFriendlyLowManaTarget(player, 40.0f, 10.0f) : nullptr;
-    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     Unit const* cursedTarget = (!dispelThrottleActive && IsSpellReady(player, 2782)) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
     Unit const* poisonedTarget = (!dispelThrottleActive && IsSpellReady(player, 2893)) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
     Unit const* swiftmendTarget = IsSpellReady(player, 18562) ? SelectFriendlyHealthTarget(player, 40.0f, 50.0f) : nullptr;
@@ -2444,7 +2482,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
 
     Unit const* emergencyLowAlly = SelectFriendlyHealthTarget(player, 15.0f, 25.0f);
     Unit const* cleanseTarget = nullptr;
-    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 900004);
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     if (!dispelThrottleActive && IsSpellReady(player, 4987))
     {
         cleanseTarget = SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f);
@@ -2688,6 +2726,8 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
     if (!HasHostileTarget(player, target))
         return decision;
 
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
+
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432), 34.0f,
@@ -2711,7 +2751,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
         { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, IsSpellReady(player, 370), 40.0f,
+    AddDecisionCandidate(candidates, !dispelThrottleActive && IsSpellReady(player, 370), 40.0f,
         { "shaman purge", "strip enemy magical effects by default", 370, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 15208), 39.0f,
         { "shaman lightning bolt", "fallback ranged damage cast", 15208, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -3203,6 +3243,38 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
+
+    // Reference parity guard: never allow mounted state indoors. In addition,
+    // while in combat always force mount-state correction immediately. When a
+    // mounted bot is simply traveling, do not let class spell selection break
+    // the mount unless an enemy has actually entered the combat envelope.
+    bool const outdoors = IsEffectivelyOutdoors(player);
+    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
+    if (player->IsMounted())
+    {
+        if (sustainedIndoorMounted || player->IsInCombat())
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
+            context.actionName = "check mount state";
+            context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
+            context.shouldExecute = true;
+            return context;
+        }
+
+        if (hasInvalidSelectedTarget)
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
+            context.actionName = "drop target";
+            context.reason = "invalid target";
+            context.shouldExecute = true;
+            context.movementTargetGuid = selectedTargetGuid;
+            return context;
+        }
+
+        if (!HasNearbyAttackableEnemyPlayer(player, GetConfiguredCombatRange()))
+            return context;
+    }
+
     bool const criticalLowMana = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
     // Hard-priority mana preservation policy: below 10% mana, disengage from
@@ -3260,19 +3332,6 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     else
     {
         ResetCombatNoTargetTicks(player);
-    }
-
-    // Reference parity guard: never allow mounted state indoors. In addition,
-    // while in combat always force mount-state correction immediately.
-    bool const outdoors = IsEffectivelyOutdoors(player);
-    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
-    if (player->IsMounted() && (sustainedIndoorMounted || player->IsInCombat()))
-    {
-        context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
-        context.actionName = "check mount state";
-        context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
-        context.shouldExecute = true;
-        return context;
     }
 
     if (hasInvalidSelectedTarget)

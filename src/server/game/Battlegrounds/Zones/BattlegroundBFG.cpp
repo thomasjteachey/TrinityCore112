@@ -106,16 +106,16 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                         break;
                     }
 
-                    uint8 honorRewards = uint8(m_TeamScores[teamId] / _honorTics);
-                    uint8 reputationRewards = uint8(m_TeamScores[teamId] / _reputationTics);
+                    uint8 honorRewards = _honorTics ? uint8(m_TeamScores[teamId] / _honorTics) : 0;
+                    uint8 reputationRewards = _reputationTics ? uint8(m_TeamScores[teamId] / _reputationTics) : 0;
                     uint8 information = uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
                     m_TeamScores[teamId] += GILNEAS_BG_TickPoints[controlledPoints];
                     if (m_TeamScores[teamId] > GILNEAS_BG_MAX_TEAM_SCORE)
                         m_TeamScores[teamId] = GILNEAS_BG_MAX_TEAM_SCORE;
 
-                    if (honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
+                    if (_honorTics && honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
                         RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
-                    if (reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
+                    if (_reputationTics && reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
                         RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
 
                     if (information < uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE))
@@ -418,12 +418,30 @@ bool BattlegroundBFG::SetupBattleground() {
     return true;
 }
 
+void BattlegroundBFG::Reset()
+{
+    Battleground::Reset();
+
+    Init();
+}
+
 void BattlegroundBFG::Init()
 {
-
-      //call parent's class reset
-
     _bgEvents.Reset();
+
+    m_TeamScores[TEAM_ALLIANCE] = 0;
+    m_TeamScores[TEAM_HORDE] = 0;
+    _controlledPoints[TEAM_ALLIANCE] = 0;
+    _controlledPoints[TEAM_HORDE] = 0;
+    _teamScores500Disadvantage[TEAM_ALLIANCE] = false;
+    _teamScores500Disadvantage[TEAM_HORDE] = false;
+
+    for (uint8 node = 0; node < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++node)
+    {
+        _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
+        _capturePointInfo[node]._state = GILNEAS_BG_NODE_TYPE_NEUTRAL;
+        _capturePointInfo[node]._captured = false;
+    }
 
     _honorTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendHonorTicks : GILNEAS_BG_NotBGWeekendHonorTicks;
     _reputationTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendRepTicks : GILNEAS_BG_NotBGWeekendRepTicks;
