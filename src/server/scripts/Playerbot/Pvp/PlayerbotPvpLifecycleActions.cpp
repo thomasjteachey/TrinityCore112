@@ -35,7 +35,9 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "MoveSplineInit.h"
+#include "MovementTypedefs.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Item.h"
@@ -593,6 +595,42 @@ bool IsResolvingBattlegroundGravityFall(Player const* player)
         !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
 }
 
+bool FinishCompletedBattlegroundGravityFall(Player* player)
+{
+    if (!IsResolvingBattlegroundGravityFall(player))
+        return false;
+
+    if (player->movespline && !player->movespline->Finalized())
+        return false;
+
+    float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
+    if (groundZ <= INVALID_HEIGHT || std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
+        return false;
+
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_FORWARD);
+    player->SetFallInformation(0, player->GetPositionZ());
+    return true;
+}
+
+float GetHumanLikeFallHorizontalSpeed(Player const* player)
+{
+    if (!player)
+        return 0.0f;
+
+    if (player->movespline && !player->movespline->Finalized() && player->movespline->Velocity() > 0.0f)
+        return player->movespline->Velocity();
+
+    if (player->HasUnitMovementFlag(MOVEMENTFLAG_WALKING))
+        return player->GetSpeed(MOVE_WALK);
+
+    if (player->HasUnitMovementFlag(MOVEMENTFLAG_BACKWARD))
+        return player->GetSpeed(MOVE_RUN_BACK);
+
+    return player->GetSpeed(MOVE_RUN);
+}
+
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
 {
     if (!player)
@@ -645,6 +683,7 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 6.0f;
+constexpr float PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE = 0.75f;
 constexpr uint32 PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS = 4000;
 
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
@@ -704,8 +743,15 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (planarDistance < 2.0f)
         return false;
 
-    std::array<float, 5> const probeDistances =
+    float const horizontalSpeed = GetHumanLikeFallHorizontalSpeed(player);
+    if (horizontalSpeed <= 0.0f)
+        return false;
+
+    std::array<float, 8> const probeDistances =
     {
+        3.0f,
+        5.0f,
+        8.0f,
         12.0f,
         20.0f,
         30.0f,
@@ -725,7 +771,19 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
         float probeZ = player->GetPositionZ();
         player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
 
-        if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+        float const drop = player->GetPositionZ() - probeZ;
+        if (drop < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+            continue;
+
+        // A falling spline derives total duration from vertical gravity.  If we
+        // choose a far-away landing point for a shallow drop, the bot is forced
+        // to cover that horizontal distance during the short gravity duration,
+        // producing the visible "rocket forward, then stop" behavior.  Keep
+        // horizontal travel close to the speed the bot already had, matching how
+        // a real client preserves horizontal velocity after stepping off a ledge.
+        float const fallTimeSeconds = Movement::computeFallTime(drop, false);
+        float const maxHumanLikeHorizontalDistance = horizontalSpeed * fallTimeSeconds + PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE;
+        if (cappedDistance > maxHumanLikeHorizontalDistance)
             continue;
 
         if (!player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
@@ -865,10 +923,53 @@ bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, f
     return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
 }
 
+} // namespace
+
+namespace playerbot
+{
+bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason /*= nullptr*/)
+{
+    if (!player || !player->IsAlive())
+        return false;
+
+    FinishCompletedBattlegroundGravityFall(player);
+    if (IsResolvingBattlegroundGravityFall(player))
+        return true;
+
+    Position fallDestination;
+    if (!TryBuildBattlegroundFallShortcutDestination(player, destination, fallDestination))
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
+    {
+        init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
+        init.SetFall();
+    }, 0, MOTION_PRIORITY_HIGHEST, EFFECT_MOTION_TYPE);
+
+    std::ostringstream detail;
+    detail << "movepoint=fall-shortcut"
+           << " reason=" << (reason ? reason : "unspecified")
+           << " drop=" << int32(player->GetPositionZ() - fallDestination.GetPositionZ())
+           << " segDist=" << int32(player->GetDistance(fallDestination));
+    EmitBattlegroundGmDebug(player, detail.str(), 1000);
+    return true;
+}
+}
+
+namespace
+{
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
 {
     if (!player)
         return false;
+
+    FinishCompletedBattlegroundGravityFall(player);
 
     if (IsResolvingBattlegroundGravityFall(player))
         return true;
@@ -958,18 +1059,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        Position fallDestination;
-        if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
+        if (playerbot::TryIssueBattlegroundFallMovement(player, safeDestination, "move-point"))
         {
-            motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
-            {
-                init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
-                init.SetFall();
-            }, 0, MOTION_PRIORITY_NORMAL, EFFECT_MOTION_TYPE);
-            issuedDestination = fallDestination;
-            EmitBattlegroundGmDebug(player,
-                "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
-                " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+            issuedDestination = safeDestination;
         }
         else
         {
@@ -1464,6 +1556,8 @@ bool CanIssueBotMovement(Player* player)
     // cliffs), do not let combat/objective steering replace the fall with a
     // fresh ground-snapped MovePoint/Follow/Chase order. The core fall state
     // should resolve at normal gravity, after which pathing can resume.
+    FinishCompletedBattlegroundGravityFall(player);
+
     if (IsResolvingBattlegroundGravityFall(player))
         return false;
 
