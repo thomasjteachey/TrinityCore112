@@ -636,7 +636,9 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 constexpr float PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP = 6.0f;
-constexpr uint32 PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS = 8000;
+constexpr float PLAYERBOT_TERRAIN_MAX_FALL_SHORTCUT_DROP = 45.0f;
+constexpr float PLAYERBOT_TERRAIN_FALL_LANDING_OFFSET = 1.25f;
+constexpr uint32 PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS = 12000;
 
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
 {
@@ -674,7 +676,37 @@ bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray 
     return player->GetDistance(segmentDestination) > 0.5f;
 }
 
-bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+float CalculatePathDistance(Movement::PointsArray const& points)
+{
+    if (points.size() < 2)
+        return 0.0f;
+
+    float distance = 0.0f;
+    for (std::size_t i = 1; i < points.size(); ++i)
+        distance += (points[i] - points[i - 1]).length();
+
+    return distance;
+}
+
+float CalculateNavigationDistance(Player* player, Position const& destination)
+{
+    if (!player)
+        return std::numeric_limits<float>::max();
+
+    PathGenerator path(player);
+    path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
+    if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true))
+        return std::numeric_limits<float>::max();
+
+    PathType const pathType = path.GetPathType();
+    if (IsForbiddenBattlegroundPathType(pathType))
+        return std::numeric_limits<float>::max();
+
+    float const pathDistance = CalculatePathDistance(path.GetPath());
+    return pathDistance > 0.0f ? pathDistance : std::numeric_limits<float>::max();
+}
+
+bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& destination, Position& landingDestination, float navigationDistance)
 {
     if (!player || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
         return false;
@@ -698,66 +730,59 @@ bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& dest
     float const destinationAngle = std::atan2(dy, dx);
     float const currentDestinationDistance = player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
     float bestScore = 0.0f;
-    Position bestDestination;
+    Position bestLandingDestination;
 
-    std::array<float, 9> const probeDistances =
+    std::array<float, 3> const stepDistances = { 2.75f, 4.5f, 6.0f };
+    std::array<float, 5> const angleOffsets = { 0.0f, 0.22f, -0.22f, 0.45f, -0.45f };
+
+    for (float stepDistance : stepDistances)
     {
-        5.0f,
-        7.0f,
-        9.0f,
-        12.0f,
-        16.0f,
-        22.0f,
-        30.0f,
-        38.0f,
-        45.0f
-    };
-    std::array<float, 11> const angleOffsets = { 0.0f, 0.30f, -0.30f, 0.60f, -0.60f, 0.95f, -0.95f, 1.30f, -1.30f, 1.57f, -1.57f };
-
-    for (float probeDistance : probeDistances)
-    {
-        float const cappedDistance = std::min(std::max(planarDistance, 8.0f), probeDistance);
-        if (cappedDistance < 1.0f)
-            continue;
-
         for (float angleOffset : angleOffsets)
         {
             float const probeAngle = destinationAngle + angleOffset;
-            float const probeX = player->GetPositionX() + std::cos(probeAngle) * cappedDistance;
-            float const probeY = player->GetPositionY() + std::sin(probeAngle) * cappedDistance;
-            float probeZ = player->GetPositionZ();
-            player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
+            float const stepX = player->GetPositionX() + std::cos(probeAngle) * stepDistance;
+            float const stepY = player->GetPositionY() + std::sin(probeAngle) * stepDistance;
 
-            float const drop = player->GetPositionZ() - probeZ;
-            if (drop < PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP || drop > 45.0f)
+            // Validate the run-off step at the bot's current elevation. The
+            // actual movement below uses a falling-style spline to the ground;
+            // validating the step separately prevents wall/barrier shoves while
+            // still allowing a real ledge drop.
+            if (!player->IsWithinLOS(stepX, stepY, player->GetPositionZ()))
                 continue;
 
-            // Check the horizontal step off the ledge instead of the ground
-            // landing point. The landing point is below the ledge, so terrain can
-            // legitimately sit between the bot and the final ground Z.
-            if (!player->IsWithinLOS(probeX, probeY, player->GetPositionZ()))
+            float landingX = player->GetPositionX() + std::cos(probeAngle) * (stepDistance + PLAYERBOT_TERRAIN_FALL_LANDING_OFFSET);
+            float landingY = player->GetPositionY() + std::sin(probeAngle) * (stepDistance + PLAYERBOT_TERRAIN_FALL_LANDING_OFFSET);
+            float landingZ = player->GetPositionZ();
+            player->UpdateAllowedPositionZ(landingX, landingY, landingZ);
+
+            float const drop = player->GetPositionZ() - landingZ;
+            if (drop < PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP || drop > PLAYERBOT_TERRAIN_MAX_FALL_SHORTCUT_DROP)
                 continue;
 
-            Position candidate(probeX, probeY, probeZ, destination.GetOrientation());
-            float const candidateDestinationDistance = candidate.GetExactDist2d(destination);
-            float const distanceImprovement = currentDestinationDistance - candidateDestinationDistance;
-            if (distanceImprovement < -5.0f)
+            Position landing(landingX, landingY, landingZ, destination.GetOrientation());
+            float const landingDestinationDistance = landing.GetExactDist2d(destination);
+            float const distanceImprovement = currentDestinationDistance - landingDestinationDistance;
+            float const shortcutRouteDistance = stepDistance + landingDestinationDistance;
+            bool const hasKnownNavRoute = navigationDistance < std::numeric_limits<float>::max();
+            bool const beatsKnownNavRoute = hasKnownNavRoute && shortcutRouteDistance + 3.0f < navigationDistance;
+            bool const makesDirectProgressWithoutKnownNav = !hasKnownNavRoute && distanceImprovement > 1.0f && std::fabs(angleOffset) <= 0.45f;
+            if (!beatsKnownNavRoute && !makesDirectProgressWithoutKnownNav)
                 continue;
 
-            float const score = std::max(distanceImprovement, 0.0f) + drop * 0.50f -
-                cappedDistance * 0.08f - std::fabs(angleOffset) * 2.0f;
+            float const score = (beatsKnownNavRoute ? navigationDistance - shortcutRouteDistance : distanceImprovement) + drop * 0.35f -
+                stepDistance * 0.08f - std::fabs(angleOffset) * 2.0f;
             if (score <= bestScore)
                 continue;
 
             bestScore = score;
-            bestDestination = candidate;
+            bestLandingDestination = landing;
         }
     }
 
     if (bestScore <= 0.0f)
         return false;
 
-    fallDestination = bestDestination;
+    landingDestination = bestLandingDestination;
     nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS;
     return true;
 }
@@ -767,7 +792,7 @@ bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& dest
 // here; falling behavior must remain generic terrain behavior.
 bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
 {
-    return TryBuildTerrainFallShortcutDestination(player, destination, fallDestination);
+    return TryBuildTerrainFallShortcutDestination(player, destination, fallDestination, CalculateNavigationDistance(player, destination));
 }
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
@@ -980,51 +1005,33 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
     Position issuedDestination = safeDestination;
-    Position fallDestination;
-    if (generatePath && TryBuildTerrainFallShortcutDestination(player, safeDestination, fallDestination))
+    Position fallLandingDestination;
+    float const navigationDistance = generatePath ? CalculateNavigationDistance(player, safeDestination) : std::numeric_limits<float>::max();
+    if (generatePath && TryBuildTerrainFallShortcutDestination(player, safeDestination, fallLandingDestination, navigationDistance))
     {
-        motionMaster->MovePoint(0, fallDestination, false);
-        issuedDestination = fallDestination;
+        motionMaster->MoveJump(fallLandingDestination, player->GetSpeed(MOVE_RUN), 0.1f, 0, true);
+        issuedDestination = fallLandingDestination;
         EmitBattlegroundGmDebug(player,
-            "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
-            " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+            "movepoint=fall-shortcut navDist=" + std::to_string(int32(navigationDistance)) +
+            " drop=" + std::to_string(int32(player->GetPositionZ() - fallLandingDestination.GetPositionZ())) +
+            " landDist=" + std::to_string(int32(player->GetDistance(fallLandingDestination))), 1000);
     }
     else if (generatePath && player->InBattleground())
     {
-        motionMaster->MovePoint(0, fallDestination, false);
-        issuedDestination = fallDestination;
-        EmitBattlegroundGmDebug(player,
-            "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
-            " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
-    }
-    else if (generatePath && player->InBattleground())
-    {
-        Position fallDestination;
-        if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
+        Position segmentDestination;
+        PathType pathType = PathType(0);
+        if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
         {
-            motionMaster->MovePoint(0, fallDestination, false);
-            issuedDestination = fallDestination;
             EmitBattlegroundGmDebug(player,
-                "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
-                " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+                "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
+            return false;
         }
-        else
-        {
-            Position segmentDestination;
-            PathType pathType = PathType(0);
-            if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
-            {
-                EmitBattlegroundGmDebug(player,
-                    "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
-                return false;
-            }
 
-            motionMaster->MovePoint(0, segmentDestination, true);
-            issuedDestination = segmentDestination;
-            EmitBattlegroundGmDebug(player,
-                "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
-                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
-        }
+        motionMaster->MovePoint(0, segmentDestination, true);
+        issuedDestination = segmentDestination;
+        EmitBattlegroundGmDebug(player,
+            "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
+            " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
     }
     else
     {
@@ -2884,15 +2891,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
         context.movement == BattlegroundMovementPrimitive::None &&
         context.flagCarrierDirective == FlagCarrierDirective::None)
     {
-        if (battleground && battleground->GetTypeID() == BATTLEGROUND_SCM)
-        {
-            float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
-            if (EngageNearestEnemyPlayer(player, engageDistance))
-                return true;
+        float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
+        if (EngageNearestEnemyPlayer(player, engageDistance))
+            return true;
 
-            if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-                return MoveTowardUnit(player, nearestEnemy, 20.0f);
-        }
+        if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
+            return MoveTowardUnit(player, nearestEnemy, 20.0f);
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP movement skipped: bot={} reason=no-objective-and-no-directive.",
@@ -2928,15 +2932,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 return true;
             }
 
-            if (battleground->GetTypeID() == BATTLEGROUND_SCM)
-            {
-                float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
-                if (EngageNearestEnemyPlayer(player, engageDistance))
-                    return true;
+            float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
+            if (EngageNearestEnemyPlayer(player, engageDistance))
+                return true;
 
-                if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-                    return MoveTowardUnit(player, nearestEnemy, 20.0f);
-            }
+            if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
+                return MoveTowardUnit(player, nearestEnemy, 20.0f);
 
             return false;
         }

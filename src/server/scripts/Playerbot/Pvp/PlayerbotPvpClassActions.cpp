@@ -94,6 +94,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
 void MarkTargetRelativeMovementLaunch(Player const* player);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
+bool HasActuallyLaunchedTargetRelativeMovement(Player const* player);
 
 struct LastLosCastFailureState
 {
@@ -515,6 +516,19 @@ void MarkTargetRelativeMovementLaunch(Player const* player)
     itr->second.lastLaunchMs = GameTime::GetGameTimeMS();
 }
 
+bool HasActuallyLaunchedTargetRelativeMovement(Player const* player)
+{
+    if (!player)
+        return false;
+
+    bool const hasStartedSpline = player->movespline && player->movespline->Initialized() &&
+        !player->movespline->Finalized() && player->movespline->HasStarted();
+    return player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        hasStartedSpline;
+}
+
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
     char const* label = nullptr, std::string* reasonOut = nullptr)
 {
@@ -548,10 +562,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     bool const madePositionProgress = positionDelta2D >= 0.35f || positionDelta3D >= 0.50f;
     bool const splineInitialized = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
     bool const splineStarted = splineInitialized && player->movespline->HasStarted();
-    bool const hasMovementSignal = player->isMoving() ||
-        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
-        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
-        splineInitialized;
+    bool const hasMovementSignal = HasActuallyLaunchedTargetRelativeMovement(player);
     bool const rawDistanceProgress = state.lastDistance > 0.0f && currentDistance + 0.20f < state.lastDistance;
     bool const madeDistanceProgress = rawDistanceProgress && (hasMovementSignal || madePositionProgress);
 
@@ -594,7 +605,8 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !credibleRecentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
         inSettleWindow = false;
 
-    bool const preserve = inSettleWindow || credibleRecentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
+    bool const preserve = inSettleWindow || credibleRecentLaunch || madeDistanceProgress || madePositionProgress ||
+        credibleRecentDistanceProgress || (hasMovementSignal && recentPositionProgress);
 
     if (!preserve)
     {
@@ -1082,12 +1094,8 @@ bool IsStaleTargetRelativeMotion(Player const* player)
 
     MotionMaster const* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
     return (motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE) &&
-        !player->isMoving() &&
-        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
-        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
-        !hasActiveSpline &&
+        !HasActuallyLaunchedTargetRelativeMovement(player) &&
         !player->HasUnitState(UNIT_STATE_NOT_MOVE) &&
         !player->IsMovementPreventedByCasting();
 }
@@ -1223,11 +1231,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
-    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
-    bool const movementGeneratorHasNotLaunched = !player->isMoving() &&
-        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
-        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
-        !hasActiveSpline;
+    bool const movementGeneratorHasNotLaunched = !HasActuallyLaunchedTargetRelativeMovement(player);
     uint32 const lastIssueAgeMs = sameStallTarget && stallState.lastIssueMs != 0 && nowMs >= stallState.lastIssueMs ? nowMs - stallState.lastIssueMs : 0;
 
     if (!forceMovementWhenAlreadyInRange && activeTargetRelativeMotion && currentDistance > (safeDistance + 0.75f))
@@ -1281,8 +1285,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         if (sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0)
         {
             MotionPrimeResult existingPrimeResult = PrimeTargetRelativeMotion(player);
-            bool const existingMotionStarted = player->isMoving() ||
-                player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+            bool const existingMotionStarted = HasActuallyLaunchedTargetRelativeMovement(player);
 
             if (existingMotionStarted)
             {
@@ -1301,11 +1304,10 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
                 return;
             }
 
-            // Give the queued generator a short settle window after a failed
-            // prime, then force a reissue if still unlaunched. Waiting ~2.5s
-            // here left bots visibly stuck with motion=follow/chase but
-            // moving=no, no spline, and no CHASE_MOVE/FOLLOW_MOVE state.
-            if (lastIssueAgeMs < 900)
+            // Give the queued generator only one short settle window after a
+            // failed prime. Diagnostics showed initialized-but-not-started
+            // splines being preserved indefinitely while bots stood still.
+            if (lastIssueAgeMs < 350)
             {
                 std::ostringstream extra;
                 extra << BuildRangedMovementDiag(player, target, "near_edge_waiting_for_motion_update",
@@ -1321,10 +1323,10 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             }
         }
 
-        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 900;
+        bool const staleQueuedGenerator = sameStallTarget && activeTargetRelativeMotion && movementGeneratorHasNotLaunched && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 350;
         float const forcedRange = std::max(1.0f, safeDistance - 8.0f);
         bool const prefersContactRescue = requestedSafeDistance <= 8.0f;
-        bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 1400 && prefersContactRescue;
+        bool const shouldEscalateContactRescue = targetAttackable && staleQueuedGenerator && lastIssueAgeMs >= 900 && prefersContactRescue;
         uint8 const prevIssuedMode = stallState.lastIssuedMode;
         uint32 const mmSizeBeforeIssue = motionMaster->Size();
         MovementGeneratorType const mmMotionBeforeIssue = motionMaster->GetCurrentMovementGeneratorType();
@@ -1406,7 +1408,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     }
 
     bool hardStaleTargetRelative = activeTargetRelativeMotion && movementGeneratorHasNotLaunched &&
-        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 3000;
+        sameStallTarget && stallState.lastIssueMs != 0 && lastIssueAgeMs >= 700;
 
     // Same protection for the generic ranged path: before clearing/reissuing a
     // stale Chase/Follow generator, prime the existing generator once in place.
@@ -1414,8 +1416,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (hardStaleTargetRelative)
     {
         MotionPrimeResult existingPrimeResult = PrimeTargetRelativeMotion(player);
-        bool const existingMotionStarted = player->isMoving() ||
-            player->HasUnitState(UNIT_STATE_CHASE_MOVE) || player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+        bool const existingMotionStarted = HasActuallyLaunchedTargetRelativeMovement(player);
 
         if (existingMotionStarted)
         {
