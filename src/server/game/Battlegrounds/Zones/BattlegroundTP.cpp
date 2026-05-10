@@ -214,7 +214,7 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
     UpdatePlayerScore(player, SCORE_FLAG_CAPTURES, 1);      // +1 flag captures
     _lastFlagCaptureTeam = player->GetTeamId();
 
-    RewardHonorToTeam(GetBonusHonorFromKill(2), player->GetTeamId());
+    RewardHonorToTeam(GetBonusHonorFromKill(2), player->GetTeam());
 
     if (GetTeamScore(TEAM_ALLIANCE) == BG_TP_MAX_TEAM_SCORE || GetTeamScore(TEAM_HORDE) == BG_TP_MAX_TEAM_SCORE)
     {
@@ -507,14 +507,21 @@ void BattlegroundTP::Init()
 
 void BattlegroundTP::EndBattleground(uint32 winnerTeamId)
 {
+    uint32 winnerTeam = TEAM_NEUTRAL;
+    if (winnerTeamId == TEAM_ALLIANCE)
+        winnerTeam = ALLIANCE;
+    else if (winnerTeamId == TEAM_HORDE)
+        winnerTeam = HORDE;
+
     // Win reward
-    RewardHonorToTeam(GetBonusHonorFromKill(_honorWinKills), winnerTeamId);
+    if (winnerTeam == ALLIANCE || winnerTeam == HORDE)
+        RewardHonorToTeam(GetBonusHonorFromKill(_honorWinKills), winnerTeam);
 
     // Complete map_end rewards (even if no team wins)
-    RewardHonorToTeam(GetBonusHonorFromKill(_honorEndKills), TEAM_ALLIANCE);
-    RewardHonorToTeam(GetBonusHonorFromKill(_honorEndKills), TEAM_HORDE);
+    RewardHonorToTeam(GetBonusHonorFromKill(_honorEndKills), ALLIANCE);
+    RewardHonorToTeam(GetBonusHonorFromKill(_honorEndKills), HORDE);
 
-    Battleground::EndBattleground(winnerTeamId);
+    Battleground::EndBattleground(winnerTeam);
 }
 
 void BattlegroundTP::HandleKillPlayer(Player* player, Player* killer)

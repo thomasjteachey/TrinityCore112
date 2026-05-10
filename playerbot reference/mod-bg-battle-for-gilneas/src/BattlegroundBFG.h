@@ -7,7 +7,6 @@
 #define __BATTLEGROUNDBFG_H
 
 #include "Battleground.h"
-#include "WorldStatePackets.h"
 #include "Object.h"
 #include "EventMap.h"
 
@@ -42,26 +41,36 @@ enum BG_BFG_Misc
 };
 
 
+enum BattlegroundCriteriaId
+{
+    BG_CRITERIA_CHECK_RESILIENT_VICTORY,
+    BG_CRITERIA_CHECK_SAVE_THE_DAY,
+    BG_CRITERIA_CHECK_EVERYTHING_COUNTS,
+    BG_CRITERIA_CHECK_AV_PERFECTION,
+    BG_CRITERIA_CHECK_DEFENSE_OF_THE_ANCIENTS,
+    BG_CRITERIA_CHECK_NOT_EVEN_A_SCRATCH,
+};
+
 enum BattleForGilneasStrings {
     // Battle For Gilneas
-    LANG_BG_BFG_START_TWO_MINUTES           = 910040,
-    LANG_BG_BFG_START_ONE_MINUTE            = 910041,
-    LANG_BG_BFG_START_HALF_MINUTE           = 910042,
-    LANG_BG_BFG_HAS_BEGUN                   = 910043,
+    LANG_BG_BFG_START_TWO_MINUTES           = 12015,
+    LANG_BG_BFG_START_ONE_MINUTE            = 12016,
+    LANG_BG_BFG_START_HALF_MINUTE           = 12017,
+    LANG_BG_BFG_HAS_BEGUN                   = 12018,
 
-    LANG_BG_BFG_ALLY                        = 910044,
-    LANG_BG_BFG_HORDE                       = 910045,
+    LANG_BG_BFG_ALLY                        = 12019,
+    LANG_BG_BFG_HORDE                       = 12020,
 
-    LANG_BG_BFG_NODE_LIGHTHOUSE             = 910046,
-    LANG_BG_BFG_NODE_WATERWORKS             = 910047,
-    LANG_BG_BFG_NODE_MINE                   = 910048,
-    LANG_BG_BFG_NODE_TAKEN                  = 910049,
-    LANG_BG_BFG_NODE_DEFENDED               = 910050,
-    LANG_BG_BFG_NODE_ASSAULTED              = 910051,
-    LANG_BG_BFG_NODE_CLAIMED                = 910052,
+    LANG_BG_BFG_NODE_LIGHTHOUSE             = 12021,
+    LANG_BG_BFG_NODE_WATERWORKS             = 12022,
+    LANG_BG_BFG_NODE_MINE                   = 12023,
+    LANG_BG_BFG_NODE_TAKEN                  = 12024,
+    LANG_BG_BFG_NODE_DEFENDED               = 12025,
+    LANG_BG_BFG_NODE_ASSAULTED              = 12026,
+    LANG_BG_BFG_NODE_CLAIMED                = 12027,
 
-    LANG_BG_BFG_A_NEAR_VICTORY              = 910053,
-    LANG_BG_BFG_H_NEAR_VICTORY              = 910054,
+    LANG_BG_BFG_A_NEAR_VICTORY              = 12028,
+    LANG_BG_BFG_H_NEAR_VICTORY              = 12029,
 };
 
 enum GILNEAS_BG_WorldStates
@@ -293,22 +302,21 @@ public:
     void AddPlayer(Player* player) override;
     void StartingEventCloseDoors() override;
     void StartingEventOpenDoors() override;
-    void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
+    void RemovePlayer(Player* player) override;
     void HandleAreaTrigger(Player* player, uint32 trigger) override;
     bool SetupBattleground() override;
-    void Reset() override;
-    void Init();
-    void EndBattleground(uint32 winnerTeamId) override;
-    WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
+    void Init() override;
+    void EndBattleground(TeamId winnerTeamId) override;
+    GraveyardStruct const* GetClosestGraveyard(Player* player) override;
 
     bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true) override;
-    void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
+    void FillInitialWorldStates(WorldPacket& data)  override;
     void EventPlayerClickedOnFlag(Player* source, GameObject* gameObject) override;
 
-    bool AllNodesConrolledByTeam(TeamId teamId) const;
+    bool AllNodesConrolledByTeam(TeamId teamId) const override;
     bool IsTeamScores500Disadvantage(TeamId teamId) const { return _teamScores500Disadvantage[teamId]; }
 
-    uint32 GetPrematureWinner() override;
+    TeamId GetPrematureWinner() override;
 private:
     void PostUpdateImpl(uint32 diff) override;
 

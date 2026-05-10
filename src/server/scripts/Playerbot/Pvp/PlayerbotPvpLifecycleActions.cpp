@@ -35,6 +35,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSplineInit.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Item.h"
@@ -982,20 +983,32 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     }
     else if (generatePath && player->InBattleground())
     {
-        Position segmentDestination;
-        PathType pathType = PathType(0);
-        if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
+        Position fallDestination;
+        if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
         {
+            motionMaster->MovePoint(0, fallDestination, false);
+            issuedDestination = fallDestination;
             EmitBattlegroundGmDebug(player,
-                "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
-            return false;
+                "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
+                " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
         }
+        else
+        {
+            Position segmentDestination;
+            PathType pathType = PathType(0);
+            if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
+            {
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
+                return false;
+            }
 
-        motionMaster->MovePoint(0, segmentDestination, true);
-        issuedDestination = segmentDestination;
-        EmitBattlegroundGmDebug(player,
-            "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
-            " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+            motionMaster->MovePoint(0, segmentDestination, true);
+            issuedDestination = segmentDestination;
+            EmitBattlegroundGmDebug(player,
+                "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
+                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+        }
     }
     else
     {

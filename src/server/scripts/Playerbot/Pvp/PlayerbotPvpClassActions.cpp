@@ -58,6 +58,31 @@ bool IsLifeTapSpell(SpellInfo const* spellInfo)
     return firstRank && firstRank->Id == 1454; // Life Tap (rank 1)
 }
 
+constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
+constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
+
+bool IsPlayerbotDispelSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+
+    switch (firstRankSpellId)
+    {
+        case 370:  // Purge
+        case 475:  // Remove Lesser Curse
+        case 527:  // Dispel Magic
+        case 2782: // Remove Curse
+        case 2893: // Abolish Poison
+        case 4987: // Cleanse
+            return true;
+        default:
+            return false;
+    }
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
@@ -2878,16 +2903,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (context.spellId == 6940)
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
 
-    // Shared tactical throttle for all dispel/decurse effects to prevent
-    // spam-casting into protected/undispellable auras.
-    if (context.spellId == 475 ||   // Remove Lesser Curse
-        context.spellId == 988 ||   // Dispel Magic
-        context.spellId == 2782 ||  // Remove Curse
-        context.spellId == 2893 ||  // Abolish Poison
-        context.spellId == 4987)    // Cleanse
-    {
-        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, 900004, std::chrono::seconds(3));
-    }
+    // Shared tactical cooldown for dispel/decurse effects. This keeps
+    // playerbots from spam-casting into protected or undispellable auras while
+    // allowing the next decision tick to fall through to another action.
+    if (IsPlayerbotDispelSpell(resolvedSpellId))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
 
     // Warlock curse openers are instant and can leave the bot with an idle
     // motion generator while still in combat against a moving target. Re-issue

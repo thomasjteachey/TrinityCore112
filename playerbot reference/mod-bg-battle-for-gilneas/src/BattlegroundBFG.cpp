@@ -10,30 +10,23 @@
 #include "WorldPacket.h"
 #include "ObjectMgr.h"
 #include "BattlegroundMgr.h"
-#include "DBCStores.h"
-#include "Duration.h"
-#include "Map.h"
 #include "Creature.h"
-#include "GameObject.h"
 #include "Language.h"
 #include "Object.h"
-#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Util.h"
 #include "WorldSession.h"
 
+#include "GameGraveyard.h"
 #include <unordered_map>
 
 #include "ScriptMgr.h"
 #include "Config.h"
 
-namespace
-{
-    TeamId GetOtherGilneasTeamId(TeamId teamId)
-    {
-        return teamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
-    }
-}
+// adding Battleground to the core battlegrounds list
+BattlegroundTypeId BATTLEGROUND_BFG = BattlegroundTypeId(120); // value from BattlemasterList.dbc
+BattlegroundQueueTypeId BATTLEGROUND_QUEUE_BFG = BattlegroundQueueTypeId(13);
+
 
 void BattlegroundBFGScore::BuildObjectivesBlock(WorldPacket& data)
 {
@@ -102,21 +95,21 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     uint8 controlledPoints = _controlledPoints[teamId];
                     if (controlledPoints == 0)
                     {
-                        _bgEvents.ScheduleEvent(eventId, 3s);
+                        _bgEvents.ScheduleEvent(eventId, 3000);
                         break;
                     }
 
-                    uint8 honorRewards = _honorTics ? uint8(m_TeamScores[teamId] / _honorTics) : 0;
-                    uint8 reputationRewards = _reputationTics ? uint8(m_TeamScores[teamId] / _reputationTics) : 0;
+                    // uint8 honorRewards = uint8(m_TeamScores[teamId] / _honorTics);
+                    // uint8 reputationRewards = uint8(m_TeamScores[teamId] / _reputationTics);
                     uint8 information = uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
                     m_TeamScores[teamId] += GILNEAS_BG_TickPoints[controlledPoints];
                     if (m_TeamScores[teamId] > GILNEAS_BG_MAX_TEAM_SCORE)
                         m_TeamScores[teamId] = GILNEAS_BG_MAX_TEAM_SCORE;
 
-                    if (_honorTics && honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
-                        RewardHonorToTeam(GetBonusHonorFromKill(1), teamId == TEAM_ALLIANCE ? ALLIANCE : HORDE);
-                    if (_reputationTics && reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
-                        RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId == TEAM_ALLIANCE ? ALLIANCE : HORDE);
+                    // if (honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
+                    //     RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
+                    // if (reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
+                    //     RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
 
                     if (information < uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE))
                     {
@@ -125,12 +118,12 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     }
 
                     UpdateWorldState(teamId == TEAM_ALLIANCE ? GILNEAS_BG_OP_RESOURCES_ALLY : GILNEAS_BG_OP_RESOURCES_HORDE, m_TeamScores[teamId]);
-                    if (m_TeamScores[teamId] > m_TeamScores[GetOtherGilneasTeamId(teamId)] + 500)
-                        _teamScores500Disadvantage[GetOtherGilneasTeamId(teamId)] = true;
+                    if (m_TeamScores[teamId] > m_TeamScores[GetOtherTeamId(teamId)] + 500)
+                        _teamScores500Disadvantage[GetOtherTeamId(teamId)] = true;
                     if (m_TeamScores[teamId] >= GILNEAS_BG_MAX_TEAM_SCORE)
                         EndBattleground(teamId);
 
-                    _bgEvents.ScheduleEvent(eventId, Milliseconds(GILNEAS_BG_TickIntervals[controlledPoints]));
+                    _bgEvents.ScheduleEvent(eventId, GILNEAS_BG_TickIntervals[controlledPoints]);
                     break;
                 }
             }
@@ -177,8 +170,8 @@ void BattlegroundBFG::StartingEventOpenDoors()
     // Achievement: Let's Get This Done
     StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, BG_BFG_EVENT_START_BATTLE);
 
-    _bgEvents.ScheduleEvent(BG_BFG_EVENT_ALLIANCE_TICK, 3s);
-    _bgEvents.ScheduleEvent(BG_BFG_EVENT_HORDE_TICK, 3s);
+    _bgEvents.ScheduleEvent(BG_BFG_EVENT_ALLIANCE_TICK, 3000);
+    _bgEvents.ScheduleEvent(BG_BFG_EVENT_HORDE_TICK, 3000);
 }
 
 
@@ -188,10 +181,8 @@ void BattlegroundBFG::AddPlayer(Player* player)
     PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundBFGScore(player->GetGUID()));
 }
 
-void BattlegroundBFG::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
-{
-    if (player)
-        player->SetPhaseMask(1, false);
+void BattlegroundBFG::RemovePlayer(Player* player) {
+    player->SetPhaseMask(1, false);
 }
 
 void BattlegroundBFG::HandleAreaTrigger(Player* /* player*/, uint32 trigger)
@@ -226,7 +217,7 @@ void BattlegroundBFG::CreateBanner(uint8 node, bool delay)
     // Just put it into the queue
     if (delay)
     {
-        _bgEvents.RescheduleEvent(BG_BFG_EVENT_UPDATE_BANNER_LIGHTHOUSE + node, Milliseconds(BG_BFG_BANNER_UPDATE_TIME));
+        _bgEvents.RescheduleEvent(BG_BFG_EVENT_UPDATE_BANNER_LIGHTHOUSE+node, BG_BFG_BANNER_UPDATE_TIME);
         return;
     }
 
@@ -240,24 +231,24 @@ void BattlegroundBFG::DeleteBanner(uint8 node)
     SpawnBGObject(node*GILNEAS_BG_OBJECT_PER_NODE + GILNEAS_BG_OBJECT_AURA_ALLY + _capturePointInfo[node]._ownerTeamId, RESPAWN_ONE_DAY);
 }
 
-void BattlegroundBFG::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
+void BattlegroundBFG::FillInitialWorldStates(WorldPacket& data)
 {
     for (uint8 node = 0; node < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++node)
     {
         if (_capturePointInfo[node]._state == GILNEAS_BG_NODE_TYPE_NEUTRAL)
-            packet.Worldstates.emplace_back(_capturePointInfo[node]._iconNone, 1);
+            data << uint32(_capturePointInfo[node]._iconNone) << uint32(1);
 
         for (uint8 i = GILNEAS_BG_NODE_STATUS_ALLY_OCCUPIED; i <= GILNEAS_BG_NODE_STATUS_HORDE_CONTESTED; ++i)
-            packet.Worldstates.emplace_back(_capturePointInfo[node]._iconCapture + i-1, uint32(_capturePointInfo[node]._state == i));
+            data << uint32(_capturePointInfo[node]._iconCapture + i-1) << uint32(_capturePointInfo[node]._state == i);
     }
 
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_OCCUPIED_BASES_ALLY, _controlledPoints[TEAM_ALLIANCE]);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_OCCUPIED_BASES_HORDE, _controlledPoints[TEAM_HORDE]);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_MAX, GILNEAS_BG_MAX_TEAM_SCORE);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_WARNING, GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_ALLY, m_TeamScores[TEAM_ALLIANCE]);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_HORDE, m_TeamScores[TEAM_HORDE]);
-    packet.Worldstates.emplace_back(0x745, 0x2u);           // 37 1861 unk
+    data << uint32(GILNEAS_BG_OP_OCCUPIED_BASES_ALLY)  << uint32(_controlledPoints[TEAM_ALLIANCE]);
+    data << uint32(GILNEAS_BG_OP_OCCUPIED_BASES_HORDE) << uint32(_controlledPoints[TEAM_HORDE]);
+    data << uint32(GILNEAS_BG_OP_RESOURCES_MAX)        << uint32(GILNEAS_BG_MAX_TEAM_SCORE);
+    data << uint32(GILNEAS_BG_OP_RESOURCES_WARNING)    << uint32(GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
+    data << uint32(GILNEAS_BG_OP_RESOURCES_ALLY)       << uint32(m_TeamScores[TEAM_ALLIANCE]);
+    data << uint32(GILNEAS_BG_OP_RESOURCES_HORDE)      << uint32(m_TeamScores[TEAM_HORDE]);
+    data << uint32(0x745) << uint32(0x2);           // 37 1861 unk
 }
 
 
@@ -334,7 +325,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
         UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1);
         _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
         _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
-        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
+        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, GILNEAS_BG_FLAG_CAPTURING_TIME);
         sound = GILNEAS_BG_SOUND_NODE_CLAIMED;
         // message = LANG_BG_BFG_NODE_CLAIMED;
         // message2 = player->GetTeamId() == TEAM_ALLIANCE ? LANG_BG_BFG_ALLY : LANG_BG_BFG_HORDE;
@@ -346,7 +337,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
             UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1);
             _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
             _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
-            _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
+            _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, GILNEAS_BG_FLAG_CAPTURING_TIME);
             // message = LANG_BG_BFG_NODE_ASSAULTED;
         }
         else
@@ -368,7 +359,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
         _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
 
         ApplyPhaseMask();
-        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
+        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, GILNEAS_BG_FLAG_CAPTURING_TIME);
         // message = LANG_BG_BFG_NODE_ASSAULTED;
         sound = player->GetTeamId() == TEAM_ALLIANCE ? GILNEAS_BG_SOUND_NODE_ASSAULTED_ALLIANCE : GILNEAS_BG_SOUND_NODE_ASSAULTED_HORDE;
     }
@@ -378,7 +369,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
     // SendBroadcastText(message, player->GetTeamId() == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, LANG_BG_BFG_NODE_LIGHTHOUSE + node, message2);
 }
 
-uint32 BattlegroundBFG::GetPrematureWinner()
+TeamId BattlegroundBFG::GetPrematureWinner()
 {
     if (_controlledPoints[TEAM_ALLIANCE] > _controlledPoints[TEAM_HORDE])
         return TEAM_ALLIANCE;
@@ -418,33 +409,16 @@ bool BattlegroundBFG::SetupBattleground() {
     return true;
 }
 
-void BattlegroundBFG::Reset()
-{
-    Battleground::Reset();
-
-    Init();
-}
-
 void BattlegroundBFG::Init()
 {
+
+      //call parent's class reset
+    Battleground::Init();
+
     _bgEvents.Reset();
 
-    m_TeamScores[TEAM_ALLIANCE] = 0;
-    m_TeamScores[TEAM_HORDE] = 0;
-    _controlledPoints[TEAM_ALLIANCE] = 0;
-    _controlledPoints[TEAM_HORDE] = 0;
-    _teamScores500Disadvantage[TEAM_ALLIANCE] = false;
-    _teamScores500Disadvantage[TEAM_HORDE] = false;
-
-    for (uint8 node = 0; node < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++node)
-    {
-        _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
-        _capturePointInfo[node]._state = GILNEAS_BG_NODE_TYPE_NEUTRAL;
-        _capturePointInfo[node]._captured = false;
-    }
-
-    _honorTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendHonorTicks : GILNEAS_BG_NotBGWeekendHonorTicks;
-    _reputationTics = BattlegroundMgr::IsBGWeekend(GetTypeID()) ? GILNEAS_BG_BGWeekendRepTicks : GILNEAS_BG_NotBGWeekendRepTicks;
+    // _honorTics = BattlegroundMgr::IsBGWeekend(GetBgTypeID()) ? BG_AB_HONOR_TICK_WEEKEND : BG_AB_HONOR_TICK_NORMAL;
+    // _reputationTics = BattlegroundMgr::IsBGWeekend(GetBgTypeID()) ? BG_AB_REP_TICK_WEEKEND : BG_AB_REP_TICK_NORMAL;
 
     _capturePointInfo[GILNEAS_BG_NODE_LIGHTHOUSE]._iconNone    = GILNEAS_BG_OP_LIGHTHOUSE_ICON;
     _capturePointInfo[GILNEAS_BG_NODE_WATERWORKS]._iconNone    = GILNEAS_BG_OP_WATERWORKS_ICON;
@@ -454,38 +428,30 @@ void BattlegroundBFG::Init()
     _capturePointInfo[GILNEAS_BG_NODE_MINE]._iconCapture       = GILNEAS_BG_OP_MINE_STATE_ALLIANCE;
 }
 
-void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
+void BattlegroundBFG::EndBattleground(TeamId winnerTeamId)
 {
-    uint32 winnerTeam = TEAM_NEUTRAL;
-    if (winnerTeamId == TEAM_ALLIANCE)
-        winnerTeam = ALLIANCE;
-    else if (winnerTeamId == TEAM_HORDE)
-        winnerTeam = HORDE;
-
-    if (winnerTeam == ALLIANCE || winnerTeam == HORDE)
-        RewardHonorToTeam(GetBonusHonorFromKill(1), winnerTeam);
-
-    RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
-    Battleground::EndBattleground(winnerTeam);
+    RewardHonorToTeam(GetBonusHonorFromKill(1), winnerTeamId);
+    RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_HORDE);
+    RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_ALLIANCE);
+    Battleground::EndBattleground(winnerTeamId);
     _bgEvents.Reset();
 }
 
-WorldSafeLocsEntry const* BattlegroundBFG::GetClosestGraveyard(Player* player)
+GraveyardStruct const* BattlegroundBFG::GetClosestGraveyard(Player* player)
 {
-    WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[static_cast<uint8>(GILNEAS_BG_SPIRIT_ALLIANCE) + player->GetTeamId()]);
-    WorldSafeLocsEntry const* nearestEntry = entry;
+    GraveyardStruct const* entry = sGraveyard->GetGraveyard(GILNEAS_BG_GraveyardIds[static_cast<uint8>(GILNEAS_BG_SPIRIT_ALLIANCE) + player->GetTeamId()]);
+    GraveyardStruct const* nearestEntry = entry;
 
     float pX = player->GetPositionX();
     float pY = player->GetPositionY();
-    float dist = (entry->Loc.X - pX)*(entry->Loc.X - pX)+(entry->Loc.Y - pY)*(entry->Loc.Y - pY);
+    float dist = (entry->x - pX)*(entry->x - pX)+(entry->y - pY)*(entry->y - pY);
     float minDist = dist;
 
     for (uint8 i = GILNEAS_BG_NODE_LIGHTHOUSE; i < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++i)
         if (_capturePointInfo[i]._ownerTeamId == player->GetTeamId())
         {
-            entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[i]);
-            dist = (entry->Loc.X - pX)*(entry->Loc.X - pX) + (entry->Loc.Y - pY)*(entry->Loc.Y - pY);
+            entry = sGraveyard->GetGraveyard(GILNEAS_BG_GraveyardIds[i]);
+            dist = (entry->x - pX)*(entry->x - pX) + (entry->y - pY)*(entry->y - pY);
             if (dist < minDist)
             {
                 minDist = dist;
@@ -540,15 +506,46 @@ void BattlegroundBFG::ApplyPhaseMask()
         if (_capturePointInfo[i]._ownerTeamId != TEAM_NEUTRAL)
             phaseMask |= 1 << (i*2+1 + _capturePointInfo[i]._ownerTeamId);
 
-    BattlegroundPlayerMap const& bgPlayerMap = GetPlayers();
+    const BattlegroundPlayerMap& bgPlayerMap = GetPlayers();
     for (BattlegroundPlayerMap::const_iterator itr = bgPlayerMap.begin(); itr != bgPlayerMap.end(); ++itr)
     {
-        if (Player* player = ObjectAccessor::FindPlayer(itr->first))
-        {
-            player->SetPhaseMask(phaseMask, false);
-            player->UpdateObjectVisibility(true);
-        }
+        itr->second->SetPhaseMask(phaseMask, false);
+        itr->second->UpdateObjectVisibility(true, false);
     }
 }
 
 
+class BattleForGilneasWorld : public WorldScript
+{
+	public:
+    	BattleForGilneasWorld() : WorldScript("BattleForGilneasWorld") { }
+};
+
+void AddBattleForGilneasScripts() {
+	new BattleForGilneasWorld();
+
+	// Add Battle for Gilneas to battleground list
+	BattlegroundMgr::queueToBg[BATTLEGROUND_QUEUE_BFG] = BATTLEGROUND_BFG;
+	BattlegroundMgr::bgToQueue[BATTLEGROUND_BFG] = BATTLEGROUND_QUEUE_BFG;
+	BattlegroundMgr::bgtypeToBattleground[BATTLEGROUND_BFG] = new BattlegroundBFG;
+
+	BattlegroundMgr::bgTypeToTemplate[BATTLEGROUND_BFG] = [](Battleground *bg_t) -> Battleground * { return new BattlegroundBFG(*(BattlegroundBFG *) bg_t); };
+
+	// BattlegroundMgr::getBgFromTypeID[BATTLEGROUND_BFG] = [](WorldPacket* data, Battleground::BattlegroundScoreMap::const_iterator itr2, Battleground* /* bg */) {
+    //     *data << uint32(0x00000002);            // count of next fields
+    //     *data << uint32(((BattlegroundBFGScore*)itr2->second)->BasesAssaulted);      // bases asssaulted
+    //     *data << uint32(((BattlegroundBFGScore*)itr2->second)->BasesDefended);       // bases defended
+	// };
+
+	// BattlegroundMgr::getBgFromMap[761] = [](WorldPacket* data, Battleground::BattlegroundScoreMap::const_iterator itr2) {
+    //     *data << uint32(0x00000002);            // count of next fields
+    //     *data << uint32(((BattlegroundBFGScore*)itr2->second)->BasesAssaulted);      // bases asssaulted
+    //     *data << uint32(((BattlegroundBFGScore*)itr2->second)->BasesDefended);       // bases defended
+	// };
+
+    Player::bgZoneIdToFillWorldStates[5449] = [](Battleground* bg, WorldPacket& data) {
+        if (bg && bg->GetBgTypeID(true) == BATTLEGROUND_BFG) {
+          bg->FillInitialWorldStates(data);
+        }
+    };
+}
