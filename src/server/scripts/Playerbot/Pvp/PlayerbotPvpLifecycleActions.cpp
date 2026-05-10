@@ -1999,6 +1999,11 @@ uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint
 
 namespace playerbot
 {
+bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason)
+{
+    return ::TryIssueBattlegroundFallMovement(player, destination, reason);
+}
+
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
 {
     return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType);
