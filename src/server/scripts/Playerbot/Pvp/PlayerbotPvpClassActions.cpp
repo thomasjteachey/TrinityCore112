@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpClassActions.h"
+#include "PlayerbotPvpLifecycleActions.h"
 
 #include "GameTime.h"
 #include "Item.h"
@@ -1191,6 +1192,13 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!motionMaster)
         return;
 
+    if (target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
+        playerbot::TryIssueBattlegroundFallMovement(player, target->GetPosition(), "ranged-target-below"))
+    {
+        SetLastMovementDebugStatus(player, "ranged_target_below_fall_shortcut issued=yes");
+        return;
+    }
+
     struct RangedApproachStallState
     {
         ObjectGuid targetGuid = ObjectGuid::Empty;
@@ -1635,6 +1643,13 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;
+
+    if (target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
+        playerbot::TryIssueBattlegroundFallMovement(player, target->GetPosition(), "melee-target-below"))
+    {
+        SetLastMovementDebugStatus(player, "melee_target_below_fall_shortcut issued=yes");
+        return;
+    }
 
     if (player->HasStealthAura())
     {
