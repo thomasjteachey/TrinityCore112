@@ -695,14 +695,21 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (planarDistance < 2.0f)
         return false;
 
-    std::array<float, 5> const probeDistances =
+    float const destinationAngle = std::atan2(dy, dx);
+    std::array<float, 10> const probeDistances =
     {
+        4.0f,
+        6.0f,
+        8.0f,
+        10.0f,
         12.0f,
+        16.0f,
         20.0f,
         30.0f,
         45.0f,
         60.0f
     };
+    std::array<float, 5> const angleOffsets = { 0.0f, 0.30f, -0.30f, 0.60f, -0.60f };
 
     for (float probeDistance : probeDistances)
     {
@@ -710,21 +717,27 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
         if (cappedDistance < 1.0f)
             continue;
 
-        float const fraction = cappedDistance / planarDistance;
-        float const probeX = player->GetPositionX() + dx * fraction;
-        float const probeY = player->GetPositionY() + dy * fraction;
-        float probeZ = player->GetPositionZ();
-        player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
+        for (float angleOffset : angleOffsets)
+        {
+            float const probeAngle = destinationAngle + angleOffset;
+            float const probeX = player->GetPositionX() + std::cos(probeAngle) * cappedDistance;
+            float const probeY = player->GetPositionY() + std::sin(probeAngle) * cappedDistance;
+            float probeZ = player->GetPositionZ();
+            player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
 
-        if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
-            continue;
+            if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+                continue;
 
-        if (!player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
-            continue;
+            // Check the air path, not the landing point. The landing point is
+            // expected to be below the ledge, so terrain can legitimately sit
+            // between the bot and the final ground Z.
+            if (!player->IsWithinLOS(probeX, probeY, player->GetPositionZ()))
+                continue;
 
-        fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
-        nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
-        return true;
+            fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
+            nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
+            return true;
+        }
     }
 
     return false;
@@ -916,7 +929,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (player->InBattleground() && botCurrentlyMoving && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+    if (player->InBattleground() && botCurrentlyMoving && player->IsFalling())
         return true;
 
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
@@ -945,11 +958,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         Position fallDestination;
         if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
         {
-            motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
-            {
-                init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
-                init.SetFall();
-            }, 0, MOTION_PRIORITY_NORMAL, EFFECT_MOTION_TYPE);
+            motionMaster->MovePoint(0, fallDestination, false);
             issuedDestination = fallDestination;
             EmitBattlegroundGmDebug(player,
                 "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
