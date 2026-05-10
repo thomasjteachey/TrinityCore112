@@ -35,6 +35,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSplineInit.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Item.h"
