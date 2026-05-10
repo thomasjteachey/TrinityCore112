@@ -32,6 +32,29 @@ namespace
     {
         return teamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
     }
+
+    uint32 GetTwinPeaksFlagStateWorldState(TeamId teamId)
+    {
+        return teamId == TEAM_ALLIANCE ? BG_TP_FLAG_STATE_ALLIANCE : BG_TP_FLAG_STATE_HORDE;
+    }
+
+    uint32 GetTwinPeaksFlagIndicatorWorldState(TeamId teamId)
+    {
+        return teamId == TEAM_ALLIANCE ? BG_TP_FLAG_UNK_ALLIANCE : BG_TP_FLAG_UNK_HORDE;
+    }
+
+    uint32 GetTwinPeaksFlagIndicatorValue(uint32 flagState)
+    {
+        if (flagState == BG_TP_FLAG_STATE_ON_GROUND)
+            return uint32(-1);
+
+        return flagState == BG_TP_FLAG_STATE_ON_PLAYER ? 1 : 0;
+    }
+
+    uint32 GetTwinPeaksFlagStateValue(uint32 flagState)
+    {
+        return flagState == BG_TP_FLAG_STATE_ON_PLAYER ? 2 : 1;
+    }
 }
 
 // these variables aren't used outside of this file, so declare them only here
@@ -154,6 +177,8 @@ void BattlegroundTP::StartingEventOpenDoors()
 
     // players joining later are not egible
     //StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, TP_EVENT_START_BATTLE);
+    UpdateFlagState(TEAM_ALLIANCE, BG_TP_FLAG_STATE_ON_BASE);
+    UpdateFlagState(TEAM_HORDE, BG_TP_FLAG_STATE_ON_BASE);
     UpdateWorldState(BG_TP_STATE_TIMER_ACTIVE, 0);
 }
 
@@ -402,7 +427,8 @@ void BattlegroundTP::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*
 void BattlegroundTP::UpdateFlagState(TeamId teamId, uint32 value)
 {
     _flagState[teamId] = value;
-    UpdateWorldState(teamId == TEAM_ALLIANCE ? BG_TP_FLAG_STATE_HORDE : BG_TP_FLAG_STATE_ALLIANCE, value);
+    UpdateWorldState(GetTwinPeaksFlagIndicatorWorldState(teamId), GetTwinPeaksFlagIndicatorValue(value));
+    UpdateWorldState(GetTwinPeaksFlagStateWorldState(teamId), GetTwinPeaksFlagStateValue(value));
 }
 
 void BattlegroundTP::HandleAreaTrigger(Player* player, uint32 trigger)
@@ -573,8 +599,10 @@ void BattlegroundTP::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
 
   packet.Worldstates.emplace_back(BG_TP_STATE_TIMER_ACTIVE, 0);
 
-  packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_HORDE, GetFlagState(TEAM_HORDE));
-  packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_ALLIANCE, GetFlagState(TEAM_ALLIANCE));
+  packet.Worldstates.emplace_back(BG_TP_FLAG_UNK_ALLIANCE, GetTwinPeaksFlagIndicatorValue(GetFlagState(TEAM_ALLIANCE)));
+  packet.Worldstates.emplace_back(BG_TP_FLAG_UNK_HORDE, GetTwinPeaksFlagIndicatorValue(GetFlagState(TEAM_HORDE)));
+  packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_HORDE, GetTwinPeaksFlagStateValue(GetFlagState(TEAM_HORDE)));
+  packet.Worldstates.emplace_back(BG_TP_FLAG_STATE_ALLIANCE, GetTwinPeaksFlagStateValue(GetFlagState(TEAM_ALLIANCE)));
 }
 
 uint32 BattlegroundTP::GetPrematureWinner()
