@@ -188,8 +188,17 @@ void BattlegroundSV::StartingEventOpenDoors()
 // done when a player enters the battleground while running
 void BattlegroundSV::AddPlayer(Player *player)
 {
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
-    PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundSVScore(player->GetGUID()));
+    if (!isInBattleground)
+    {
+        BattlegroundSVScore* scoreEntry = new BattlegroundSVScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 
 	UpdateWorldState(BG_SV_WS_HORDE_SCORE, TeamScore[TEAM_HORDE]);
 	UpdateWorldState(BG_SV_WS_ALLIANCE_SCORE, TeamScore[TEAM_ALLIANCE]);
@@ -437,13 +446,21 @@ void BattlegroundSV::HandleKillPlayer(Player *player, Player *killer)
 
 void BattlegroundSV::EndBattleground(uint32 winner)
 {
-	RemoveAuraOnTeam(BG_SV_MINE_BUFF, TEAM_ALLIANCE);
-	RemoveAuraOnTeam(BG_SV_MINE_BUFF, TEAM_HORDE);
-	RemoveAuraOnTeam(BG_SV_BOSS_BUFF, TEAM_ALLIANCE);
-	RemoveAuraOnTeam(BG_SV_BOSS_BUFF, TEAM_HORDE);
+	RemoveAuraOnTeam(BG_SV_MINE_BUFF, ALLIANCE);
+	RemoveAuraOnTeam(BG_SV_MINE_BUFF, HORDE);
+	RemoveAuraOnTeam(BG_SV_BOSS_BUFF, ALLIANCE);
+	RemoveAuraOnTeam(BG_SV_BOSS_BUFF, HORDE);
 
-	RewardHonorToTeam(BG_SV_WINNER_HONOR_AMOUNT, winner == TEAM_ALLIANCE ? TEAM_ALLIANCE : TEAM_HORDE);
-	Battleground::EndBattleground(winner);
+	uint32 winnerTeam = TEAM_NEUTRAL;
+	if (winner == TEAM_ALLIANCE)
+		winnerTeam = ALLIANCE;
+	else if (winner == TEAM_HORDE)
+		winnerTeam = HORDE;
+
+	if (winnerTeam == ALLIANCE || winnerTeam == HORDE)
+		RewardHonorToTeam(BG_SV_WINNER_HONOR_AMOUNT, winnerTeam);
+
+	Battleground::EndBattleground(winnerTeam);
 }
 
 void BattlegroundSV::EventPlayerClickedOnFlag(Player *player, GameObject *target_obj)
@@ -590,14 +607,14 @@ void BattlegroundSV::BG_SV_HandleContestedNodes(BG_SV_NodePoint *node)
 
 	if (node->nodeType == NODE_TYPE_MINE)
 	{
-		RemoveAuraOnTeam(BG_SV_MINE_BUFF, TEAM_ALLIANCE);
-		RemoveAuraOnTeam(BG_SV_MINE_BUFF, TEAM_HORDE);
+		RemoveAuraOnTeam(BG_SV_MINE_BUFF, ALLIANCE);
+		RemoveAuraOnTeam(BG_SV_MINE_BUFF, HORDE);
 	}
 
 	if (node->nodeType == NODE_TYPE_BOSS)
 	{
-		RemoveAuraOnTeam(BG_SV_BOSS_BUFF, TEAM_ALLIANCE);
-		RemoveAuraOnTeam(BG_SV_BOSS_BUFF, TEAM_HORDE);
+		RemoveAuraOnTeam(BG_SV_BOSS_BUFF, ALLIANCE);
+		RemoveAuraOnTeam(BG_SV_BOSS_BUFF, HORDE);
 	}
 }
 
