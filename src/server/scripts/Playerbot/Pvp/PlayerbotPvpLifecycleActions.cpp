@@ -712,7 +712,9 @@ bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& dest
         38.0f,
         45.0f
     };
-    std::array<float, 11> const angleOffsets = { 0.0f, 0.30f, -0.30f, 0.60f, -0.60f, 0.95f, -0.95f, 1.30f, -1.30f, 1.57f, -1.57f };
+    // Only probe mostly-forward ledge exits. Wider/perpendicular probes can pick
+    // attractive drops that move the bot sideways or backward into hazards.
+    std::array<float, 5> const angleOffsets = { 0.0f, 0.25f, -0.25f, 0.50f, -0.50f };
 
     for (float probeDistance : probeDistances)
     {
@@ -741,11 +743,14 @@ bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& dest
             Position candidate(probeX, probeY, probeZ, destination.GetOrientation());
             float const candidateDestinationDistance = candidate.GetExactDist2d(destination);
             float const distanceImprovement = currentDestinationDistance - candidateDestinationDistance;
-            if (distanceImprovement < -5.0f)
+            // Falling is only a shortcut if it makes concrete progress toward the
+            // active move destination; never pick a drop purely because it is lower.
+            float const minimumImprovement = std::max(3.0f, std::min(cappedDistance * 0.30f, 10.0f));
+            if (distanceImprovement < minimumImprovement)
                 continue;
 
-            float const score = std::max(distanceImprovement, 0.0f) + drop * 0.50f -
-                cappedDistance * 0.08f - std::fabs(angleOffset) * 2.0f;
+            float const score = distanceImprovement + drop * 0.35f -
+                cappedDistance * 0.10f - std::fabs(angleOffset) * 3.0f;
             if (score <= bestScore)
                 continue;
 
@@ -983,14 +988,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position fallDestination;
     if (generatePath && TryBuildTerrainFallShortcutDestination(player, safeDestination, fallDestination))
     {
-        motionMaster->MovePoint(0, fallDestination, false);
-        issuedDestination = fallDestination;
-        EmitBattlegroundGmDebug(player,
-            "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
-            " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
-    }
-    else if (generatePath && player->InBattleground())
-    {
+        // A selected terrain drop should be committed on foot; mounted bots can
+        // otherwise keep a bad mounted point-motion while stuck on ledge geometry.
+        ForcePlayerbotDismount(player);
         motionMaster->MovePoint(0, fallDestination, false);
         issuedDestination = fallDestination;
         EmitBattlegroundGmDebug(player,
