@@ -35,6 +35,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "MoveSplineInit.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
@@ -584,9 +585,27 @@ void ClearMovementBeforeBattlegroundTeleport(Player* player)
 }
 
 
+bool IsPlayerbotActivelyFalling(Player const* player)
+{
+    if (!player || !player->Unit::IsFalling())
+        return false;
+
+    // Unit::IsFalling() also reports the MoveSpline falling flag. Completed
+    // falling splines can keep that flag for diagnostics, so only block new
+    // MovePoint/repath orders while a client fall flag is present or a falling
+    // spline is still active.
+    if (player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR))
+        return true;
+
+    return player->movespline->Initialized() && !player->movespline->Finalized() && player->movespline->isFalling();
+}
+
 bool CanIssueMovementCommand(Player const* player, uint32 cooldownMs = 500)
 {
     if (!player)
+        return false;
+
+    if (IsPlayerbotActivelyFalling(player))
         return false;
 
     static std::unordered_map<uint64, uint32> nextAllowedMoveCommandMsByGuid;
@@ -679,7 +698,7 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (!player || !player->InBattleground() || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
         return false;
 
-    if (player->IsFalling())
+    if (IsPlayerbotActivelyFalling(player))
         return false;
 
     static std::unordered_map<uint64, uint32> nextAllowedFallShortcutMsByGuid;
@@ -916,7 +935,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (player->InBattleground() && botCurrentlyMoving && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+    if (player->InBattleground() && botCurrentlyMoving && (IsPlayerbotActivelyFalling(player) || currentMovement == EFFECT_MOTION_TYPE))
         return true;
 
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)

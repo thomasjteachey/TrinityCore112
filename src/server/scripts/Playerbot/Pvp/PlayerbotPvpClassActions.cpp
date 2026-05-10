@@ -2096,9 +2096,27 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
     }
 }
 
+bool IsPlayerbotActivelyFalling(Player const* player)
+{
+    if (!player || !player->Unit::IsFalling())
+        return false;
+
+    // Unit::IsFalling() also reports the MoveSpline falling flag. Completed
+    // falling splines can keep that flag for diagnostics, so only block new
+    // MovePoint/repath orders while a client fall flag is present or a falling
+    // spline is still active.
+    if (player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR))
+        return true;
+
+    return player->movespline->Initialized() && !player->movespline->Finalized() && player->movespline->isFalling();
+}
+
 bool CanIssueFollowCommands(Player const* player)
 {
     if (!player || !player->IsAlive())
+        return false;
+
+    if (IsPlayerbotActivelyFalling(player))
         return false;
 
     if (IsCrowdControlledForAction(player) ||
