@@ -21,14 +21,10 @@
 #include "PlayerbotPvpCore.h"
 
 class Player;
-class Position;
-
 namespace playerbot
 {
 bool NormalizeLifecycleQueueState(Player* player);
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
-bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason = nullptr);
-bool FinishBattlegroundFallMovement(Player* player);
 
 class BattlegroundLifecycleActions
 {

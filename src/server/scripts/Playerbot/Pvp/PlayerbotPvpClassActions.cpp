@@ -16,8 +16,6 @@
  */
 
 #include "PlayerbotPvpClassActions.h"
-#include "PlayerbotPvpLifecycleActions.h"
-
 #include "GameTime.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
@@ -86,7 +84,6 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
 
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
-bool IsResolvingBattlegroundGravityFall(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
 bool IsPrimaryMeleeClassForSpacing(uint8 classId);
@@ -143,19 +140,6 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
     return player->IsOutdoors() && terrainStatus.outdoors;
-}
-
-bool IsResolvingBattlegroundGravityFall(Player const* player)
-{
-    if (!player || !player->InBattleground() || !player->IsFalling() ||
-        player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
-        return false;
-
-    // Let the shared lifecycle fall finalizer settle completed virtual-session
-    // falls before class movement decides that every follow/chase order must be
-    // blocked.  Without this, a finalized fall spline with a stale falling flag
-    // can leave casters or shapeshifted bots suspended in mid-air indefinitely.
-    return !playerbot::FinishBattlegroundFallMovement(const_cast<Player*>(player));
 }
 
 bool IsPrimaryMeleeClassForSpacing(uint8 classId)
@@ -335,15 +319,6 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     bool const destinationChanged = state.lastIssueMs == 0 ||
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-
-    // Strict battleground movement is also used by combat range recovery.
-    // Before honoring local point-move throttles or asking navmesh for a walking
-    // segment, allow the shared BG fall shortcut to launch a real falling spline
-    // when the direct human-like route crosses graveyard ledges such as Twin
-    // Peaks. Without this, the strict segment walker can install or preserve a
-    // point generator on top of the graveyard and never step off the drop.
-    if (player->InBattleground() && playerbot::TryIssueBattlegroundFallMovement(player, destination, "strict-human"))
-        return true;
 
     if (!destinationChanged && !canReissueByTime)
     {
@@ -1198,19 +1173,12 @@ void IssueStealthOpenerMovement(Player* player, Unit* target)
 
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance, bool forceMovementWhenAlreadyInRange = false, char const* forcedReason = nullptr)
 {
-    if (!player || !target || IsResolvingBattlegroundGravityFall(player))
+    if (!player || !target)
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;
-
-    if (target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
-        playerbot::TryIssueBattlegroundFallMovement(player, target->GetPosition(), "ranged-target-below"))
-    {
-        SetLastMovementDebugStatus(player, "ranged_target_below_fall_shortcut issued=yes");
-        return;
-    }
 
     struct RangedApproachStallState
     {
@@ -1650,19 +1618,12 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
 {
-    if (!player || !target || IsResolvingBattlegroundGravityFall(player))
+    if (!player || !target)
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;
-
-    if (target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
-        playerbot::TryIssueBattlegroundFallMovement(player, target->GetPosition(), "melee-target-below"))
-    {
-        SetLastMovementDebugStatus(player, "melee_target_below_fall_shortcut issued=yes");
-        return;
-    }
 
     if (player->HasStealthAura())
     {
@@ -2103,7 +2064,6 @@ void FinalizeVirtualNearTeleport(Player* player)
 
     player->SetSemaphoreTeleportNear(false);
     player->UpdatePosition(dest, true);
-    player->SetFallInformation(0, player->GetPositionZ());
 
     uint32 newZone = 0;
     uint32 newArea = 0;
@@ -2137,12 +2097,6 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
 bool CanIssueFollowCommands(Player const* player)
 {
     if (!player || !player->IsAlive())
-        return false;
-
-    // Preserve natural battleground falls. Reissuing follow/chase while the
-    // bot is falling can snap the destination Z back to the cliff/gy surface,
-    // which looks like teleporting or flying instead of gravity.
-    if (IsResolvingBattlegroundGravityFall(player))
         return false;
 
     if (IsCrowdControlledForAction(player) ||

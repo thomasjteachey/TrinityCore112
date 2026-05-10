@@ -455,7 +455,6 @@ void TryFinalizePendingManagedBotTeleport(Player* player)
             dest.Relocate(dest.GetPositionX(), dest.GetPositionY(), safeDestZ, dest.GetOrientation());
             player->SetSemaphoreTeleportNear(false);
             player->UpdatePosition(dest, true);
-            player->SetFallInformation(0, player->GetPositionZ());
 
             uint32 newZone = 0;
             uint32 newArea = 0;
