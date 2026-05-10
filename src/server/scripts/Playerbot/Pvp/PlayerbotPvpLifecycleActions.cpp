@@ -604,7 +604,7 @@ bool FinishCompletedBattlegroundGravityFall(Player* player)
         return false;
 
     float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
-    if (groundZ > INVALID_HEIGHT && std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
+    if (groundZ <= INVALID_HEIGHT || std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
         return false;
 
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
@@ -923,6 +923,47 @@ bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, f
     return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
 }
 
+} // namespace
+
+namespace playerbot
+{
+bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason /*= nullptr*/)
+{
+    if (!player || !player->IsAlive())
+        return false;
+
+    FinishCompletedBattlegroundGravityFall(player);
+    if (IsResolvingBattlegroundGravityFall(player))
+        return true;
+
+    Position fallDestination;
+    if (!TryBuildBattlegroundFallShortcutDestination(player, destination, fallDestination))
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
+    {
+        init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
+        init.SetFall();
+    }, 0, MOTION_PRIORITY_HIGHEST, EFFECT_MOTION_TYPE);
+
+    std::ostringstream detail;
+    detail << "movepoint=fall-shortcut"
+           << " reason=" << (reason ? reason : "unspecified")
+           << " drop=" << int32(player->GetPositionZ() - fallDestination.GetPositionZ())
+           << " segDist=" << int32(player->GetDistance(fallDestination));
+    EmitBattlegroundGmDebug(player, detail.str(), 1000);
+    return true;
+}
+}
+
+namespace
+{
+
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
 {
     if (!player)
@@ -1018,18 +1059,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        Position fallDestination;
-        if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
+        if (playerbot::TryIssueBattlegroundFallMovement(player, safeDestination, "move-point"))
         {
-            motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
-            {
-                init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
-                init.SetFall();
-            }, 0, MOTION_PRIORITY_NORMAL, EFFECT_MOTION_TYPE);
-            issuedDestination = fallDestination;
-            EmitBattlegroundGmDebug(player,
-                "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
-                " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+            issuedDestination = safeDestination;
         }
         else
         {
