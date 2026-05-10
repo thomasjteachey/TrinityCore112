@@ -635,8 +635,8 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
-constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 6.0f;
-constexpr uint32 PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS = 4000;
+constexpr float PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP = 6.0f;
+constexpr uint32 PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS = 8000;
 
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
 {
@@ -674,12 +674,12 @@ bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray 
     return player->GetDistance(segmentDestination) > 0.5f;
 }
 
-bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
 {
-    if (!player || !player->InBattleground() || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+    if (!player || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
         return false;
 
-    if (player->IsFalling())
+    if (player->IsFalling() || player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING))
         return false;
 
     static std::unordered_map<uint64, uint32> nextAllowedFallShortcutMsByGuid;
@@ -692,28 +692,31 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     float const dx = destination.GetPositionX() - player->GetPositionX();
     float const dy = destination.GetPositionY() - player->GetPositionY();
     float const planarDistance = std::sqrt(dx * dx + dy * dy);
-    if (planarDistance < 2.0f)
+    if (planarDistance < 4.0f)
         return false;
 
     float const destinationAngle = std::atan2(dy, dx);
-    std::array<float, 10> const probeDistances =
+    float const currentDestinationDistance = player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
+    float bestScore = 0.0f;
+    Position bestDestination;
+
+    std::array<float, 9> const probeDistances =
     {
-        4.0f,
-        6.0f,
-        8.0f,
-        10.0f,
+        5.0f,
+        7.0f,
+        9.0f,
         12.0f,
         16.0f,
-        20.0f,
+        22.0f,
         30.0f,
-        45.0f,
-        60.0f
+        38.0f,
+        45.0f
     };
-    std::array<float, 5> const angleOffsets = { 0.0f, 0.30f, -0.30f, 0.60f, -0.60f };
+    std::array<float, 11> const angleOffsets = { 0.0f, 0.30f, -0.30f, 0.60f, -0.60f, 0.95f, -0.95f, 1.30f, -1.30f, 1.57f, -1.57f };
 
     for (float probeDistance : probeDistances)
     {
-        float const cappedDistance = std::min(planarDistance, probeDistance);
+        float const cappedDistance = std::min(std::max(planarDistance, 8.0f), probeDistance);
         if (cappedDistance < 1.0f)
             continue;
 
@@ -725,22 +728,38 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
             float probeZ = player->GetPositionZ();
             player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
 
-            if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+            float const drop = player->GetPositionZ() - probeZ;
+            if (drop < PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP || drop > 45.0f)
                 continue;
 
-            // Check the air path, not the landing point. The landing point is
-            // expected to be below the ledge, so terrain can legitimately sit
-            // between the bot and the final ground Z.
+            // Check the horizontal step off the ledge instead of the ground
+            // landing point. The landing point is below the ledge, so terrain can
+            // legitimately sit between the bot and the final ground Z.
             if (!player->IsWithinLOS(probeX, probeY, player->GetPositionZ()))
                 continue;
 
-            fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
-            nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
-            return true;
+            Position candidate(probeX, probeY, probeZ, destination.GetOrientation());
+            float const candidateDestinationDistance = candidate.GetExactDist2d(destination);
+            float const distanceImprovement = currentDestinationDistance - candidateDestinationDistance;
+            if (distanceImprovement < -5.0f)
+                continue;
+
+            float const score = std::max(distanceImprovement, 0.0f) + drop * 0.50f -
+                cappedDistance * 0.08f - std::fabs(angleOffset) * 2.0f;
+            if (score <= bestScore)
+                continue;
+
+            bestScore = score;
+            bestDestination = candidate;
         }
     }
 
-    return false;
+    if (bestScore <= 0.0f)
+        return false;
+
+    fallDestination = bestDestination;
+    nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS;
+    return true;
 }
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
@@ -929,7 +948,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-    if (player->InBattleground() && botCurrentlyMoving && player->IsFalling())
+    if (player->InBattleground() && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
         return true;
 
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
@@ -953,7 +972,16 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
     Position issuedDestination = safeDestination;
-    if (generatePath && player->InBattleground())
+    Position fallDestination;
+    if (generatePath && TryBuildTerrainFallShortcutDestination(player, safeDestination, fallDestination))
+    {
+        motionMaster->MovePoint(0, fallDestination, false);
+        issuedDestination = fallDestination;
+        EmitBattlegroundGmDebug(player,
+            "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
+            " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+    }
+    else if (generatePath && player->InBattleground())
     {
         Position fallDestination;
         if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
