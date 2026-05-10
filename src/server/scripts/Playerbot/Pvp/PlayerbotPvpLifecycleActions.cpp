@@ -625,9 +625,6 @@ bool FinishCompletedBattlegroundGravityFall(Player* player)
     if (hasPendingShortcut)
     {
         Position landing = pendingItr->second.landing;
-        float landingZ = landing.GetPositionZ();
-        player->UpdateAllowedPositionZ(landing.GetPositionX(), landing.GetPositionY(), landingZ);
-        landing.Relocate(landing.GetPositionX(), landing.GetPositionY(), landingZ, landing.GetOrientation());
 
         // Player MoveSpline finalization for virtual-session bots can leave the
         // authoritative server position at the takeoff ledge while observers see
@@ -639,26 +636,17 @@ bool FinishCompletedBattlegroundGravityFall(Player* player)
     }
     else
     {
-        float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
+        float const groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
         if (groundZ <= INVALID_HEIGHT)
             return false;
 
-        float const airborneDistance = player->GetPositionZ() - groundZ;
-        if (std::fabs(airborneDistance) > 1.0f)
-        {
-            // A virtual-session bot can occasionally keep the falling flag after
-            // its spline has finalized without a pending shortcut record (for
-            // example after a movement-generator clear or reload while dropping
-            // from battleground terrain).  If the bot is still suspended above
-            // valid terrain with no active spline left to advance, settle the
-            // authoritative position to that terrain so normal movement can
-            // resume instead of blocking every follow/chase command forever.
-            if (airborneDistance <= 0.0f)
-                return false;
-
-            Position landing(player->GetPositionX(), player->GetPositionY(), groundZ, player->GetOrientation());
-            player->UpdatePosition(landing, true);
-        }
+        // If there is no pending shortcut record, do not teleport the bot to an
+        // inferred ground height.  Height queries around cliffs can resolve to a
+        // different shelf and visibly pop the bot upward.  Once the spline has
+        // finalized, clearing stale falling flags is enough to let normal
+        // pathing resume; only refuse if the position is already below terrain.
+        if (player->GetPositionZ() + 1.0f < groundZ)
+            return false;
     }
 
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
@@ -907,12 +895,14 @@ bool TryBuildBattlegroundGraveyardFallShortcutDestination(Player* player, Positi
         return false;
 
     float const destinationAngle = player->GetAbsoluteAngle(destination);
+    // Keep graveyard escape probing deterministic and centered on leaving the
+    // graveyard shelf.  Destination/current-facing angles can change every tick
+    // as enemies and combat directives change, which made bots wiggle around the
+    // graveyard instead of committing to the first usable drop direction.
     float const awayFromGraveyardAngle = graveyardDistance2D > 1.0f ? std::atan2(graveyardDy, graveyardDx) : destinationAngle;
-    std::array<float, 10> const probeAngles =
+    std::array<float, 8> const probeAngles =
     {
-        destinationAngle,
         awayFromGraveyardAngle,
-        player->GetOrientation(),
         awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.25f,
         awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.25f,
         awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.5f,
