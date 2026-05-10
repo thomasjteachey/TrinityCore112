@@ -332,6 +332,15 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
+    // Strict battleground movement is also used by combat range recovery.
+    // Before honoring local point-move throttles or asking navmesh for a walking
+    // segment, allow the shared BG fall shortcut to launch a real falling spline
+    // when the direct human-like route crosses graveyard ledges such as Twin
+    // Peaks. Without this, the strict segment walker can install or preserve a
+    // point generator on top of the graveyard and never step off the drop.
+    if (player->InBattleground() && playerbot::TryIssueBattlegroundFallMovement(player, destination, "strict-human"))
+        return true;
+
     if (!destinationChanged && !canReissueByTime)
     {
         // Treat strict move as unsuccessful when the throttled order is stale
