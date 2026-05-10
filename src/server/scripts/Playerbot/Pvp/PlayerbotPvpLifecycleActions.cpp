@@ -489,7 +489,7 @@ bool MoveToBattlegroundObjectivePosition(Player* player)
 
     if (player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
     {
-        EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
+        EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12", 1000);
         return true;
     }
 
@@ -3080,7 +3080,7 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
                 if (!withinObjectiveRange)
                     IssueMovePointThrottled(player, destination);
                 else
-                    EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12");
+                    EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12", 1000);
                 return true;
             }
 
