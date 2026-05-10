@@ -640,8 +640,25 @@ bool FinishCompletedBattlegroundGravityFall(Player* player)
     else
     {
         float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
-        if (groundZ <= INVALID_HEIGHT || std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
+        if (groundZ <= INVALID_HEIGHT)
             return false;
+
+        float const airborneDistance = player->GetPositionZ() - groundZ;
+        if (std::fabs(airborneDistance) > 1.0f)
+        {
+            // A virtual-session bot can occasionally keep the falling flag after
+            // its spline has finalized without a pending shortcut record (for
+            // example after a movement-generator clear or reload while dropping
+            // from battleground terrain).  If the bot is still suspended above
+            // valid terrain with no active spline left to advance, settle the
+            // authoritative position to that terrain so normal movement can
+            // resume instead of blocking every follow/chase command forever.
+            if (airborneDistance <= 0.0f)
+                return false;
+
+            Position landing(player->GetPositionX(), player->GetPositionY(), groundZ, player->GetOrientation());
+            player->UpdatePosition(landing, true);
+        }
     }
 
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
@@ -786,13 +803,16 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     if (horizontalSpeed <= 0.0f)
         return false;
 
-    std::array<float, 5> const edgeProbeDistances =
+    std::array<float, 8> const edgeProbeDistances =
     {
         3.0f,
         5.0f,
         8.0f,
         12.0f,
-        16.0f
+        16.0f,
+        24.0f,
+        32.0f,
+        40.0f
     };
 
     for (float edgeProbeDistance : edgeProbeDistances)
@@ -829,7 +849,11 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
             continue;
 
         float const fallTimeSeconds = Movement::computeFallTime(drop, false);
-        float const maxHumanLikeHorizontalDistance = horizontalSpeed * fallTimeSeconds + PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE;
+        // The ledge can be several yards away from the bot's current position.
+        // Allow the shortcut to cover the run-up to the edge plus the natural
+        // horizontal travel during the drop; otherwise bots stop just short of
+        // wider graveyard shelves and never get a chance to fall.
+        float const maxHumanLikeHorizontalDistance = edgeDistance + horizontalSpeed * fallTimeSeconds + PLAYERBOT_BG_FALL_SHORTCUT_SPEED_TOLERANCE;
         if (landingDistance > maxHumanLikeHorizontalDistance)
         {
             float const cappedLandingDistance = std::min(planarDistance, maxHumanLikeHorizontalDistance);
@@ -1090,6 +1114,11 @@ namespace playerbot
 bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason /*= nullptr*/)
 {
     return TryIssueBattlegroundFallMovementInternal(player, destination, reason);
+}
+
+bool FinishBattlegroundFallMovement(Player* player)
+{
+    return FinishCompletedBattlegroundGravityFall(player);
 }
 }
 

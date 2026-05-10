@@ -147,11 +147,15 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
 
 bool IsResolvingBattlegroundGravityFall(Player const* player)
 {
-    return player &&
-        player->InBattleground() &&
-        player->IsFalling() &&
-        !player->IsFlying() &&
-        !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+    if (!player || !player->InBattleground() || !player->IsFalling() ||
+        player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+        return false;
+
+    // Let the shared lifecycle fall finalizer settle completed virtual-session
+    // falls before class movement decides that every follow/chase order must be
+    // blocked.  Without this, a finalized fall spline with a stale falling flag
+    // can leave casters or shapeshifted bots suspended in mid-air indefinitely.
+    return !playerbot::FinishBattlegroundFallMovement(const_cast<Player*>(player));
 }
 
 bool IsPrimaryMeleeClassForSpacing(uint8 classId)
