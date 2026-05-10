@@ -361,7 +361,14 @@ void BattlegroundEY::AddPlayer(Player* player)
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
     if (!isInBattleground)
-        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundEYScore(player->GetGUID());
+    {
+        BattlegroundEYScore* scoreEntry = new BattlegroundEYScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 
     m_PlayersNearPoint[EY_POINTS_MAX].push_back(player->GetGUID());
 }

@@ -485,7 +485,14 @@ void BattlegroundSA::AddPlayer(Player* player)
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
     if (!isInBattleground)
-        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundSAScore(player->GetGUID());
+    {
+        BattlegroundSAScore* scoreEntry = new BattlegroundSAScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 
     SendTransportInit(player);
 

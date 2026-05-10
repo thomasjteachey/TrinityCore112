@@ -188,8 +188,17 @@ void BattlegroundSV::StartingEventOpenDoors()
 // done when a player enters the battleground while running
 void BattlegroundSV::AddPlayer(Player *player)
 {
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
-    PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundSVScore(player->GetGUID()));
+    if (!isInBattleground)
+    {
+        BattlegroundSVScore* scoreEntry = new BattlegroundSVScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 
 	UpdateWorldState(BG_SV_WS_HORDE_SCORE, TeamScore[TEAM_HORDE]);
 	UpdateWorldState(BG_SV_WS_ALLIANCE_SCORE, TeamScore[TEAM_ALLIANCE]);

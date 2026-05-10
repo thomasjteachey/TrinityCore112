@@ -184,8 +184,17 @@ void BattlegroundBFG::StartingEventOpenDoors()
 
 void BattlegroundBFG::AddPlayer(Player* player)
 {
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
-    PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundBFGScore(player->GetGUID()));
+    if (!isInBattleground)
+    {
+        BattlegroundBFGScore* scoreEntry = new BattlegroundBFGScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 }
 
 void BattlegroundBFG::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 /*team*/)
