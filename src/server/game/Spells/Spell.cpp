@@ -3310,10 +3310,6 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
-    if (playerCaster && playerCaster->GetRace() == RACE_TAUREN
-        && (m_spellInfo->HasAura(SPELL_AURA_MOUNTED) || m_spellInfo->Mechanic == MECHANIC_MOUNT))
-        m_casttime = std::max(m_casttime - 1000, 0);
-
     bool const isStarfire = m_spellInfo->IsStarfire();
     float starfireSnareSpeedRate = 0.0f;
     if (playerCaster && m_casttime && isStarfire)
