@@ -824,6 +824,56 @@ bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const&
     return false;
 }
 
+bool TryBuildBattlegroundGraveyardFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    WorldSafeLocsEntry const* graveyard = battleground->GetClosestGraveyard(player);
+    if (!graveyard)
+        return false;
+
+    float const graveyardDx = player->GetPositionX() - graveyard->Loc.X;
+    float const graveyardDy = player->GetPositionY() - graveyard->Loc.Y;
+    float const graveyardDistance2D = std::sqrt(graveyardDx * graveyardDx + graveyardDy * graveyardDy);
+    if (graveyardDistance2D > 80.0f || std::fabs(player->GetPositionZ() - graveyard->Loc.Z) > 35.0f)
+        return false;
+
+    float const destinationAngle = player->GetAbsoluteAngle(destination);
+    float const awayFromGraveyardAngle = graveyardDistance2D > 1.0f ? std::atan2(graveyardDy, graveyardDx) : destinationAngle;
+    std::array<float, 10> const probeAngles =
+    {
+        destinationAngle,
+        awayFromGraveyardAngle,
+        player->GetOrientation(),
+        awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.25f,
+        awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.25f,
+        awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.5f,
+        awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.5f,
+        awayFromGraveyardAngle + static_cast<float>(M_PI) * 0.75f,
+        awayFromGraveyardAngle - static_cast<float>(M_PI) * 0.75f,
+        awayFromGraveyardAngle + static_cast<float>(M_PI)
+    };
+
+    for (float angle : probeAngles)
+    {
+        Position probeDestination(
+            player->GetPositionX() + std::cos(angle) * 40.0f,
+            player->GetPositionY() + std::sin(angle) * 40.0f,
+            player->GetPositionZ(),
+            angle);
+
+        if (TryBuildBattlegroundFallShortcutDestination(player, probeDestination, fallDestination))
+            return true;
+    }
+
+    return false;
+}
+
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
     if (!player)
@@ -960,7 +1010,8 @@ bool TryIssueBattlegroundFallMovementInternal(Player* player, Position const& de
         return true;
 
     Position fallDestination;
-    if (!TryBuildBattlegroundFallShortcutDestination(player, destination, fallDestination))
+    if (!TryBuildBattlegroundFallShortcutDestination(player, destination, fallDestination) &&
+        !TryBuildBattlegroundGraveyardFallShortcutDestination(player, destination, fallDestination))
         return false;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -1096,14 +1147,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
     Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
-    Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        if (TryIssueBattlegroundFallMovementInternal(player, safeDestination, "move-point"))
-        {
-            issuedDestination = safeDestination;
-        }
-        else
+        if (!TryIssueBattlegroundFallMovementInternal(player, safeDestination, "move-point"))
         {
             Position segmentDestination;
             PathType pathType = PathType(0);
@@ -1115,7 +1161,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
 
             motionMaster->MovePoint(0, segmentDestination, true);
-            issuedDestination = segmentDestination;
             EmitBattlegroundGmDebug(player,
                 "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
                 " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
@@ -1124,10 +1169,14 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     else
     {
         motionMaster->MovePoint(0, safeDestination, generatePath);
-        issuedDestination = safeDestination;
     }
 
-    state.lastDestination = issuedDestination;
+    // Throttle against the caller's tactical destination, not the intermediate
+    // navmesh segment we just issued. Battleground segment walking intentionally
+    // advances in chunks; storing the chunk endpoint here made the next tick see
+    // the real objective as a different destination, clear the active spline,
+    // and reinstall a fresh segment before bots could make visible progress.
+    state.lastDestination = destination;
     state.lastIssueMs = nowMs;
     return true;
 }
