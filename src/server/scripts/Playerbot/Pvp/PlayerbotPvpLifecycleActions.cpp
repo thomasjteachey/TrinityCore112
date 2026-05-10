@@ -78,6 +78,13 @@ bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
 namespace
 {
 std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+
+struct PendingBattlegroundFallShortcut
+{
+    Position landing;
+};
+
+std::unordered_map<uint64, PendingBattlegroundFallShortcut> g_PendingBattlegroundFallShortcutByGuid;
 std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
 constexpr uint32 PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS = 45000;
 constexpr uint32 PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS = 15000;
@@ -569,6 +576,8 @@ void ClearMovementBeforeBattlegroundTeleport(Player* player)
     if (!player)
         return;
 
+    g_PendingBattlegroundFallShortcutByGuid.erase(player->GetGUID().GetRawValue());
+
     player->AttackStop();
     player->SetSelection(ObjectGuid::Empty);
 
@@ -600,20 +609,47 @@ bool IsResolvingBattlegroundGravityFall(Player const* player)
 
 bool FinishCompletedBattlegroundGravityFall(Player* player)
 {
-    if (!IsResolvingBattlegroundGravityFall(player))
+    if (!player)
+        return false;
+
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    auto pendingItr = g_PendingBattlegroundFallShortcutByGuid.find(botGuid);
+    bool const hasPendingShortcut = pendingItr != g_PendingBattlegroundFallShortcutByGuid.end();
+
+    if (!IsResolvingBattlegroundGravityFall(player) && !hasPendingShortcut)
         return false;
 
     if (player->movespline && !player->movespline->Finalized())
         return false;
 
-    float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
-    if (groundZ <= INVALID_HEIGHT || std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
-        return false;
+    if (hasPendingShortcut)
+    {
+        Position landing = pendingItr->second.landing;
+        float landingZ = landing.GetPositionZ();
+        player->UpdateAllowedPositionZ(landing.GetPositionX(), landing.GetPositionY(), landingZ);
+        landing.Relocate(landing.GetPositionX(), landing.GetPositionY(), landingZ, landing.GetOrientation());
+
+        // Player MoveSpline finalization for virtual-session bots can leave the
+        // authoritative server position at the takeoff ledge while observers see
+        // the falling spline below. Commit the server position to the spline's
+        // landing point once the spline is done; otherwise the next movement tick
+        // starts from the graveyard again and appears as an endless fall/snap loop.
+        player->UpdatePosition(landing, true);
+        g_PendingBattlegroundFallShortcutByGuid.erase(pendingItr);
+    }
+    else
+    {
+        float groundZ = player->GetMapHeight(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(), true, MAX_FALL_DISTANCE);
+        if (groundZ <= INVALID_HEIGHT || std::fabs(player->GetPositionZ() - groundZ) > 1.0f)
+            return false;
+    }
 
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING);
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_SPLINE_ENABLED);
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_FORWARD);
     player->SetFallInformation(0, player->GetPositionZ());
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        player->SendMovementFlagUpdate();
     return true;
 }
 
@@ -1030,6 +1066,7 @@ bool TryIssueBattlegroundFallMovementInternal(Player* player, Position const& de
     // snap back up and restart the fall repeatedly.
     player->AddUnitMovementFlag(MOVEMENTFLAG_FALLING);
     player->SetFallInformation(0, player->GetPositionZ());
+    g_PendingBattlegroundFallShortcutByGuid[player->GetGUID().GetRawValue()] = { fallDestination };
 
     motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
     {
