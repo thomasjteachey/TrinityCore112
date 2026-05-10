@@ -85,6 +85,7 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
 
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
+bool IsResolvingBattlegroundGravityFall(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
 bool IsStrictlyOutdoorsForMount(Player const* player);
 bool IsPrimaryMeleeClassForSpacing(uint8 classId);
@@ -141,6 +142,15 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
     return player->IsOutdoors() && terrainStatus.outdoors;
+}
+
+bool IsResolvingBattlegroundGravityFall(Player const* player)
+{
+    return player &&
+        player->InBattleground() &&
+        player->IsFalling() &&
+        !player->IsFlying() &&
+        !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
 }
 
 bool IsPrimaryMeleeClassForSpacing(uint8 classId)
@@ -1174,7 +1184,7 @@ void IssueStealthOpenerMovement(Player* player, Unit* target)
 
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance, bool forceMovementWhenAlreadyInRange = false, char const* forcedReason = nullptr)
 {
-    if (!player || !target)
+    if (!player || !target || IsResolvingBattlegroundGravityFall(player))
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -1619,7 +1629,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
 void IssueMeleeApproachMovement(Player* player, Unit* target)
 {
-    if (!player || !target)
+    if (!player || !target || IsResolvingBattlegroundGravityFall(player))
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -2099,6 +2109,12 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
 bool CanIssueFollowCommands(Player const* player)
 {
     if (!player || !player->IsAlive())
+        return false;
+
+    // Preserve natural battleground falls. Reissuing follow/chase while the
+    // bot is falling can snap the destination Z back to the cliff/gy surface,
+    // which looks like teleporting or flying instead of gravity.
+    if (IsResolvingBattlegroundGravityFall(player))
         return false;
 
     if (IsCrowdControlledForAction(player) ||
