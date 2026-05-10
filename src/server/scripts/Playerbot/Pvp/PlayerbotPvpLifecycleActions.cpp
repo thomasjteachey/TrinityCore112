@@ -490,120 +490,6 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     return false;
 }
 
-bool TryJumpOffWarsongGraveyard(Player* player)
-{
-    if (!player || !IsWarsongGulch(player))
-        return false;
-
-    struct PostResurrectRouteState
-    {
-        uint32 battlegroundInstanceId = 0;
-        bool wasAlive = true;
-        bool active = false;
-        uint8 phase = 0; // 0 = move to tip, 1 = run forward burst, 2 = move to mid
-        uint32 forwardBurstEndMs = 0;
-    };
-
-    static std::unordered_map<uint64, PostResurrectRouteState> stateByGuid;
-    PostResurrectRouteState& state = stateByGuid[player->GetGUID().GetRawValue()];
-
-    Battleground* battleground = player->GetBattleground();
-    if (!battleground)
-        return false;
-
-    if (state.battlegroundInstanceId != battleground->GetInstanceID())
-    {
-        state = {};
-        state.battlegroundInstanceId = battleground->GetInstanceID();
-        state.wasAlive = player->IsAlive();
-    }
-
-    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-    {
-        state.wasAlive = false;
-        state.active = false;
-        return false;
-    }
-
-    bool const justResurrected = !state.wasAlive;
-    state.wasAlive = true;
-    if (justResurrected)
-    {
-        state.active = true;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
-    }
-
-    if (!state.active)
-        return false;
-
-    static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-
-    // Replace rigid graveyard jump anchors with navmesh-driven pursuit:
-    // build movement toward the nearest enemy immediately after resurrection
-    // and keep issuing path segments for a short bootstrap window so bots do
-    // not tunnel through floor/wall geometry while leaving spawn platforms.
-    if (state.phase == 0)
-    {
-        if (!state.forwardBurstEndMs)
-            state.forwardBurstEndMs = nowMs + 7000;
-        state.phase = 1;
-    }
-
-    if (state.phase == 1)
-    {
-        bool issuedMovement = false;
-        TeamId const teamId = ResolveBotTeamId(player);
-        Position const gateStagingPoint = (teamId == TEAM_HORDE)
-            ? Position(1066.0946404f, 1380.843994f, 340.612305f, 0.0f)
-            : Position(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
-        Position const gateExitPoint = (teamId == TEAM_HORDE)
-            ? Position(978.20f, 1427.10f, 335.20f, 0.0f)
-            : Position(1498.60f, 1484.30f, 340.20f, 0.0f);
-
-        // Explicit egress routing near the spawn gate. This keeps bots from
-        // parking against the fence/gate line when direct nearest-enemy
-        // pathing fails to build a viable first segment from spawn.
-        if (!player->IsWithinDist3d(gateStagingPoint.GetPositionX(), gateStagingPoint.GetPositionY(), gateStagingPoint.GetPositionZ(), 5.0f))
-        {
-            issuedMovement = IssueMovePointThrottled(player, gateStagingPoint, 2.0f, 400);
-            if (issuedMovement)
-                return true;
-        }
-
-        if (!player->IsWithinDist3d(gateExitPoint.GetPositionX(), gateExitPoint.GetPositionY(), gateExitPoint.GetPositionZ(), 8.0f))
-        {
-            issuedMovement = IssueMovePointThrottled(player, gateExitPoint, 2.0f, 400);
-            if (issuedMovement)
-                return true;
-        }
-
-        if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-        {
-            issuedMovement = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
-                IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 12.0f, 500);
-            if (issuedMovement)
-                return true;
-        }
-
-        issuedMovement = IssueMovePointThrottled(player, midPoint, 4.0f, 500);
-        if (nowMs >= state.forwardBurstEndMs)
-            state.phase = 2;
-        return issuedMovement;
-    }
-
-    if (state.phase == 2)
-    {
-        state.active = false;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
-        return false;
-    }
-
-    return true;
-}
-
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -746,7 +632,147 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
     return (pathType & forbiddenPathFlags) != 0;
 }
 
-constexpr float PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT = 700.0f;
+constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
+constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
+constexpr float PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP = 6.0f;
+constexpr uint32 PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS = 8000;
+
+bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
+{
+    if (!player || points.size() < 2)
+        return false;
+
+    G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+    float traversedDistance = 0.0f;
+
+    for (std::size_t i = 1; i < points.size(); ++i)
+    {
+        G3D::Vector3 const& point = points[i];
+        G3D::Vector3 const delta = point - previous;
+        float const segmentLength = delta.length();
+        if (segmentLength <= 0.01f)
+        {
+            previous = point;
+            continue;
+        }
+
+        if (traversedDistance + segmentLength >= PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE)
+        {
+            float const fraction = (PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE - traversedDistance) / segmentLength;
+            G3D::Vector3 const selected = previous + delta * fraction;
+            segmentDestination.Relocate(selected.x, selected.y, selected.z, orientation);
+            return true;
+        }
+
+        traversedDistance += segmentLength;
+        previous = point;
+    }
+
+    G3D::Vector3 const& finalPoint = points.back();
+    segmentDestination.Relocate(finalPoint.x, finalPoint.y, finalPoint.z, orientation);
+    return player->GetDistance(segmentDestination) > 0.5f;
+}
+
+bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+{
+    if (!player || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+        return false;
+
+    if (player->IsFalling() || player->HasUnitMovementFlag(MOVEMENTFLAG_FALLING))
+        return false;
+
+    static std::unordered_map<uint64, uint32> nextAllowedFallShortcutMsByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const nextAllowedMs = nextAllowedFallShortcutMsByGuid[botGuid];
+    if (nowMs < nextAllowedMs)
+        return false;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 4.0f)
+        return false;
+
+    float const destinationAngle = std::atan2(dy, dx);
+    float const currentDestinationDistance = player->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
+    float bestScore = 0.0f;
+    Position bestDestination;
+
+    std::array<float, 9> const probeDistances =
+    {
+        5.0f,
+        7.0f,
+        9.0f,
+        12.0f,
+        16.0f,
+        22.0f,
+        30.0f,
+        38.0f,
+        45.0f
+    };
+    // Only probe mostly-forward ledge exits. Wider/perpendicular probes can pick
+    // attractive drops that move the bot sideways or backward into hazards.
+    std::array<float, 5> const angleOffsets = { 0.0f, 0.25f, -0.25f, 0.50f, -0.50f };
+
+    for (float probeDistance : probeDistances)
+    {
+        float const cappedDistance = std::min(std::max(planarDistance, 8.0f), probeDistance);
+        if (cappedDistance < 1.0f)
+            continue;
+
+        for (float angleOffset : angleOffsets)
+        {
+            float const probeAngle = destinationAngle + angleOffset;
+            float const probeX = player->GetPositionX() + std::cos(probeAngle) * cappedDistance;
+            float const probeY = player->GetPositionY() + std::sin(probeAngle) * cappedDistance;
+            float probeZ = player->GetPositionZ();
+            player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
+
+            float const drop = player->GetPositionZ() - probeZ;
+            if (drop < PLAYERBOT_TERRAIN_MIN_FALL_SHORTCUT_DROP || drop > 45.0f)
+                continue;
+
+            // Check the horizontal step off the ledge instead of the ground
+            // landing point. The landing point is below the ledge, so terrain can
+            // legitimately sit between the bot and the final ground Z.
+            if (!player->IsWithinLOS(probeX, probeY, player->GetPositionZ()))
+                continue;
+
+            Position candidate(probeX, probeY, probeZ, destination.GetOrientation());
+            float const candidateDestinationDistance = candidate.GetExactDist2d(destination);
+            float const distanceImprovement = currentDestinationDistance - candidateDestinationDistance;
+            // Falling is only a shortcut if it makes concrete progress toward the
+            // active move destination; never pick a drop purely because it is lower.
+            float const minimumImprovement = std::max(3.0f, std::min(cappedDistance * 0.30f, 10.0f));
+            if (distanceImprovement < minimumImprovement)
+                continue;
+
+            float const score = distanceImprovement + drop * 0.35f -
+                cappedDistance * 0.10f - std::fabs(angleOffset) * 3.0f;
+            if (score <= bestScore)
+                continue;
+
+            bestScore = score;
+            bestDestination = candidate;
+        }
+    }
+
+    if (bestScore <= 0.0f)
+        return false;
+
+    fallDestination = bestDestination;
+    nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_TERRAIN_FALL_SHORTCUT_COOLDOWN_MS;
+    return true;
+}
+
+// Compatibility shim for branches that still reference the old battleground-named
+// helper while this code is being merged. Do not add map or battleground checks
+// here; falling behavior must remain generic terrain behavior.
+bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+{
+    return TryBuildTerrainFallShortcutDestination(player, destination, fallDestination);
+}
 
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
@@ -761,7 +787,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         // Allow longer battleground route segments so bots can commit to
         // meaningful navmesh progress toward distant enemies instead of
         // repeatedly selecting tiny local hops that catch on terrain.
-        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
+        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -770,7 +796,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_SEGMENT_LENGTH_LIMIT);
+            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -786,10 +812,8 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
             return false;
 
         bool haveResolvedDestination = false;
-        if (points.size() > 1)
+        if (BuildNavPathSegmentDestination(player, points, collisionSafeDestination.GetOrientation(), resolvedDestination))
         {
-            G3D::Vector3 const& lastPoint = points.back();
-            resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, collisionSafeDestination.GetOrientation());
             haveResolvedDestination = true;
         }
         else
@@ -936,6 +960,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+    if (player->InBattleground() && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+        return true;
+
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
         motionMaster->Clear();
@@ -957,7 +984,19 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
     Position issuedDestination = safeDestination;
-    if (generatePath && player->InBattleground())
+    Position fallDestination;
+    if (generatePath && TryBuildTerrainFallShortcutDestination(player, safeDestination, fallDestination))
+    {
+        // A selected terrain drop should be committed on foot; mounted bots can
+        // otherwise keep a bad mounted point-motion while stuck on ledge geometry.
+        ForcePlayerbotDismount(player);
+        motionMaster->MovePoint(0, fallDestination, false);
+        issuedDestination = fallDestination;
+        EmitBattlegroundGmDebug(player,
+            "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
+            " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
+    }
+    else if (generatePath && player->InBattleground())
     {
         Position segmentDestination;
         PathType pathType = PathType(0);
@@ -1680,17 +1719,6 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
-
-    // WSG should not avoid fall damage while pursuing enemies.
-    if (IsWarsongGulch(player) &&
-        target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
-        player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
-    {
-        if (!CanIssueMovementCommand(player, 500))
-            return false;
-        ClearEatDrinkAurasForMovement(player);
-        return IssueMovePointThrottled(player, target->GetPosition(), 30.0f, 500);
-    }
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
     {
@@ -2834,11 +2862,8 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     if (TryPursueNearestEnemyInBattleground(player))
         return true;
 
-    if (TryJumpOffWarsongGraveyard(player))
-        return true;
-
-    // Evaluate combat/post-res logic before this guard so stale movement
-    // flags do not suppress target pursuit immediately after graveyard rez.
+    // Evaluate target pursuit before this guard so stale movement flags do not
+    // suppress nearest-enemy pathing after battleground resurrection.
     if (player->isMoving())
         return false;
 
