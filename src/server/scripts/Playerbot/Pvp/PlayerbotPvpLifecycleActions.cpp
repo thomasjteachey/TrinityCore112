@@ -742,7 +742,9 @@ bool TryBuildTerrainFallShortcutDestination(Player* player, Position const& dest
         38.0f,
         45.0f
     };
-    std::array<float, 11> const angleOffsets = { 0.0f, 0.30f, -0.30f, 0.60f, -0.60f, 0.95f, -0.95f, 1.30f, -1.30f, 1.57f, -1.57f };
+    // Only probe mostly-forward ledge exits. Wider/perpendicular probes can pick
+    // attractive drops that move the bot sideways or backward into hazards.
+    std::array<float, 5> const angleOffsets = { 0.0f, 0.25f, -0.25f, 0.50f, -0.50f };
 
     for (float probeDistance : probeDistances)
     {
