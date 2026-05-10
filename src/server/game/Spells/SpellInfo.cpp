@@ -2904,7 +2904,23 @@ void SpellInfo::ApplyAllSpellImmunitiesTo(Unit* target, SpellEffectInfo const& s
         if (HasAttribute(SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY))
         {
             if (apply)
+            {
                 target->RemoveAurasWithMechanic(mechanicImmunity, AURA_REMOVE_BY_DEFAULT, Id);
+
+                if (mechanicImmunity & (1 << MECHANIC_CHARM))
+                {
+                    auto canRemoveByCharmImmunity = [](AuraApplication const* aurApp) -> bool
+                    {
+                        return !aurApp->GetBase()->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY);
+                    };
+
+                    target->RemoveAurasByType(SPELL_AURA_MOD_TAUNT, canRemoveByCharmImmunity);
+                    target->RemoveAurasByType(SPELL_AURA_MOD_FEAR, [canRemoveByCharmImmunity](AuraApplication const* aurApp) -> bool
+                    {
+                        return aurApp->GetBase()->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME) && canRemoveByCharmImmunity(aurApp);
+                    });
+                }
+            }
             else
             {
                 std::vector<Aura*> aurasToUpdateTargets;
@@ -3073,12 +3089,24 @@ bool SpellInfo::SpellCancelsAuraEffect(AuraEffect const* aurEff) const
                     continue;
                 break;
             case SPELL_AURA_MECHANIC_IMMUNITY:
+            {
+                bool const isTauntControl = aurEff->GetAuraType() == SPELL_AURA_MOD_TAUNT ||
+                    (aurEff->GetAuraType() == SPELL_AURA_MOD_FEAR && aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME));
+                if (isTauntControl)
+                {
+                    if (miscValue != MECHANIC_CHARM)
+                        continue;
+
+                    break;
+                }
+
                 if (miscValue != aurEff->GetSpellInfo()->Mechanic)
                 {
                     if (miscValue != aurEff->GetSpellEffectInfo().Mechanic)
                         continue;
                 }
                 break;
+            }
             default:
                 continue;
         }
