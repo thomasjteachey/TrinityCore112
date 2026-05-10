@@ -114,9 +114,9 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                         m_TeamScores[teamId] = GILNEAS_BG_MAX_TEAM_SCORE;
 
                     if (_honorTics && honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
-                        RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
+                        RewardHonorToTeam(GetBonusHonorFromKill(1), teamId == TEAM_ALLIANCE ? ALLIANCE : HORDE);
                     if (_reputationTics && reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
-                        RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
+                        RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId == TEAM_ALLIANCE ? ALLIANCE : HORDE);
 
                     if (information < uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE))
                     {
@@ -456,10 +456,18 @@ void BattlegroundBFG::Init()
 
 void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
 {
-    RewardHonorToTeam(GetBonusHonorFromKill(1), winnerTeamId);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_HORDE);
-    RewardHonorToTeam(GetBonusHonorFromKill(1), TEAM_ALLIANCE);
-    Battleground::EndBattleground(winnerTeamId);
+    uint32 winnerTeam = TEAM_NEUTRAL;
+    if (winnerTeamId == TEAM_ALLIANCE)
+        winnerTeam = ALLIANCE;
+    else if (winnerTeamId == TEAM_HORDE)
+        winnerTeam = HORDE;
+
+    if (winnerTeam == ALLIANCE || winnerTeam == HORDE)
+        RewardHonorToTeam(GetBonusHonorFromKill(1), winnerTeam);
+
+    RewardHonorToTeam(GetBonusHonorFromKill(1), HORDE);
+    RewardHonorToTeam(GetBonusHonorFromKill(1), ALLIANCE);
+    Battleground::EndBattleground(winnerTeam);
     _bgEvents.Reset();
 }
 
