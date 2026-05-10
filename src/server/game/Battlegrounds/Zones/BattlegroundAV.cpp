@@ -449,7 +449,14 @@ void BattlegroundAV::AddPlayer(Player* player)
     bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
     if (!isInBattleground)
-        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundAVScore(player->GetGUID());
+    {
+        BattlegroundAVScore* scoreEntry = new BattlegroundAVScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 }
 
 void BattlegroundAV::EndBattleground(uint32 winner)
