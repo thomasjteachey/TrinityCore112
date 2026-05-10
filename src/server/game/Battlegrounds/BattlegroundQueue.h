@@ -41,6 +41,7 @@ struct GroupQueueInfo                                       // stores informatio
 {
     std::map<ObjectGuid, PlayerQueueInfo*> Players;         // player queue info map
     uint32  Team;                                           // Player team (ALLIANCE/HORDE)
+    bool    IsForcedTeam;                                   // True when a queue entry must stay on Team instead of being rebalanced
     BattlegroundTypeId BgTypeId;                            // battleground type id
     bool    IsRated;                                        // rated
     uint8   ArenaType;                                      // 2v2, 3v3, 4v4, 5v5 or 0 when BG

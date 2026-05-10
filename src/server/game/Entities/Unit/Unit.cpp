@@ -3456,7 +3456,15 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
 
     // remove appropriate auras if we are swimming/not swimming respectively
     if (IsInWater())
-        RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+    {
+        Player* player = ToPlayer();
+        Battleground const* battleground = player ? player->GetBattleground() : nullptr;
+
+        // Scarlet Chapel's shallow water is part of the intended battleground pathing and
+        // should not force players out of mounts or Travel Form when they cross it.
+        if (!battleground || battleground->GetTypeID(true) != BATTLEGROUND_SCM)
+            RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+    }
     else
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
 
@@ -5050,13 +5058,13 @@ int32 Unit::GetTotalAuraModifier(AuraType auraType, std::function<bool(AuraEffec
 
     for (AuraEffect const* aurEff : mTotalAuraList)
     {
-        if (predicate(aurEff))
-        {
-            // Check if the Aura Effect has a the Same Effect Stack Rule and if so, use the highest amount of that SpellGroup
-            // If the Aura Effect does not have this Stack Rule, it returns false so we can add to the multiplier as usual
-            if (!sSpellMgr->AddSameEffectStackRuleSpellGroups(aurEff->GetSpellInfo(), static_cast<uint32>(auraType), aurEff->GetAmount(), sameEffectSpellGroup))
-                modifier += aurEff->GetAmount();
-        }
+        if (!aurEff || !predicate(aurEff))
+            continue;
+
+        // Check if the Aura Effect has a the Same Effect Stack Rule and if so, use the highest amount of that SpellGroup
+        // If the Aura Effect does not have this Stack Rule, it returns false so we can add to the modifier as usual
+        if (!sSpellMgr->AddSameEffectStackRuleSpellGroups(aurEff->GetSpellInfo(), static_cast<uint32>(auraType), aurEff->GetAmount(), sameEffectSpellGroup))
+            modifier += aurEff->GetAmount();
     }
 
     // Add the highest of the Same Effect Stack Rule SpellGroups to the accumulator
@@ -5077,13 +5085,13 @@ float Unit::GetTotalAuraMultiplier(AuraType auraType, std::function<bool(AuraEff
 
     for (AuraEffect const* aurEff : mTotalAuraList)
     {
-        if (predicate(aurEff))
-        {
-            // Check if the Aura Effect has a the Same Effect Stack Rule and if so, use the highest amount of that SpellGroup
-            // If the Aura Effect does not have this Stack Rule, it returns false so we can add to the multiplier as usual
-            if (!sSpellMgr->AddSameEffectStackRuleSpellGroups(aurEff->GetSpellInfo(), static_cast<uint32>(auraType), aurEff->GetAmount(), sameEffectSpellGroup))
-                AddPct(multiplier, aurEff->GetAmount());
-        }
+        if (!aurEff || !predicate(aurEff))
+            continue;
+
+        // Check if the Aura Effect has a the Same Effect Stack Rule and if so, use the highest amount of that SpellGroup
+        // If the Aura Effect does not have this Stack Rule, it returns false so we can add to the multiplier as usual
+        if (!sSpellMgr->AddSameEffectStackRuleSpellGroups(aurEff->GetSpellInfo(), static_cast<uint32>(auraType), aurEff->GetAmount(), sameEffectSpellGroup))
+            AddPct(multiplier, aurEff->GetAmount());
     }
 
     // Add the highest of the Same Effect Stack Rule SpellGroups to the multiplier
@@ -5102,7 +5110,7 @@ int32 Unit::GetMaxPositiveAuraModifier(AuraType auraType, std::function<bool(Aur
     int32 modifier = 0;
     for (AuraEffect const* aurEff : mTotalAuraList)
     {
-        if (predicate(aurEff))
+        if (aurEff && predicate(aurEff))
             modifier = std::max(modifier, aurEff->GetAmount());
     }
 
@@ -5118,7 +5126,7 @@ int32 Unit::GetMaxNegativeAuraModifier(AuraType auraType, std::function<bool(Aur
     int32 modifier = 0;
     for (AuraEffect const* aurEff : mTotalAuraList)
     {
-        if (predicate(aurEff))
+        if (aurEff && predicate(aurEff))
             modifier = std::min(modifier, aurEff->GetAmount());
     }
 

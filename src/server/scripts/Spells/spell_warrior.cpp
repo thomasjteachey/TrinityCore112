@@ -72,7 +72,9 @@ enum WarriorSpells
     SPELL_WARRIOR_GLYPH_OF_BLOCKING                 = 58374,
     SPELL_WARRIOR_STOICISM                          = 70845,
     SPELL_WARRIOR_T10_MELEE_4P_BONUS                = 70847,
-    SPELL_WARRIOR_INTERVENE_THREAT                  = 59667
+    SPELL_WARRIOR_INTERVENE_THREAT                  = 59667,
+    SPELL_WARRIOR_AURA_89751                        = 89751,
+    SPELL_WARRIOR_PROC_89753                        = 89753
 };
 
 enum WarriorSpellIcons
@@ -87,6 +89,32 @@ enum MiscSpells
     SPELL_PRIEST_RENEWED_HOPE                       = 63944,
     SPELL_GEN_DAMAGE_REDUCTION_AURA                 = 68066,
     SPELL_CATEGORY_SHIELD_SLAM                      = 1209
+};
+
+
+// 71, 2457, 2458 - Warrior Stances
+class spell_warr_stance_switch_trigger : public SpellScript
+{
+    PrepareSpellScript(spell_warr_stance_switch_trigger);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_WARRIOR_AURA_89751, SPELL_WARRIOR_PROC_89753 });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_WARRIOR_AURA_89751))
+            return;
+
+        caster->CastSpell(caster, SPELL_WARRIOR_PROC_89753, true);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warr_stance_switch_trigger::HandleAfterCast);
+    }
 };
 
 // 81271 - Leap
@@ -1032,4 +1060,5 @@ void AddSC_warrior_spell_scripts()
     RegisterSpellScript(spell_warr_bloodrage);
     RegisterSpellScript(spell_warr_leap);
     RegisterSpellScript(spell_warr_disarm_wrapper);
+    RegisterSpellScript(spell_warr_stance_switch_trigger);
 }

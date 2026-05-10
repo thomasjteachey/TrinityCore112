@@ -1,0 +1,256 @@
+/*
+ * Copyright (C) ArkCORE
+ * Copyright (C) 2019+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license: http://github.com/azerothcore/azerothcore-wotlk/blob/master/LICENSE-AGPL3
+*/
+
+#ifndef __BATTLEGROUNDTP_H
+#define __BATTLEGROUNDTP_H
+
+#include "Battleground.h"
+#include "EventMap.h"
+#include "WorldStatePackets.h"
+
+enum TwinPeaksStrings {
+    LANG_BG_TP_START_TWO_MINUTES        = 910020,
+    LANG_BG_TP_START_ONE_MINUTE         = 910021,
+    LANG_BG_TP_START_HALF_MINUTE        = 910022,
+    LANG_BG_TP_HAS_BEGUN                = 910023,
+    LANG_BG_TP_CAPTURED_HF              = 910024,
+    LANG_BG_TP_CAPTURED_AF              = 910025,
+    LANG_BG_TP_DROPPED_HF               = 910026,
+    LANG_BG_TP_DROPPED_AF               = 910027,
+    LANG_BG_TP_RETURNED_AF              = 910028,
+    LANG_BG_TP_RETURNED_HF              = 910029,
+    LANG_BG_TP_PICKEDUP_HF              = 910030,
+    LANG_BG_TP_PICKEDUP_AF              = 910031,
+    LANG_BG_TP_F_PLACED                 = 910032,
+    LANG_BG_TP_ALLIANCE_FLAG_RESPAWNED  = 910033,
+    LANG_BG_TP_HORDE_FLAG_RESPAWNED     = 910034
+    // Custom broadcast_text IDs. Keep in sync with lplusworld.broadcast_text.
+};
+
+enum BG_TP_Events
+{
+    BG_TP_EVENT_UPDATE_GAME_TIME    = 1,
+    BG_TP_EVENT_NO_TIME_LEFT        = 2,
+    BG_TP_EVENT_RESPAWN_BOTH_FLAGS  = 3,
+    BG_TP_EVENT_ALLIANCE_DROP_FLAG  = 4,
+    BG_TP_EVENT_HORDE_DROP_FLAG     = 5,
+    BG_TP_EVENT_BOTH_FLAGS_KEPT10   = 6,
+    BG_TP_EVENT_BOTH_FLAGS_KEPT15   = 7
+};
+
+enum BG_TP_TimerOrScore
+{
+    BG_TP_MAX_TEAM_SCORE    = 3,
+    BG_TP_TOTAL_GAME_TIME   = 25*MINUTE*IN_MILLISECONDS,
+    BG_TP_FLAG_RESPAWN_TIME = 23*IN_MILLISECONDS,
+    BG_TP_FLAG_DROP_TIME    = 10*IN_MILLISECONDS,
+    BG_TP_SPELL_FORCE_TIME  = 10*MINUTE*IN_MILLISECONDS,
+    BG_TP_SPELL_BRUTAL_TIME = 15*MINUTE*IN_MILLISECONDS
+};
+
+enum BG_TP_Sound
+{
+    BG_TP_SOUND_FLAG_CAPTURED_ALLIANCE  = 8173,
+    BG_TP_SOUND_FLAG_CAPTURED_HORDE     = 8213,
+    BG_TP_SOUND_FLAG_PLACED             = 8232,
+    BG_TP_SOUND_FLAG_RETURNED           = 8192,
+    BG_TP_SOUND_HORDE_FLAG_PICKED_UP    = 8212,
+    BG_TP_SOUND_ALLIANCE_FLAG_PICKED_UP = 8174,
+    BG_TP_SOUND_FLAGS_RESPAWNED         = 8232
+};
+
+enum BG_TP_SpellId
+{
+    BG_TP_SPELL_HORDE_FLAG              = 23333,
+    BG_TP_SPELL_HORDE_FLAG_DROPPED      = 23334,
+    BG_TP_SPELL_HORDE_FLAG_PICKED       = 61266,    // fake spell, does not exist but used as timer start event
+    BG_TP_SPELL_ALLIANCE_FLAG           = 23335,
+    BG_TP_SPELL_ALLIANCE_FLAG_DROPPED   = 23336,
+    BG_TP_SPELL_ALLIANCE_FLAG_PICKED    = 61265,    // fake spell, does not exist but used as timer start event
+    BG_TP_SPELL_FOCUSED_ASSAULT         = 46392,
+    BG_TP_SPELL_BRUTAL_ASSAULT          = 46393
+};
+
+enum BG_TP_WorldStates
+{
+    BG_TP_FLAG_UNK_ALLIANCE       = 1545,
+    BG_TP_FLAG_UNK_HORDE          = 1546,
+    BG_TP_FLAG_CAPTURES_ALLIANCE  = 6101,
+    BG_TP_FLAG_CAPTURES_HORDE     = 6102,
+    BG_TP_FLAG_CAPTURES_MAX       = 6100,
+    BG_TP_FLAG_STATE_HORDE        = 6110,
+    BG_TP_FLAG_STATE_ALLIANCE     = 6111,
+    BG_TP_STATE_TIMER             = 6120,
+    BG_TP_STATE_TIMER_ACTIVE      = 6121
+};
+
+enum BG_TP_ObjectTypes
+{
+    BG_TP_OBJECT_DOOR_A_1        = 0,
+    BG_TP_OBJECT_DOOR_A_2        = 1,
+    BG_TP_OBJECT_DOOR_A_3        = 2,
+    BG_TP_OBJECT_DOOR_A_4        = 3,
+    BG_TP_OBJECT_DOOR_H_1        = 4,
+    BG_TP_OBJECT_DOOR_H_2        = 5,
+    BG_TP_OBJECT_DOOR_H_3        = 6,
+    BG_TP_OBJECT_DOOR_H_4        = 7,
+    BG_TP_OBJECT_A_FLAG          = 8,
+    BG_TP_OBJECT_H_FLAG          = 9,
+    BG_TP_OBJECT_SPEEDBUFF_1     = 10,
+    BG_TP_OBJECT_SPEEDBUFF_2     = 11,
+    BG_TP_OBJECT_REGENBUFF_1     = 12,
+    BG_TP_OBJECT_REGENBUFF_2     = 13,
+    BG_TP_OBJECT_BERSERKBUFF_1   = 14,
+    BG_TP_OBJECT_BERSERKBUFF_2   = 15,
+    BG_TP_OBJECT_MAX             = 16
+};
+
+enum BG_TP_ObjectEntry
+{
+    BG_OBJECT_DOOR_A_1_TP_ENTRY          = 206655,
+    BG_OBJECT_DOOR_A_2_TP_ENTRY          = 206654,
+    BG_OBJECT_DOOR_A_3_TP_ENTRY          = 206653,
+    BG_OBJECT_DOOR_A_4_TP_ENTRY          = 206653,
+    BG_OBJECT_DOOR_H_1_TP_ENTRY          = 208205,
+    BG_OBJECT_DOOR_H_2_TP_ENTRY          = 208206,
+    BG_OBJECT_DOOR_H_3_TP_ENTRY          = 208206,
+    BG_OBJECT_DOOR_H_4_TP_ENTRY          = 208207,
+    BG_OBJECT_A_FLAG_TP_ENTRY            = 179830,
+    BG_OBJECT_H_FLAG_TP_ENTRY            = 179831,
+    BG_OBJECT_A_FLAG_GROUND_TP_ENTRY     = 179785,
+    BG_OBJECT_H_FLAG_GROUND_TP_ENTRY     = 179786
+};
+
+enum BG_TP_FlagState
+{
+    BG_TP_FLAG_STATE_ON_BASE      = 1,
+    BG_TP_FLAG_STATE_ON_PLAYER    = 2,
+    BG_TP_FLAG_STATE_ON_GROUND    = 3
+};
+
+enum BG_TP_Graveyards
+{
+    TP_GRAVEYARD_FLAGROOM_ALLIANCE  = 1726,
+    TP_GRAVEYARD_FLAGROOM_HORDE     = 1727,
+    TP_GRAVEYARD_START_ALLIANCE     = 1729, // not used
+    TP_GRAVEYARD_START_HORDE        = 1728, // not used
+    TP_GRAVEYARD_MIDDLE_ALLIANCE    = 1749,
+    TP_GRAVEYARD_MIDDLE_HORDE       = 1750
+};
+
+enum BG_TP_CreatureTypes
+{
+    TP_SPIRIT_ALLIANCE    = 0,
+    TP_SPIRIT_HORDE       = 1,
+
+    BG_CREATURES_MAX_TP   = 2
+};
+
+enum BG_TP_Objectives
+{
+    TP_OBJECTIVE_CAPTURE_FLAG   = 42,
+    TP_OBJECTIVE_RETURN_FLAG    = 44
+};
+
+#define TP_EVENT_START_BATTLE   8563
+
+struct BattlegroundTPScore final : public BattlegroundScore
+{
+    friend class BattlegroundTP;
+
+protected:
+
+    BattlegroundTPScore(ObjectGuid playerGuid) : BattlegroundScore(playerGuid) { }
+
+    void UpdateScore(uint32 type, uint32 value) override
+    {
+        switch (type)
+        {
+        case SCORE_FLAG_CAPTURES:   // Flags captured
+            FlagCaptures += value;
+            break;
+        case SCORE_FLAG_RETURNS:    // Flags returned
+            FlagReturns += value;
+            break;
+        default:
+            BattlegroundScore::UpdateScore(type, value);
+            break;
+        }
+    }
+
+    void BuildObjectivesBlock(WorldPacket& data) final;
+
+    uint32 GetAttr1() const override { return FlagCaptures; }
+    uint32 GetAttr2() const override { return FlagReturns; }
+
+    uint32 FlagCaptures = 0;
+    uint32 FlagReturns = 0;
+};
+
+class BattlegroundTP : public Battleground
+{
+    friend class BattlegroundMgr;
+
+    public:
+        /* Construction */
+        BattlegroundTP();
+        ~BattlegroundTP();
+
+        /* inherited from BattlegroundClass */
+        void AddPlayer(Player* player) override;
+        void StartingEventCloseDoors() override;
+        void StartingEventOpenDoors() override;
+
+        /* BG Flags */
+        ObjectGuid GetFlagPickerGUID(int32 teamId) const override { return _flagKeepers[teamId];  }
+        void SetFlagPicker(ObjectGuid guid, TeamId teamId) { _flagKeepers[teamId] = guid; }
+        void RespawnFlagAfterDrop(TeamId teamId);
+        uint8 GetFlagState(TeamId teamId) const { return _flagState[teamId]; }
+
+        /* Battleground Events */
+        void EventPlayerDroppedFlag(Player* player) override;
+        void EventPlayerClickedOnFlag(Player* player, GameObject* gameObject) override;
+        void EventPlayerCapturedFlag(Player* player);
+
+        void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
+        void HandleAreaTrigger(Player* player, uint32 trigger) override;
+        void HandleKillPlayer(Player* player, Player* killer) override;
+        bool SetupBattleground() override;
+        void Init();
+        void EndBattleground(uint32 winnerTeamId) override;
+        WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
+
+        void UpdateFlagState(TeamId teamId, uint32 value);
+        bool UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor = true) override;
+        void SetDroppedFlagGUID(ObjectGuid guid, int32 teamId = -1) override { _droppedFlagGUID[teamId] = guid; }
+        ObjectGuid GetDroppedFlagGUID(TeamId teamId) const { return _droppedFlagGUID[teamId];}
+        void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
+
+        /* Scorekeeping */
+        void AddPoints(TeamId teamId, uint32 points) { m_TeamScores[teamId] += points; }
+
+        uint32 GetPrematureWinner() override;
+        uint32 GetMatchTime() const { return 1 + (BG_TP_TOTAL_GAME_TIME - GetStartTime()) / (MINUTE*IN_MILLISECONDS); }
+        uint32 GetAssaultSpellId() const;
+        void RemoveAssaultAuras();
+        void HandleFlagRoomCapturePoint(TeamId teamId);
+
+        /* Achievements*/
+        bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
+
+    private:
+        EventMap _bgEvents;
+
+        ObjectGuid _flagKeepers[2];
+        ObjectGuid _droppedFlagGUID[2];
+        uint8  _flagState[2];
+        TeamId _lastFlagCaptureTeam;
+        uint32 _reputationCapture;
+        uint32 _honorWinKills;
+        uint32 _honorEndKills;
+
+        void PostUpdateImpl(uint32 diff) override;
+};
+#endif

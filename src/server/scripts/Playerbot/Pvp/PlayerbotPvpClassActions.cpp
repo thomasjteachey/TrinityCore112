@@ -58,6 +58,31 @@ bool IsLifeTapSpell(SpellInfo const* spellInfo)
     return firstRank && firstRank->Id == 1454; // Life Tap (rank 1)
 }
 
+constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
+constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
+
+bool IsPlayerbotDispelSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+
+    switch (firstRankSpellId)
+    {
+        case 370:  // Purge
+        case 475:  // Remove Lesser Curse
+        case 527:  // Dispel Magic
+        case 2782: // Remove Curse
+        case 2893: // Abolish Poison
+        case 4987: // Cleanse
+            return true;
+        default:
+            return false;
+    }
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
@@ -93,7 +118,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -108,7 +133,7 @@ bool IsStrictlyOutdoorsForMount(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -1964,7 +1989,7 @@ void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellCo
     if (!bot || castResult == SPELL_CAST_OK || castResult == SPELL_FAILED_SPELL_IN_PROGRESS)
         return;
 
-    Map* map = bot->GetMap();
+    Map* map = bot->FindMap();
     if (!map)
         return;
 
@@ -2100,12 +2125,12 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
 
 void RepositionDruidAfterTravelFormRecovery(Player* player)
 {
-    if (!player || !player->GetMap() || !CanIssueFollowCommands(player))
+    if (!player || !player->FindMap() || !CanIssueFollowCommands(player))
         return;
 
     Unit* nearestEnemy = nullptr;
     float nearestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2632,6 +2657,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+    // Auto-repeat spells (wand Shoot / Auto Shot) should not be re-cast every
+    // AI tick when already channeling on the same target. Reissuing the spell
+    // repeatedly restarts the opener and causes "startup only" behavior where
+    // bots appear to idle after the start sound.
+    if (spellInfo->IsAutoRepeatRangedSpell())
+        if (Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+            if (SpellInfo const* activeAutoRepeatInfo = autoRepeat->GetSpellInfo())
+                if (activeAutoRepeatInfo->Id == resolvedSpellId &&
+                    autoRepeat->m_targets.GetUnitTargetGUID() == target->GetGUID())
+                    return true;
+
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
     // attempting non-instant casts.
@@ -2866,6 +2902,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
     if (context.spellId == 6940)
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
+
+    // Shared tactical cooldown for dispel/decurse effects. This keeps
+    // playerbots from spam-casting into protected or undispellable auras while
+    // allowing the next decision tick to fall through to another action.
+    if (IsPlayerbotDispelSpell(resolvedSpellId))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
 
     // Warlock curse openers are instant and can leave the bot with an idle
     // motion generator while still in combat against a moving target. Re-issue

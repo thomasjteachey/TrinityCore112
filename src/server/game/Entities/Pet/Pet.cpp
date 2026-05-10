@@ -92,6 +92,14 @@ void Pet::RemoveFromWorld()
     ///- Remove the pet from the accessor
     if (IsInWorld())
     {
+        // Pets bypass Minion::RemoveFromWorld because they are stored in the pet
+        // accessor rather than the creature accessor. Keep the minion ownership
+        // cleanup here so direct map/world unloads do not leave this pet in its
+        // owner's controlled list before Unit::RemoveFromWorld validates it.
+        if (Unit* owner = WorldObject::GetOwner())
+            if (GetOwnerGUID() == owner->GetGUID())
+                owner->SetMinion(this, false);
+
         ///- Don't call the function for Creature, normal mobs + totems go in a different storage
         Unit::RemoveFromWorld();
         GetMap()->GetObjectsStore().Remove<Pet>(GetGUID());

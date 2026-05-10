@@ -498,6 +498,7 @@ Player::~Player()
     delete m_achievementMgr;
     delete m_reputationMgr;
     delete _cinematicMgr;
+    _cinematicMgr = nullptr;
 
     sWorld->DecreasePlayerCount();
 }
@@ -1093,11 +1094,14 @@ void Player::Update(uint32 p_time)
     }
 
     // Update cinematic location, if 500ms have passed and we're doing a cinematic now.
-    _cinematicMgr->m_cinematicDiff += p_time;
-    if (_cinematicMgr->m_cinematicCamera && _cinematicMgr->m_activeCinematicCameraId && GetMSTimeDiffToNow(_cinematicMgr->m_lastCinematicCheck) > CINEMATIC_UPDATEDIFF)
+    if (_cinematicMgr)
     {
-        _cinematicMgr->m_lastCinematicCheck = GameTime::GetGameTimeMS();
-        _cinematicMgr->UpdateCinematicLocation(p_time);
+        _cinematicMgr->m_cinematicDiff += p_time;
+        if (_cinematicMgr->m_cinematicCamera && _cinematicMgr->m_activeCinematicCameraId && GetMSTimeDiffToNow(_cinematicMgr->m_lastCinematicCheck) > CINEMATIC_UPDATEDIFF)
+        {
+            _cinematicMgr->m_lastCinematicCheck = GameTime::GetGameTimeMS();
+            _cinematicMgr->UpdateCinematicLocation(p_time);
+        }
     }
 
     //used to implement delayed far teleports
@@ -9651,6 +9655,14 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             packet.Worldstates.emplace_back(3610, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_SHOW
         }
         break;
+    case 5005: // Twin Peaks
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_TP)
+            battleground->FillInitialWorldStates(packet);
+        break;
+    case 5449: // Battle for Gilneas
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BFG)
+            battleground->FillInitialWorldStates(packet);
+        break;
     case 4384: // Strand of the Ancients
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SA)
             battleground->FillInitialWorldStates(packet);
@@ -12610,6 +12622,10 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
             if (pProto && IsInCombat() && (pProto->Class == ITEM_CLASS_WEAPON || pProto->InventoryType == INVTYPE_RELIC) && m_weaponChangeTimer == 0)
             {
                 uint32 cooldownSpell = GetClass() == CLASS_ROGUE ? 6123 : 6119;
+
+                if (HasAura(89743))
+                    cooldownSpell = 89749;
+
                 SpellInfo const* spellProto = sSpellMgr->GetSpellInfo(cooldownSpell);
 
                 if (!spellProto)

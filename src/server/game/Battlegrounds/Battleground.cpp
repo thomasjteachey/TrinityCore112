@@ -70,6 +70,25 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
 
     return false;
 }
+
+ObjectGuid GetFirstNonVirtualMemberGuid(Group const* group)
+{
+    if (!group)
+        return ObjectGuid::Empty;
+
+    for (GroupReference const* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+    {
+        Player const* member = itr->GetSource();
+        if (!member)
+            continue;
+
+        WorldSession const* session = member->GetSession();
+        if (session && !session->IsVirtualSession())
+            return member->GetGUID();
+    }
+
+    return ObjectGuid::Empty;
+}
 }
 
 void BattlegroundScore::AppendToPacket(WorldPacket& data)
@@ -1246,6 +1265,7 @@ void Battleground::AddOrSetPlayerToCorrectBgGroup(Player* player, uint32 team)
 {
     ObjectGuid playerGuid = player->GetGUID();
     Group* group = GetBgRaid(team);
+    bool const joiningPlayerIsNonVirtual = player->GetSession() && !player->GetSession()->IsVirtualSession();
     if (!group)                                      // first player joined
     {
         group = new Group;
@@ -1269,6 +1289,20 @@ void Battleground::AddOrSetPlayerToCorrectBgGroup(Player* player, uint32 team)
                     group->ChangeLeader(playerGuid);
                     group->SendUpdate();
                 }
+        }
+    }
+
+    ObjectGuid const currentLeaderGuid = group->GetLeaderGUID();
+    Player const* currentLeader = ObjectAccessor::FindConnectedPlayer(currentLeaderGuid);
+    bool const currentLeaderIsNonVirtual = currentLeader && currentLeader->GetSession() && !currentLeader->GetSession()->IsVirtualSession();
+
+    if (!currentLeaderIsNonVirtual)
+    {
+        ObjectGuid const humanLeaderGuid = joiningPlayerIsNonVirtual ? playerGuid : GetFirstNonVirtualMemberGuid(group);
+        if (!humanLeaderGuid.IsEmpty() && humanLeaderGuid != currentLeaderGuid)
+        {
+            group->ChangeLeader(humanLeaderGuid);
+            group->SendUpdate();
         }
     }
 }

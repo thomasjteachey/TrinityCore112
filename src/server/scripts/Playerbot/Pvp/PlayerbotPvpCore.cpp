@@ -56,12 +56,35 @@ constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
+constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
+
+bool IsPlayerbotDispelSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+
+    switch (firstRankSpellId)
+    {
+        case 370:  // Purge
+        case 475:  // Remove Lesser Curse
+        case 527:  // Dispel Magic
+        case 2782: // Remove Curse
+        case 2893: // Abolish Poison
+        case 4987: // Cleanse
+            return true;
+        default:
+            return false;
+    }
+}
 
 bool IsHunterInRangedMode(Player const* player)
 {
@@ -172,6 +195,14 @@ float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
 float GetConfiguredMeleeRange() { return g_PvpCoreConfig.meleeRange; }
 float GetConfiguredCloseRange() { return g_PvpCoreConfig.closeRange; }
 float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
+
+float GetConfiguredCombatRange()
+{
+    float range = std::max(GetConfiguredLongRange(), GetConfiguredSpellRange());
+    range = std::max(range, GetConfiguredCloseRange());
+    range = std::max(range, GetConfiguredMeleeRange());
+    return std::max(range, 0.0f);
+}
 
 bool IsLifecycleGateEnabled(playerbot::PvpCoreConfig const& config)
 {
@@ -389,6 +420,13 @@ SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpell
 bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& decision, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget)
 {
     if (!player || !decision.spellId || !player->HasSpell(decision.spellId))
+        return false;
+
+    // Treat the shared playerbot dispel cooldown as an immediate castability
+    // failure so the same decision pass suppresses this dispel and selects the
+    // next available action instead of returning an idle cooldown attempt.
+    if (IsPlayerbotDispelSpell(decision.spellId) &&
+        playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken))
         return false;
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(decision.spellId);
@@ -617,7 +655,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -678,7 +716,7 @@ bool HasNearbyAttackableEnemyPlayer(Player const* player, float maxDistance)
     if (!player || !player->IsInWorld())
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return false;
 
@@ -709,7 +747,7 @@ bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
     if (mountSpellInfo->CheckLocation(player->GetMapId(), zoneId, areaId, player, false) != SPELL_CAST_OK)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return false;
 
@@ -787,9 +825,9 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     // combat, allow drink selection so they can recover instead of idling in a
     // perpetual "combat posture" loop.
     float const nearbyHostileCombatBoundary = std::max(GetConfiguredLongRange(), 35.0f);
-    if (player->GetMap())
+    if (player->FindMap())
     {
-        Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+        Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
         for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         {
             Player* candidate = itr->GetSource();
@@ -990,7 +1028,7 @@ bool HasActivePaladinSeal(Player const* player)
 
 ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance, bool includeSelf)
 {
-    if (!player || !player->GetMap() || !baseSpellId)
+    if (!player || !player->FindMap() || !baseSpellId)
         return ObjectGuid::Empty;
 
     auto isEligible = [&](Player* candidate)
@@ -1018,7 +1056,7 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
 
     Player* bestTarget = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1193,7 +1231,7 @@ uint8 GetArmorPriority(Unit const* unit)
 
 Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1215,7 +1253,7 @@ Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* prefer
         bestDistance = player->GetDistance(preferredTarget);
     }
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1237,7 +1275,7 @@ Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* prefer
 
 Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1254,7 +1292,7 @@ Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredT
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1274,7 +1312,7 @@ Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredT
 
 Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1290,7 +1328,7 @@ Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredT
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1310,7 +1348,7 @@ Unit const* SelectNearbyEnemyTarget(Player const* player, Unit const* preferredT
 
 Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* preferredTarget, float maxDistance, float minManaPct)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1330,7 +1368,7 @@ Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* prefer
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1350,11 +1388,11 @@ Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* prefer
 
 uint32 CountNearbyUnsNaredEnemies(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return 0;
 
     uint32 count = 0;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1455,12 +1493,12 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
 
 Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1489,7 +1527,7 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
 
 Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isCandidateUsable = [&](Unit const* candidate)
@@ -1507,7 +1545,7 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1527,10 +1565,10 @@ Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Un
 
 bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return false;
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1547,7 +1585,7 @@ bool AnyEnemyPolymorphed(Player const* player, float maxDistance)
 
 Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     SpellInfo const* polymorphInfo = sSpellMgr->GetSpellInfo(12826);
@@ -1555,7 +1593,7 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
 
     std::vector<Unit const*> preferredTargets;
     std::vector<Unit const*> fallbackTargets;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1591,7 +1629,7 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
 
 Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto hasDispellableCurse = [&](Unit const* target)
@@ -1606,7 +1644,7 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1635,7 +1673,7 @@ Unit const* SelectFriendlyCurseTarget(Player const* player, float maxDistance)
 
 Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isPriorityBlindTarget = [&](Unit const* candidate)
@@ -1657,7 +1695,7 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
 
     Unit const* bestSecondary = nullptr;
     float bestSecondaryDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1680,7 +1718,7 @@ Unit const* SelectRogueBlindTarget(Player const* player, Unit const* primaryTarg
 
 Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     SpellInfo const* fearInfo = sSpellMgr->GetSpellInfo(6215);
@@ -1700,7 +1738,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         return false;
     };
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1754,12 +1792,12 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
 
 Unit const* SelectEnemyClassTarget(Player const* player, uint8 classId, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1785,7 +1823,7 @@ Unit const* SelectEnemyClassTarget(Player const* player, uint8 classId, float ma
 
 Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, float maxHealthPct)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
@@ -1823,7 +1861,56 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
 
     evaluateCandidate(player);
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        evaluateCandidate(itr->GetSource());
+
+    return best ? best : selfCandidate;
+}
+
+Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, float maxHealthPct)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    Unit const* best = nullptr;
+    Unit const* selfCandidate = nullptr;
+    float bestHealth = 101.0f;
+    float bestDistance = std::numeric_limits<float>::max();
+
+    auto evaluateCandidate = [&](Unit const* candidate)
+    {
+        if (!candidate || !candidate->IsAlive())
+            return;
+        if (!IsCasterClass(candidate))
+            return;
+        if (!IsFriendlySupportTarget(player, candidate))
+            return;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return;
+
+        float const healthPct = candidate->GetHealthPct();
+        if (healthPct > maxHealthPct)
+            return;
+
+        float const distance = player->GetDistance(candidate);
+        if (candidate == player)
+        {
+            selfCandidate = player;
+            return;
+        }
+
+        if (healthPct < bestHealth || (std::abs(healthPct - bestHealth) < 0.1f && distance < bestDistance))
+        {
+            best = candidate;
+            bestHealth = healthPct;
+            bestDistance = distance;
+        }
+    };
+
+    evaluateCandidate(player);
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         evaluateCandidate(itr->GetSource());
 
@@ -1832,7 +1919,7 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
 
 Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelType, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto hasDispellableAura = [&](Unit const* target)
@@ -1847,7 +1934,7 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1876,7 +1963,7 @@ Unit const* SelectFriendlyDispelTarget(Player const* player, DispelType dispelTy
 
 Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
@@ -1887,7 +1974,7 @@ Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, floa
         (1 << MECHANIC_FREEZE) |
         (1 << MECHANIC_SNARE);
 
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1915,7 +2002,7 @@ Unit const* SelectEnemyNonBreakableCrowdControlTarget(Player const* player, floa
 
 Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType, Unit const* preferredTarget, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto hasDispellableAura = [&](Unit const* target)
@@ -1929,7 +2016,21 @@ Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType,
 
         DispelChargesList dispelList;
         target->GetDispellableAuraList(player, (1 << dispelType), dispelList);
-        return !dispelList.empty();
+        for (DispelableAura const& dispelable : dispelList)
+        {
+            Aura const* aura = dispelable.GetAura();
+            if (!aura)
+                continue;
+
+            // Sweeping Strikes should never be a valid offensive-dispel target
+            // for playerbots, even if external spell data marks it dispellable.
+            if (HasAuraFromSpellChain(target, 12328) && HasAuraFromSpellChain(target, aura->GetId()))
+                continue;
+
+            return true;
+        }
+
+        return false;
     };
 
     if (hasDispellableAura(preferredTarget))
@@ -1937,7 +2038,7 @@ Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType,
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -1957,7 +2058,7 @@ Unit const* SelectEnemyDispelTarget(Player const* player, DispelType dispelType,
 
 Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance, float maxManaPct)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     Unit const* best = nullptr;
@@ -1989,7 +2090,7 @@ Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance,
     };
 
     evaluateCandidate(player);
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
         evaluateCandidate(itr->GetSource());
 
@@ -1998,7 +2099,7 @@ Unit const* SelectFriendlyLowManaTarget(Player const* player, float maxDistance,
 
 Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return nullptr;
 
     auto isSnared = [](Unit const* target)
@@ -2014,7 +2115,7 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 
     Unit const* best = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2040,11 +2141,11 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 
 uint32 CountNearbyEnemies(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return 0;
 
     uint32 count = 0;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2062,11 +2163,11 @@ uint32 CountNearbyEnemies(Player const* player, float maxDistance)
 
 uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
 {
-    if (!player || !player->GetMap())
+    if (!player || !player->FindMap())
         return 0;
 
     uint32 count = 0;
-    Map::PlayerList const& mapPlayers = player->GetMap()->GetPlayers();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2201,7 +2302,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, GetConfiguredMeleeRange());
     float const manaPct = player->GetPowerPct(POWER_MANA);
-    Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
+    Unit const* cursedTarget = (!dispelThrottleActive && IsSpellReady(player, 475)) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
     Unit const* castingTarget = IsSpellReady(player, 2139) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* polymorphTarget =
         (IsSpellReady(player, 12826) && !AnyEnemyPolymorphed(player, 40.0f)) ? SelectPolymorphTarget(player, target, 30.0f) : nullptr;
@@ -2250,13 +2352,14 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         return decision;
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
-    Unit const* debuffedAlly = IsSpellReady(player, 988) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
-    Unit const* enemyBuffedTarget = (IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
+    Unit const* debuffedAlly = (!dispelThrottleActive && IsSpellReady(player, 988)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
+    Unit const* enemyBuffedTarget = (!dispelThrottleActive && IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
     Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f) : nullptr;
     Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
     Unit const* emergencyLowAlly = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, 15.0f, 25.0f) : nullptr;
-    Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
+    Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyCasterTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
     Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
     Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
     Unit const* rogueTarget = IsSpellReady(player, 27605) ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr;
@@ -2273,7 +2376,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             { "priest dispel magic enemy", "prioritize dispelling magic buffs from enemies", 988, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyBuffedTarget ? enemyBuffedTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, shieldTarget && !HasAuraFromSpellChain(shieldTarget, 10901), 44.0f,
             { "priest power word shield ally", "protect ally below 50 percent health", 10901, shieldTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, shieldTarget ? shieldTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, casterAlly && casterAlly->GetPowerType() == POWER_MANA, 30.0f,
+        AddDecisionCandidate(candidates, casterAlly, 30.0f,
             { "priest power infusion", "boost nearby caster throughput in combat", 10060, casterAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, casterAlly ? casterAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(10938) && IsSpellReady(player, 10938), 14.0f,
             { "priest power word fortitude", "maintain fortitude out of combat", 10938, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -2322,8 +2425,9 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target)
         !player->IsPolymorphed();
 
     Unit const* lowManaAlly = IsSpellReady(player, 29166) ? SelectFriendlyLowManaTarget(player, 40.0f, 10.0f) : nullptr;
-    Unit const* cursedTarget = IsSpellReady(player, 2782) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
-    Unit const* poisonedTarget = IsSpellReady(player, 2893) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
+    Unit const* cursedTarget = (!dispelThrottleActive && IsSpellReady(player, 2782)) ? SelectFriendlyDispelTarget(player, DISPEL_CURSE, 40.0f) : nullptr;
+    Unit const* poisonedTarget = (!dispelThrottleActive && IsSpellReady(player, 2893)) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f) : nullptr;
     Unit const* swiftmendTarget = IsSpellReady(player, 18562) ? SelectFriendlyHealthTarget(player, 40.0f, 50.0f) : nullptr;
     Unit const* emergencyLowTarget = (IsSpellReady(player, 17116) && IsSpellReady(player, 25297)) ? SelectFriendlyHealthTarget(player, 40.0f, 25.0f) : nullptr;
     Unit const* emergencyTarget = IsSpellReady(player, 25297) ? SelectFriendlyHealthTarget(player, 40.0f, 50.0f) : nullptr;
@@ -2378,7 +2482,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
 
     Unit const* emergencyLowAlly = SelectFriendlyHealthTarget(player, 15.0f, 25.0f);
     Unit const* cleanseTarget = nullptr;
-    if (IsSpellReady(player, 4987))
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
+    if (!dispelThrottleActive && IsSpellReady(player, 4987))
     {
         cleanseTarget = SelectFriendlyDispelTarget(player, DISPEL_POISON, 40.0f);
         if (!cleanseTarget)
@@ -2621,6 +2726,8 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
     if (!HasHostileTarget(player, target))
         return decision;
 
+    bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
+
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
     AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10432) && IsSpellReady(player, 10432), 34.0f,
@@ -2644,7 +2751,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target)
         { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, IsSpellReady(player, 370), 40.0f,
+    AddDecisionCandidate(candidates, !dispelThrottleActive && IsSpellReady(player, 370), 40.0f,
         { "shaman purge", "strip enemy magical effects by default", 370, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 15208), 39.0f,
         { "shaman lightning bolt", "fallback ranged damage cast", 15208, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -2905,7 +3012,7 @@ namespace playerbot
 {
 uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
 {
-    if (!player || !player->InBattleground() || !player->GetMap())
+    if (!player || !player->InBattleground() || !player->FindMap())
         return 0;
 
     Battleground const* battleground = player->GetBattleground();
@@ -2915,7 +3022,7 @@ uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
     uint32 const botBgTeam = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
     uint32 humanCount = 0;
 
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player const* teammate = itr->GetSource();
@@ -3136,6 +3243,38 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (!selectedTargetByGuid || !HasHostileTarget(player, selectedTargetByGuid));
     ObjectGuid const selectedAllyGuid = SelectAllyTargetGuid(player);
     bool const hasValidAllyTarget = resolveTargetByGuid(selectedAllyGuid) != nullptr;
+
+    // Reference parity guard: never allow mounted state indoors. In addition,
+    // while in combat always force mount-state correction immediately. When a
+    // mounted bot is simply traveling, do not let class spell selection break
+    // the mount unless an enemy has actually entered the combat envelope.
+    bool const outdoors = IsEffectivelyOutdoors(player);
+    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
+    if (player->IsMounted())
+    {
+        if (sustainedIndoorMounted || player->IsInCombat())
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
+            context.actionName = "check mount state";
+            context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
+            context.shouldExecute = true;
+            return context;
+        }
+
+        if (hasInvalidSelectedTarget)
+        {
+            context.movementDirective = PvpClassSpellContext::MovementDirective::DropInvalidTarget;
+            context.actionName = "drop target";
+            context.reason = "invalid target";
+            context.shouldExecute = true;
+            context.movementTargetGuid = selectedTargetGuid;
+            return context;
+        }
+
+        if (!HasNearbyAttackableEnemyPlayer(player, GetConfiguredCombatRange()))
+            return context;
+    }
+
     bool const criticalLowMana = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
     // Hard-priority mana preservation policy: below 10% mana, disengage from
@@ -3193,19 +3332,6 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     else
     {
         ResetCombatNoTargetTicks(player);
-    }
-
-    // Reference parity guard: never allow mounted state indoors. In addition,
-    // while in combat always force mount-state correction immediately.
-    bool const outdoors = IsEffectivelyOutdoors(player);
-    bool const sustainedIndoorMounted = player->IsMounted() && ShouldForceIndoorDismount(player, outdoors);
-    if (player->IsMounted() && (sustainedIndoorMounted || player->IsInCombat()))
-    {
-        context.movementDirective = PvpClassSpellContext::MovementDirective::CheckMountState;
-        context.actionName = "check mount state";
-        context.reason = player->IsInCombat() ? "mounted in combat" : "mounted indoors";
-        context.shouldExecute = true;
-        return context;
     }
 
     if (hasInvalidSelectedTarget)

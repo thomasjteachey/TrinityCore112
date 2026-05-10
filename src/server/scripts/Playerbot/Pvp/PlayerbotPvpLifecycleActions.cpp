@@ -35,6 +35,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSplineInit.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
 #include "Item.h"
@@ -271,7 +272,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     if (!player)
         return false;
 
-    Map const* map = player->GetMap();
+    Map const* map = player->FindMap();
     if (!map)
         return player->IsOutdoors();
 
@@ -418,9 +419,9 @@ bool IsCrowdControlledForAction(Player const* player)
     return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
-bool TryPursueNearestEnemyInWarsong(Player* player)
+bool TryPursueNearestEnemyInBattleground(Player* player)
 {
-    if (!player || !IsWarsongGulch(player))
+    if (!player || !player->InBattleground())
         return false;
 
     float const combatEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
@@ -432,27 +433,15 @@ bool TryPursueNearestEnemyInWarsong(Player* player)
         return false;
 
     bool chaseIssued = MoveTowardUnit(player, nearestEnemy, combatEngageDistance);
-    if (!chaseIssued)
+    if (!chaseIssued && !player->isMoving())
     {
         // If direct pursuit did not issue movement, clear stale motion so a new
-        // path request can be accepted even when the bot is parked at gate edge.
+        // navmesh-segmented path request can be accepted. The MovePoint helper
+        // still validates battleground navigation and refuses no-path segments.
         player->GetMotionMaster()->Clear();
-
-        PathGenerator path(player);
-        bool const hasPath = path.CalculatePath(
-            nearestEnemy->GetPositionX(), nearestEnemy->GetPositionY(), nearestEnemy->GetPositionZ(), false);
-
-        if (!hasPath || (path.GetPathType() & PATHFIND_NOPATH))
-        {
-            // Gate/fence geometry can block direct first-segment pursuit from
-            // the spawn berm. Nudge toward midfield, then resume enemy pursuit.
-            static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-            chaseIssued = IssueMovePointThrottled(player, midPoint, 8.0f, 700) || player->isMoving();
-        }
-
-        if (!chaseIssued)
-            chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 2000) || player->isMoving();
+        chaseIssued = IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 30.0f, 700) || player->isMoving();
     }
+
     return chaseIssued;
 }
 
@@ -500,120 +489,6 @@ bool MoveToClosestBattlegroundGraveyard(Player* player)
     }
 
     return false;
-}
-
-bool TryJumpOffWarsongGraveyard(Player* player)
-{
-    if (!player || !IsWarsongGulch(player))
-        return false;
-
-    struct PostResurrectRouteState
-    {
-        uint32 battlegroundInstanceId = 0;
-        bool wasAlive = true;
-        bool active = false;
-        uint8 phase = 0; // 0 = move to tip, 1 = run forward burst, 2 = move to mid
-        uint32 forwardBurstEndMs = 0;
-    };
-
-    static std::unordered_map<uint64, PostResurrectRouteState> stateByGuid;
-    PostResurrectRouteState& state = stateByGuid[player->GetGUID().GetRawValue()];
-
-    Battleground* battleground = player->GetBattleground();
-    if (!battleground)
-        return false;
-
-    if (state.battlegroundInstanceId != battleground->GetInstanceID())
-    {
-        state = {};
-        state.battlegroundInstanceId = battleground->GetInstanceID();
-        state.wasAlive = player->IsAlive();
-    }
-
-    if (!player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-    {
-        state.wasAlive = false;
-        state.active = false;
-        return false;
-    }
-
-    bool const justResurrected = !state.wasAlive;
-    state.wasAlive = true;
-    if (justResurrected)
-    {
-        state.active = true;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
-    }
-
-    if (!state.active)
-        return false;
-
-    static Position const midPoint(1258.810181f, 1463.801758f, 312.229401f, 0.0f);
-    uint32 const nowMs = GameTime::GetGameTimeMS();
-
-    // Replace rigid graveyard jump anchors with navmesh-driven pursuit:
-    // build movement toward the nearest enemy immediately after resurrection
-    // and keep issuing path segments for a short bootstrap window so bots do
-    // not tunnel through floor/wall geometry while leaving spawn platforms.
-    if (state.phase == 0)
-    {
-        if (!state.forwardBurstEndMs)
-            state.forwardBurstEndMs = nowMs + 7000;
-        state.phase = 1;
-    }
-
-    if (state.phase == 1)
-    {
-        bool issuedMovement = false;
-        TeamId const teamId = ResolveBotTeamId(player);
-        Position const gateStagingPoint = (teamId == TEAM_HORDE)
-            ? Position(1066.0946404f, 1380.843994f, 340.612305f, 0.0f)
-            : Position(1406.597412f, 1553.099121f, 343.533295f, 0.0f);
-        Position const gateExitPoint = (teamId == TEAM_HORDE)
-            ? Position(978.20f, 1427.10f, 335.20f, 0.0f)
-            : Position(1498.60f, 1484.30f, 340.20f, 0.0f);
-
-        // Explicit egress routing near the spawn gate. This keeps bots from
-        // parking against the fence/gate line when direct nearest-enemy
-        // pathing fails to build a viable first segment from spawn.
-        if (!player->IsWithinDist3d(gateStagingPoint.GetPositionX(), gateStagingPoint.GetPositionY(), gateStagingPoint.GetPositionZ(), 5.0f))
-        {
-            issuedMovement = IssueMovePointThrottled(player, gateStagingPoint, 2.0f, 400);
-            if (issuedMovement)
-                return true;
-        }
-
-        if (!player->IsWithinDist3d(gateExitPoint.GetPositionX(), gateExitPoint.GetPositionY(), gateExitPoint.GetPositionZ(), 8.0f))
-        {
-            issuedMovement = IssueMovePointThrottled(player, gateExitPoint, 2.0f, 400);
-            if (issuedMovement)
-                return true;
-        }
-
-        if (Player* nearestEnemy = playerbot::FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-        {
-            issuedMovement = MoveTowardUnit(player, nearestEnemy, 20.0f) ||
-                IssueMovePointThrottled(player, nearestEnemy->GetPosition(), 12.0f, 500);
-            if (issuedMovement)
-                return true;
-        }
-
-        issuedMovement = IssueMovePointThrottled(player, midPoint, 4.0f, 500);
-        if (nowMs >= state.forwardBurstEndMs)
-            state.phase = 2;
-        return issuedMovement;
-    }
-
-    if (state.phase == 2)
-    {
-        state.active = false;
-        state.phase = 0;
-        state.forwardBurstEndMs = 0;
-        return false;
-    }
-
-    return true;
 }
 
 bool IsLifecycleGateEnabled()
@@ -758,6 +633,103 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
     return (pathType & forbiddenPathFlags) != 0;
 }
 
+constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
+constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
+constexpr float PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP = 6.0f;
+constexpr uint32 PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS = 4000;
+
+bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
+{
+    if (!player || points.size() < 2)
+        return false;
+
+    G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+    float traversedDistance = 0.0f;
+
+    for (std::size_t i = 1; i < points.size(); ++i)
+    {
+        G3D::Vector3 const& point = points[i];
+        G3D::Vector3 const delta = point - previous;
+        float const segmentLength = delta.length();
+        if (segmentLength <= 0.01f)
+        {
+            previous = point;
+            continue;
+        }
+
+        if (traversedDistance + segmentLength >= PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE)
+        {
+            float const fraction = (PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE - traversedDistance) / segmentLength;
+            G3D::Vector3 const selected = previous + delta * fraction;
+            segmentDestination.Relocate(selected.x, selected.y, selected.z, orientation);
+            return true;
+        }
+
+        traversedDistance += segmentLength;
+        previous = point;
+    }
+
+    G3D::Vector3 const& finalPoint = points.back();
+    segmentDestination.Relocate(finalPoint.x, finalPoint.y, finalPoint.z, orientation);
+    return player->GetDistance(segmentDestination) > 0.5f;
+}
+
+bool TryBuildBattlegroundFallShortcutDestination(Player* player, Position const& destination, Position& fallDestination)
+{
+    if (!player || !player->InBattleground() || player->IsFlying() || player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING))
+        return false;
+
+    if (player->IsFalling())
+        return false;
+
+    static std::unordered_map<uint64, uint32> nextAllowedFallShortcutMsByGuid;
+    uint64 const botGuid = player->GetGUID().GetRawValue();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32 const nextAllowedMs = nextAllowedFallShortcutMsByGuid[botGuid];
+    if (nowMs < nextAllowedMs)
+        return false;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 2.0f)
+        return false;
+
+    std::array<float, 5> const probeDistances =
+    {
+        12.0f,
+        20.0f,
+        30.0f,
+        45.0f,
+        60.0f
+    };
+
+    for (float probeDistance : probeDistances)
+    {
+        float const cappedDistance = std::min(planarDistance, probeDistance);
+        if (cappedDistance < 1.0f)
+            continue;
+
+        float const fraction = cappedDistance / planarDistance;
+        float const probeX = player->GetPositionX() + dx * fraction;
+        float const probeY = player->GetPositionY() + dy * fraction;
+        float probeZ = player->GetPositionZ();
+        player->UpdateAllowedPositionZ(probeX, probeY, probeZ);
+
+        if (player->GetPositionZ() - probeZ < PLAYERBOT_BG_MIN_FALL_SHORTCUT_DROP)
+            continue;
+
+        if (!player->IsWithinLOS(probeX, probeY, probeZ + 1.0f))
+            continue;
+
+        fallDestination.Relocate(probeX, probeY, probeZ, destination.GetOrientation());
+        nextAllowedFallShortcutMsByGuid[botGuid] = nowMs + PLAYERBOT_BG_FALL_SHORTCUT_COOLDOWN_MS;
+        return true;
+    }
+
+    return false;
+}
+
 bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safeDestination, Position& segmentDestination, PathType* resolvedPathType = nullptr)
 {
     if (!player)
@@ -768,10 +740,10 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         Position const collisionSafeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        // Allow long battleground routes (including spawn-to-midfield/target
-        // pursuit) to be generated in one request instead of forcing very
-        // short local segments that can stall at gate/fence bottlenecks.
-        path.SetPathLengthLimit(350.0f);
+        // Allow longer battleground route segments so bots can commit to
+        // meaningful navmesh progress toward distant enemies instead of
+        // repeatedly selecting tiny local hops that catch on terrain.
+        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
         bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
         Movement::PointsArray points = path.GetPath();
@@ -780,7 +752,7 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(350.0f);
+            retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
             bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
             if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
@@ -796,10 +768,8 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
             return false;
 
         bool haveResolvedDestination = false;
-        if (points.size() > 1)
+        if (BuildNavPathSegmentDestination(player, points, collisionSafeDestination.GetOrientation(), resolvedDestination))
         {
-            G3D::Vector3 const& lastPoint = points.back();
-            resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, collisionSafeDestination.GetOrientation());
             haveResolvedDestination = true;
         }
         else
@@ -841,14 +811,16 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
     if (planarDistance < 1.0f)
         return false;
 
-    std::array<float, 6> const probeDistances =
+    std::array<float, 8> const probeDistances =
     {
-        24.0f,
-        18.0f,
+        80.0f,
+        60.0f,
+        45.0f,
+        30.0f,
+        20.0f,
         12.0f,
         8.0f,
-        5.0f,
-        3.0f
+        5.0f
     };
 
     PathType probePathType = PathType(0);
@@ -944,6 +916,9 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+    if (player->InBattleground() && botCurrentlyMoving && (player->IsFalling() || currentMovement == EFFECT_MOTION_TYPE))
+        return true;
+
     if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
     {
         motionMaster->Clear();
@@ -967,20 +942,36 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        Position segmentDestination;
-        PathType pathType = PathType(0);
-        if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
+        Position fallDestination;
+        if (TryBuildBattlegroundFallShortcutDestination(player, safeDestination, fallDestination))
         {
+            motionMaster->LaunchMoveSpline([fallDestination](Movement::MoveSplineInit& init)
+            {
+                init.MoveTo(fallDestination.GetPositionX(), fallDestination.GetPositionY(), fallDestination.GetPositionZ(), false);
+                init.SetFall();
+            }, 0, MOTION_PRIORITY_NORMAL, EFFECT_MOTION_TYPE);
+            issuedDestination = fallDestination;
             EmitBattlegroundGmDebug(player,
-                "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
-            return false;
+                "movepoint=fall-shortcut drop=" + std::to_string(int32(player->GetPositionZ() - fallDestination.GetPositionZ())) +
+                " segDist=" + std::to_string(int32(player->GetDistance(fallDestination))), 1000);
         }
+        else
+        {
+            Position segmentDestination;
+            PathType pathType = PathType(0);
+            if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
+            {
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
+                return false;
+            }
 
-        motionMaster->MovePoint(0, segmentDestination, true);
-        issuedDestination = segmentDestination;
-        EmitBattlegroundGmDebug(player,
-            "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
-            " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+            motionMaster->MovePoint(0, segmentDestination, true);
+            issuedDestination = segmentDestination;
+            EmitBattlegroundGmDebug(player,
+                "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
+                " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
+        }
     }
     else
     {
@@ -1066,6 +1057,12 @@ bool QueuePlayer(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
     if (!bracketEntry)
         return false;
+
+    // Playerbots should never request a fixed Scarlet Chapel side. Only the custom queue NPC
+    // should set ALLIANCE/HORDE explicitly. Clear any stale raw override before AddGroup so
+    // BattlegroundQueue can assign a synthetic balanced side.
+    if (bgTypeId == BATTLEGROUND_SCM)
+        player->SetBGTeam(0);
 
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
     GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
@@ -1668,12 +1665,12 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     }
 
     float const distanceToTarget = player->GetDistance(target);
-    if (IsWarsongGulch(player) && distanceToTarget > desiredDistance)
+    if (player->InBattleground() && distanceToTarget > desiredDistance)
     {
         Position destination = target->GetPosition();
         bool const moved = IssueMovePointThrottled(player, destination, 30.0f, 2000);
         EmitBattlegroundGmDebug(player,
-            "move-toward-unit mode=segmented target=" + target->GetName() +
+            "move-toward-unit mode=battleground-segmented target=" + target->GetName() +
             " dist=" + std::to_string(int32(distanceToTarget)) +
             " issued=" + std::to_string(moved ? 1 : 0), 1200);
         return moved || player->isMoving();
@@ -1682,17 +1679,6 @@ bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
     CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
     if (!player->IsWithinLOSInMap(target))
         return TryRecoverLineOfSight(player, target, profile, "move-toward-unit");
-
-    // WSG should not avoid fall damage while pursuing enemies.
-    if (IsWarsongGulch(player) &&
-        target->GetPositionZ() + 6.0f < player->GetPositionZ() &&
-        player->IsWithinLOS(target->GetPositionX(), target->GetPositionY(), target->GetPositionZ()))
-    {
-        if (!CanIssueMovementCommand(player, 500))
-            return false;
-        ClearEatDrinkAurasForMovement(player);
-        return IssueMovePointThrottled(player, target->GetPosition(), 30.0f, 500);
-    }
 
     if (!player->IsWithinDistInMap(target, desiredDistance))
     {
@@ -1709,7 +1695,7 @@ std::unordered_map<uint64, uint32> g_WsgReturnAttemptNotBeforeMsByGuid;
 
 GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
 {
-    if (!player || !bgWs || !player->GetMap())
+    if (!player || !bgWs || !player->FindMap())
         return nullptr;
 
     TeamId const botBgTeam = ResolveBotTeamId(player);
@@ -1720,18 +1706,18 @@ GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
     if (droppedFlagGuid.IsEmpty())
         return nullptr;
 
-    return player->GetMap()->GetGameObject(droppedFlagGuid);
+    return player->FindMap()->GetGameObject(droppedFlagGuid);
 }
 
 bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag, float veryCloseDistance)
 {
-    if (!player || !droppedFlag || !player->GetMap())
+    if (!player || !droppedFlag || !player->FindMap())
         return false;
 
     TeamId const botBgTeam = ResolveBotTeamId(player);
     float const botDistance = player->GetDistance(droppedFlag);
 
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player* teammate = itr->GetSource();
@@ -1756,11 +1742,11 @@ bool HumanTeammateNearDroppedFlag(Player* player, GameObject const* droppedFlag,
 
 bool BattlegroundHasAnyRealHumanPlayers(Player const* player)
 {
-    if (!player || !player->InBattleground() || !player->GetMap())
+    if (!player || !player->InBattleground() || !player->FindMap())
         return false;
 
     uint32 const battlegroundId = player->GetBattlegroundId();
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player const* participant = itr->GetSource();
@@ -2090,7 +2076,7 @@ bool TryReturnDroppedFriendlyFlagWithHumanPriority(Player* player)
 
 Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers, uint32* attackableEnemies)
 {
-    if (!player || !player->InBattleground() || !player->GetMap())
+    if (!player || !player->InBattleground() || !player->FindMap())
         return nullptr;
 
     Battleground* battleground = player->GetBattleground();
@@ -2106,7 +2092,7 @@ Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, ui
     float nearestDistance = std::numeric_limits<float>::max();
     Player* nearestEnemy = nullptr;
 
-    Map::PlayerList const& players = player->GetMap()->GetPlayers();
+    Map::PlayerList const& players = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
     {
         Player* candidate = itr->GetSource();
@@ -2832,14 +2818,12 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
 
     if (player->IsInCombat())
         return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
-    if (TryJumpOffWarsongGraveyard(player))
+
+    if (TryPursueNearestEnemyInBattleground(player))
         return true;
 
-    if (TryPursueNearestEnemyInWarsong(player))
-        return true;
-
-    // Evaluate combat/WSG post-res logic before this guard so stale movement
-    // flags do not suppress target pursuit immediately after graveyard rez.
+    // Evaluate target pursuit before this guard so stale movement flags do not
+    // suppress nearest-enemy pathing after battleground resurrection.
     if (player->isMoving())
         return false;
 
@@ -2915,25 +2899,10 @@ bool BattlegroundTacticalActions::CheckObjectivePrimitive(Player* player, Battle
     if (!player || !player->InBattleground())
         return false;
 
-    if (IsWarsongGulch(player))
-    {
-        if (EngageNearestEnemyPlayer(player, 60.0f))
-            return true;
-
-        if (TryPursueNearestEnemyInWarsong(player) || MoveToClosestBattlegroundGraveyard(player))
-            return true;
-
-        return false;
-    }
-
-    float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
-    if (EngageNearestEnemyPlayer(player, engageDistance))
+    if (TryPursueNearestEnemyInBattleground(player))
         return true;
 
-    if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-        return MoveTowardUnit(player, nearestEnemy, 20.0f);
-
-    return false;
+    return MoveToClosestBattlegroundGraveyard(player);
 }
 
 bool BattlegroundTacticalActions::ResetObjectiveForcePrimitive(Player* player)

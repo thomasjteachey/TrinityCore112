@@ -76,6 +76,19 @@ bool HasVirtualPlayerOnTeam(Battleground* battleground, uint32 team)
     return false;
 }
 
+bool AddForcedGroupToSelectionPool(BattlegroundQueue::SelectionPool selectionPools[PVP_TEAMS_COUNT], GroupQueueInfo* ginfo,
+    Battleground* bg, int32 hordeFree, int32 allianceFree)
+{
+    TeamId const forcedTeamIndex = ginfo->Team == HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+    int32 const freeSlots = ginfo->Team == HORDE ? hordeFree : allianceFree;
+    uint32 desiredCount = freeSlots > 0 ? uint32(freeSlots) : 0u;
+
+    if (!desiredCount && GroupHasRealPlayerInvitee(ginfo) && HasVirtualPlayerOnTeam(bg, ginfo->Team))
+        desiredCount = 1;
+
+    return selectionPools[forcedTeamIndex].AddGroup(ginfo, desiredCount, forcedTeamIndex);
+}
+
 bool RemoveOneVirtualPlayerFromTeam(Battleground* battleground, uint32 team)
 {
     if (!battleground)
@@ -220,6 +233,7 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     ginfo->JoinTime = GameTime::GetGameTimeMS();
     ginfo->RemoveInviteTime = 0;
     ginfo->Team = leader->GetTeam();
+    ginfo->IsForcedTeam = false;
     ginfo->ArenaTeamRating = ArenaRating;
     ginfo->ArenaMatchmakerRating = MatchmakerRating;
     ginfo->PreviousOpponentsTeamId = PreviousOpponentsArenaTeamId;
@@ -229,7 +243,13 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
     // For battlegrounds we use synthetic queue sides instead of the player's real faction.
     // This keeps the first waiting team on one side and pushes the next waiting team to the
     // opposite side so cross-faction queues can always produce a match.
-    if (!ArenaType)
+    //
+    // Scarlet Chapel may explicitly request a side by temporarily setting the raw BG team override
+    // before queueing. Do not use Player::GetBGTeam() here: it falls back to the player's real
+    // faction when no override is set, which would make every SCM queue look forced.
+    uint32 const explicitBgTeam = (BgTypeId == BATTLEGROUND_SCM) ? leader->GetBGTeamOverride() : 0;
+    bool const hasForcedQueueTeam = explicitBgTeam == ALLIANCE || explicitBgTeam == HORDE;
+    if (!ArenaType && !hasForcedQueueTeam)
     {
         uint32 alliancePlayers = 0;
         uint32 hordePlayers = 0;
@@ -295,6 +315,11 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group* grp, Battlegr
                 break;
             }
         }
+    }
+    else if (hasForcedQueueTeam)
+    {
+        ginfo->Team = explicitBgTeam;
+        ginfo->IsForcedTeam = true;
     }
 
     ginfo->Players.clear();
@@ -684,26 +709,34 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
 
         uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
         uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
-            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
-
-        if (addToHorde)
+        if ((*Ali_itr)->IsForcedTeam)
         {
-            uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
-            if (!hordeDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
-                hordeDesired = 1;
-
-            if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeDesired, TEAM_HORDE))
+            if (!AddForcedGroupToSelectionPool(m_SelectionPools, *Ali_itr, bg, hordeFree, aliFree))
                 break;
         }
         else
         {
-            uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
-            if (!allianceDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
-                allianceDesired = 1;
+            bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+                (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
 
-            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), allianceDesired, TEAM_ALLIANCE))
-                break;
+            if (addToHorde)
+            {
+                uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
+                if (!hordeDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
+                    hordeDesired = 1;
+
+                if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Ali_itr), hordeDesired, TEAM_HORDE))
+                    break;
+            }
+            else
+            {
+                uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
+                if (!allianceDesired && GroupHasRealPlayerInvitee(*Ali_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
+                    allianceDesired = 1;
+
+                if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Ali_itr), allianceDesired, TEAM_ALLIANCE))
+                    break;
+            }
         }
         ++Ali_itr;
     }
@@ -726,26 +759,34 @@ void BattlegroundQueue::FillPlayersToBG(Battleground* bg, BattlegroundBracketId 
 
         uint32 aliCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_ALLIANCE].size();
         uint32 hordeCount = m_QueuedGroups[bracket_id][BG_QUEUE_NORMAL_HORDE].size();
-        bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
-            (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
-
-        if (addToHorde)
+        if ((*Horde_itr)->IsForcedTeam)
         {
-            uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
-            if (!hordeDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
-                hordeDesired = 1;
-
-            if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeDesired, TEAM_HORDE))
+            if (!AddForcedGroupToSelectionPool(m_SelectionPools, *Horde_itr, bg, hordeFree, aliFree))
                 break;
         }
         else
         {
-            uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
-            if (!allianceDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
-                allianceDesired = 1;
+            bool addToHorde = (projectedHordeInGame < projectedAliInGame) ||
+                (projectedHordeInGame == projectedAliInGame && roll_chance_i(50));
 
-            if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), allianceDesired, TEAM_ALLIANCE))
-                break;
+            if (addToHorde)
+            {
+                uint32 hordeDesired = hordeFree > 0 ? uint32(hordeFree) : 0u;
+                if (!hordeDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, HORDE))
+                    hordeDesired = 1;
+
+                if (!m_SelectionPools[TEAM_HORDE].AddGroup((*Horde_itr), hordeDesired, TEAM_HORDE))
+                    break;
+            }
+            else
+            {
+                uint32 allianceDesired = aliFree > 0 ? uint32(aliFree) : 0u;
+                if (!allianceDesired && GroupHasRealPlayerInvitee(*Horde_itr) && HasVirtualPlayerOnTeam(bg, ALLIANCE))
+                    allianceDesired = 1;
+
+                if (!m_SelectionPools[TEAM_ALLIANCE].AddGroup((*Horde_itr), allianceDesired, TEAM_ALLIANCE))
+                    break;
+            }
         }
         ++Horde_itr;
     }

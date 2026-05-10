@@ -586,8 +586,8 @@ void Aura::_ApplyForTarget(Unit* target, Unit* caster, AuraApplication* auraApp)
 void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraApp)
 {
     ASSERT(target);
-    ASSERT(auraApp->GetRemoveMode());
     ASSERT(auraApp);
+    ASSERT(auraApp->GetRemoveMode());
 
     ApplicationMap::iterator itr = m_applications.find(target->GetGUID());
 
@@ -595,8 +595,8 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
     if (itr == m_applications.end())
     {
         TC_LOG_ERROR("spells", "Aura::_UnapplyForTarget, target: {}, caster: {}, spell:{} was not found in owners application map!",
-        target->GetGUID().ToString(), caster ? caster->GetGUID().ToString() : "0", auraApp->GetBase()->GetSpellInfo()->Id);
-        ABORT();
+            target->GetGUID().ToString(), caster ? caster->GetGUID().ToString() : "0", auraApp->GetBase()->GetSpellInfo()->Id);
+        return;
     }
 
     // aura has to be already applied
