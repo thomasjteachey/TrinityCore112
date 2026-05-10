@@ -950,7 +950,7 @@ bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, f
     return IssueMovePointThrottled(player, BuildFollowDestination(player, target, desiredDistance), destinationChangeThreshold, minReissueMs);
 }
 
-bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason = nullptr)
+bool TryIssueBattlegroundFallMovementInternal(Player* player, Position const& destination, char const* reason)
 {
     if (!player || !player->IsAlive())
         return false;
@@ -992,6 +992,18 @@ bool TryIssueBattlegroundFallMovement(Player* player, Position const& destinatio
     return true;
 }
 
+} // namespace
+
+namespace playerbot
+{
+bool TryIssueBattlegroundFallMovement(Player* player, Position const& destination, char const* reason /*= nullptr*/)
+{
+    return TryIssueBattlegroundFallMovementInternal(player, destination, reason);
+}
+}
+
+namespace
+{
 bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold, uint32 minReissueMs)
 {
     if (!player)
@@ -1087,7 +1099,7 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     Position issuedDestination = safeDestination;
     if (generatePath && player->InBattleground())
     {
-        if (TryIssueBattlegroundFallMovement(player, safeDestination, "move-point"))
+        if (TryIssueBattlegroundFallMovementInternal(player, safeDestination, "move-point"))
         {
             issuedDestination = safeDestination;
         }
