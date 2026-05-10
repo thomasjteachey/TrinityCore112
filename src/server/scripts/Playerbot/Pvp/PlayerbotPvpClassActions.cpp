@@ -1437,6 +1437,44 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         hardStaleTargetRelative = true;
     }
 
+    // Very long battleground approaches can exceed the practical launch range
+    // of target-relative Chase/Follow. The diagnostic for this failure is a
+    // CHASE/FOLLOW generator at hundreds of yards with no moving flag, no
+    // CHASE_MOVE/FOLLOW_MOVE state, and no spline. In that case use the same
+    // navmesh-validated strict segment walker used by other battleground
+    // movement instead of repeatedly installing an unlaunched target-relative
+    // generator. Near spell range still stays target-relative so range-edge
+    // spacing remains attached to the target.
+    bool const farStrictSegmentApproach = strictPathing && currentDistance > std::max(90.0f, safeDistance + 60.0f);
+    if (farStrictSegmentApproach)
+    {
+        bool const strictIssued = IssueStrictHumanFollow(player, target, safeDistance);
+        if (strictIssued)
+        {
+            g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+            stallState.targetGuid = target->GetGUID();
+            stallState.lastDistance = currentDistance;
+            stallState.lastSampleMs = nowMs;
+            stallState.lastFallbackMs = nowMs;
+            stallState.lastIssueMs = nowMs;
+            stallState.lastIssuedRange = safeDistance;
+            stallState.lastIssuedMode = 0;
+            stallState.stagnantSamples = 0;
+
+            std::ostringstream diag;
+            diag << BuildRangedMovementDiag(player, target, "strict_far_segment_move",
+                safeDistance, safeDistance, targetLos, targetAttackable, activeTargetRelativeMotion, initialMotionType, "strict_point")
+                 << " far_segment=yes"
+                 << " force_in_range=" << (forceMovementWhenAlreadyInRange ? "yes" : "no")
+                 << " forced_reason=" << (forcedReason ? forcedReason : "none")
+                 << " requested_edge=" << requestedSafeDistance
+                 << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+                 << " moving_after=" << (player->isMoving() ? "yes" : "no");
+            SetLastMovementDebugStatus(player, diag.str());
+            return;
+        }
+    }
+
     bool const shouldForceActiveRepath = !player->isMoving() && currentDistance > (safeDistance + 1.5f) &&
         (!activeTargetRelativeMotion || hardStaleTargetRelative);
     if (shouldForceActiveRepath)
