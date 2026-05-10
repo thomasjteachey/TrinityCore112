@@ -159,8 +159,17 @@ void BattlegroundTP::StartingEventOpenDoors()
 
 void BattlegroundTP::AddPlayer(Player* player)
 {
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
     Battleground::AddPlayer(player);
-    PlayerScores.emplace(player->GetGUID().GetCounter(), new BattlegroundTPScore(player->GetGUID()));
+    if (!isInBattleground)
+    {
+        BattlegroundTPScore* scoreEntry = new BattlegroundTPScore(player->GetGUID());
+        if (player->GetTeam() == HORDE)
+        {
+            scoreEntry->BonusHonor = 1;
+        }
+        PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
+    }
 }
 
 void BattlegroundTP::RespawnFlagAfterDrop(TeamId teamId)
