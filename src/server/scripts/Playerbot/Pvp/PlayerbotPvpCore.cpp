@@ -2988,7 +2988,7 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
     std::array<TacticalRule, 4> const rules =
     {{
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
-        { "bg active", bgActive, "bg check objective", 60.0f },
+        { "bg active", bgActive, "bg pursue enemy", 60.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
         { "low mana", lowMana, "bg use buff", 45.0f }
     }};

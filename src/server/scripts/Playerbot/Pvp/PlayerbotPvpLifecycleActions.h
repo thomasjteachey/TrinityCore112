@@ -48,7 +48,7 @@ public:
 
     static bool MoveToStartPrimitive(Player* player);
     static bool MoveToObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context);
-    static bool CheckObjectivePrimitive(Player* player, BattlegroundTacticalContext const& context);
+    static bool PursueEnemyPrimitive(Player* player);
     static bool ResetObjectiveForcePrimitive(Player* player);
     static bool UseBuffPrimitive(Player* player);
     static bool AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
