@@ -2815,6 +2815,12 @@ void SpellInfo::_LoadImmunityInfo()
                 break;
         }
 
+        // Will of the Forsaken removes charm-like control in WotLK. Some DBC encodings
+        // expose it through a mechanic immunity mask that does not map cleanly to
+        // MECHANIC_CHARM above, so force the loaded immunity data to include charm.
+        if (Id == 7744 && (effect.ApplyAuraName == SPELL_AURA_MECHANIC_IMMUNITY || effect.ApplyAuraName == SPELL_AURA_MECHANIC_IMMUNITY_MASK))
+            mechanicImmunityMask |= 1 << MECHANIC_CHARM;
+
         immuneInfo.SchoolImmuneMask = schoolImmunityMask;
         immuneInfo.ApplyHarmfulAuraImmuneMask = applyHarmfulAuraImmunityMask;
         immuneInfo.MechanicImmuneMask = mechanicImmunityMask;
@@ -2910,7 +2916,23 @@ void SpellInfo::ApplyAllSpellImmunitiesTo(Unit* target, SpellEffectInfo const& s
         if (HasAttribute(SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY))
         {
             if (apply)
+            {
                 target->RemoveAurasWithMechanic(mechanicImmunity, AURA_REMOVE_BY_DEFAULT, Id);
+
+                if (mechanicImmunity & (1 << MECHANIC_CHARM))
+                {
+                    auto canRemoveByCharmImmunity = [](AuraApplication const* aurApp) -> bool
+                    {
+                        return !aurApp->GetBase()->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY);
+                    };
+
+                    target->RemoveAurasByType(SPELL_AURA_MOD_TAUNT, canRemoveByCharmImmunity);
+                    target->RemoveAurasByType(SPELL_AURA_MOD_FEAR, [canRemoveByCharmImmunity](AuraApplication const* aurApp) -> bool
+                    {
+                        return aurApp->GetBase()->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME) && canRemoveByCharmImmunity(aurApp);
+                    });
+                }
+            }
             else
             {
                 std::vector<Aura*> aurasToUpdateTargets;
@@ -3057,15 +3079,67 @@ bool SpellInfo::SpellCancelsAuraEffect(AuraEffect const* aurEff) const
     if (aurEff->GetSpellInfo()->HasAttribute(SPELL_ATTR0_UNAFFECTED_BY_INVULNERABILITY))
         return false;
 
+    bool const isTauntControl = aurEff->GetAuraType() == SPELL_AURA_MOD_TAUNT ||
+        (aurEff->GetAuraType() == SPELL_AURA_MOD_FEAR && aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME));
+
     for (SpellEffectInfo const& effect : GetEffects())
     {
         if (!effect.IsEffect(SPELL_EFFECT_APPLY_AURA))
             continue;
 
+        if (SpellEffectInfo::ImmunityInfo const* immuneInfo = effect.GetImmunityInfo())
+        {
+            if (!aurEff->GetSpellInfo()->HasAttribute(SPELL_ATTR1_UNAFFECTED_BY_SCHOOL_IMMUNE) &&
+                !aurEff->GetSpellInfo()->HasAttribute(SPELL_ATTR2_UNAFFECTED_BY_AURA_SCHOOL_IMMUNE))
+            {
+                if (uint32 schoolImmunity = immuneInfo->SchoolImmuneMask)
+                    if (aurEff->GetSpellInfo()->SchoolMask & schoolImmunity)
+                        return true;
+            }
+
+            if (uint32 mechanicImmunity = immuneInfo->MechanicImmuneMask)
+            {
+                if (isTauntControl)
+                {
+                    if (mechanicImmunity & (1 << MECHANIC_CHARM))
+                        return true;
+                }
+                else
+                {
+                    if (mechanicImmunity & (1 << aurEff->GetSpellInfo()->Mechanic))
+                        return true;
+                    if (aurEff->GetSpellEffectInfo().Mechanic && (mechanicImmunity & (1 << aurEff->GetSpellEffectInfo().Mechanic)))
+                        return true;
+                }
+            }
+
+            if (uint32 dispelImmunity = immuneInfo->DispelImmune)
+                if (aurEff->GetSpellInfo()->Dispel == dispelImmunity)
+                    return true;
+
+            if (immuneInfo->AuraTypeImmune.find(aurEff->GetAuraType()) != immuneInfo->AuraTypeImmune.end())
+            {
+                if (!isTauntControl || aurEff->GetAuraType() == SPELL_AURA_MOD_TAUNT)
+                    return true;
+            }
+
+            if (isTauntControl && aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME) &&
+                immuneInfo->SpellEffectImmune.find(SPELL_EFFECT_ATTACK_ME) != immuneInfo->SpellEffectImmune.end())
+                return true;
+        }
+
         uint32 const miscValue = static_cast<uint32>(effect.MiscValue);
         switch (effect.ApplyAuraName)
         {
             case SPELL_AURA_STATE_IMMUNITY:
+                if (isTauntControl)
+                {
+                    if (aurEff->GetAuraType() != SPELL_AURA_MOD_TAUNT || miscValue != SPELL_AURA_MOD_TAUNT)
+                        continue;
+
+                    break;
+                }
+
                 if (miscValue != aurEff->GetAuraType())
                     continue;
                 break;
@@ -3079,12 +3153,22 @@ bool SpellInfo::SpellCancelsAuraEffect(AuraEffect const* aurEff) const
                     continue;
                 break;
             case SPELL_AURA_MECHANIC_IMMUNITY:
+            {
+                if (isTauntControl)
+                {
+                    if (miscValue != MECHANIC_CHARM)
+                        continue;
+
+                    break;
+                }
+
                 if (miscValue != aurEff->GetSpellInfo()->Mechanic)
                 {
                     if (miscValue != aurEff->GetSpellEffectInfo().Mechanic)
                         continue;
                 }
                 break;
+            }
             default:
                 continue;
         }

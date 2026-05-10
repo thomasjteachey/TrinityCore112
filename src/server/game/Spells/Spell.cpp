@@ -6650,7 +6650,7 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
             result = SPELL_FAILED_STUNNED;
     }
 
-    if (result == SPELL_CAST_OK && unitCaster->IsTaunted() && !CheckSpellCancelsTaunt(param1)) //wut
+    if (result == SPELL_CAST_OK && unitCaster->IsTaunted() && !CheckSpellCancelsTaunt(param1))
         result = SPELL_FAILED_CHARMED;
     if (result == SPELL_CAST_OK && unitflag & UNIT_FLAG_SILENCED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && !CheckSpellCancelsSilence(param1))
         result = SPELL_FAILED_SILENCED;
@@ -6719,14 +6719,11 @@ bool Spell::CheckSpellCancelsTaunt(uint32* param1) const
         return false;
 
     Unit::AuraEffectList const& fearAuras = unitCaster->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
-    bool hasAttackMeFear = false;
 
     for (AuraEffect const* aurEff : fearAuras)
     {
         if (!aurEff->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
             continue;
-
-        hasAttackMeFear = true;
 
         if (m_spellInfo->SpellCancelsAuraEffect(aurEff))
             continue;
@@ -6741,7 +6738,7 @@ bool Spell::CheckSpellCancelsTaunt(uint32* param1) const
         return false;
     }
 
-    return !hasAttackMeFear;
+    return CheckSpellCancelsAuraEffect(SPELL_AURA_MOD_TAUNT, param1);
 }
 
 bool Spell::CheckSpellCancelsStun(uint32* param1) const

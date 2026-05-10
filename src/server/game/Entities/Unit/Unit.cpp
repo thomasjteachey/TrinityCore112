@@ -4380,6 +4380,9 @@ void Unit::RemoveAurasWithMechanic(uint32 mechanicMaskToRemove, AuraRemoveMode r
         if (!(appliedMechanicMask & mechanicMaskToRemove))
             return false;
 
+        if ((mechanicMaskToRemove & (1 << MECHANIC_FEAR)) && aura->GetSpellInfo()->HasEffect(SPELL_EFFECT_ATTACK_ME))
+            return false;
+
         // spell mechanic matches required mask for removal
         if ((1 << aura->GetSpellInfo()->Mechanic) & mechanicMaskToRemove || withEffectMechanics)
             return true;
