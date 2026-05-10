@@ -6650,7 +6650,7 @@ SpellCastResult Spell::CheckCasterAuras(uint32* param1) const
             result = SPELL_FAILED_STUNNED;
     }
 
-    if (result == SPELL_CAST_OK && unitCaster->IsTaunted() && !CheckSpellCancelsCharm(param1))
+    if (result == SPELL_CAST_OK && unitCaster->IsTaunted() && !CheckSpellCancelsCharm(param1)) //wut
         result = SPELL_FAILED_CHARMED;
     if (result == SPELL_CAST_OK && unitflag & UNIT_FLAG_SILENCED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE && !CheckSpellCancelsSilence(param1))
         result = SPELL_FAILED_SILENCED;
