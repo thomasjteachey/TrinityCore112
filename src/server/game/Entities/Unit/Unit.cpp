@@ -719,8 +719,16 @@ void Unit::UpdateInterruptMask()
         m_interruptMask |= (*i)->GetBase()->GetSpellInfo()->AuraInterruptFlags;
 
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
         if (spell->getState() == SPELL_STATE_CASTING)
-            m_interruptMask |= spell->m_spellInfo->ChannelInterruptFlags;
+        {
+            uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
+            if (spell->m_spellInfo->IsHurricane())
+                channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+
+            m_interruptMask |= channelInterruptFlags;
+        }
+    }
 }
 
 bool Unit::HasAuraTypeWithFamilyFlags(AuraType auraType, uint32 familyName, flag96 familyFlags) const
@@ -3401,9 +3409,14 @@ bool Unit::IsMovementPreventedByCasting() const
 
     // channeled spells during channel stage (after the initial cast timer) allow movement with a specific spell attribute
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
         if (spell->getState() != SPELL_STATE_FINISHED && spell->IsChannelActive())
-            if (spell->GetSpellInfo()->IsMoveAllowedChannel())
+        {
+            SpellInfo const* spellInfo = spell->GetSpellInfo();
+            if (spellInfo->IsMoveAllowedChannel() && (!spellInfo->IsHurricane() || GetHurricaneSnareSpeedRate() > 0.0f))
                 return false;
+        }
+    }
 
     if (GetStarfireSnareSpeedRate() > 0.0f)
         if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
@@ -4338,14 +4351,20 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
 
     // interrupt channeled spell
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
+        uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
+        if (spell->m_spellInfo->IsHurricane())
+            channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+
         if (spell->getState() == SPELL_STATE_CASTING
-            && (spell->m_spellInfo->ChannelInterruptFlags & flag)
+            && (channelInterruptFlags & flag)
             && spell->m_spellInfo->Id != except)
         {
-            bool const hurricaneMovementAllowed = (flag & AURA_INTERRUPT_FLAG_MOVE) && spell->m_spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f;
+            bool const hurricaneMovementAllowed = (flag & (AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING)) && spell->m_spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f;
             if (!hurricaneMovementAllowed)
                 InterruptNonMeleeSpells(false);
         }
+    }
 
     UpdateInterruptMask();
 }

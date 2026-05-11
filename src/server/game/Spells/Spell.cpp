@@ -3324,6 +3324,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     bool const snareMovementAllowed = ((isStarfire && m_casttime) || isHurricane) && movementSnareSpeedRate > 0.0f;
     bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
     bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
+    bool const moveAllowedChannel = m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt;
     bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt;
 
     // don't allow channeled spells / spells with cast time to be cast while moving
@@ -3332,7 +3333,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     if (!IsTriggered() && (m_spellInfo->IsChanneled() || m_casttime) && m_caster->GetTypeId() == TYPEID_PLAYER && !(m_caster->ToPlayer()->IsCharmed() && m_caster->ToPlayer()->GetCharmerGUID().IsCreature()) && m_caster->ToPlayer()->isMoving() && requiresMovementInterrupt)
     {
         // 1. Has casttime, 2. Or doesn't have flag to allow movement during channel
-        if (m_casttime || !m_spellInfo->IsMoveAllowedChannel())
+        if (m_casttime || !moveAllowedChannel)
         {
             if (!snareMovementAllowed)
             {
@@ -3791,7 +3792,11 @@ void Spell::handle_immediate()
         {
             m_spellState = SPELL_STATE_CASTING;
             // GameObjects shouldn't cast channeled spells
-            ASSERT_NOTNULL(m_caster->ToUnit())->AddInterruptMask(m_spellInfo->ChannelInterruptFlags);
+            uint32 channelInterruptFlags = m_spellInfo->ChannelInterruptFlags;
+            if (m_spellInfo->IsHurricane())
+                channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+
+            ASSERT_NOTNULL(m_caster->ToUnit())->AddInterruptMask(channelInterruptFlags);
         }
     }
 
@@ -4008,13 +4013,14 @@ void Spell::update(uint32 difftime)
         bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
         bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
         bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
+        bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt;
 
         if (playerMoved && !snareMovementAllowed &&
             (hasMovementInterruptFlag || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt) &&
             (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
         {
             // don't cancel for melee, autorepeat, triggered and instant spells
-            if (!m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !IsTriggered() && !(IsChannelActive() && m_spellInfo->IsMoveAllowedChannel()))
+            if (!m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !IsTriggered() && !moveAllowedChannel)
             {
                 // if charmed by creature, trust the AI not to cheat and allow the cast to proceed
                 // @todo this is a hack, "creature" movesplines don't differentiate turning/moving right now
