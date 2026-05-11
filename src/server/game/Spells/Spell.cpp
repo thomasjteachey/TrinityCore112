@@ -73,6 +73,9 @@ extern SpellEffectHandlerFn SpellEffectHandlers[TOTAL_SPELL_EFFECTS];
 
 namespace
 {
+    constexpr uint32 SPELL_DRUID_BEEFS_TENACITY = 89766;
+    constexpr uint32 SPELL_DRUID_UNSTOPPABLE = 89765;
+
     bool IsTrapGameObject(GameObject const* caster)
     {
         if (!caster)
@@ -721,6 +724,7 @@ m_caster((info->HasAttribute(SPELL_ATTR6_CAST_BY_CHARMER) && caster->GetCharmerO
     m_channeledDuration = 0;                                // will be setup in Spell::handle_immediate
     m_immediateHandled = false;
     m_resetStarfireSnareAfterCast = false;
+    m_appliedBeefsTenacityHurricaneAura = false;
 
     m_channelTargetEffectMask = 0;
 
@@ -3449,6 +3453,14 @@ void Spell::cancel()
             break;
     }
 
+    if (m_appliedBeefsTenacityHurricaneAura)
+    {
+        if (Unit* unitCaster = m_caster->ToUnit())
+            unitCaster->RemoveOwnedAura(SPELL_DRUID_UNSTOPPABLE, unitCaster->GetGUID(), 0, AURA_REMOVE_BY_CANCEL);
+
+        m_appliedBeefsTenacityHurricaneAura = false;
+    }
+
     SetReferencedFromCurrent(false);
     if (m_selfContainer && *m_selfContainer == this)
         *m_selfContainer = nullptr;
@@ -3792,11 +3804,26 @@ void Spell::handle_immediate()
         {
             m_spellState = SPELL_STATE_CASTING;
             // GameObjects shouldn't cast channeled spells
+            Unit* unitCaster = ASSERT_NOTNULL(m_caster->ToUnit());
             uint32 channelInterruptFlags = m_spellInfo->ChannelInterruptFlags;
             if (m_spellInfo->IsHurricane())
+            {
                 channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
 
-            ASSERT_NOTNULL(m_caster->ToUnit())->AddInterruptMask(channelInterruptFlags);
+                if (unitCaster->GetTypeId() == TYPEID_PLAYER && unitCaster->HasAura(SPELL_DRUID_BEEFS_TENACITY))
+                    if (Aura* unstoppable = unitCaster->AddAura(SPELL_DRUID_UNSTOPPABLE, unitCaster))
+                    {
+                        m_appliedBeefsTenacityHurricaneAura = true;
+
+                        if (m_channeledDuration > 0)
+                        {
+                            unstoppable->SetMaxDuration(m_channeledDuration);
+                            unstoppable->SetDuration(m_channeledDuration);
+                        }
+                    }
+            }
+
+            unitCaster->AddInterruptMask(channelInterruptFlags);
         }
     }
 
@@ -4109,6 +4136,12 @@ void Spell::finish(bool ok)
             playerCaster->RemoveStarfireSnareRef();
 
         m_resetStarfireSnareAfterCast = false;
+    }
+
+    if (m_appliedBeefsTenacityHurricaneAura)
+    {
+        unitCaster->RemoveOwnedAura(SPELL_DRUID_UNSTOPPABLE, unitCaster->GetGUID(), 0, AURA_REMOVE_BY_CANCEL);
+        m_appliedBeefsTenacityHurricaneAura = false;
     }
 
     if (m_spellInfo->IsChanneled())
