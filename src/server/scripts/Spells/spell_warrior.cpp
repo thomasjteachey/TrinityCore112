@@ -44,6 +44,8 @@ enum WarriorSpells
     SPELL_WARRIOR_DEEP_WOUNDS_RANK_2                = 12850,
     SPELL_WARRIOR_DEEP_WOUNDS_RANK_3                = 12868,
     SPELL_WARRIOR_DEEP_WOUNDS_PERIODIC              = 12721,
+    SPELL_WARRIOR_DEATH_WISH                        = 12328,
+    SPELL_WARRIOR_DEATH_WISH_UNSTOPPABLE            = 81272,
     SPELL_WARRIOR_EXECUTE                           = 20647,
     SPELL_WARRIOR_EXECUTE_GCD_REDUCED               = 71069,
     SPELL_WARRIOR_EXTRA_CHARGE                      = 70849,
@@ -67,6 +69,7 @@ enum WarriorSpells
     SPELL_WARRIOR_VIGILANCE_PROC                    = 50725,
     SPELL_WARRIOR_VIGILANCE_REDIRECT_THREAT         = 59665,
     SPELL_WARRIOR_IMPROVED_SPELL_REFLECTION_TRIGGER = 59725,
+    SPELL_WARRIOR_IMPROVED_DEATH_WISH               = 89764,
     SPELL_WARRIOR_SECOND_WIND_TRIGGER_1             = 29841,
     SPELL_WARRIOR_SECOND_WIND_TRIGGER_2             = 29842,
     SPELL_WARRIOR_GLYPH_OF_BLOCKING                 = 58374,
@@ -377,6 +380,35 @@ class spell_warr_deep_wounds_aura : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(spell_warr_deep_wounds_aura::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_warr_deep_wounds_aura::OnProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
+// 12328 - Death Wish
+class spell_warr_death_wish : public SpellScript
+{
+    PrepareSpellScript(spell_warr_death_wish);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({
+            SPELL_WARRIOR_DEATH_WISH,
+            SPELL_WARRIOR_DEATH_WISH_UNSTOPPABLE,
+            SPELL_WARRIOR_IMPROVED_DEATH_WISH
+        });
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster->HasAura(SPELL_WARRIOR_IMPROVED_DEATH_WISH))
+            return;
+
+        caster->CastSpell(caster, SPELL_WARRIOR_DEATH_WISH_UNSTOPPABLE, true);
+    }
+
+    void Register() override
+    {
+        AfterCast += SpellCastFn(spell_warr_death_wish::HandleAfterCast);
     }
 };
 
@@ -1036,6 +1068,7 @@ void AddSC_warrior_spell_scripts()
     RegisterSpellScript(spell_warr_damage_shield);
     RegisterSpellScript(spell_warr_deep_wounds);
     RegisterSpellScript(spell_warr_deep_wounds_aura);
+    RegisterSpellScript(spell_warr_death_wish);
     RegisterSpellScript(spell_warr_execute);
     RegisterSpellScript(spell_warr_extra_proc);
     RegisterSpellScript(spell_warr_glyph_of_blocking);
