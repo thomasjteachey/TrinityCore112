@@ -3572,39 +3572,8 @@ void Spell::EffectWeaponDmg()
             if (m_spellInfo->SpellFamilyFlags[1] & 0x400)
                 AddComboPointGain(unitTarget, 1);
 
-            switch (m_spellInfo->Id)
-            {
-                // Maul
-                case 6807:
-                case 6808:
-                case 6809:
-                case 8972:
-                case 9745:
-                case 9880:
-                case 9881:
-                case 26996:
-                case 48479:
-                case 48480:
-                // Swipe (Bear)
-                case 779:
-                case 780:
-                case 769:
-                case 9754:
-                case 9908:
-                case 26997:
-                case 48561:
-                case 48562:
-                // Swipe (Cat)
-                case 62078:
-                    if (unitCaster->HasAura(89759))
-                        AddComboPointGain(unitTarget, 1);
-                    break;
-                default:
-                    break;
-            }
-
             // Shred, Maul - Rend and Tear
-            if (m_spellInfo->SpellFamilyFlags[0] & 0x00008800 && unitTarget->HasAuraState(AURA_STATE_BLEEDING))
+            else if (m_spellInfo->SpellFamilyFlags[0] & 0x00008800 && unitTarget->HasAuraState(AURA_STATE_BLEEDING))
             {
                 if (AuraEffect const* rendAndTear = unitCaster->GetDummyAuraEffect(SPELLFAMILY_DRUID, 2859, 0))
                     AddPct(totalDamagePercentMod, rendAndTear->GetAmount());

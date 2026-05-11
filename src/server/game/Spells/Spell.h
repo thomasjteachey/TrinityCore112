@@ -453,6 +453,7 @@ class TC_GAME_API Spell
         SpellInfo const* GetSpellInfo() const { return m_spellInfo; }
         SpellInfo const* GetTriggeredByAuraSpell() const { return m_triggeredByAuraSpell; }
         int32 GetPowerCost() const { return m_powerCost; }
+        uint32 GetHitMask() const { return m_hitMask; }
 
         bool UpdatePointers();                              // must be used at call Spell code after time delay (non triggered spell cast/update spell call/etc)
 

@@ -29,6 +29,7 @@ void AddSC_custom_diremaul_beads();
 void AddSC_custom_gurubashi_arena();
 void AddSC_custom_depleted_mark_exchange();
 void AddSC_custom_pvpve_dungeon();
+void AddSC_custom_surprise_bear();
 void AddSC_npc_scarlet_chapel_queue();
 void AddSC_npc_account_banker();
 
@@ -43,6 +44,7 @@ void AddCustomScripts()
     AddSC_custom_gurubashi_arena();
     AddSC_custom_depleted_mark_exchange();
     AddSC_custom_pvpve_dungeon();
+    AddSC_custom_surprise_bear();
     AddSC_npc_scarlet_chapel_queue();
     AddSC_npc_account_banker();
 }

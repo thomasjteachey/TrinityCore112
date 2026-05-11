@@ -145,68 +145,6 @@ namespace
         sWorld->SendServerMessage(SERVER_MSG_STRING, message.str(), ownerPlayer);
     }
 
-    constexpr uint32 SPELL_DRUID_SURPRISE_BEAR = 89759;
-    constexpr uint32 SPELL_DRUID_PRIMAL_FRENZY_R1 = 16952;
-
-    bool IsSurpriseBearComboSpell(SpellInfo const* spellInfo)
-    {
-        switch (spellInfo->Id)
-        {
-            // Maul
-            case 6807:
-            case 6808:
-            case 6809:
-            case 8972:
-            case 9745:
-            case 9880:
-            case 9881:
-            case 26996:
-            case 48479:
-            case 48480:
-            // Swipe (Bear)
-            case 779:
-            case 780:
-            case 769:
-            case 9754:
-            case 9908:
-            case 26997:
-            case 48561:
-            case 48562:
-            // Swipe (Cat)
-            case 62078:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    bool SurpriseBearCanAwardPrimalFrenzy(Unit* caster, SpellInfo const* spellInfo, uint32 hitMask)
-    {
-        if (!(hitMask & PROC_HIT_CRITICAL))
-            return false;
-
-        if (!caster->HasAura(SPELL_DRUID_SURPRISE_BEAR))
-            return false;
-
-        return IsSurpriseBearComboSpell(spellInfo);
-    }
-
-    bool RollPrimalFrenzyBonus(Unit* caster)
-    {
-        AuraEffect const* primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0, caster->GetGUID());
-        if (!primalFrenzy)
-            primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0);
-
-        if (!primalFrenzy)
-            return false;
-
-        float chance = float(primalFrenzy->GetSpellInfo()->ProcChance);
-        if (Player* modOwner = caster->GetSpellModOwner())
-            modOwner->ApplySpellMod(primalFrenzy->GetId(), SPELLMOD_CHANCE_OF_SUCCESS, chance);
-
-        return roll_chance_f(chance);
-    }
-
     char const* GetNaturesGraspMissReason(SpellMissInfo missInfo)
     {
         switch (missInfo)
@@ -4004,12 +3942,7 @@ void Spell::_handle_finish_phase()
             // (this Aura removes the already-added CP when it expires from duration - now that we've added CP, this shouldn't happen anymore!)
             if (!m_spellInfo->HasAura(SPELL_AURA_RETAIN_COMBO_POINTS))
                 unitCaster->RemoveAurasByType(SPELL_AURA_RETAIN_COMBO_POINTS);
-
-            int8 comboPointGain = m_comboPointGain;
-            if (SurpriseBearCanAwardPrimalFrenzy(unitCaster, m_spellInfo, m_hitMask) && RollPrimalFrenzyBonus(unitCaster))
-                ++comboPointGain;
-
-            unitCaster->AddComboPoints(m_comboTarget, comboPointGain);
+            unitCaster->AddComboPoints(m_comboTarget, m_comboPointGain);
         }
 
         if (m_spellInfo->HasEffect(SPELL_EFFECT_ADD_EXTRA_ATTACKS))
