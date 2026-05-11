@@ -513,6 +513,7 @@ class TC_GAME_API Spell
         uint64 m_delayMoment;                               // moment of next delay call, used internally
         bool m_immediateHandled;                            // were immediate actions handled? (used by delayed spells only)
         bool m_resetStarfireSnareAfterCast;
+        bool m_appliedBeefsTenacityHurricaneAura;
 
         // These vars are used in both delayed spell system and modified immediate spell system
         bool m_referencedFromCurrentSpell;                  // mark as references to prevent deleted and access by dead pointers
