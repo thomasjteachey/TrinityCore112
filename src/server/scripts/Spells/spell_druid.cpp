@@ -854,6 +854,60 @@ class spell_dru_innervate : public AuraScript
     }
 };
 
+class spell_dru_thinnervate : public AuraScript
+{
+    PrepareAuraScript(spell_dru_thinnervate);
+
+    void CalculateAmount(AuraEffect const* aurEff, int32& amount, bool& /*canBeRecalculated*/)
+    {
+        if (!aurEff->GetTotalTicks())
+        {
+            amount = 0;
+            return;
+        }
+
+        if (Unit* caster = GetCaster())
+            amount = int32(CalculatePct(caster->GetCreatePowerValue(POWER_MANA), amount) / aurEff->GetTotalTicks());
+        else
+            amount = 0;
+    }
+
+    void HandleApply(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target)
+            return;
+
+        if (!caster->HasAura(81418))
+            return;
+
+        if (caster->GetGUID() == target->GetGUID())
+            return;
+
+        caster->AddAura(SPELL_DRUID_INNERVATE, caster);
+        if (Aura* innervate = caster->GetAura(SPELL_DRUID_INNERVATE))
+        {
+            int32 newDuration = innervate->GetDuration() / 2;
+            int32 newMaxDuration = innervate->GetMaxDuration() / 2;
+
+            if (newDuration <= 0)
+                newDuration = 1;
+            if (newMaxDuration < newDuration)
+                newMaxDuration = newDuration;
+
+            innervate->SetMaxDuration(newMaxDuration);
+            innervate->SetDuration(newDuration);
+        }
+    }
+
+    void Register() override
+    {
+        DoEffectCalcAmount += AuraEffectCalcAmountFn(spell_dru_thinnervate::CalculateAmount, EFFECT_1, SPELL_AURA_PERIODIC_ENERGIZE);
+        AfterEffectApply += AuraEffectApplyFn(spell_dru_thinnervate::HandleApply, EFFECT_1, SPELL_AURA_PERIODIC_ENERGIZE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 
 // -5570 - Insect Swarm
 class spell_dru_insect_swarm : public AuraScript
@@ -2271,6 +2325,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellScript(spell_dru_glyph_of_starfire_dummy);
     RegisterSpellScript(spell_dru_idol_lifebloom);
     RegisterSpellScript(spell_dru_innervate);
+    RegisterSpellScript(spell_dru_thinnervate);
     RegisterSpellScript(spell_dru_insect_swarm);
     RegisterSpellScript(spell_dru_leader_of_the_pack);
     RegisterSpellScript(spell_dru_lifebloom);
