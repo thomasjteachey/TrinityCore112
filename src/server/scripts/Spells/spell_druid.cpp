@@ -32,6 +32,7 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Spell.h"
+#include "Util.h"
 #include <chrono>
 
 enum DruidSpells
@@ -65,6 +66,7 @@ enum DruidSpells
     SPELL_DRUID_LIVING_SEED_HEAL            = 48503,
     SPELL_DRUID_LIVING_SEED_PROC            = 48504,
     SPELL_DRUID_NATURES_SPLENDOR            = 57865,
+    SPELL_DRUID_SURPRISE_BEAR                = 89759,
     SPELL_DRUID_SURVIVAL_INSTINCTS          = 50322,
     SPELL_DRUID_SAVAGE_ROAR                 = 62071,
     SPELL_DRUID_T9_FERAL_RELIC_BEAR         = 67354,
@@ -102,6 +104,7 @@ enum DruidSpells
     SPELL_DRUID_GLYPH_OF_NOURISH            = 62971,
     SPELL_DRUID_NURTURING_INSTINCT_R1       = 47179,
     SPELL_DRUID_NURTURING_INSTINCT_R2       = 47180,
+    SPELL_DRUID_PRIMAL_FRENZY_R1            = 16952,
     SPELL_DRUID_PRIMAL_PRECISION            = 48410,
     SPELL_DRUID_MANGLE                      = 33876,
     SPELL_DRUID_WRATH_NATURES_GRASP_BUFF    = 81523
@@ -1528,6 +1531,74 @@ class spell_dru_starfall_dummy : public SpellScript
     }
 };
 
+// 89759 - Surprise Bear
+class spell_dru_surprise_bear_combo : public SpellScript
+{
+    PrepareSpellScript(spell_dru_surprise_bear_combo);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_DRUID_SURPRISE_BEAR, SPELL_DRUID_PRIMAL_FRENZY_R1 });
+    }
+
+    void CheckHit(SpellMissInfo missInfo)
+    {
+        SpellInfo const* spellInfo = GetSpellInfo();
+        _canAwardComboPoint = missInfo == SPELL_MISS_NONE || (missInfo == SPELL_MISS_BLOCK && !spellInfo->HasAttribute(SPELL_ATTR3_COMPLETELY_BLOCKED));
+    }
+
+    void AwardComboPoint()
+    {
+        if (!_canAwardComboPoint)
+            return;
+
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target || !caster->HasAura(SPELL_DRUID_SURPRISE_BEAR))
+            return;
+
+        if (!_comboPointTarget)
+        {
+            _comboPointTarget = target;
+            GetSpell()->AddComboPointGain(_comboPointTarget, 1);
+        }
+
+        if (!_primalFrenzyChecked && (GetSpell()->GetHitMask() & PROC_HIT_CRITICAL))
+        {
+            _primalFrenzyChecked = true;
+            if (RollPrimalFrenzyBonus(caster))
+                GetSpell()->AddComboPointGain(_comboPointTarget, 1);
+        }
+    }
+
+    static bool RollPrimalFrenzyBonus(Unit* caster)
+    {
+        AuraEffect const* primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0, caster->GetGUID());
+        if (!primalFrenzy)
+            primalFrenzy = caster->GetAuraEffectOfRankedSpell(SPELL_DRUID_PRIMAL_FRENZY_R1, EFFECT_0);
+
+        if (!primalFrenzy)
+            return false;
+
+        float chance = float(primalFrenzy->GetSpellInfo()->ProcChance);
+        if (Player* modOwner = caster->GetSpellModOwner())
+            modOwner->ApplySpellMod(primalFrenzy->GetId(), SPELLMOD_CHANCE_OF_SUCCESS, chance);
+
+        return roll_chance_f(chance);
+    }
+
+    void Register() override
+    {
+        BeforeHit += BeforeSpellHitFn(spell_dru_surprise_bear_combo::CheckHit);
+        AfterHit += SpellHitFn(spell_dru_surprise_bear_combo::AwardComboPoint);
+    }
+
+private:
+    bool _canAwardComboPoint = false;
+    bool _primalFrenzyChecked = false;
+    Unit* _comboPointTarget = nullptr;
+};
+
 // 61336 - Survival Instincts
 class spell_dru_survival_instincts : public SpellScript
 {
@@ -2314,6 +2385,7 @@ void AddSC_druid_spell_scripts()
     RegisterSpellAndAuraScriptPair(spell_dru_savage_roar, spell_dru_savage_roar_aura);
     RegisterSpellScript(spell_dru_starfall_aoe);
     RegisterSpellScript(spell_dru_starfall_dummy);
+    RegisterSpellScript(spell_dru_surprise_bear_combo);
     RegisterSpellAndAuraScriptPair(spell_dru_survival_instincts, spell_dru_survival_instincts_aura);
     RegisterSpellScript(spell_dru_swift_flight_passive);
     RegisterSpellScript(spell_dru_tiger_s_fury);
