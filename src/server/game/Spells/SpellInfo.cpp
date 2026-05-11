@@ -1251,6 +1251,12 @@ bool SpellInfo::IsStarfire() const
     return SpellFamilyName == SPELLFAMILY_DRUID && (SpellFamilyFlags[0] & 0x00000004);
 }
 
+bool SpellInfo::IsHurricane() const
+{
+    SpellInfo const* firstRankSpellInfo = GetFirstRankSpell();
+    return firstRankSpellInfo && firstRankSpellInfo->Id == 16914;
+}
+
 bool SpellInfo::IsMindVision() const
 {
     return Id == 2096 || Id == 10909;
@@ -1270,6 +1276,19 @@ float SpellInfo::GetStarfireSnareSpeedRate() const
             return 0.20f;
         case 16862: // Rank 5
             return 0.25f;
+        default:
+            break;
+    }
+
+    return 0.0f;
+}
+
+float SpellInfo::GetHurricaneSnareSpeedRate() const
+{
+    switch (Id)
+    {
+        case 89760: // Custom Hurricane walk-while-channeling aura
+            return 0.10f;
         default:
             break;
     }
