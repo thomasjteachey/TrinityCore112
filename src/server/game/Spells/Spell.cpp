@@ -3311,13 +3311,21 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         m_casttime = m_spellInfo->CalcCastTime(this);
 
     bool const isStarfire = m_spellInfo->IsStarfire();
-    float starfireSnareSpeedRate = 0.0f;
-    if (playerCaster && m_casttime && isStarfire)
-        starfireSnareSpeedRate = playerCaster->GetStarfireSnareSpeedRate();
+    bool const isHurricane = m_spellInfo->IsHurricane();
+    float movementSnareSpeedRate = 0.0f;
+    if (playerCaster)
+    {
+        if (m_casttime && isStarfire)
+            movementSnareSpeedRate = playerCaster->GetStarfireSnareSpeedRate();
+        else if (isHurricane)
+            movementSnareSpeedRate = playerCaster->GetHurricaneSnareSpeedRate();
+    }
 
-    bool const starfireMovementAllowed = isStarfire && starfireSnareSpeedRate > 0.0f;
-    bool const needsStarfireMovementInterrupt = isStarfire && !starfireMovementAllowed;
-    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt;
+    bool const snareMovementAllowed = ((isStarfire && m_casttime) || isHurricane) && movementSnareSpeedRate > 0.0f;
+    bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
+    bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
+    bool const moveAllowedChannel = m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt;
+    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt;
 
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
@@ -3325,9 +3333,9 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     if (!IsTriggered() && (m_spellInfo->IsChanneled() || m_casttime) && m_caster->GetTypeId() == TYPEID_PLAYER && !(m_caster->ToPlayer()->IsCharmed() && m_caster->ToPlayer()->GetCharmerGUID().IsCreature()) && m_caster->ToPlayer()->isMoving() && requiresMovementInterrupt)
     {
         // 1. Has casttime, 2. Or doesn't have flag to allow movement during channel
-        if (m_casttime || !m_spellInfo->IsMoveAllowedChannel())
+        if (m_casttime || !moveAllowedChannel)
         {
-            if (!starfireMovementAllowed)
+            if (!snareMovementAllowed)
             {
                 SendCastResult(SPELL_FAILED_MOVING);
                 finish(false);
@@ -3336,9 +3344,9 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         }
     }
 
-    if (starfireSnareSpeedRate > 0.0f && playerCaster)
+    if (movementSnareSpeedRate > 0.0f && playerCaster)
     {
-        if (playerCaster->AddStarfireSnareRef(starfireSnareSpeedRate))
+        if (playerCaster->AddStarfireSnareRef(movementSnareSpeedRate))
             m_resetStarfireSnareAfterCast = true;
     }
 
@@ -3784,7 +3792,11 @@ void Spell::handle_immediate()
         {
             m_spellState = SPELL_STATE_CASTING;
             // GameObjects shouldn't cast channeled spells
-            ASSERT_NOTNULL(m_caster->ToUnit())->AddInterruptMask(m_spellInfo->ChannelInterruptFlags);
+            uint32 channelInterruptFlags = m_spellInfo->ChannelInterruptFlags;
+            if (m_spellInfo->IsHurricane())
+                channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+
+            ASSERT_NOTNULL(m_caster->ToUnit())->AddInterruptMask(channelInterruptFlags);
         }
     }
 
@@ -3996,16 +4008,19 @@ void Spell::update(uint32 difftime)
         Player* playerCaster = m_caster->ToPlayer();
         bool const playerMoved = playerCaster->isMoving();
         bool const isStarfire = m_spellInfo->IsStarfire();
-        bool const starfireMovementAllowed = isStarfire && playerCaster->GetStarfireSnareSpeedRate() > 0.0f;
-        bool const needsStarfireMovementInterrupt = isStarfire && !starfireMovementAllowed;
+        bool const isHurricane = m_spellInfo->IsHurricane();
+        bool const snareMovementAllowed = (isStarfire && playerCaster->GetStarfireSnareSpeedRate() > 0.0f) || (isHurricane && playerCaster->GetHurricaneSnareSpeedRate() > 0.0f);
+        bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
+        bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
         bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
+        bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt;
 
-        if (playerMoved && !starfireMovementAllowed &&
-            (hasMovementInterruptFlag || needsStarfireMovementInterrupt) &&
+        if (playerMoved && !snareMovementAllowed &&
+            (hasMovementInterruptFlag || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt) &&
             (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
         {
             // don't cancel for melee, autorepeat, triggered and instant spells
-            if (!m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !IsTriggered() && !(IsChannelActive() && m_spellInfo->IsMoveAllowedChannel()))
+            if (!m_spellInfo->IsNextMeleeSwingSpell() && !IsAutoRepeat() && !IsTriggered() && !moveAllowedChannel)
             {
                 // if charmed by creature, trust the AI not to cheat and allow the cast to proceed
                 // @todo this is a hack, "creature" movesplines don't differentiate turning/moving right now
@@ -7573,7 +7588,8 @@ void Spell::Delayed() // only called in DealDamage()
     // spells not losing casting time
     bool const hasPushbackInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_PUSH_BACK;
     bool const needsStarfirePushbackInterrupt = m_spellInfo->IsStarfire() && playerCaster->GetStarfireSnareSpeedRate() <= 0.0f;
-    if (!hasPushbackInterruptFlag && !needsStarfirePushbackInterrupt)
+    bool const needsHurricanePushbackInterrupt = m_spellInfo->IsHurricane() && playerCaster->GetHurricaneSnareSpeedRate() <= 0.0f;
+    if (!hasPushbackInterruptFlag && !needsStarfirePushbackInterrupt && !needsHurricanePushbackInterrupt)
         return;
 
     //check pushback reduce

@@ -719,8 +719,16 @@ void Unit::UpdateInterruptMask()
         m_interruptMask |= (*i)->GetBase()->GetSpellInfo()->AuraInterruptFlags;
 
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
         if (spell->getState() == SPELL_STATE_CASTING)
-            m_interruptMask |= spell->m_spellInfo->ChannelInterruptFlags;
+        {
+            uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
+            if (spell->m_spellInfo->IsHurricane())
+                channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+
+            m_interruptMask |= channelInterruptFlags;
+        }
+    }
 }
 
 bool Unit::HasAuraTypeWithFamilyFlags(AuraType auraType, uint32 familyName, flag96 familyFlags) const
@@ -3401,13 +3409,23 @@ bool Unit::IsMovementPreventedByCasting() const
 
     // channeled spells during channel stage (after the initial cast timer) allow movement with a specific spell attribute
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
         if (spell->getState() != SPELL_STATE_FINISHED && spell->IsChannelActive())
-            if (spell->GetSpellInfo()->IsMoveAllowedChannel())
+        {
+            SpellInfo const* spellInfo = spell->GetSpellInfo();
+            if (spellInfo->IsMoveAllowedChannel() && (!spellInfo->IsHurricane() || GetHurricaneSnareSpeedRate() > 0.0f))
                 return false;
+        }
+    }
 
     if (GetStarfireSnareSpeedRate() > 0.0f)
         if (Spell* spell = m_currentSpells[CURRENT_GENERIC_SPELL])
             if (spell->GetSpellInfo()->IsStarfire())
+                return false;
+
+    if (GetHurricaneSnareSpeedRate() > 0.0f)
+        if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+            if (spell->GetSpellInfo()->IsHurricane())
                 return false;
 
     // prohibit movement for all other spell casts
@@ -4333,10 +4351,20 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
 
     // interrupt channeled spell
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
+        uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
+        if (spell->m_spellInfo->IsHurricane())
+            channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+
         if (spell->getState() == SPELL_STATE_CASTING
-            && (spell->m_spellInfo->ChannelInterruptFlags & flag)
+            && (channelInterruptFlags & flag)
             && spell->m_spellInfo->Id != except)
-            InterruptNonMeleeSpells(false);
+        {
+            bool const hurricaneMovementAllowed = (flag & (AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING)) && spell->m_spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f;
+            if (!hurricaneMovementAllowed)
+                InterruptNonMeleeSpells(false);
+        }
+    }
 
     UpdateInterruptMask();
 }
@@ -4940,6 +4968,47 @@ float Unit::GetStarfireSnareSpeedRate() const
         }
 
         if (!spellInfo->HasAttribute(SPELL_ATTR0_CU_ALLOW_STARFIRE_SNARE_CAST))
+            continue;
+
+        for (uint8 effIndex = EFFECT_0; effIndex < MAX_SPELL_EFFECTS; ++effIndex)
+        {
+            if (AuraEffect const* auraEffect = aura->GetEffect(effIndex))
+            {
+                int32 const amount = auraEffect->GetAmount();
+                if (amount <= 0)
+                    continue;
+
+                float const rate = std::clamp(static_cast<float>(amount) / 100.0f, 0.0f, 1.0f);
+                if (rate > bestRate)
+                    bestRate = rate;
+            }
+        }
+    }
+
+    return bestRate;
+}
+
+float Unit::GetHurricaneSnareSpeedRate() const
+{
+    float bestRate = 0.0f;
+
+    for (AuraApplicationMap::const_iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end(); ++iter)
+    {
+        Aura const* aura = iter->second->GetBase();
+        SpellInfo const* spellInfo = aura->GetSpellInfo();
+        if (!spellInfo)
+            continue;
+
+        float const spellDefinedRate = spellInfo->GetHurricaneSnareSpeedRate();
+        if (spellDefinedRate > 0.0f)
+        {
+            if (spellDefinedRate > bestRate)
+                bestRate = spellDefinedRate;
+
+            continue;
+        }
+
+        if (!spellInfo->HasAttribute(SPELL_ATTR0_CU_ALLOW_HURRICANE_SNARE_CAST))
             continue;
 
         for (uint8 effIndex = EFFECT_0; effIndex < MAX_SPELL_EFFECTS; ++effIndex)

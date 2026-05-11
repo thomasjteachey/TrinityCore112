@@ -168,6 +168,7 @@ enum SpellCustomAttributes
     SPELL_ATTR0_CU_IS_TALENT                     = 0x00800000, // reserved for master branch
     SPELL_ATTR0_CU_AURA_CANNOT_BE_SAVED          = 0x01000000,
     SPELL_ATTR0_CU_ALLOW_STARFIRE_SNARE_CAST     = 0x02000000,
+    SPELL_ATTR0_CU_ALLOW_HURRICANE_SNARE_CAST    = 0x04000000,
 
     SPELL_ATTR0_CU_NEGATIVE                      = SPELL_ATTR0_CU_NEGATIVE_EFF0 | SPELL_ATTR0_CU_NEGATIVE_EFF1 | SPELL_ATTR0_CU_NEGATIVE_EFF2
 };
@@ -418,8 +419,10 @@ class TC_GAME_API SpellInfo
         bool IsChanneled() const;
         bool IsMoveAllowedChannel() const;
         bool IsStarfire() const;
+        bool IsHurricane() const;
         bool IsMindVision() const;
         float GetStarfireSnareSpeedRate() const;
+        float GetHurricaneSnareSpeedRate() const;
         bool NeedsComboPoints() const;
         bool IsNextMeleeSwingSpell() const;
         bool IsBreakingStealth() const;
