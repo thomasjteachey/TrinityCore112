@@ -1288,7 +1288,7 @@ float SpellInfo::GetHurricaneSnareSpeedRate() const
     switch (Id)
     {
         case 89760: // Custom Hurricane walk-while-channeling aura
-            return 0.10f;
+            return 0.15f;
         default:
             break;
     }
