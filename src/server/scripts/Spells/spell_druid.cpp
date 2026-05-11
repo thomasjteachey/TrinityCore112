@@ -867,7 +867,7 @@ class spell_dru_thinnervate : public AuraScript
         }
 
         if (Unit* caster = GetCaster())
-            amount = int32(CalculatePct(caster->GetCreatePowerValue(POWER_MANA), amount) / aurEff->GetTotalTicks());
+            amount = int32(CalculatePct(caster->GetCreatePowerValue(POWER_MANA), amount));
         else
             amount = 0;
     }
