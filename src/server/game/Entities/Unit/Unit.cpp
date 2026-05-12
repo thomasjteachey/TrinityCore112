@@ -87,6 +87,20 @@
 namespace
 {
 static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
+static uint32 constexpr SPELL_ICE_FANG_SPRINT = 89768;
+static float constexpr ICE_FANG_SPRINT_TURN_SPEED = 0.7f;
+
+bool IsRogueSprintSpell(SpellInfo const* spellInfo)
+{
+    return spellInfo->SpellFamilyName == SPELLFAMILY_ROGUE
+        && (spellInfo->SpellFamilyFlags[0] & 0x40)
+        && spellInfo->GetCategory() == 44;
+}
+
+bool IsIceFangSprintTurnRateAura(SpellInfo const* spellInfo)
+{
+    return spellInfo->Id == SPELL_ICE_FANG_SPRINT || IsRogueSprintSpell(spellInfo);
+}
 }
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
@@ -3712,6 +3726,9 @@ void Unit::_ApplyAura(AuraApplication* aurApp, uint8 effMask)
             aurApp->_HandleEffect(i, true);
     }
 
+    if (IsIceFangSprintTurnRateAura(aura->GetSpellInfo()))
+        UpdateIceFangSprintTurnRate();
+
     if (Player* player = ToPlayer())
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
@@ -3802,6 +3819,9 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
     aura->HandleAuraSpecificMods(aurApp, caster, false, false);
 
     aura->LogHeartbeatRemoval(this, removeMode);
+
+    if (IsIceFangSprintTurnRateAura(aura->GetSpellInfo()))
+        UpdateIceFangSprintTurnRate();
 
     if (Player* player = ToPlayer())
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
@@ -9141,6 +9161,34 @@ float Unit::GetSpeed(UnitMoveType mtype) const
 void Unit::SetSpeed(UnitMoveType mtype, float newValue)
 {
     SetSpeedRate(mtype, newValue / (IsControlledByPlayer() ? playerBaseMoveSpeed[mtype] : baseMoveSpeed[mtype]));
+}
+
+void Unit::UpdateIceFangSprintTurnRate()
+{
+    bool hasIceFangSprint = false;
+    bool hasRogueSprint = false;
+
+    for (AuraApplicationMap::value_type const& appliedAura : m_appliedAuras)
+    {
+        SpellInfo const* spellInfo = appliedAura.second->GetBase()->GetSpellInfo();
+        if (spellInfo->Id == SPELL_ICE_FANG_SPRINT)
+        {
+            hasIceFangSprint = true;
+            if (hasRogueSprint)
+                break;
+        }
+        else if (IsRogueSprintSpell(spellInfo))
+        {
+            hasRogueSprint = true;
+            if (hasIceFangSprint)
+                break;
+        }
+    }
+
+    if (hasIceFangSprint && hasRogueSprint)
+        SetSpeed(MOVE_TURN_RATE, ICE_FANG_SPRINT_TURN_SPEED);
+    else
+        SetSpeedRate(MOVE_TURN_RATE, 1.0f);
 }
 
 void Unit::SetSpeedRate(UnitMoveType mtype, float rate)
