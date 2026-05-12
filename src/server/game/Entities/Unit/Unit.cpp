@@ -90,16 +90,9 @@ static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
 static uint32 constexpr SPELL_ICE_FANG_SPRINT = 89768;
 static float constexpr ICE_FANG_SPRINT_TURN_SPEED = 0;
 
-bool IsRogueSprintSpell(SpellInfo const* spellInfo)
-{
-    return spellInfo->SpellFamilyName == SPELLFAMILY_ROGUE
-        && (spellInfo->SpellFamilyFlags[0] & 0x40)
-        && spellInfo->GetCategory() == 44;
-}
-
 bool IsIceFangSprintTurnRateAura(SpellInfo const* spellInfo)
 {
-    return spellInfo->Id == SPELL_ICE_FANG_SPRINT || IsRogueSprintSpell(spellInfo);
+    return spellInfo->Id == SPELL_ICE_FANG_SPRINT;
 }
 }
 
@@ -9158,6 +9151,11 @@ float Unit::GetSpeed(UnitMoveType mtype) const
     return m_speed_rate[mtype]*(IsControlledByPlayer() ? playerBaseMoveSpeed[mtype] : baseMoveSpeed[mtype]);
 }
 
+bool Unit::IsIceFangSprintTurnLocked() const
+{
+    return HasAura(SPELL_ICE_FANG_SPRINT);
+}
+
 void Unit::SetSpeed(UnitMoveType mtype, float newValue)
 {
     SetSpeedRate(mtype, newValue / (IsControlledByPlayer() ? playerBaseMoveSpeed[mtype] : baseMoveSpeed[mtype]));
@@ -9165,27 +9163,7 @@ void Unit::SetSpeed(UnitMoveType mtype, float newValue)
 
 void Unit::UpdateIceFangSprintTurnRate()
 {
-    bool hasIceFangSprint = false;
-    bool hasRogueSprint = false;
-
-    for (AuraApplicationMap::value_type const& appliedAura : m_appliedAuras)
-    {
-        SpellInfo const* spellInfo = appliedAura.second->GetBase()->GetSpellInfo();
-        if (spellInfo->Id == SPELL_ICE_FANG_SPRINT)
-        {
-            hasIceFangSprint = true;
-            if (hasRogueSprint)
-                break;
-        }
-        else if (IsRogueSprintSpell(spellInfo))
-        {
-            hasRogueSprint = true;
-            if (hasIceFangSprint)
-                break;
-        }
-    }
-
-    if (hasIceFangSprint && hasRogueSprint)
+    if (IsIceFangSprintTurnLocked())
         SetSpeed(MOVE_TURN_RATE, ICE_FANG_SPRINT_TURN_SPEED);
     else
         SetSpeedRate(MOVE_TURN_RATE, 1.0f);
