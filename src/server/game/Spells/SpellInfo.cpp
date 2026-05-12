@@ -2786,6 +2786,8 @@ void SpellInfo::_LoadImmunityInfo()
                     case 81272: //death wish: unstoppable
                     case 81296: //unstoppable
                     case 81300: //bestial wrath (new)
+                    case 89765: //unstoppable hurricane
+                    case 89775: //thank your shaman
                         mechanicImmunityMask |= IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK;
                         break;
                     case 54508: // Demonic Empowerment
