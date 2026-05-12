@@ -2393,7 +2393,7 @@ class spell_sha_purge : public SpellScript
         PreventHitDefaultEffect(effIndex);
 
         caster->CastSpell(target, SPELL_SHAMAN_REHGARS_MERCY_TRIGGER, TRIGGERED_FULL_MASK);
-        AddVisiblePurgeCooldown(caster, 120 * IN_MILLISECONDS);
+        AddVisiblePurgeCooldown(caster, 180 * IN_MILLISECONDS);
     }
 
     void Register() override
