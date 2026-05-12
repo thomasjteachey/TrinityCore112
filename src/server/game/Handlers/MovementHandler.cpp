@@ -377,6 +377,12 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
     if (!mover->movespline->Finalized())
         return;
 
+    if (mover->IsIceFangSprintTurnLocked())
+    {
+        movementInfo.pos.SetOrientation(mover->GetOrientation());
+        movementInfo.RemoveMovementFlag(MOVEMENTFLAG_MASK_TURNING);
+    }
+
     /* handle special cases */
     if (movementInfo.HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
     {

@@ -1671,6 +1671,7 @@ class TC_GAME_API Unit : public WorldObject
         float GetSpeedRate(UnitMoveType mtype) const { return m_speed_rate[mtype]; }
         void SetSpeed(UnitMoveType mtype, float newValue);
         void SetSpeedRate(UnitMoveType mtype, float rate);
+        bool IsIceFangSprintTurnLocked() const;
     private:
         void UpdateIceFangSprintTurnRate();
         void SetSpeedRateReal(UnitMoveType mtype, float rate);
