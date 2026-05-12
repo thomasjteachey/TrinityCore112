@@ -119,6 +119,10 @@ enum ShamanSpells
     SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R6 = 26370,
     SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R7 = 26371,
     SPELL_SHAMAN_LIGHTNING_SHIELD_DAMAGE_R8 = 26372,
+    SPELL_SHAMAN_PURGE_R1                       = 370,
+    SPELL_SHAMAN_PURGE_R2                       = 8012,
+    SPELL_SHAMAN_PURGE_WRAPPER_R1               = 81324,
+    SPELL_SHAMAN_PURGE_WRAPPER_R2               = 81325,
     SPELL_SHAMAN_EXPUNGE                        = 81326,
     SPELL_SHAMAN_BRAIN_DRAIN                    = 81327,
     SPELL_SHAMAN_SHOCKING                       = 81328,
@@ -131,7 +135,9 @@ enum ShamanSpells
     SPELL_SHAMAN_FROST_SHOCK_R1 = 8056,
     SPELL_SHAMAN_WIND_SHEAR = 57994,
     SPELL_SHAMAN_FROSTBRAND_ATTACK_TRIGGER = 81851,
-    SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF = 81852
+    SPELL_SHAMAN_FROSTBRAND_ATTACK_SELF_BUFF = 81852,
+    SPELL_SHAMAN_REHGARS_MERCY                 = 89774,
+    SPELL_SHAMAN_REHGARS_MERCY_TRIGGER         = 89775
 };
 
 enum ShamanSpellIcons
@@ -2302,45 +2308,98 @@ class spell_sha_purge : public SpellScript
 {
     PrepareSpellScript(spell_sha_purge);
 
+    static void AddVisiblePurgeCooldown(Unit* caster, uint32 cooldownMs)
+    {
+        if (!caster)
+            return;
+
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        if (!spellHistory)
+            return;
+
+        static constexpr std::array<uint32, 4> PurgeSpellIds =
+        {
+            SPELL_SHAMAN_PURGE_R1,
+            SPELL_SHAMAN_PURGE_R2,
+            SPELL_SHAMAN_PURGE_WRAPPER_R1,
+            SPELL_SHAMAN_PURGE_WRAPPER_R2
+        };
+
+        Player* player = caster->ToPlayer();
+
+        for (uint32 spellId : PurgeSpellIds)
+        {
+            if (!sSpellMgr->GetSpellInfo(spellId))
+                continue;
+
+            spellHistory->AddCooldown(spellId, 0, std::chrono::milliseconds(cooldownMs));
+
+            if (player)
+            {
+                WorldPacket data;
+                spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, spellId, cooldownMs);
+                player->SendDirectMessage(&data);
+            }
+        }
+    }
+
     SpellCastResult CheckMagicDispel()
     {
         Unit* caster = GetCaster();
         Unit* target = GetExplTargetUnit();
 
-        bool hasDispellableAura = false;
-        bool hasNonDispelEffect = false;
+        if (!caster || !target)
+            return SPELL_CAST_OK;
+
+        // Rehgar's Mercy turns wrapper Purge into a friendly spell.
+        // The triggered real Purge spell is suppressed in HandleRehgarsMercy.
+        if (caster->IsFriendlyTo(target))
+            return caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY) ? SPELL_CAST_OK : SPELL_FAILED_BAD_TARGETS;
+
         uint32 dispelMask = DISPEL_CURSE;
 
-        //if target doesn't have expunge, go through dispel check
-        if(!caster->HasAura(SPELL_SHAMAN_EXPUNGE))
+        // If target doesn't have Expunge, go through dispel check.
+        if (!caster->HasAura(SPELL_SHAMAN_EXPUNGE))
         {
-            if (target && caster)
+            // do not allow to cast on hostile targets in sanctuary
+            if (caster->IsInSanctuary() || target->IsInSanctuary())
             {
-                // do not allow to cast on hostile targets in sanctuary
-                if (!caster->IsFriendlyTo(target))
-                {
-                    if (caster->IsInSanctuary() || target->IsInSanctuary())
-                    {
-                        // fix for duels
-                        Player* player = caster->ToPlayer();
-                        if (!player || !player->duel || target != player->duel->Opponent)
-                            return SPELL_FAILED_NOTHING_TO_DISPEL;
-                    }
-                }
-
-                DispelChargesList dispelList;
-                target->GetDispellableAuraList(caster, dispelMask, dispelList);
-                if (dispelList.empty())
+                // fix for duels
+                Player* player = caster->ToPlayer();
+                if (!player || !player->duel || target != player->duel->Opponent)
                     return SPELL_FAILED_NOTHING_TO_DISPEL;
             }
+
+            DispelChargesList dispelList;
+            target->GetDispellableAuraList(caster, dispelMask, dispelList);
+            if (dispelList.empty())
+                return SPELL_FAILED_NOTHING_TO_DISPEL;
         }
+
         return SPELL_CAST_OK;
+    }
+
+    void HandleRehgarsMercy(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
+
+        if (!caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY) || !caster->IsFriendlyTo(target))
+            return;
+
+        // Do not fire 370/8012 from the wrapper when Purge is used on a friendly target.
+        PreventHitDefaultEffect(effIndex);
+
+        caster->CastSpell(target, SPELL_SHAMAN_REHGARS_MERCY_TRIGGER, TRIGGERED_FULL_MASK);
+        AddVisiblePurgeCooldown(caster, 90 * IN_MILLISECONDS);
     }
 
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_sha_purge::CheckMagicDispel);
-        //OnEffectHitTarget += SpellEffectFn(spell_sha_purge::OnLaunch, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
+        OnEffectHitTarget += SpellEffectFn(spell_sha_purge::HandleRehgarsMercy, EFFECT_0, SPELL_EFFECT_TRIGGER_SPELL);
     }
 };
 
