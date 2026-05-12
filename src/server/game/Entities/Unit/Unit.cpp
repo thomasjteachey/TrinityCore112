@@ -88,7 +88,7 @@ namespace
 {
 static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
 static uint32 constexpr SPELL_ICE_FANG_SPRINT = 89768;
-static float constexpr ICE_FANG_SPRINT_TURN_SPEED = 0f;
+static float constexpr ICE_FANG_SPRINT_TURN_SPEED = 0;
 
 bool IsRogueSprintSpell(SpellInfo const* spellInfo)
 {
