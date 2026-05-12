@@ -23817,6 +23817,12 @@ void Player::ResetNonQuestAndMountSpells()
     if (HasAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS))
         RemoveAtLoginFlag(AT_LOGIN_RESET_SPELLS_KEEP_MOUNTS, true);
 
+    // Strip currently applied equipment state before clearing all auras so the
+    // equipment pass below can rebuild only the auras and bonuses the character
+    // should still have after the spell/talent reset.
+    _RemoveAllItemMods();
+    RemoveAllAuras();
+
     PlayerSpellMap spells = GetSpellMap();
     std::unordered_set<uint32> mountSpells;
     std::unordered_set<uint32> customSpells;
@@ -23889,6 +23895,25 @@ void Player::ResetNonQuestAndMountSpells()
     SetActiveSpec(activeSpec);
     m_usedTalentCount = 0;
     SetFreeTalentPoints(CalculateTalentsPoints());
+
+    _ApplyAllItemMods();
+
+    PlayerSpellMap rebuiltSpells = GetSpellMap();
+    for (PlayerSpellMap::const_iterator itr = rebuiltSpells.begin(); itr != rebuiltSpells.end(); ++itr)
+    {
+        if (itr->second.state == PLAYERSPELL_REMOVED || itr->second.disabled || !itr->second.active)
+            continue;
+
+        if (!HasSpell(itr->first))
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(itr->first);
+        if (!spellInfo || !spellInfo->IsPassive())
+            continue;
+
+        if (HandlePassiveSpellLearn(spellInfo))
+            CastSpell(this, spellInfo->Id, true);
+    }
 
     SendTalentsInfoData(false);
 }
