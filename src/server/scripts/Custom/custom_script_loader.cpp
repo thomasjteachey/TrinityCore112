@@ -28,6 +28,7 @@ void AddSC_mod_pvp_titles();
 void AddSC_custom_diremaul_beads();
 void AddSC_custom_gurubashi_arena();
 void AddSC_custom_depleted_mark_exchange();
+void AddSC_custom_polearm_staff_inner_auras();
 void AddSC_custom_pvpve_dungeon();
 void AddSC_npc_scarlet_chapel_queue();
 void AddSC_npc_account_banker();
@@ -42,6 +43,7 @@ void AddCustomScripts()
     AddSC_custom_diremaul_beads();
     AddSC_custom_gurubashi_arena();
     AddSC_custom_depleted_mark_exchange();
+    AddSC_custom_polearm_staff_inner_auras();
     AddSC_custom_pvpve_dungeon();
     AddSC_npc_scarlet_chapel_queue();
     AddSC_npc_account_banker();
