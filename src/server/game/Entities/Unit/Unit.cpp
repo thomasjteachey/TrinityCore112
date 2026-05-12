@@ -695,8 +695,15 @@ bool Unit::IsWithinMeleeRangeAt(Position const& pos, Unit const* obj) const
 
 float Unit::GetMeleeRange(Unit const* target) const
 {
-    float range = GetCombatReach() + target->GetCombatReach() + 4.0f / 3.0f;
-    return std::max(range, NOMINAL_MELEE_RANGE);
+    float range = std::max(GetCombatReach() + target->GetCombatReach() + 4.0f / 3.0f, NOMINAL_MELEE_RANGE);
+
+    if (AuraEffect const* auraEffect = GetAuraEffect(89772, EFFECT_0))
+        range += auraEffect->GetAmount();
+
+    if (AuraEffect const* auraEffect = GetAuraEffect(89773, EFFECT_0))
+        range += auraEffect->GetAmount();
+
+    return range;
 }
 
 AuraApplication* Unit::GetVisibleAura(uint8 slot) const
