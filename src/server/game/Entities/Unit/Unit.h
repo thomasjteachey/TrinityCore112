@@ -1672,6 +1672,7 @@ class TC_GAME_API Unit : public WorldObject
         void SetSpeed(UnitMoveType mtype, float newValue);
         void SetSpeedRate(UnitMoveType mtype, float rate);
     private:
+        void UpdateIceFangSprintTurnRate();
         void SetSpeedRateReal(UnitMoveType mtype, float rate);
 
     public:
