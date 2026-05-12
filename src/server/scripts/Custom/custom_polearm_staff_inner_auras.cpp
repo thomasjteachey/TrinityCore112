@@ -19,6 +19,7 @@
 #include "ItemTemplate.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "SpellInfo.h"
 #include "SpellScript.h"
 
 namespace PolearmStaffInnerAuras
