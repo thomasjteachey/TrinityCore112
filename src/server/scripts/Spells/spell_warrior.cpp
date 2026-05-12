@@ -24,7 +24,6 @@
 #include "ScriptMgr.h"
 #include "Item.h"
 #include "ItemTemplate.h"
-#include "Optional.h"
 #include "PathGenerator.h"
 #include "Player.h"
 #include "Random.h"
@@ -130,6 +129,15 @@ bool IsPolearmOrStaffEquipped(Player const* player)
     return weaponTemplate->SubClass == ITEM_SUBCLASS_WEAPON_POLEARM || weaponTemplate->SubClass == ITEM_SUBCLASS_WEAPON_STAFF;
 }
 
+uint32 GetInnerSpellForOuter(uint32 outerSpellId)
+{
+    for (AuraMapping const& mapping : AuraMappings)
+        if (mapping.OuterSpellId == outerSpellId)
+            return mapping.InnerSpellId;
+
+    return 0;
+}
+
 bool IsMappedOuterSpell(uint32 spellId)
 {
     for (AuraMapping const& mapping : AuraMappings)
@@ -176,6 +184,41 @@ void OnKnownSpellChanged(Player* player, uint32 spellId)
         Sync(player);
 }
 }
+
+class spell_polearm_staff_outer_aura : public AuraScript
+{
+    PrepareAuraScript(spell_polearm_staff_outer_aura);
+
+    void HandleApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* player = GetTarget() ? GetTarget()->ToPlayer() : nullptr)
+            PolearmStaffInnerAuras::Sync(player);
+    }
+
+    void HandleRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Player* player = GetTarget() ? GetTarget()->ToPlayer() : nullptr)
+            if (uint32 innerSpellId = PolearmStaffInnerAuras::GetInnerSpellForOuter(GetSpellInfo()->Id))
+                player->RemoveAurasDueToSpell(innerSpellId);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_polearm_staff_outer_aura::HandleApply, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL_OR_REAPPLY_MASK);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_polearm_staff_outer_aura::HandleRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+class spell_polearm_staff_outer_aura_loader : public SpellScriptLoader
+{
+public:
+    spell_polearm_staff_outer_aura_loader() : SpellScriptLoader("spell_polearm_staff_outer_aura") { }
+
+    AuraScript* GetAuraScript() const override
+    {
+        return new spell_polearm_staff_outer_aura();
+    }
+};
 
 class spell_warr_polearm_staff_inner_aura_player : public PlayerScript
 {
@@ -1154,6 +1197,7 @@ class spell_warr_disarm_wrapper : public SpellScript
 
 void AddSC_warrior_spell_scripts()
 {
+    new spell_polearm_staff_outer_aura_loader();
     new spell_warr_polearm_staff_inner_aura_player();
 
     RegisterSpellScript(spell_warr_bloodthirst);
