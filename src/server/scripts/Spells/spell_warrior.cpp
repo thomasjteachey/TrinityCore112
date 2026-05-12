@@ -22,6 +22,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "Item.h"
 #include "ItemTemplate.h"
 #include "Optional.h"
 #include "PathGenerator.h"
@@ -94,6 +95,98 @@ enum MiscSpells
     SPELL_CATEGORY_SHIELD_SLAM                      = 1209
 };
 
+namespace PolearmStaffInnerAuras
+{
+namespace
+{
+struct AuraMapping
+{
+    uint32 OuterSpellId;
+    uint32 InnerSpellId;
+};
+
+constexpr AuraMapping AuraMappings[] =
+{
+    { 12165, 89769 },
+    { 12830, 89770 },
+    { 12831, 89771 },
+    { 12832, 89772 },
+    { 12833, 89773 }
+};
+
+bool IsPolearmOrStaffEquipped(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Item const* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    if (!weapon)
+        return false;
+
+    ItemTemplate const* weaponTemplate = weapon->GetTemplate();
+    if (!weaponTemplate || weaponTemplate->Class != ITEM_CLASS_WEAPON)
+        return false;
+
+    return weaponTemplate->SubClass == ITEM_SUBCLASS_WEAPON_POLEARM || weaponTemplate->SubClass == ITEM_SUBCLASS_WEAPON_STAFF;
+}
+
+bool IsMappedOuterSpell(uint32 spellId)
+{
+    for (AuraMapping const& mapping : AuraMappings)
+        if (mapping.OuterSpellId == spellId)
+            return true;
+
+    return false;
+}
+
+bool ShouldHaveInnerAura(Player const* player, AuraMapping const& mapping)
+{
+    return player->HasSpell(mapping.OuterSpellId) && IsPolearmOrStaffEquipped(player);
+}
+}
+
+void Sync(Player* player)
+{
+    if (!player)
+        return;
+
+    for (AuraMapping const& mapping : AuraMappings)
+    {
+        bool const shouldHaveInnerAura = ShouldHaveInnerAura(player, mapping);
+        bool const hasInnerAura = player->HasAura(mapping.InnerSpellId);
+
+        if (shouldHaveInnerAura)
+        {
+            if (!hasInnerAura)
+                player->CastSpell(player, mapping.InnerSpellId, true);
+        }
+        else if (hasInnerAura)
+            player->RemoveAurasDueToSpell(mapping.InnerSpellId);
+    }
+}
+
+void OnEquipmentChanged(Player* player)
+{
+    Sync(player);
+}
+
+void OnKnownSpellChanged(Player* player, uint32 spellId)
+{
+    if (IsMappedOuterSpell(spellId))
+        Sync(player);
+}
+}
+
+class spell_warr_polearm_staff_inner_aura_player : public PlayerScript
+{
+public:
+    spell_warr_polearm_staff_inner_aura_player() : PlayerScript("spell_warr_polearm_staff_inner_aura_player") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
+    }
+};
 
 // 71, 2457, 2458 - Warrior Stances
 class spell_warr_stance_switch_trigger : public SpellScript
@@ -1061,6 +1154,8 @@ class spell_warr_disarm_wrapper : public SpellScript
 
 void AddSC_warrior_spell_scripts()
 {
+    new spell_warr_polearm_staff_inner_aura_player();
+
     RegisterSpellScript(spell_warr_bloodthirst);
     RegisterSpellScript(spell_warr_bloodthirst_heal);
     RegisterSpellScript(spell_warr_charge);

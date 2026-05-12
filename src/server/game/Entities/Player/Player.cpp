@@ -134,6 +134,12 @@ namespace HiddenSets
     void OnEquipmentChanged(Player* player);
 }
 
+namespace PolearmStaffInnerAuras
+{
+    void OnEquipmentChanged(Player* player);
+    void OnKnownSpellChanged(Player* player, uint32 spellId);
+}
+
 namespace
 {
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
@@ -3679,6 +3685,9 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill /*= 0*
         SendDirectMessage(&data);
     }
 
+    if (learning)
+        PolearmStaffInnerAuras::OnKnownSpellChanged(this, spell_id);
+
     // learn all disabled higher ranks and required spells (recursive)
     if (disabled)
     {
@@ -3925,6 +3934,8 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank)
 
     if (needsUnlearnSpellsPacket)
         SendUnlearnSpells();
+
+    PolearmStaffInnerAuras::OnKnownSpellChanged(this, spell_id);
 
     // remove from spell book if not replaced by lesser rank
     if (!prev_activate)
@@ -12697,7 +12708,10 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
         ApplyEquipCooldown(pItem2);
 
         if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+        {
             HiddenSets::OnEquipmentChanged(this);
+            PolearmStaffInnerAuras::OnEquipmentChanged(this);
+        }
 
         return pItem2;
     }
@@ -12710,7 +12724,10 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM, slot, pItem->GetEntry());
 
     if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+    {
         HiddenSets::OnEquipmentChanged(this);
+        PolearmStaffInnerAuras::OnEquipmentChanged(this);
+    }
 
     return pItem;
 }
@@ -12738,7 +12755,10 @@ void Player::QuickEquipItem(uint16 pos, Item* pItem)
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM, slot, pItem->GetEntry());
 
         if (slot < EQUIPMENT_SLOT_END)
+        {
             HiddenSets::OnEquipmentChanged(this);
+            PolearmStaffInnerAuras::OnEquipmentChanged(this);
+        }
     }
 }
 
@@ -12860,6 +12880,7 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
                     CheckTitanGripPenalty();
 
                 HiddenSets::OnEquipmentChanged(this);
+                PolearmStaffInnerAuras::OnEquipmentChanged(this);
             }
         }
         else if (Bag* pBag = GetBagByPos(bag))
@@ -12990,6 +13011,7 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
                 SetVisibleItemSlot(slot, nullptr);
 
                 HiddenSets::OnEquipmentChanged(this);
+                PolearmStaffInnerAuras::OnEquipmentChanged(this);
             }
 
             m_items[slot] = nullptr;
