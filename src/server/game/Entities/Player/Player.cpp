@@ -134,6 +134,11 @@ namespace HiddenSets
     void OnEquipmentChanged(Player* player);
 }
 
+namespace PolearmStaffInnerAuras
+{
+    void OnEquipmentChanged(Player* player);
+}
+
 namespace
 {
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
@@ -12697,7 +12702,10 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
         ApplyEquipCooldown(pItem2);
 
         if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+        {
             HiddenSets::OnEquipmentChanged(this);
+            PolearmStaffInnerAuras::OnEquipmentChanged(this);
+        }
 
         return pItem2;
     }
@@ -12710,7 +12718,10 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
     UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM, slot, pItem->GetEntry());
 
     if (bag == INVENTORY_SLOT_BAG_0 && slot < EQUIPMENT_SLOT_END)
+    {
         HiddenSets::OnEquipmentChanged(this);
+        PolearmStaffInnerAuras::OnEquipmentChanged(this);
+    }
 
     return pItem;
 }
@@ -12738,7 +12749,10 @@ void Player::QuickEquipItem(uint16 pos, Item* pItem)
         UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM, slot, pItem->GetEntry());
 
         if (slot < EQUIPMENT_SLOT_END)
+        {
             HiddenSets::OnEquipmentChanged(this);
+            PolearmStaffInnerAuras::OnEquipmentChanged(this);
+        }
     }
 }
 
@@ -12860,6 +12874,7 @@ void Player::RemoveItem(uint8 bag, uint8 slot, bool update)
                     CheckTitanGripPenalty();
 
                 HiddenSets::OnEquipmentChanged(this);
+                PolearmStaffInnerAuras::OnEquipmentChanged(this);
             }
         }
         else if (Bag* pBag = GetBagByPos(bag))
@@ -12990,6 +13005,7 @@ void Player::DestroyItem(uint8 bag, uint8 slot, bool update)
                 SetVisibleItemSlot(slot, nullptr);
 
                 HiddenSets::OnEquipmentChanged(this);
+                PolearmStaffInnerAuras::OnEquipmentChanged(this);
             }
 
             m_items[slot] = nullptr;
