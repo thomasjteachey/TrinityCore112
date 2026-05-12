@@ -137,6 +137,7 @@ namespace HiddenSets
 namespace PolearmStaffInnerAuras
 {
     void OnEquipmentChanged(Player* player);
+    void OnKnownSpellChanged(Player* player, uint32 spellId);
 }
 
 namespace
@@ -3684,6 +3685,9 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill /*= 0*
         SendDirectMessage(&data);
     }
 
+    if (learning)
+        PolearmStaffInnerAuras::OnKnownSpellChanged(this, spell_id);
+
     // learn all disabled higher ranks and required spells (recursive)
     if (disabled)
     {
@@ -3930,6 +3934,8 @@ void Player::RemoveSpell(uint32 spell_id, bool disabled, bool learn_low_rank)
 
     if (needsUnlearnSpellsPacket)
         SendUnlearnSpells();
+
+    PolearmStaffInnerAuras::OnKnownSpellChanged(this, spell_id);
 
     // remove from spell book if not replaced by lesser rank
     if (!prev_activate)
