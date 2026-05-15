@@ -3316,6 +3316,19 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->ProcChance = 0;
     });
 
+    // Polearm Specialization
+    ApplySpellFix({
+        12165, // (Rank 1)
+        12830, // (Rank 2)
+        12831, // (Rank 3)
+        12832, // (Rank 4)
+        12833  // (Rank 5)
+    }, [](SpellInfo* spellInfo)
+    {
+        // Custom rules allow Polearm Specialization to work with staves too.
+        spellInfo->EquippedItemSubClassMask |= 1 << ITEM_SUBCLASS_WEAPON_STAFF;
+    });
+
     // Maelstrom Weapon
     ApplySpellFix({
         51528, // (Rank 1)
