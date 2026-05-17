@@ -1584,6 +1584,21 @@ class spell_sha_t3_6p_bonus : public AuraScript
     }
 };
 
+// 5729, 6393, 6394, 6395, 10423, 10424 - Stoneclaw Totem Effect
+class spell_sha_stoneclaw_totem_effect : public SpellScript
+{
+    void HandleHit()
+    {
+        if (Unit* target = GetHitUnit())
+            target->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+    }
+
+    void Register() override
+    {
+        OnHit += SpellHitFn(spell_sha_stoneclaw_totem_effect::HandleHit);
+    }
+};
+
 // 28820 - Lightning Shield
 class spell_sha_t3_8p_bonus : public AuraScript
 {
@@ -1955,6 +1970,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_path_of_flames_spread);
     RegisterSpellScript(spell_sha_restorative_mists);
     RegisterSpellScript(spell_sha_spirit_wolf);
+    RegisterSpellScript(spell_sha_stoneclaw_totem_effect);
     RegisterSpellScript(spell_sha_tidal_waves);
     RegisterSpellScript(spell_sha_t3_6p_bonus);
     RegisterSpellScript(spell_sha_t3_8p_bonus);

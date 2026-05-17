@@ -3225,8 +3225,19 @@ void SpellMgr::LoadSpellInfoCustomAttributes()
             break;
         case SPELLFAMILY_GENERIC:
             // Stoneclaw Totem effect
-            if (spellInfoMutable->Id == 5729)
-                spellInfoMutable->AttributesCu |= SPELL_ATTR0_CU_AURA_CC;
+            switch (spellInfoMutable->Id)
+            {
+                case 5729:
+                case 6393:
+                case 6394:
+                case 6395:
+                case 10423:
+                case 10424:
+                    spellInfoMutable->AttributesCu |= SPELL_ATTR0_CU_AURA_CC;
+                    break;
+                default:
+                    break;
+            }
             break;
         default:
             break;
