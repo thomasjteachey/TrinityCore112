@@ -1585,6 +1585,23 @@ class spell_sha_shamanistic_rage : public AuraScript
     }
 };
 
+// 5729, 6393, 6394, 6395, 10423, 10424, 25512, 58586, 58587, 58588 - Stoneclaw Totem Effect
+class spell_sha_stoneclaw_totem_effect : public SpellScript
+{
+    PrepareSpellScript(spell_sha_stoneclaw_totem_effect);
+
+    void RemoveStealth()
+    {
+        if (Unit* target = GetHitUnit())
+            target->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_sha_stoneclaw_totem_effect::RemoveStealth);
+    }
+};
+
 // 55278, 55328, 55329, 55330, 55332, 55333, 55335, 58589, 58590, 58591 - Stoneclaw Totem
 class spell_sha_stoneclaw_totem : public SpellScript
 {
@@ -2784,6 +2801,7 @@ void AddSC_shaman_spell_scripts()
     RegisterSpellScript(spell_sha_nature_guardian);
     RegisterSpellScript(spell_sha_sentry_totem);
     RegisterSpellScript(spell_sha_shamanistic_rage);
+    RegisterSpellScript(spell_sha_stoneclaw_totem_effect);
     RegisterSpellScript(spell_sha_stoneclaw_totem);
     RegisterSpellScript(spell_sha_spirit_hunt);
     RegisterSpellScript(spell_sha_ghost_wolf_charge);
