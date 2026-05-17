@@ -316,14 +316,20 @@ class spell_mage_cold_snap : public SpellScript
         {
             caster->AddAura(81397, GetCaster());
             static constexpr uint32 const spellsToReset[] = {
-                2136, 2137, 2138, 8412, 8413, 10197, 10199, // Fire Blast (ranks 1-7)
-                1953,                                       // Blink
-                12051,                                       // Evocation
-                2139
+                1953,                                      // Blink
+                12051,                                     // Evocation
+                543, 8457, 8458, 10223, 10225, 27128, 43010, // Fire Ward (ranks 1-7)
+                6143, 8461, 8462, 10177, 28609, 32796, 43012 // Frost Ward (ranks 1-7)
             };
 
             for (uint32 spellId : spellsToReset)
+            {
+                SpellInfo const* spellInfo = sSpellMgr->AssertSpellInfo(spellId);
+                if (uint32 categoryId = spellInfo->GetCategory())
+                    caster->GetSpellHistory()->ResetCategoryCooldown(categoryId, true);
+
                 caster->GetSpellHistory()->ResetCooldown(spellId, true);
+            }
         }
     }
 
