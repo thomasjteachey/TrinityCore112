@@ -5832,18 +5832,20 @@ void AuraEffect::HandleBreakableCCAuraProc(AuraApplication* aurApp, ProcEventInf
                     return;
     }
 
-    Unit* caster = aurApp->GetBase()->GetCaster()->ToUnit();
+    Unit* caster = GetCaster();
     int32 maxDamage = 1200;
     if (caster)
     {
         maxDamage = (caster->GetLevel() * 25) - 300;
         if (caster->HasAura(81399) || caster->HasAura(81340))
-        {
             maxDamage *= 1.2f;
-        }
     }
 
-    int32 damage = eventInfo.GetDamageInfo()->GetDamage();
+    DamageInfo* damageInfo = eventInfo.GetDamageInfo();
+    if (!damageInfo)
+        return;
+
+    int32 damage = damageInfo->GetDamage();
     if (damage > maxDamage)
     {
         damage = maxDamage;

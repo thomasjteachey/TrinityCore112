@@ -30,6 +30,7 @@
 #include "Player.h"
 #include "World.h"
 #include "WorldStatePackets.h"
+#include <vector>
 
 GameEventMgr* GameEventMgr::instance()
 {
@@ -1705,24 +1706,52 @@ public:
 
     void Visit(std::unordered_map<ObjectGuid, Creature*>& creatureMap)
     {
-        for (auto const& pair : creatureMap)
-            if (Creature* creature = pair.second; creature && creature->IsInWorld() && creature->IsAIEnabled())
+        VisitSnapshot(creatureMap, [this](Creature* creature)
+        {
+            if (creature->IsInWorld() && creature->IsAIEnabled())
                 if (CreatureAI* ai = creature->AI())
                     ai->OnGameEvent(_activate, _eventId);
+        });
     }
 
     void Visit(std::unordered_map<ObjectGuid, GameObject*>& gameObjectMap)
     {
-        for (auto const& pair : gameObjectMap)
-            if (GameObject* gameObject = pair.second; gameObject && gameObject->IsInWorld())
+        VisitSnapshot(gameObjectMap, [this](GameObject* gameObject)
+        {
+            if (gameObject->IsInWorld())
                 if (GameObjectAI* ai = gameObject->AI())
                     ai->OnGameEvent(_activate, _eventId);
+        });
     }
 
     template<class T>
     void Visit(std::unordered_map<ObjectGuid, T*>&) { }
 
 private:
+    template<class T, class Callback>
+    static void VisitSnapshot(std::unordered_map<ObjectGuid, T*>& objectMap, Callback callback)
+    {
+        std::vector<ObjectGuid> guids;
+        guids.reserve(objectMap.size());
+
+        for (auto const& pair : objectMap)
+            guids.push_back(pair.first);
+
+        // OnGameEvent handlers are free to despawn objects or otherwise mutate
+        // the map object store.  Iterate a stable GUID snapshot and re-resolve
+        // each object immediately before dispatching so callback-side erases do
+        // not invalidate the traversal iterator.
+        for (ObjectGuid const& guid : guids)
+        {
+            auto itr = objectMap.find(guid);
+            if (itr == objectMap.end())
+                continue;
+
+            if (T* object = itr->second)
+                callback(object);
+        }
+    }
+
     uint16 _eventId;
     bool _activate;
 };
