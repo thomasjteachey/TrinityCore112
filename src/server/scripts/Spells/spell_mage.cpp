@@ -416,7 +416,7 @@ private:
     {
         OnCheckCast += SpellCheckCastFn(spell_mage_blink::CheckCast);
         BeforeCast += SpellCastFn(spell_mage_blink::HandleBeforeCast);
-        OnEffectHit += SpellEffectFn(spell_mage_blink::HandleTeleport, EFFECT_0, SPELL_EFFECT_TELEPORT_UNITS);
+        OnEffectHitTarget += SpellEffectFn(spell_mage_blink::HandleTeleport, EFFECT_0, SPELL_EFFECT_TELEPORT_UNITS);
         AfterCast += SpellCastFn(spell_mage_blink::HandleAfterCast);
     }
 
