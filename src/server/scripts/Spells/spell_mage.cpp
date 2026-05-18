@@ -394,10 +394,11 @@ private:
         itr->second.Consumed = true;
 
         WorldLocation const& loc = itr->second.ReturnLocation;
+        float const orientation = caster->GetOrientation();
         if (caster->GetMapId() == loc.GetMapId())
-            caster->NearTeleportTo(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), true);
+            caster->NearTeleportTo(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), orientation, true);
         else if (Player* player = caster->ToPlayer())
-            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), TELE_TO_NOT_LEAVE_COMBAT);
+            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), orientation, TELE_TO_NOT_LEAVE_COMBAT);
         else
             return false;
 
