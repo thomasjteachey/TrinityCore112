@@ -739,7 +739,7 @@ void Unit::UpdateInterruptMask()
         if (spell->getState() == SPELL_STATE_CASTING)
         {
             uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
-            if (spell->m_spellInfo->IsHurricane() || spell->m_spellInfo->IsArcaneMissiles())
+            if (spell->m_spellInfo->IsHurricane())
                 channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
             else if (spell->m_spellInfo->IsArcaneMissiles())
                 channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
@@ -4382,7 +4382,7 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
     if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
     {
         uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
-        if (spell->m_spellInfo->IsHurricane() || spell->m_spellInfo->IsArcaneMissiles())
+        if (spell->m_spellInfo->IsHurricane())
             channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
         else if (spell->m_spellInfo->IsArcaneMissiles())
             channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
