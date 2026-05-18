@@ -88,11 +88,18 @@ namespace
 {
 static uint32 constexpr SPELL_SHAMAN_GHOST_WOLF = 2645;
 static uint32 constexpr SPELL_ICE_FANG_SPRINT = 89768;
+static uint32 constexpr SPELL_ARCANE_MISSILES_MOVE_AURA_1 = 89777;
+static uint32 constexpr SPELL_ARCANE_MISSILES_MOVE_AURA_2 = 89778;
 static float constexpr ICE_FANG_SPRINT_TURN_SPEED = 0;
 
 bool IsIceFangSprintTurnRateAura(SpellInfo const* spellInfo)
 {
     return spellInfo->Id == SPELL_ICE_FANG_SPRINT;
+}
+
+bool IsArcaneMissilesMovementAura(SpellInfo const* spellInfo)
+{
+    return spellInfo->Id == SPELL_ARCANE_MISSILES_MOVE_AURA_1 || spellInfo->Id == SPELL_ARCANE_MISSILES_MOVE_AURA_2;
 }
 }
 
@@ -739,6 +746,8 @@ void Unit::UpdateInterruptMask()
             uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
             if (spell->m_spellInfo->IsHurricane())
                 channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+            else if (spell->m_spellInfo->IsArcaneMissiles())
+                channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
 
             m_interruptMask |= channelInterruptFlags;
         }
@@ -3427,7 +3436,7 @@ bool Unit::IsMovementPreventedByCasting() const
         if (spell->getState() != SPELL_STATE_FINISHED && spell->IsChannelActive())
         {
             SpellInfo const* spellInfo = spell->GetSpellInfo();
-            if (spellInfo->IsMoveAllowedChannel() && (!spellInfo->IsHurricane() || GetHurricaneSnareSpeedRate() > 0.0f))
+            if (spellInfo->IsMoveAllowedChannel() && (!spellInfo->IsHurricane() || GetHurricaneSnareSpeedRate() > 0.0f) && (!spellInfo->IsArcaneMissiles() || GetArcaneMissilesSnareSpeedRate() > 0.0f))
                 return false;
         }
     }
@@ -3437,10 +3446,15 @@ bool Unit::IsMovementPreventedByCasting() const
             if (spell->GetSpellInfo()->IsStarfire())
                 return false;
 
-    if (GetHurricaneSnareSpeedRate() > 0.0f)
-        if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
-            if (spell->GetSpellInfo()->IsHurricane())
-                return false;
+    if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f)
+            return false;
+
+        if (spellInfo->IsArcaneMissiles() && GetArcaneMissilesSnareSpeedRate() > 0.0f)
+            return false;
+    }
 
     // prohibit movement for all other spell casts
     return true;
@@ -4351,8 +4365,15 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
     {
         Aura* aura = (*iter)->GetBase();
         ++iter;
-        if ((aura->GetSpellInfo()->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
+        SpellInfo const* auraSpellInfo = aura->GetSpellInfo();
+        if ((auraSpellInfo->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
         {
+            uint32 constexpr movementInterruptFlags = AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+            if ((flag & movementInterruptFlags) && IsArcaneMissilesMovementAura(auraSpellInfo))
+                if (Spell* channeledSpell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+                    if (channeledSpell->getState() == SPELL_STATE_CASTING && channeledSpell->m_spellInfo->IsArcaneMissiles() && !(auraSpellInfo->AuraInterruptFlags & (flag & ~movementInterruptFlags)))
+                        continue;
+
             if (HasAura(81439) && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))
             {
                 uint32 const protectedFlags = AURA_INTERRUPT_FLAG_HITBYSPELL | AURA_INTERRUPT_FLAG_TAKE_DAMAGE |
@@ -4375,13 +4396,17 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
         if (spell->m_spellInfo->IsHurricane())
             channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+        else if (spell->m_spellInfo->IsArcaneMissiles())
+            channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
 
         if (spell->getState() == SPELL_STATE_CASTING
             && (channelInterruptFlags & flag)
             && spell->m_spellInfo->Id != except)
         {
-            bool const hurricaneMovementAllowed = (flag & (AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING)) && spell->m_spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f;
-            if (!hurricaneMovementAllowed)
+            bool const channelMovementFlag = flag & (AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING);
+            bool const hurricaneMovementAllowed = channelMovementFlag && spell->m_spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f;
+            bool const arcaneMissilesMovementAllowed = (flag & AURA_INTERRUPT_FLAG_MOVE) && spell->m_spellInfo->IsArcaneMissiles() && GetArcaneMissilesSnareSpeedRate() > 0.0f;
+            if (!hurricaneMovementAllowed && !arcaneMissilesMovementAllowed)
                 InterruptNonMeleeSpells(false);
         }
     }
@@ -5029,6 +5054,35 @@ float Unit::GetHurricaneSnareSpeedRate() const
         }
 
         if (!spellInfo->HasAttribute(SPELL_ATTR0_CU_ALLOW_HURRICANE_SNARE_CAST))
+            continue;
+
+        for (uint8 effIndex = EFFECT_0; effIndex < MAX_SPELL_EFFECTS; ++effIndex)
+        {
+            if (AuraEffect const* auraEffect = aura->GetEffect(effIndex))
+            {
+                int32 const amount = auraEffect->GetAmount();
+                if (amount <= 0)
+                    continue;
+
+                float const rate = std::clamp(static_cast<float>(amount) / 100.0f, 0.0f, 1.0f);
+                if (rate > bestRate)
+                    bestRate = rate;
+            }
+        }
+    }
+
+    return bestRate;
+}
+
+float Unit::GetArcaneMissilesSnareSpeedRate() const
+{
+    float bestRate = 0.0f;
+
+    for (AuraApplicationMap::const_iterator iter = m_appliedAuras.begin(); iter != m_appliedAuras.end(); ++iter)
+    {
+        Aura const* aura = iter->second->GetBase();
+        SpellInfo const* spellInfo = aura->GetSpellInfo();
+        if (!spellInfo || !IsArcaneMissilesMovementAura(spellInfo))
             continue;
 
         for (uint8 effIndex = EFFECT_0; effIndex < MAX_SPELL_EFFECTS; ++effIndex)

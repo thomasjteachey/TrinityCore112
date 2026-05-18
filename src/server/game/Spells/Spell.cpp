@@ -3316,6 +3316,7 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
 
     bool const isStarfire = m_spellInfo->IsStarfire();
     bool const isHurricane = m_spellInfo->IsHurricane();
+    bool const isArcaneMissiles = m_spellInfo->IsArcaneMissiles();
     float movementSnareSpeedRate = 0.0f;
     if (playerCaster)
     {
@@ -3323,13 +3324,16 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
             movementSnareSpeedRate = playerCaster->GetStarfireSnareSpeedRate();
         else if (isHurricane)
             movementSnareSpeedRate = playerCaster->GetHurricaneSnareSpeedRate();
+        else if (isArcaneMissiles)
+            movementSnareSpeedRate = playerCaster->GetArcaneMissilesSnareSpeedRate();
     }
 
-    bool const snareMovementAllowed = ((isStarfire && m_casttime) || isHurricane) && movementSnareSpeedRate > 0.0f;
+    bool const snareMovementAllowed = ((isStarfire && m_casttime) || isHurricane || isArcaneMissiles) && movementSnareSpeedRate > 0.0f;
     bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
     bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
-    bool const moveAllowedChannel = m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt;
-    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt;
+    bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
+    bool const moveAllowedChannel = m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
+    bool const requiresMovementInterrupt = (m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT) || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt;
 
     // don't allow channeled spells / spells with cast time to be cast while moving
     // exception are only channeled spells that have no casttime and SPELL_ATTR5_CAN_CHANNEL_WHEN_MOVING
@@ -3807,9 +3811,12 @@ void Spell::handle_immediate()
             Unit* unitCaster = ASSERT_NOTNULL(m_caster->ToUnit());
             uint32 channelInterruptFlags = m_spellInfo->ChannelInterruptFlags;
             if (m_spellInfo->IsHurricane())
-            {
                 channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+            else if (m_spellInfo->IsArcaneMissiles())
+                channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
 
+            if (m_spellInfo->IsHurricane())
+            {
                 if (unitCaster->GetTypeId() == TYPEID_PLAYER && unitCaster->HasAura(SPELL_DRUID_BEEFS_TENACITY))
                     if (Aura* unstoppable = unitCaster->AddAura(SPELL_DRUID_UNSTOPPABLE, unitCaster))
                     {
@@ -4036,14 +4043,16 @@ void Spell::update(uint32 difftime)
         bool const playerMoved = playerCaster->isMoving();
         bool const isStarfire = m_spellInfo->IsStarfire();
         bool const isHurricane = m_spellInfo->IsHurricane();
-        bool const snareMovementAllowed = (isStarfire && playerCaster->GetStarfireSnareSpeedRate() > 0.0f) || (isHurricane && playerCaster->GetHurricaneSnareSpeedRate() > 0.0f);
+        bool const isArcaneMissiles = m_spellInfo->IsArcaneMissiles();
+        bool const snareMovementAllowed = (isStarfire && playerCaster->GetStarfireSnareSpeedRate() > 0.0f) || (isHurricane && playerCaster->GetHurricaneSnareSpeedRate() > 0.0f) || (isArcaneMissiles && playerCaster->GetArcaneMissilesSnareSpeedRate() > 0.0f);
         bool const needsStarfireMovementInterrupt = isStarfire && !snareMovementAllowed;
         bool const needsHurricaneMovementInterrupt = isHurricane && !snareMovementAllowed;
+        bool const needsArcaneMissilesMovementInterrupt = isArcaneMissiles && !snareMovementAllowed;
         bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
-        bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt;
+        bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
 
         if (playerMoved && !snareMovementAllowed &&
-            (hasMovementInterruptFlag || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt) &&
+            (hasMovementInterruptFlag || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt) &&
             (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))
         {
             // don't cancel for melee, autorepeat, triggered and instant spells
@@ -7622,7 +7631,8 @@ void Spell::Delayed() // only called in DealDamage()
     bool const hasPushbackInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_PUSH_BACK;
     bool const needsStarfirePushbackInterrupt = m_spellInfo->IsStarfire() && playerCaster->GetStarfireSnareSpeedRate() <= 0.0f;
     bool const needsHurricanePushbackInterrupt = m_spellInfo->IsHurricane() && playerCaster->GetHurricaneSnareSpeedRate() <= 0.0f;
-    if (!hasPushbackInterruptFlag && !needsStarfirePushbackInterrupt && !needsHurricanePushbackInterrupt)
+    bool const needsArcaneMissilesPushbackInterrupt = m_spellInfo->IsArcaneMissiles() && playerCaster->GetArcaneMissilesSnareSpeedRate() <= 0.0f;
+    if (!hasPushbackInterruptFlag && !needsStarfirePushbackInterrupt && !needsHurricanePushbackInterrupt && !needsArcaneMissilesPushbackInterrupt)
         return;
 
     //check pushback reduce

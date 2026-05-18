@@ -420,6 +420,7 @@ class TC_GAME_API SpellInfo
         bool IsMoveAllowedChannel() const;
         bool IsStarfire() const;
         bool IsHurricane() const;
+        bool IsArcaneMissiles() const;
         bool IsMindVision() const;
         float GetStarfireSnareSpeedRate() const;
         float GetHurricaneSnareSpeedRate() const;
