@@ -117,10 +117,21 @@ void ClearMageBlinkCooldown(Unit* caster, bool update)
 void StartMageBlinkCooldown(Unit* caster, Spell* spell, int32 cooldownModMs)
 {
     SpellInfo const* blink = sSpellMgr->AssertSpellInfo(SPELL_MAGE_BLINK);
-    caster->GetSpellHistory()->SendCooldownEvent(blink, 0, spell);
+    SpellHistory* spellHistory = caster->GetSpellHistory();
+    spellHistory->SendCooldownEvent(blink, 0, spell);
 
     if (cooldownModMs)
-        caster->GetSpellHistory()->ModifyCooldown(SPELL_MAGE_BLINK, cooldownModMs);
+        spellHistory->ModifyCooldown(SPELL_MAGE_BLINK, cooldownModMs);
+
+    if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+    {
+        if (uint32 remainingCooldown = spellHistory->GetRemainingCooldown(blink))
+        {
+            WorldPacket data;
+            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, SPELL_MAGE_BLINK, remainingCooldown);
+            player->SendDirectMessage(&data);
+        }
+    }
 }
 }
 
