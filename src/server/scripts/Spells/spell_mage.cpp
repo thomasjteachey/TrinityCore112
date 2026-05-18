@@ -405,14 +405,27 @@ private:
         return true;
     }
 
-    void HandleTeleport(SpellEffIndex effIndex)
+    void HandleReturnBlinkEffect(SpellEffIndex effIndex)
     {
         Unit* caster = GetCaster();
         if (!caster || !_returnBlink)
             return;
 
-        PreventHitDefaultEffect(effIndex);
-        ReturnToStoredLocation(caster);
+        switch (GetEffectInfo().Effect)
+        {
+            case SPELL_EFFECT_TELEPORT_UNITS:
+                PreventHitDefaultEffect(effIndex);
+                ReturnToStoredLocation(caster);
+                break;
+            case SPELL_EFFECT_APPLY_AURA:
+                // The return Blink should only move the caster back and start the
+                // penalty cooldown; it must not refresh/apply Blink's aura payload.
+                PreventHitAura();
+                PreventHitDefaultEffect(effIndex);
+                break;
+            default:
+                break;
+        }
     }
 
     void HandleAfterCast()
@@ -446,7 +459,7 @@ private:
     {
         OnCheckCast += SpellCheckCastFn(spell_mage_blink::CheckCast);
         BeforeCast += SpellCastFn(spell_mage_blink::HandleBeforeCast);
-        OnEffectHitTarget += SpellEffectFn(spell_mage_blink::HandleTeleport, EFFECT_0, SPELL_EFFECT_TELEPORT_UNITS);
+        OnEffectHitTarget += SpellEffectFn(spell_mage_blink::HandleReturnBlinkEffect, EFFECT_ALL, SPELL_EFFECT_ANY);
         AfterCast += SpellCastFn(spell_mage_blink::HandleAfterCast);
     }
 
