@@ -3810,8 +3810,10 @@ void Spell::handle_immediate()
             // GameObjects shouldn't cast channeled spells
             Unit* unitCaster = ASSERT_NOTNULL(m_caster->ToUnit());
             uint32 channelInterruptFlags = m_spellInfo->ChannelInterruptFlags;
-            if (m_spellInfo->IsHurricane() || m_spellInfo->IsArcaneMissiles())
+            if (m_spellInfo->IsHurricane())
                 channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+            else if (m_spellInfo->IsArcaneMissiles())
+                channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
 
             if (m_spellInfo->IsHurricane())
             {
