@@ -105,13 +105,28 @@ struct MageTimeTravelBlinkState
 
 std::unordered_map<ObjectGuid, MageTimeTravelBlinkState> MageTimeTravelBlinkStates;
 
-void ClearMageBlinkCooldown(Unit* caster, bool update)
+void ClearMageBlinkCooldown(Unit* caster, bool notifyClient)
 {
     SpellInfo const* blink = sSpellMgr->AssertSpellInfo(SPELL_MAGE_BLINK);
-    if (uint32 categoryId = blink->GetCategory())
-        caster->GetSpellHistory()->ResetCategoryCooldown(categoryId, update);
+    SpellHistory* spellHistory = caster->GetSpellHistory();
 
-    caster->GetSpellHistory()->ResetCooldown(SPELL_MAGE_BLINK, update);
+    if (uint32 categoryId = blink->GetCategory())
+        spellHistory->ResetCategoryCooldown(categoryId, false);
+
+    spellHistory->ResetCooldown(SPELL_MAGE_BLINK, false);
+
+    // Do not use SMSG_CLEAR_COOLDOWN here: when this runs immediately after Blink,
+    // that clear packet also makes the client drop the current global-cooldown swipe.
+    // A spell-cooldown update with a zero duration only refreshes Blink's recast state.
+    if (notifyClient)
+    {
+        if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            WorldPacket data;
+            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_NONE, SPELL_MAGE_BLINK, 0);
+            player->SendDirectMessage(&data);
+        }
+    }
 }
 
 void StartMageBlinkCooldown(Unit* caster, Spell* spell, int32 cooldownModMs)
@@ -394,10 +409,11 @@ private:
         itr->second.Consumed = true;
 
         WorldLocation const& loc = itr->second.ReturnLocation;
+        float const orientation = caster->GetOrientation();
         if (caster->GetMapId() == loc.GetMapId())
-            caster->NearTeleportTo(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), true);
+            caster->NearTeleportTo(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), orientation, true);
         else if (Player* player = caster->ToPlayer())
-            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), TELE_TO_NOT_LEAVE_COMBAT);
+            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), orientation, TELE_TO_NOT_LEAVE_COMBAT);
         else
             return false;
 
