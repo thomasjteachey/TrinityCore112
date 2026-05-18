@@ -1427,6 +1427,7 @@ class TC_GAME_API Unit : public WorldObject
         bool HasAuraWithMechanic(uint32 mechanicMask) const;
         float GetStarfireSnareSpeedRate() const;
         float GetHurricaneSnareSpeedRate() const;
+        float GetArcaneMissilesSnareSpeedRate() const;
         bool HasStrongerAuraWithDR(SpellInfo const* auraSpellInfo, Unit* caster, bool triggered) const;
 
         AuraEffect* IsScriptOverriden(SpellInfo const* spell, int32 script) const;

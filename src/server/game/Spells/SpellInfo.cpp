@@ -1257,6 +1257,12 @@ bool SpellInfo::IsHurricane() const
     return firstRankSpellInfo && firstRankSpellInfo->Id == 16914;
 }
 
+bool SpellInfo::IsArcaneMissiles() const
+{
+    SpellInfo const* firstRankSpellInfo = GetFirstRankSpell();
+    return firstRankSpellInfo && firstRankSpellInfo->Id == 5143;
+}
+
 bool SpellInfo::IsMindVision() const
 {
     return Id == 2096 || Id == 10909;
