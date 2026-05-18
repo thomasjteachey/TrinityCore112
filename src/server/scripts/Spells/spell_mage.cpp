@@ -30,8 +30,11 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "CellImpl.h"
+#include "Position.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
+
+#include <unordered_map>
 
 enum MageSpells
 {
@@ -77,7 +80,10 @@ enum MageSpells
     SPELL_MAGE_BROKEN_MANA_SHIELD                = 81331,
     SPELL_MAGE_IMPLOSION                         = 81332,
     SPELL_MAGE_RECALIBRATING                     = 81333,
-    SPELL_MAGE_IGNITE_SPREAD_AURA                = 81411
+    SPELL_MAGE_IGNITE_SPREAD_AURA                = 81411,
+    SPELL_MAGE_BLINK                              = 1953,
+    SPELL_MAGE_TIME_TRAVEL_PASSIVE                = 89776,
+    SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY            = 89780
 };
 
 enum MageSpellIcons
@@ -87,6 +93,36 @@ enum MageSpellIcons
     SPELL_ICON_MAGE_CLEARCASTING      = 212,
     SPELL_ICON_MAGE_LIVING_BOMB       = 3000
 };
+
+
+namespace
+{
+struct MageTimeTravelBlinkState
+{
+    WorldLocation ReturnLocation;
+    bool Consumed = false;
+};
+
+std::unordered_map<ObjectGuid, MageTimeTravelBlinkState> MageTimeTravelBlinkStates;
+
+void ClearMageBlinkCooldown(Unit* caster, bool update)
+{
+    SpellInfo const* blink = sSpellMgr->AssertSpellInfo(SPELL_MAGE_BLINK);
+    if (uint32 categoryId = blink->GetCategory())
+        caster->GetSpellHistory()->ResetCategoryCooldown(categoryId, update);
+
+    caster->GetSpellHistory()->ResetCooldown(SPELL_MAGE_BLINK, update);
+}
+
+void StartMageBlinkCooldown(Unit* caster, Spell* spell, int32 cooldownModMs)
+{
+    SpellInfo const* blink = sSpellMgr->AssertSpellInfo(SPELL_MAGE_BLINK);
+    caster->GetSpellHistory()->SendCooldownEvent(blink, 0, spell);
+
+    if (cooldownModMs)
+        caster->GetSpellHistory()->ModifyCooldown(SPELL_MAGE_BLINK, cooldownModMs);
+}
+}
 
 // Incanter's Absorbtion
 class spell_mage_incanters_absorbtion_base_AuraScript : public AuraScript
@@ -289,6 +325,134 @@ class spell_mage_burnout : public AuraScript
     {
         DoCheckProc += AuraCheckProcFn(spell_mage_burnout::CheckProc);
         OnEffectProc += AuraEffectProcFn(spell_mage_burnout::HandleProc, EFFECT_1, SPELL_AURA_DUMMY);
+    }
+};
+
+// 1953 - Blink
+class spell_mage_blink : public SpellScript
+{
+    PrepareSpellScript(spell_mage_blink);
+
+public:
+    spell_mage_blink() : _recordOrigin(false), _origin() { }
+
+private:
+    SpellCastResult CheckCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY))
+            return SPELL_CAST_OK;
+
+        if (!caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
+            return SPELL_CAST_OK;
+
+        if (caster->HasUnitState(UNIT_STATE_STUNNED) || caster->HasAuraType(SPELL_AURA_MOD_STUN))
+            return SPELL_FAILED_STUNNED;
+
+        // If the return aura survived without stored position state (for example after a reload),
+        // remove it and let Blink behave as a fresh cast instead of teleporting to an invalid location.
+        if (MageTimeTravelBlinkStates.find(caster->GetGUID()) == MageTimeTravelBlinkStates.end())
+            caster->RemoveAurasDueToSpell(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY);
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleBeforeCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE) || caster->HasAura(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY))
+            return;
+
+        _origin = caster->GetWorldLocation();
+        _recordOrigin = true;
+    }
+
+    void HandleTeleport(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY) || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
+            return;
+
+        auto itr = MageTimeTravelBlinkStates.find(caster->GetGUID());
+        if (itr == MageTimeTravelBlinkStates.end())
+            return;
+
+        PreventHitDefaultEffect(effIndex);
+        itr->second.Consumed = true;
+
+        WorldLocation const& loc = itr->second.ReturnLocation;
+        if (Player* player = caster->ToPlayer())
+            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), TELE_TO_NOT_LEAVE_COMBAT);
+        else if (caster->GetMapId() == loc.GetMapId())
+            caster->NearTeleportTo(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), true);
+    }
+
+    void HandleAfterCast()
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
+            return;
+
+        ObjectGuid const casterGuid = caster->GetGUID();
+        auto itr = MageTimeTravelBlinkStates.find(casterGuid);
+        if (itr != MageTimeTravelBlinkStates.end() && itr->second.Consumed)
+        {
+            caster->RemoveAurasDueToSpell(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY);
+            MageTimeTravelBlinkStates.erase(casterGuid);
+            ClearMageBlinkCooldown(caster, true);
+            StartMageBlinkCooldown(caster, GetSpell(), 4 * IN_MILLISECONDS);
+            return;
+        }
+
+        if (!_recordOrigin)
+            return;
+
+        ClearMageBlinkCooldown(caster, true);
+        MageTimeTravelBlinkStates[casterGuid] = { _origin, false };
+        caster->CastSpell(caster, SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY, true);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_mage_blink::CheckCast);
+        BeforeCast += SpellCastFn(spell_mage_blink::HandleBeforeCast);
+        OnEffectHit += SpellEffectFn(spell_mage_blink::HandleTeleport, EFFECT_0, SPELL_EFFECT_TELEPORT_UNITS);
+        AfterCast += SpellCastFn(spell_mage_blink::HandleAfterCast);
+    }
+
+    bool _recordOrigin;
+    WorldLocation _origin;
+};
+
+// 89780 - Time Travel Blink opportunity
+class spell_mage_time_travel_blink : public AuraScript
+{
+    PrepareAuraScript(spell_mage_time_travel_blink);
+
+    void OnRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        ObjectGuid const targetGuid = target->GetGUID();
+        auto itr = MageTimeTravelBlinkStates.find(targetGuid);
+        if (itr == MageTimeTravelBlinkStates.end())
+            return;
+
+        bool const consumed = itr->second.Consumed;
+        MageTimeTravelBlinkStates.erase(itr);
+
+        if (consumed || !target->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
+            return;
+
+        int32 elapsedMs = aurEff->GetBase()->GetMaxDuration();
+        if (elapsedMs < 0)
+            elapsedMs = 0;
+
+        StartMageBlinkCooldown(target, nullptr, -elapsedMs);
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_mage_time_travel_blink::OnRemove, EFFECT_FIRST_FOUND, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -1425,6 +1589,7 @@ void AddSC_mage_spell_scripts()
     RegisterSpellScript(spell_mage_arcane_potency);
     RegisterSpellScript(spell_mage_arcane_missiles);
     RegisterSpellScript(spell_mage_blast_wave);
+    RegisterSpellScript(spell_mage_blink);
     RegisterSpellScript(spell_mage_blazing_speed);
     RegisterSpellScript(spell_mage_burning_determination);
     RegisterSpellScript(spell_mage_burnout);
@@ -1444,6 +1609,7 @@ void AddSC_mage_spell_scripts()
     RegisterSpellScript(spell_mage_glyph_of_icy_veins);
     RegisterSpellScript(spell_mage_glyph_of_ice_block);
     RegisterSpellScript(spell_mage_hot_streak);
+    RegisterSpellScript(spell_mage_time_travel_blink);
     RegisterSpellScript(spell_mage_ice_barrier);
     RegisterSpellScript(spell_mage_ice_block);
     RegisterSpellScript(spell_mage_ignite);
