@@ -22741,6 +22741,13 @@ void Player::UpdateStarfireSnare()
         if (spell->GetSpellInfo()->IsStarfire())
             return;
 
+    if (Spell* spell = m_currentSpells[CURRENT_CHANNELED_SPELL])
+    {
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (spellInfo->IsHurricane() || spellInfo->IsArcaneMissiles())
+            return;
+    }
+
     _pendingStarfireSnareRemoval = false;
     _starfireSnareRemovalGraceUpdates = 0;
     _activeStarfireSnareSpeedRate = 0.0f;
