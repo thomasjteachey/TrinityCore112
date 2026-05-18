@@ -1702,25 +1702,31 @@ void GameEventMgr::SendWorldStateUpdate(Player* player, uint16 event_id)
 class GameEventAIHookWorker
 {
 public:
-    GameEventAIHookWorker(uint16 eventId, bool activate) : _eventId(eventId), _activate(activate) { }
+    GameEventAIHookWorker(Map* map, uint16 eventId, bool activate) : _map(map), _eventId(eventId), _activate(activate) { }
 
     void Visit(std::unordered_map<ObjectGuid, Creature*>& creatureMap)
     {
-        VisitSnapshot(creatureMap, [this](Creature* creature)
+        VisitSnapshot(creatureMap, [this](ObjectGuid const& guid)
         {
-            if (creature->IsInWorld() && creature->IsAIEnabled())
-                if (CreatureAI* ai = creature->AI())
-                    ai->OnGameEvent(_activate, _eventId);
+            Creature* creature = _map->GetCreature(guid);
+            if (!creature || !creature->IsInWorld() || !creature->IsAIEnabled())
+                return;
+
+            if (CreatureAI* ai = creature->AI())
+                ai->OnGameEvent(_activate, _eventId);
         });
     }
 
     void Visit(std::unordered_map<ObjectGuid, GameObject*>& gameObjectMap)
     {
-        VisitSnapshot(gameObjectMap, [this](GameObject* gameObject)
+        VisitSnapshot(gameObjectMap, [this](ObjectGuid const& guid)
         {
-            if (gameObject->IsInWorld())
-                if (GameObjectAI* ai = gameObject->AI())
-                    ai->OnGameEvent(_activate, _eventId);
+            GameObject* gameObject = _map->GetGameObject(guid);
+            if (!gameObject || !gameObject->IsInWorld())
+                return;
+
+            if (GameObjectAI* ai = gameObject->AI())
+                ai->OnGameEvent(_activate, _eventId);
         });
     }
 
@@ -1729,7 +1735,7 @@ public:
 
 private:
     template<class T, class Callback>
-    static void VisitSnapshot(std::unordered_map<ObjectGuid, T*>& objectMap, Callback callback)
+    static void VisitSnapshot(std::unordered_map<ObjectGuid, T*> const& objectMap, Callback callback)
     {
         std::vector<ObjectGuid> guids;
         guids.reserve(objectMap.size());
@@ -1738,20 +1744,15 @@ private:
             guids.push_back(pair.first);
 
         // OnGameEvent handlers are free to despawn objects or otherwise mutate
-        // the map object store.  Iterate a stable GUID snapshot and re-resolve
-        // each object immediately before dispatching so callback-side erases do
-        // not invalidate the traversal iterator.
+        // the map object store.  Iterate only a stable GUID snapshot here and
+        // resolve each GUID through the owning map immediately before dispatch.
+        // This avoids keeping iterators, element references, or stale raw object
+        // pointers from the visited unordered_map across script callbacks.
         for (ObjectGuid const& guid : guids)
-        {
-            auto itr = objectMap.find(guid);
-            if (itr == objectMap.end())
-                continue;
-
-            if (T* object = itr->second)
-                callback(object);
-        }
+            callback(guid);
     }
 
+    Map* _map;
     uint16 _eventId;
     bool _activate;
 };
@@ -1762,7 +1763,7 @@ void GameEventMgr::RunSmartAIScripts(uint16 event_id, bool activate)
     //! Not entirely sure how this will affect units in non-loaded grids.
     sMapMgr->DoForAllMaps([event_id, activate](Map* map)
     {
-        GameEventAIHookWorker worker(event_id, activate);
+        GameEventAIHookWorker worker(map, event_id, activate);
         TypeContainerVisitor<GameEventAIHookWorker, MapStoredObjectTypesContainer> visitor(worker);
         visitor.Visit(map->GetObjectsStore());
     });
