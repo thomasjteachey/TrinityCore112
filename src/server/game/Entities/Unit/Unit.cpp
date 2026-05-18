@@ -741,6 +741,8 @@ void Unit::UpdateInterruptMask()
             uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
             if (spell->m_spellInfo->IsHurricane() || spell->m_spellInfo->IsArcaneMissiles())
                 channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+            else if (spell->m_spellInfo->IsArcaneMissiles())
+                channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
 
             m_interruptMask |= channelInterruptFlags;
         }
@@ -4382,6 +4384,8 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         uint32 channelInterruptFlags = spell->m_spellInfo->ChannelInterruptFlags;
         if (spell->m_spellInfo->IsHurricane() || spell->m_spellInfo->IsArcaneMissiles())
             channelInterruptFlags |= AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING;
+        else if (spell->m_spellInfo->IsArcaneMissiles())
+            channelInterruptFlags = (channelInterruptFlags | AURA_INTERRUPT_FLAG_MOVE) & ~AURA_INTERRUPT_FLAG_TURNING;
 
         if (spell->getState() == SPELL_STATE_CASTING
             && (channelInterruptFlags & flag)
@@ -4389,7 +4393,7 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         {
             bool const channelMovementFlag = flag & (AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING);
             bool const hurricaneMovementAllowed = channelMovementFlag && spell->m_spellInfo->IsHurricane() && GetHurricaneSnareSpeedRate() > 0.0f;
-            bool const arcaneMissilesMovementAllowed = channelMovementFlag && spell->m_spellInfo->IsArcaneMissiles() && GetArcaneMissilesSnareSpeedRate() > 0.0f;
+            bool const arcaneMissilesMovementAllowed = (flag & AURA_INTERRUPT_FLAG_MOVE) && spell->m_spellInfo->IsArcaneMissiles() && GetArcaneMissilesSnareSpeedRate() > 0.0f;
             if (!hurricaneMovementAllowed && !arcaneMissilesMovementAllowed)
                 InterruptNonMeleeSpells(false);
         }
