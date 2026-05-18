@@ -82,6 +82,7 @@ enum MageSpells
     SPELL_MAGE_RECALIBRATING                     = 81333,
     SPELL_MAGE_IGNITE_SPREAD_AURA                = 81411,
     SPELL_MAGE_BLINK                              = 1953,
+    SPELL_MAGE_BLINK_NO_GLOBAL_COOLDOWN           = 89781,
     SPELL_MAGE_TIME_TRAVEL_PASSIVE                = 89776,
     SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY            = 89780
 };
@@ -429,9 +430,27 @@ private:
         }
     }
 
+    void ApplyBlinkGlobalCooldown(Unit* caster)
+    {
+        if (!caster || caster->HasAura(SPELL_MAGE_BLINK_NO_GLOBAL_COOLDOWN))
+            return;
+
+        SpellHistory* spellHistory = caster->GetSpellHistory();
+        spellHistory->AddGlobalCooldown(GetSpellInfo(), 1500);
+
+        if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            WorldPacket data;
+            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, SPELL_MAGE_BLINK, 0);
+            player->SendDirectMessage(&data);
+        }
+    }
+
     void HandleAfterCast()
     {
         Unit* caster = GetCaster();
+        ApplyBlinkGlobalCooldown(caster);
+
         if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
             return;
 
