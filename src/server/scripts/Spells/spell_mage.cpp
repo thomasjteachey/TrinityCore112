@@ -334,7 +334,7 @@ class spell_mage_blink : public SpellScript
     PrepareSpellScript(spell_mage_blink);
 
 public:
-    spell_mage_blink() : _recordOrigin(false), _origin() { }
+    spell_mage_blink() : _recordOrigin(false), _returnBlink(false), _returned(false), _origin() { }
 
 private:
     SpellCastResult CheckCast()
@@ -360,31 +360,48 @@ private:
     void HandleBeforeCast()
     {
         Unit* caster = GetCaster();
-        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE) || caster->HasAura(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY))
+        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
             return;
+
+        ObjectGuid const casterGuid = caster->GetGUID();
+        if (caster->HasAura(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY))
+        {
+            _returnBlink = MageTimeTravelBlinkStates.find(casterGuid) != MageTimeTravelBlinkStates.end();
+            return;
+        }
 
         _origin = caster->GetWorldLocation();
         _recordOrigin = true;
     }
 
-    void HandleTeleport(SpellEffIndex effIndex)
+    bool ReturnToStoredLocation(Unit* caster)
     {
-        Unit* caster = GetCaster();
-        if (!caster || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY) || !caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
-            return;
-
         auto itr = MageTimeTravelBlinkStates.find(caster->GetGUID());
         if (itr == MageTimeTravelBlinkStates.end())
-            return;
+            return false;
 
-        PreventHitDefaultEffect(effIndex);
         itr->second.Consumed = true;
 
         WorldLocation const& loc = itr->second.ReturnLocation;
-        if (Player* player = caster->ToPlayer())
-            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), TELE_TO_NOT_LEAVE_COMBAT);
-        else if (caster->GetMapId() == loc.GetMapId())
+        if (caster->GetMapId() == loc.GetMapId())
             caster->NearTeleportTo(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), true);
+        else if (Player* player = caster->ToPlayer())
+            player->TeleportTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), loc.GetOrientation(), TELE_TO_NOT_LEAVE_COMBAT);
+        else
+            return false;
+
+        _returned = true;
+        return true;
+    }
+
+    void HandleTeleport(SpellEffIndex effIndex)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !_returnBlink)
+            return;
+
+        PreventHitDefaultEffect(effIndex);
+        ReturnToStoredLocation(caster);
     }
 
     void HandleAfterCast()
@@ -394,9 +411,11 @@ private:
             return;
 
         ObjectGuid const casterGuid = caster->GetGUID();
-        auto itr = MageTimeTravelBlinkStates.find(casterGuid);
-        if (itr != MageTimeTravelBlinkStates.end() && itr->second.Consumed)
+        if (_returnBlink)
         {
+            if (!_returned)
+                ReturnToStoredLocation(caster);
+
             caster->RemoveAurasDueToSpell(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY);
             MageTimeTravelBlinkStates.erase(casterGuid);
             ClearMageBlinkCooldown(caster, true);
@@ -421,6 +440,8 @@ private:
     }
 
     bool _recordOrigin;
+    bool _returnBlink;
+    bool _returned;
     WorldLocation _origin;
 };
 
