@@ -34,6 +34,7 @@
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "ObjectAccessor.h"
+#include "TemporarySummon.h"
 
 #include <unordered_map>
 
