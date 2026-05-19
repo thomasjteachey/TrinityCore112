@@ -86,7 +86,7 @@ enum MageSpells
     SPELL_MAGE_BLINK_NO_GLOBAL_COOLDOWN           = 89781,
     SPELL_MAGE_TIME_TRAVEL_PASSIVE                = 89776,
     SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY            = 89780,
-    SPELL_MAGE_GHOST_VISUAL                       = 8326
+    SPELL_MAGE_TIME_TRAVEL_ECHO_VISUAL            = 89782
 };
 
 enum MageSpellIcons
@@ -503,7 +503,7 @@ private:
             echo->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
             echo->SetReactState(REACT_PASSIVE);
             echo->SetImmuneToAll(true);
-            echo->CastSpell(echo, SPELL_MAGE_GHOST_VISUAL, true);
+            echo->CastSpell(echo, SPELL_MAGE_TIME_TRAVEL_ECHO_VISUAL, true);
             MageTimeTravelBlinkStates[casterGuid].EchoGuid = echo->GetGUID();
         }
 
