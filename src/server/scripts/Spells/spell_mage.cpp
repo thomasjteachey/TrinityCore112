@@ -33,6 +33,8 @@
 #include "Position.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
+#include "ObjectAccessor.h"
+#include "TemporarySummon.h"
 
 #include <unordered_map>
 
@@ -84,7 +86,8 @@ enum MageSpells
     SPELL_MAGE_BLINK                              = 1953,
     SPELL_MAGE_BLINK_NO_GLOBAL_COOLDOWN           = 89781,
     SPELL_MAGE_TIME_TRAVEL_PASSIVE                = 89776,
-    SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY            = 89780
+    SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY            = 89780,
+    SPELL_MAGE_TIME_TRAVEL_ECHO_VISUAL            = 89782
 };
 
 enum MageSpellIcons
@@ -101,6 +104,7 @@ namespace
 struct MageTimeTravelBlinkState
 {
     WorldLocation ReturnLocation;
+    ObjectGuid EchoGuid;
     bool Consumed = false;
 };
 
@@ -133,6 +137,17 @@ void StartMageBlinkCooldown(Unit* caster, Spell* spell, int32 cooldownModMs)
             player->SendDirectMessage(&data);
         }
     }
+}
+
+void DespawnMageTimeTravelEcho(Unit* owner, MageTimeTravelBlinkState& state)
+{
+    if (!owner || state.EchoGuid.IsEmpty())
+        return;
+
+    if (Creature* echo = ObjectAccessor::GetCreature(*owner, state.EchoGuid))
+        echo->DespawnOrUnsummon();
+
+    state.EchoGuid.Clear();
 }
 }
 
@@ -461,7 +476,11 @@ private:
                 ReturnToStoredLocation(caster);
 
             caster->RemoveAurasDueToSpell(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY);
-            MageTimeTravelBlinkStates.erase(casterGuid);
+            if (auto itr = MageTimeTravelBlinkStates.find(casterGuid); itr != MageTimeTravelBlinkStates.end())
+            {
+                DespawnMageTimeTravelEcho(caster, itr->second);
+                MageTimeTravelBlinkStates.erase(itr);
+            }
             ClearMageBlinkCooldown(caster, true);
             StartMageBlinkCooldown(caster, GetSpell(), 4 * IN_MILLISECONDS);
             return;
@@ -471,7 +490,22 @@ private:
             return;
 
         ClearMageBlinkCooldown(caster, true);
-        MageTimeTravelBlinkStates[casterGuid] = { _origin, false };
+        MageTimeTravelBlinkStates[casterGuid] = { _origin, ObjectGuid::Empty, false };
+
+        int32 echoDurationMs = sSpellMgr->AssertSpellInfo(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY)->GetMaxDuration();
+        if (echoDurationMs <= 0)
+            echoDurationMs = 6000;
+
+        if (TempSummon* echo = caster->SummonCreature(WORLD_TRIGGER, _origin.GetPositionX(), _origin.GetPositionY(), _origin.GetPositionZ(), _origin.GetOrientation(), TEMPSUMMON_TIMED_DESPAWN, Milliseconds(echoDurationMs)))
+        {
+            echo->SetDisplayId(caster->GetDisplayId());
+            echo->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+            echo->SetReactState(REACT_PASSIVE);
+            echo->SetImmuneToAll(true);
+            echo->CastSpell(echo, SPELL_MAGE_TIME_TRAVEL_ECHO_VISUAL, true);
+            MageTimeTravelBlinkStates[casterGuid].EchoGuid = echo->GetGUID();
+        }
+
         caster->CastSpell(caster, SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY, true);
     }
 
@@ -503,6 +537,7 @@ class spell_mage_time_travel_blink : public AuraScript
             return;
 
         bool const consumed = itr->second.Consumed;
+        DespawnMageTimeTravelEcho(target, itr->second);
         MageTimeTravelBlinkStates.erase(itr);
 
         if (consumed || !target->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
