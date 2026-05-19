@@ -456,7 +456,7 @@ private:
         if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
         {
             WorldPacket data;
-            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, SPELL_MAGE_BLINK, 0);
+            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, 6119, 0);
             player->SendDirectMessage(&data);
         }
     }
