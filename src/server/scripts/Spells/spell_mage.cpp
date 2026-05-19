@@ -491,16 +491,14 @@ private:
         ClearMageBlinkCooldown(caster, true);
         MageTimeTravelBlinkStates[casterGuid] = { _origin, ObjectGuid::Empty, false };
 
-        int32 echoDurationMs = 0;
-        if (SpellInfo const* opportunitySpell = sSpellMgr->GetSpellInfo(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY, GetCastDifficulty()))
-            echoDurationMs = opportunitySpell->GetMaxDuration();
+        int32 echoDurationMs = sSpellMgr->AssertSpellInfo(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY)->GetMaxDuration();
         if (echoDurationMs <= 0)
             echoDurationMs = 6000;
 
-        if (Creature* echo = caster->SummonCreature(WORLD_TRIGGER, _origin.GetPositionX(), _origin.GetPositionY(), _origin.GetPositionZ(), _origin.GetOrientation(), TEMPSUMMON_TIMED_DESPAWN, echoDurationMs))
+        if (TempSummon* echo = caster->SummonCreature(WORLD_TRIGGER, _origin.GetPositionX(), _origin.GetPositionY(), _origin.GetPositionZ(), _origin.GetOrientation(), TEMPSUMMON_TIMED_DESPAWN, Milliseconds(echoDurationMs)))
         {
             echo->SetDisplayId(caster->GetDisplayId());
-            echo->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+            echo->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
             echo->SetReactState(REACT_PASSIVE);
             echo->SetImmuneToAll(true);
             echo->CastSpell(echo, SPELL_MAGE_TIME_TRAVEL_ECHO_VISUAL, true);
