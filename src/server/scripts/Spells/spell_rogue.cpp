@@ -70,6 +70,8 @@ enum RogueSpells
     SPELL_ROGUE_IMPROVED_EVASION_TRIGGER        = 81403,
     SPELL_ROGUE_IMPROVED_EVASION_AURA           = 81404,
     SPELL_ROGUE_GOUGE_DOT_REMOVAL_AURA          = 81410,
+    SPELL_ROGUE_STEALTH_AURA_STALKER            = 81439,
+    SPELL_ROGUE_VANISH_AURA                     = 89783,
     SPELL_ROGUE_DEADLY_SHOT_INTERRUPT_TRIGGER   = 89159
 };
 
@@ -1205,7 +1207,7 @@ class spell_rog_vanish : public AuraScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_ROGUE_STEALTH });
+        return ValidateSpellInfo({ SPELL_ROGUE_STEALTH, SPELL_ROGUE_VANISH_AURA, SPELL_ROGUE_STEALTH_AURA_STALKER });
     }
 
     void ApplyStealth(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
@@ -1225,8 +1227,10 @@ class spell_rog_vanish : public AuraScript
 
         unitTarget->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
 
+        unitTarget->AddAura(SPELL_ROGUE_VANISH_AURA, unitTarget);
+
         if (unitTarget->HasAura(81412))
-            unitTarget->AddAura(81439, unitTarget);
+            unitTarget->AddAura(SPELL_ROGUE_STEALTH_AURA_STALKER, unitTarget);
     }
 
     void Register() override
