@@ -450,8 +450,12 @@ private:
         if (!caster || caster->HasAura(SPELL_MAGE_BLINK_NO_GLOBAL_COOLDOWN))
             return;
 
+        uint32 globalCooldownMs = 1500;
+        if (!_returnBlink && caster->HasAura(SPELL_MAGE_TIME_TRAVEL_PASSIVE))
+            globalCooldownMs = 250;
+
         SpellHistory* spellHistory = caster->GetSpellHistory();
-        spellHistory->AddGlobalCooldown(GetSpellInfo(), 1500);
+        spellHistory->AddGlobalCooldown(GetSpellInfo(), globalCooldownMs);
 
         if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
         {
@@ -490,6 +494,7 @@ private:
             return;
 
         ClearMageBlinkCooldown(caster, true);
+        caster->GetSpellHistory()->AddCooldown(SPELL_MAGE_BLINK, 0, Milliseconds(250));
         MageTimeTravelBlinkStates[casterGuid] = { _origin, ObjectGuid::Empty, false };
 
         int32 echoDurationMs = sSpellMgr->AssertSpellInfo(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY)->GetMaxDuration();
@@ -498,7 +503,14 @@ private:
 
         if (TempSummon* echo = caster->SummonCreature(WORLD_TRIGGER, _origin.GetPositionX(), _origin.GetPositionY(), _origin.GetPositionZ(), _origin.GetOrientation(), TEMPSUMMON_TIMED_DESPAWN, Milliseconds(echoDurationMs)))
         {
-            echo->SetDisplayId(caster->GetDisplayId());
+            if (Player* playerCaster = caster->ToPlayer())
+                echo->CopyAppearanceFromPlayer(playerCaster, false, true, false);
+            else
+            {
+                echo->SetDisplayId(caster->GetDisplayId());
+                echo->SetNativeDisplayId(caster->GetDisplayId());
+            }
+
             echo->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
             echo->SetReactState(REACT_PASSIVE);
             echo->SetImmuneToAll(true);
