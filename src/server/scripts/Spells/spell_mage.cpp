@@ -490,7 +490,7 @@ private:
             return;
 
         ClearMageBlinkCooldown(caster, true);
-        caster->GetSpellHistory()->AddCooldown(SPELL_MAGE_BLINK, 0, Milliseconds(250));
+        caster->GetSpellHistory()->AddCooldown(SPELL_MAGE_BLINK, 0, Milliseconds(500));
         MageTimeTravelBlinkStates[casterGuid] = { _origin, ObjectGuid::Empty, false };
 
         int32 echoDurationMs = sSpellMgr->AssertSpellInfo(SPELL_MAGE_TIME_TRAVEL_OPPORTUNITY)->GetMaxDuration();
