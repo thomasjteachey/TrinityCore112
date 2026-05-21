@@ -976,7 +976,7 @@ bool Aura::ModCharges(int32 num, AuraRemoveMode removeMode)
         if (num < 0 && GetId() == 1784)
         {
             if (Unit* owner = m_owner->ToUnit())
-                if (owner->HasAura(81439))
+                if (owner->HasAura(81439) || owner->HasAura(89783))
                     return false;
         }
 
@@ -2211,8 +2211,8 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
     {
         Unit* target = aurApp->GetTarget();
 
-        // Do not consume stealth proc charges when the unit is protected by aura 81439 (Stealth Aura Stalker)
-        if (!(GetId() == 1784 && target && target->HasAura(81439)))
+        // Do not consume stealth proc charges when the unit is protected by aura 81439 (Stealth Aura Stalker) or 89783 (Vanish Aura)
+        if (!(GetId() == 1784 && target && (target->HasAura(81439) || target->HasAura(89783))))
         {
             --m_procCharges;
             SetNeedClientUpdateForTargets();
