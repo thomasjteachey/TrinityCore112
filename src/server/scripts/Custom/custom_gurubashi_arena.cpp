@@ -640,16 +640,15 @@ bool ShouldTrackGurubashiPlayer(Player const* player)
     return player && player->IsInWorld() && player->GetMapId() == GURUBASHI_ARENA_MAP_ID && player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
 }
 
-bool RestoreItemCharges(Item* item, Player* owner)
+bool HasBelowMaxCharges(Item const* item)
 {
-    if (!item || !owner)
+    if (!item)
         return false;
 
     ItemTemplate const* itemTemplate = item->GetTemplate();
     if (!itemTemplate || itemTemplate->ItemLimitCategory != PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY)
         return false;
 
-    bool hasBelowMaxCharges = false;
     for (uint8 spellIndex = 0; spellIndex < MAX_ITEM_PROTO_SPELLS; ++spellIndex)
     {
         int32 const maxCharges = itemTemplate->Spells[spellIndex].SpellCharges;
@@ -659,17 +658,21 @@ bool RestoreItemCharges(Item* item, Player* owner)
         int32 const currentCharges = item->GetSpellCharges(spellIndex);
         bool const isBelowMaxCharges = (maxCharges > 0) ? (currentCharges < maxCharges) : (currentCharges > maxCharges);
         if (isBelowMaxCharges)
-        {
-            hasBelowMaxCharges = true;
-            break;
-        }
+            return true;
     }
 
-    if (!hasBelowMaxCharges)
+    return false;
+}
+
+bool RestoreItemCharges(Player* owner, uint8 bagSlot, uint8 slot)
+{
+    if (!owner)
         return false;
 
-    uint8 const bagSlot = item->GetBagSlot();
-    uint8 const slot = item->GetSlot();
+    Item* item = owner->GetItemByPos(bagSlot, slot);
+    if (!HasBelowMaxCharges(item))
+        return false;
+
     uint32 const itemEntry = item->GetEntry();
     int32 const randomPropertyId = item->GetItemRandomPropertyId();
 
@@ -688,20 +691,21 @@ bool RestorePvpConsumableCharges(Player* player)
     if (!player)
         return false;
 
-    bool restoredAny = false;
-
-    auto tryRestoreItem = [player, &restoredAny](Item* item)
-    {
-        restoredAny = RestoreItemCharges(item, player) || restoredAny;
-    };
+    std::vector<std::pair<uint8, uint8>> itemsToRestore;
 
     for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
-        tryRestoreItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+        if (HasBelowMaxCharges(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot)))
+            itemsToRestore.emplace_back(INVENTORY_SLOT_BAG_0, slot);
 
     for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
         if (Bag* bag = player->GetBagByPos(bagSlot))
             for (uint8 slot = 0; slot < bag->GetBagSize(); ++slot)
-                tryRestoreItem(bag->GetItemByPos(slot));
+                if (HasBelowMaxCharges(bag->GetItemByPos(slot)))
+                    itemsToRestore.emplace_back(bagSlot, slot);
+
+    bool restoredAny = false;
+    for (auto const& [bagSlot, slot] : itemsToRestore)
+        restoredAny = RestoreItemCharges(player, bagSlot, slot) || restoredAny;
 
     return restoredAny;
 }
