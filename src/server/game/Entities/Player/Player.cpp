@@ -1379,7 +1379,7 @@ void Player::Update(uint32 p_time)
         for (InstanceTimeMap::iterator itr = _instanceResetTimes.begin(); itr != _instanceResetTimes.end();)
         {
             if (itr->second < now)
-                _instanceResetTimes.erase(itr++);
+                itr = _instanceResetTimes.erase(itr);
             else
                 ++itr;
         }
