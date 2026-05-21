@@ -738,13 +738,11 @@ public:
 
     void OnMapChanged(Player* player) override
     {
-        RefreshPvpConsumablesIfInStranglethorn(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
     {
-        RefreshPvpConsumablesIfInStranglethorn(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
