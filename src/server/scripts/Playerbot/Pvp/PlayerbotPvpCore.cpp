@@ -2622,7 +2622,9 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
+    bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
     bool const canDisarmNearbyMeleeThreat = hasNearbyMeleeThreat &&
+        nearbyMeleeThreatSnared &&
         player->IsWithinMeleeRange(nearbyMeleeTarget) &&
         nearbyMeleeTarget->CanUseAttackType(BASE_ATTACK) &&
         !HasAuraFromSpellChain(nearbyMeleeTarget, 676);
