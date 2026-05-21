@@ -813,9 +813,6 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     minReissueMs = std::max<uint32>(minReissueMs, 500);
 
-    if (IsWarsongGulch(player))
-        minReissueMs = std::max<uint32>(minReissueMs, 500);
-
     struct MoveOrderState
     {
         Position lastDestination;
@@ -833,15 +830,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
     bool const botCurrentlyMoving = player->isMoving();
-    bool const hardThrottleActive = IsWarsongGulch(player) && !canReissueByTime;
     bool const forcedStationaryReissue = !destinationChanged && !canReissueByTime && !botCurrentlyMoving;
     if (forcedStationaryReissue)
         stationaryReissueCount = std::min<uint8>(uint8(stationaryReissueCount + 1), 20);
     else
         stationaryReissueCount = 0;
-
-    if (hardThrottleActive && botCurrentlyMoving)
-        return false;
 
     if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
         return false;
@@ -874,8 +867,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         currentMovement != CHASE_MOTION_TYPE &&
         currentMovement != POINT_MOTION_TYPE &&
         // Charge/Intercept movement is issued through effect generators.
-        // Do not treat those as stale while they are resolving.
-        currentMovement != EFFECT_MOTION_TYPE)
+        // Clear stale effect movement only once charge state has ended.
+        (currentMovement != EFFECT_MOTION_TYPE || !player->HasUnitState(UNIT_STATE_CHARGING)))
     {
         EmitBattlegroundGmDebug(player,
             "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
