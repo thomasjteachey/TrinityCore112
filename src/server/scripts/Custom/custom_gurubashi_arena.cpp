@@ -656,8 +656,9 @@ bool RestoreItemCharges(Item* item, Player* owner)
         if (maxCharges == 0)
             continue;
 
-        int32 const restoredCharges = (maxCharges > 0) ? (maxCharges + 1) : (maxCharges - 1);
-        if (item->GetSpellCharges(spellIndex) != restoredCharges)
+        int32 const currentCharges = item->GetSpellCharges(spellIndex);
+        bool const isBelowMaxCharges = (maxCharges > 0) ? (currentCharges < maxCharges) : (currentCharges > maxCharges);
+        if (isBelowMaxCharges)
         {
             hasBelowMaxCharges = true;
             break;
