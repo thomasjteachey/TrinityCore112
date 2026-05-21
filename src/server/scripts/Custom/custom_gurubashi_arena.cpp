@@ -649,7 +649,7 @@ bool RestoreItemCharges(Item* item, Player* owner)
     if (!itemTemplate || itemTemplate->ItemLimitCategory != PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY)
         return false;
 
-    bool restoredAny = false;
+    bool hasBelowMaxCharges = false;
     for (uint8 spellIndex = 0; spellIndex < MAX_ITEM_PROTO_SPELLS; ++spellIndex)
     {
         int32 const maxCharges = itemTemplate->Spells[spellIndex].SpellCharges;
@@ -657,18 +657,29 @@ bool RestoreItemCharges(Item* item, Player* owner)
             continue;
 
         int32 const restoredCharges = (maxCharges > 0) ? (maxCharges + 1) : (maxCharges - 1);
-        int32 const currentCharges = item->GetSpellCharges(spellIndex);
-        if (currentCharges == restoredCharges)
-            continue;
-
-        item->SetSpellCharges(spellIndex, restoredCharges);
-        restoredAny = true;
+        if (item->GetSpellCharges(spellIndex) != restoredCharges)
+        {
+            hasBelowMaxCharges = true;
+            break;
+        }
     }
 
-    if (restoredAny)
-        item->SetState(ITEM_CHANGED, owner);
+    if (!hasBelowMaxCharges)
+        return false;
 
-    return restoredAny;
+    uint8 const bagSlot = item->GetBagSlot();
+    uint8 const slot = item->GetSlot();
+    uint32 const itemEntry = item->GetEntry();
+    int32 const randomPropertyId = item->GetItemRandomPropertyId();
+
+    owner->DestroyItem(bagSlot, slot, true);
+
+    ItemPosCountVec dest;
+    if (owner->CanStoreNewItem(bagSlot, slot, dest, itemEntry, 1) != EQUIP_ERR_OK)
+        return false;
+
+    owner->StoreNewItem(dest, itemEntry, true, randomPropertyId);
+    return true;
 }
 
 bool RestorePvpConsumableCharges(Player* player)
