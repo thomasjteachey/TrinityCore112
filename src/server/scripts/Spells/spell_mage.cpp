@@ -364,7 +364,7 @@ public:
     spell_mage_blink() : _recordOrigin(false), _returnBlink(false), _returned(false), _origin() { }
 
 private:
-    void HandleReturnBlinkDestination(WorldLocation& dest)
+    void HandleReturnBlinkDestination(SpellDestination& dest)
     {
         Unit* caster = GetCaster();
         if (!caster || !_returnBlink)

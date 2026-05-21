@@ -16,6 +16,7 @@
  */
 
 #include "Chat.h"
+#include "Bag.h"
 #include "Creature.h"
 #include "DBCStores.h"
 #include "GameObject.h"
