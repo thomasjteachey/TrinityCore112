@@ -49,6 +49,7 @@
 #include <deque>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <sstream>
 #include <unordered_map>
@@ -1199,7 +1200,7 @@ void RandomBotParticipationManager::OnStartupBootstrap()
 
 void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
 {
-    std::unordered_set<uint32> botAccountsForSweep;
+    std::optional<std::unordered_set<uint32>> botAccountsForSweep;
     bool shouldRunScmSweep = false;
 
     {
@@ -1208,12 +1209,15 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
         if (!g_RandomPopulation.config.enabled || !g_RandomPopulation.runtimeEnabled)
             return;
 
-        botAccountsForSweep = g_RandomPopulation.config.botAccountIds;
-        if (botAccountsForSweep.empty())
+        if (g_RandomPopulation.config.botAccountIds.empty())
         {
             g_RandomPopulation.skippedNoCandidatePool++;
             return;
         }
+
+        // Use copy-construction instead of assignment to avoid allocator-heavy
+        // unordered_set assignment internals on the world update thread.
+        botAccountsForSweep.emplace(g_RandomPopulation.config.botAccountIds);
 
         if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs)
             g_RandomPopulation.rebalanceTimerMs += diffMs;
@@ -1231,7 +1235,7 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
         }
     }
 
-    RecoverManagedVirtualBotTeleports(botAccountsForSweep);
+    RecoverManagedVirtualBotTeleports(*botAccountsForSweep);
 
     // Avoid running the SCM sweep while holding g_RandomPopulationLock:
     // lifecycle queue operations can call TriggerImmediateRebalance(), which
@@ -1239,7 +1243,7 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
     if (!shouldRunScmSweep)
         return;
 
-    ForceManagedScmQueueSweep(botAccountsForSweep);
+    ForceManagedScmQueueSweep(*botAccountsForSweep);
 }
 
 void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
