@@ -54,6 +54,7 @@ constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
+constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
@@ -638,6 +639,52 @@ bool ShouldTrackGurubashiPlayer(Player const* player)
     return player && player->IsInWorld() && player->GetMapId() == GURUBASHI_ARENA_MAP_ID && player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
 }
 
+bool RestoreItemCharges(Item* item)
+{
+    if (!item)
+        return false;
+
+    ItemTemplate const* itemTemplate = item->GetTemplate();
+    if (!itemTemplate || itemTemplate->ItemLimitCategory != PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY)
+        return false;
+
+    bool restoredAny = false;
+    for (uint8 spellIndex = 0; spellIndex < MAX_ITEM_PROTO_SPELLS; ++spellIndex)
+    {
+        int32 const maxCharges = itemTemplate->Spells[spellIndex].SpellCharges;
+        if (maxCharges == 0 || item->GetSpellCharges(spellIndex) == maxCharges)
+            continue;
+
+        item->SetSpellCharges(spellIndex, maxCharges);
+        restoredAny = true;
+    }
+
+    return restoredAny;
+}
+
+bool RestorePvpConsumableCharges(Player* player)
+{
+    if (!player)
+        return false;
+
+    bool restoredAny = false;
+
+    auto tryRestoreItem = [&restoredAny](Item* item)
+    {
+        restoredAny = RestoreItemCharges(item) || restoredAny;
+    };
+
+    for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        tryRestoreItem(player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot));
+
+    for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        if (Bag* bag = player->GetBagByPos(bagSlot))
+            for (uint8 slot = 0; slot < bag->GetBagSize(); ++slot)
+                tryRestoreItem(bag->GetItemByPos(slot));
+
+    return restoredAny;
+}
+
 void UpdateGurubashiPlayerTracking(Player* player)
 {
     if (!player)
@@ -664,16 +711,19 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
+        RefreshPvpConsumablesIfInStranglethorn(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
     void OnMapChanged(Player* player) override
     {
+        RefreshPvpConsumablesIfInStranglethorn(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
     void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
     {
+        RefreshPvpConsumablesIfInStranglethorn(player);
         UpdateGurubashiPlayerTracking(player);
     }
 
@@ -714,6 +764,15 @@ public:
         WhisperFromChromi(player, GURUBASHI_REENTRY_RULE_WHISPER);
     }
 
+private:
+    void RefreshPvpConsumablesIfInStranglethorn(Player* player)
+    {
+        if (!ShouldTrackGurubashiPlayer(player))
+            return;
+
+        if (RestorePvpConsumableCharges(player))
+            WhisperFromChromi(player, "Your PvP consumable charges have been restored.");
+    }
 };
 
 class gurubashi_arena_exit_enforcer : public WorldScript
