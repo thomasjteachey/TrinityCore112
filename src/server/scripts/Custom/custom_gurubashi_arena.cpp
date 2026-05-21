@@ -640,9 +640,9 @@ bool ShouldTrackGurubashiPlayer(Player const* player)
     return player && player->IsInWorld() && player->GetMapId() == GURUBASHI_ARENA_MAP_ID && player->GetZoneId() == STRANGLETHORN_VALE_ZONE_ID;
 }
 
-bool RestoreItemCharges(Item* item)
+bool RestoreItemCharges(Item* item, Player* owner)
 {
-    if (!item)
+    if (!item || !owner)
         return false;
 
     ItemTemplate const* itemTemplate = item->GetTemplate();
@@ -665,6 +665,9 @@ bool RestoreItemCharges(Item* item)
         restoredAny = true;
     }
 
+    if (restoredAny)
+        item->SetState(ITEM_CHANGED, owner);
+
     return restoredAny;
 }
 
@@ -675,9 +678,9 @@ bool RestorePvpConsumableCharges(Player* player)
 
     bool restoredAny = false;
 
-    auto tryRestoreItem = [&restoredAny](Item* item)
+    auto tryRestoreItem = [player, &restoredAny](Item* item)
     {
-        restoredAny = RestoreItemCharges(item) || restoredAny;
+        restoredAny = RestoreItemCharges(item, player) || restoredAny;
     };
 
     for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
