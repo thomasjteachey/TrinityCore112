@@ -2634,18 +2634,18 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, nearbyCastingTarget) && IsSpellReady(player, 6552), 59.0f,
         { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 676), 58.0f,
-        { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 676) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
+    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 81492), 58.0f,
+        { "warrior disarm", "disarm threatening melee weapon users", 81492, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 81492) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
         { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323), 56.0f,
         { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, activeTarget) && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 5246), 55.5f,
         { "warrior intimidating shout", "aoe fear around the current target when outnumbered", 5246, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, (IsSpellReady(player, 6552) || IsSpellReady(player, 676) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, 21553)) &&
+    AddDecisionCandidate(candidates, (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, 21553)) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inDefensiveStance && (!IsSpellReady(player, 676) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
+    AddDecisionCandidate(candidates, inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
         { "warrior berserker stance", "leave defensive stance when disarm is unavailable or no melee threat is nearby", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && !inBattleStance && IsSpellReady(player, 2457), 52.5f,
         { "warrior battle stance", "switch to battle stance before out-of-combat charge", 2457, playerbot::PvpClassSpellContext::TargetMode::Self });
