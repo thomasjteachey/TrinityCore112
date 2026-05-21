@@ -1609,7 +1609,7 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
             continue;
         if (IsTargetInvalidByImmunity(player, candidate))
             continue;
-        if (polymorphDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(polymorphDrGroup) >= DIMINISHING_LEVEL_IMMUNE)
+        if (polymorphDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(polymorphDrGroup) > DIMINISHING_LEVEL_0)
             continue;
 
         if (candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST)
@@ -1732,7 +1732,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         if (fearInfo && candidate->IsImmunedToSpell(fearInfo, player))
             return true;
 
-        if (fearDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(fearDrGroup) >= DIMINISHING_LEVEL_IMMUNE)
+        if (fearDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(fearDrGroup) > DIMINISHING_LEVEL_0)
             return true;
 
         return false;
