@@ -653,10 +653,15 @@ bool RestoreItemCharges(Item* item)
     for (uint8 spellIndex = 0; spellIndex < MAX_ITEM_PROTO_SPELLS; ++spellIndex)
     {
         int32 const maxCharges = itemTemplate->Spells[spellIndex].SpellCharges;
-        if (maxCharges == 0 || item->GetSpellCharges(spellIndex) == maxCharges)
+        if (maxCharges == 0)
             continue;
 
-        item->SetSpellCharges(spellIndex, maxCharges);
+        int32 const restoredCharges = (maxCharges > 0) ? (maxCharges + 1) : (maxCharges - 1);
+        int32 const currentCharges = item->GetSpellCharges(spellIndex);
+        if (currentCharges == restoredCharges)
+            continue;
+
+        item->SetSpellCharges(spellIndex, restoredCharges);
         restoredAny = true;
     }
 
