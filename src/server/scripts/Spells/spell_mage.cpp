@@ -372,7 +372,7 @@ private:
 
         // Return Blink should not project the regular forward Blink destination,
         // otherwise clients can render the teleport flash in front of the caster.
-        dest.Relocate(caster->GetPositionX(), caster->GetPositionY(), caster->GetPositionZ(), caster->GetOrientation());
+        dest.Relocate(Position(caster->GetPositionX(), caster->GetPositionY(), caster->GetPositionZ(), caster->GetOrientation()));
     }
 
     SpellCastResult CheckCast()
