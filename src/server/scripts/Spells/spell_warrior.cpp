@@ -560,37 +560,28 @@ class spell_warr_execute : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_WARRIOR_EXECUTE, SPELL_WARRIOR_GLYPH_OF_EXECUTION });
+        return ValidateSpellInfo({ SPELL_WARRIOR_EXECUTE });
     }
 
     void HandleEffect(SpellEffIndex /*effIndex*/)
     {
         Unit* caster = GetCaster();
-        if (Unit* target = GetHitUnit())
-        {
-            SpellInfo const* spellInfo = GetSpellInfo();
-            int32 rageUsed = std::min<int32>(300 - spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask)), caster->GetPower(POWER_RAGE));
-            int32 newRage = std::max<int32>(0, caster->GetPower(POWER_RAGE) - rageUsed);
+        Unit* target = GetHitUnit();
+        if (!caster || !target)
+            return;
 
-            // Sudden Death rage save
-            if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_GENERIC, WARRIOR_ICON_ID_SUDDEN_DEATH, EFFECT_0))
-            {
-                int32 ragesave = aurEff->GetSpellInfo()->GetEffect(EFFECT_1).CalcValue() * 10;
-                newRage = std::max(newRage, ragesave);
-            }
+        int32 rageUsed = caster->GetPower(POWER_RAGE);
 
-            newRage = 0;
+        if (rageUsed > 0)
+            caster->SetPower(POWER_RAGE, 0);
 
-            caster->SetPower(POWER_RAGE, uint32(newRage));
-            // Glyph of Execution bonus
-            if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
-                rageUsed += aurEff->GetAmount() * 10;
+        int32 bp = GetEffectValue()
+            + int32(rageUsed * GetEffectInfo().DamageMultiplier);
 
-            int32 bp = GetEffectValue() + rageUsed * 15;
-            CastSpellExtraArgs args(GetOriginalCaster()->GetGUID());
-            args.AddSpellBP0(bp);
-            caster->CastSpell(target, SPELL_WARRIOR_EXECUTE, args);
-        }
+        CastSpellExtraArgs args(GetOriginalCaster()->GetGUID());
+        args.AddSpellBP0(bp);
+
+        caster->CastSpell(target, SPELL_WARRIOR_EXECUTE, args);
     }
 
     void Register() override
