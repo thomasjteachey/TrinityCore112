@@ -33,6 +33,7 @@
 #include "Pet.h"
 #include "Spell.h"
 #include "SpellAuras.h"
+#include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
@@ -57,6 +58,7 @@ constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
+constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -1609,7 +1611,7 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
             continue;
         if (IsTargetInvalidByImmunity(player, candidate))
             continue;
-        if (polymorphDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(polymorphDrGroup) >= DIMINISHING_LEVEL_IMMUNE)
+        if (polymorphDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(polymorphDrGroup) > DIMINISHING_LEVEL_0)
             continue;
 
         if (candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST)
@@ -1721,6 +1723,23 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
     if (!player || !player->FindMap())
         return nullptr;
 
+    auto hasFearFromPlayer = [&](Player const* candidate)
+    {
+        if (!candidate)
+            return false;
+
+        Unit::AuraEffectList const& fearAuras = candidate->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
+        for (AuraEffect const* auraEffect : fearAuras)
+        {
+            if (!auraEffect)
+                continue;
+            if (auraEffect->GetCasterGUID() == player->GetGUID())
+                return true;
+        }
+
+        return false;
+    };
+
     SpellInfo const* fearInfo = sSpellMgr->GetSpellInfo(6215);
     DiminishingGroup const fearDrGroup = fearInfo ? fearInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
 
@@ -1732,7 +1751,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         if (fearInfo && candidate->IsImmunedToSpell(fearInfo, player))
             return true;
 
-        if (fearDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(fearDrGroup) >= DIMINISHING_LEVEL_IMMUNE)
+        if (fearDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(fearDrGroup) > DIMINISHING_LEVEL_0)
             return true;
 
         return false;
@@ -1744,11 +1763,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!HasHostileTarget(player, candidate))
             continue;
-        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
-            continue;
-        if (isFearInvalidTarget(candidate))
-            continue;
-        if (candidate->HasAuraType(SPELL_AURA_MOD_FEAR))
+        if (hasFearFromPlayer(candidate))
             return nullptr;
     }
 
@@ -2510,7 +2525,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates,
         sacrificeTarget && sacrificeTarget != player &&
         !player->HasAura(6940) &&
-        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 6940) &&
+        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHandOfSacrificeCooldownToken) &&
         !HasAuraFromSpellChain(sacrificeTarget, 6940) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1022) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1044), 53.0f,
@@ -2622,7 +2637,9 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
+    bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
     bool const canDisarmNearbyMeleeThreat = hasNearbyMeleeThreat &&
+        nearbyMeleeThreatSnared &&
         player->IsWithinMeleeRange(nearbyMeleeTarget) &&
         nearbyMeleeTarget->CanUseAttackType(BASE_ATTACK) &&
         !HasAuraFromSpellChain(nearbyMeleeTarget, 676);
@@ -2634,18 +2651,18 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, nearbyCastingTarget) && IsSpellReady(player, 6552), 59.0f,
         { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 676), 58.0f,
-        { "warrior disarm", "disarm threatening melee weapon users", 676, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 676) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
+    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 81492), 58.0f,
+        { "warrior disarm", "disarm threatening melee weapon users", 81492, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 81492) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
         { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323), 56.0f,
         { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, activeTarget) && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 5246), 55.5f,
         { "warrior intimidating shout", "aoe fear around the current target when outnumbered", 5246, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, (IsSpellReady(player, 6552) || IsSpellReady(player, 676) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, 21553)) &&
+    AddDecisionCandidate(candidates, (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, 21553)) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inDefensiveStance && (!IsSpellReady(player, 676) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
+    AddDecisionCandidate(candidates, inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
         { "warrior berserker stance", "leave defensive stance when disarm is unavailable or no melee threat is nearby", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && !inBattleStance && IsSpellReady(player, 2457), 52.5f,
         { "warrior battle stance", "switch to battle stance before out-of-combat charge", 2457, playerbot::PvpClassSpellContext::TargetMode::Self });

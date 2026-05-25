@@ -229,6 +229,11 @@ public:
     {
         PolearmStaffInnerAuras::Sync(player);
     }
+
+    void OnPlayerResurrect(Player* player) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
+    }
 };
 
 // 71, 2457, 2458 - Warrior Stances
@@ -581,7 +586,7 @@ class spell_warr_execute : public SpellScript
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
                 rageUsed += aurEff->GetAmount() * 10;
 
-            int32 bp = GetEffectValue() + int32(rageUsed * GetEffectInfo().DamageMultiplier + caster->GetTotalAttackPowerValue(BASE_ATTACK) * 0.2f);
+            int32 bp = GetEffectValue() + rageUsed * 15;
             CastSpellExtraArgs args(GetOriginalCaster()->GetGUID());
             args.AddSpellBP0(bp);
             caster->CastSpell(target, SPELL_WARRIOR_EXECUTE, args);

@@ -2879,6 +2879,10 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
     if (m_spellInfo->Speed && unit->IsImmunedToSpell(m_spellInfo, m_caster))
         return SPELL_MISS_IMMUNE;
 
+    // Vanish aura protects against hostile projectiles that were already in flight before stealth was gained
+    if (m_spellInfo->Speed > 0.0f && unit->HasAura(89783) && m_caster && m_caster != unit && m_caster->IsValidAttackTarget(unit, m_spellInfo))
+        return SPELL_MISS_IMMUNE;
+
     if (Player* player = unit->ToPlayer())
     {
         player->StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_SPELL_TARGET, m_spellInfo->Id);

@@ -1379,7 +1379,7 @@ void Player::Update(uint32 p_time)
         for (InstanceTimeMap::iterator itr = _instanceResetTimes.begin(); itr != _instanceResetTimes.end();)
         {
             if (itr->second < now)
-                _instanceResetTimes.erase(itr++);
+                itr = _instanceResetTimes.erase(itr);
             else
                 ++itr;
         }
@@ -6605,6 +6605,9 @@ void Player::SendMessageToSet(WorldPacket const* data, Player const* skipped_rcv
 {
     if (skipped_rcvr != this)
         SendDirectMessage(data);
+
+    if (!IsInWorld())
+        return;
 
     // we use World::GetMaxVisibleDistance() because i cannot see why not use a distance
     // update: replaced by GetMap()->GetVisibilityDistance()

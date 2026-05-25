@@ -3557,7 +3557,7 @@ Aura* Unit::_TryStackingOrRefreshingExistingAura(AuraCreateInfo& createInfo)
         // find current aura from spell and change it's stackamount, or refresh it's duration
         if (Aura* foundAura = GetOwnedAura(createInfo.GetSpellInfo()->Id, createInfo.GetSpellInfo()->IsStackableOnOneSlotWithDifferentCasters() ? ObjectGuid::Empty : createInfo.CasterGUID, createInfo.GetSpellInfo()->HasAttribute(SPELL_ATTR0_CU_ENCHANT_PROC) ? castItemGUID : ObjectGuid::Empty))
         {
-            if (IsZulGurubClassEnchant(createInfo.GetSpellInfo()->Id) && foundAura->GetCastItemGUID() != castItemGUID)
+            if ((IsZulGurubClassEnchant(createInfo.GetSpellInfo()->Id) || IsArcanumEnchant(createInfo.GetSpellInfo()->Id)) && foundAura->GetCastItemGUID() != castItemGUID)
                 return nullptr;
 
             // effect masks do not match
@@ -4362,7 +4362,7 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         ++iter;
         if ((aura->GetSpellInfo()->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
         {
-            if (HasAura(81439) && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))
+            if ((HasAura(81439) || HasAura(89783)) && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))
             {
                 uint32 const protectedFlags = AURA_INTERRUPT_FLAG_HITBYSPELL | AURA_INTERRUPT_FLAG_TAKE_DAMAGE |
                                              AURA_INTERRUPT_FLAG_DIRECT_DAMAGE | AURA_INTERRUPT_FLAG_MELEE_ATTACK |

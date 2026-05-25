@@ -364,6 +364,17 @@ public:
     spell_mage_blink() : _recordOrigin(false), _returnBlink(false), _returned(false), _origin() { }
 
 private:
+    void HandleReturnBlinkDestination(SpellDestination& dest)
+    {
+        Unit* caster = GetCaster();
+        if (!caster || !_returnBlink)
+            return;
+
+        // Return Blink should not project the regular forward Blink destination,
+        // otherwise clients can render the teleport flash in front of the caster.
+        dest.Relocate(Position(caster->GetPositionX(), caster->GetPositionY(), caster->GetPositionZ(), caster->GetOrientation()));
+    }
+
     SpellCastResult CheckCast()
     {
         Unit* caster = GetCaster();
@@ -456,7 +467,7 @@ private:
         if (Player* player = caster->GetCharmerOrOwnerPlayerOrPlayerItself())
         {
             WorldPacket data;
-            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, SPELL_MAGE_BLINK, 0);
+            spellHistory->BuildCooldownPacket(data, SPELL_COOLDOWN_FLAG_INCLUDE_GCD, 6119, 0);
             player->SendDirectMessage(&data);
         }
     }
@@ -521,6 +532,7 @@ private:
     {
         OnCheckCast += SpellCheckCastFn(spell_mage_blink::CheckCast);
         BeforeCast += SpellCastFn(spell_mage_blink::HandleBeforeCast);
+        OnDestinationTargetSelect += SpellDestinationTargetSelectFn(spell_mage_blink::HandleReturnBlinkDestination, EFFECT_0, TARGET_DEST_CASTER_FRONT_LEAP);
         OnEffectHitTarget += SpellEffectFn(spell_mage_blink::HandleReturnBlinkEffect, EFFECT_ALL, SPELL_EFFECT_ANY);
         AfterCast += SpellCastFn(spell_mage_blink::HandleAfterCast);
     }

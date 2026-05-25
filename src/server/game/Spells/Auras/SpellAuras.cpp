@@ -976,7 +976,7 @@ bool Aura::ModCharges(int32 num, AuraRemoveMode removeMode)
         if (num < 0 && GetId() == 1784)
         {
             if (Unit* owner = m_owner->ToUnit())
-                if (owner->HasAura(81439))
+                if (owner->HasAura(81439) || owner->HasAura(89783))
                     return false;
         }
 
@@ -1879,9 +1879,10 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     if (this == existingAura)
         return true;
 
-    // HACK: Allow ZG class head/leg enchants to stack with each other (e.g. helm + legs)
+    // HACK: Allow ZG class head/leg enchants and Arcanums to stack with each other (e.g. helm + legs)
     uint32 const existingSpellId = existingAura->GetSpellInfo()->Id;
-    if (IsZulGurubClassEnchant(m_spellInfo->Id) && IsZulGurubClassEnchant(existingSpellId))
+    if ((IsZulGurubClassEnchant(m_spellInfo->Id) && IsZulGurubClassEnchant(existingSpellId)) ||
+        (IsArcanumEnchant(m_spellInfo->Id) && IsArcanumEnchant(existingSpellId)))
         return true;
 
     bool sameCaster = GetCasterGUID() == existingAura->GetCasterGUID();
@@ -2211,8 +2212,8 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
     {
         Unit* target = aurApp->GetTarget();
 
-        // Do not consume stealth proc charges when the unit is protected by aura 81439 (Stealth Aura Stalker)
-        if (!(GetId() == 1784 && target && target->HasAura(81439)))
+        // Do not consume stealth proc charges when the unit is protected by aura 81439 (Stealth Aura Stalker) or 89783 (Vanish Aura)
+        if (!(GetId() == 1784 && target && (target->HasAura(81439) || target->HasAura(89783))))
         {
             --m_procCharges;
             SetNeedClientUpdateForTargets();

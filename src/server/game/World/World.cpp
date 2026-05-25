@@ -2374,6 +2374,12 @@ void World::LoadAutobroadcasts()
 void World::Update(uint32 diff)
 {
     TC_METRIC_TIMER("world_update_time_total");
+    uint32 const updateStartMs = getMSTime();
+    uint32 sectionStartMs = updateStartMs;
+    uint32 sessionsUpdateMs = 0;
+    uint32 mapUpdateMs = 0;
+    uint32 battlegroundUpdateMs = 0;
+    uint32 scriptsUpdateMs = 0;
     ///- Update the game time and check for shutdown time
     _UpdateGameTime();
     time_t currentGameTime = GameTime::GetGameTime();
@@ -2475,6 +2481,8 @@ void World::Update(uint32 diff)
         /// <li> Handle session updates when the timer has passed
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update sessions"));
         UpdateSessions(diff);
+        sessionsUpdateMs = getMSTimeDiff(sectionStartMs, getMSTime());
+        sectionStartMs = getMSTime();
     }
 
     /// <li> Update uptime table
@@ -2519,6 +2527,8 @@ void World::Update(uint32 diff)
     {
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update maps"));
         sMapMgr->Update(diff);
+        mapUpdateMs = getMSTimeDiff(sectionStartMs, getMSTime());
+        sectionStartMs = getMSTime();
     }
 
     if (sWorld->getBoolConfig(CONFIG_AUTOBROADCAST))
@@ -2534,6 +2544,8 @@ void World::Update(uint32 diff)
     {
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update battlegrounds"));
         sBattlegroundMgr->Update(diff);
+        battlegroundUpdateMs = getMSTimeDiff(sectionStartMs, getMSTime());
+        sectionStartMs = getMSTime();
     }
 
     {
@@ -2627,6 +2639,7 @@ void World::Update(uint32 diff)
     {
         TC_METRIC_TIMER("world_update_time", TC_METRIC_TAG("type", "Update world scripts"));
         sScriptMgr->OnWorldUpdate(diff);
+        scriptsUpdateMs = getMSTimeDiff(sectionStartMs, getMSTime());
     }
 
     {
@@ -2634,6 +2647,15 @@ void World::Update(uint32 diff)
         // Stats logger update
         sMetric->Update();
         TC_METRIC_VALUE("update_time_diff", diff);
+    }
+
+    uint32 const totalUpdateMs = getMSTimeDiff(updateStartMs, getMSTime());
+    static uint32 constexpr SlowWorldUpdateThresholdMs = 3000;
+    if (totalUpdateMs >= SlowWorldUpdateThresholdMs)
+    {
+        TC_LOG_WARN("server.worldserver",
+            "Slow world update detected: total={} ms (diff={} ms, sessions={} ms, maps={} ms, battlegrounds={} ms, scripts={} ms)",
+            totalUpdateMs, diff, sessionsUpdateMs, mapUpdateMs, battlegroundUpdateMs, scriptsUpdateMs);
     }
 }
 
