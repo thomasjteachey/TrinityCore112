@@ -60,7 +60,27 @@ enum BG_SCM_Objects
     BG_SCM_OBJECT_BUFF2_REGEN     = 10,
     BG_SCM_OBJECT_BUFF2_BERSERK   = 11,
 
-    BG_SCM_OBJECT_MAX             = 12
+    // Buff group 3 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_SCM_OBJECT_BUFF3_SPEED     = 12,
+    BG_SCM_OBJECT_BUFF3_REGEN     = 13,
+    BG_SCM_OBJECT_BUFF3_BERSERK   = 14,
+
+    // Buff group 4 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_SCM_OBJECT_BUFF4_SPEED     = 15,
+    BG_SCM_OBJECT_BUFF4_REGEN     = 16,
+    BG_SCM_OBJECT_BUFF4_BERSERK   = 17,
+
+    // Buff group 5 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_SCM_OBJECT_BUFF5_SPEED     = 18,
+    BG_SCM_OBJECT_BUFF5_REGEN     = 19,
+    BG_SCM_OBJECT_BUFF5_BERSERK   = 20,
+
+    // Buff group 6 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_SCM_OBJECT_BUFF6_SPEED     = 21,
+    BG_SCM_OBJECT_BUFF6_REGEN     = 22,
+    BG_SCM_OBJECT_BUFF6_BERSERK   = 23,
+
+    BG_SCM_OBJECT_MAX             = 24
 };
 
 enum BG_SCM_ObjectEntries
