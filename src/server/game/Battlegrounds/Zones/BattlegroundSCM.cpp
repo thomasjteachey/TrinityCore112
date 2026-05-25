@@ -187,16 +187,16 @@ bool BattlegroundSCM::SetupBattleground()
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF3_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            963.067078f, 1360.810181f, 18.677767f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            963.067078f, 1360.810181f, 18.677767f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF3_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            963.067078f, 1360.810181f, 18.677767f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            963.067078f, 1360.810181f, 18.677767f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF3_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            963.067078f, 1360.810181f, 18.677767f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            963.067078f, 1360.810181f, 18.677767f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF4_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
             986.732442f, 1454.590088f, 29.099308f, 0.0f,
@@ -211,28 +211,28 @@ bool BattlegroundSCM::SetupBattleground()
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF5_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            963.067078f, 1437.870605f, 18.677767f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            963.067078f, 1437.870605f, 18.677767f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF5_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            963.067078f, 1437.870605f, 18.677767f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            963.067078f, 1437.870605f, 18.677767f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF5_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            963.067078f, 1437.870605f, 18.677767f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            963.067078f, 1437.870605f, 18.677767f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF6_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
-            987.244507f, 1343.777466f, 29.146633f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            987.244507f, 1343.777466f, 29.146633f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF6_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
-            987.244507f, 1343.777466f, 29.146633f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            987.244507f, 1343.777466f, 29.146633f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME)
         || !AddObject(BG_SCM_OBJECT_BUFF6_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            987.244507f, 1343.777466f, 29.146633f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            987.244507f, 1343.777466f, 29.146633f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_SCM_BUFF_RESPAWN_TIME))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundSCM::SetupBattleground: failed to spawn one or more Scarlet Chapel gameobjects.");
