@@ -33,6 +33,7 @@
 #include "Pet.h"
 #include "Spell.h"
 #include "SpellAuras.h"
+#include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
@@ -57,6 +58,7 @@ constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
+constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -1721,6 +1723,23 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
     if (!player || !player->FindMap())
         return nullptr;
 
+    auto hasFearFromPlayer = [&](Player const* candidate)
+    {
+        if (!candidate)
+            return false;
+
+        Unit::AuraEffectList const& fearAuras = candidate->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
+        for (AuraEffect const* auraEffect : fearAuras)
+        {
+            if (!auraEffect)
+                continue;
+            if (auraEffect->GetCasterGUID() == player->GetGUID())
+                return true;
+        }
+
+        return false;
+    };
+
     SpellInfo const* fearInfo = sSpellMgr->GetSpellInfo(6215);
     DiminishingGroup const fearDrGroup = fearInfo ? fearInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
 
@@ -1744,11 +1763,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!HasHostileTarget(player, candidate))
             continue;
-        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
-            continue;
-        if (isFearInvalidTarget(candidate))
-            continue;
-        if (candidate->HasAuraType(SPELL_AURA_MOD_FEAR))
+        if (hasFearFromPlayer(candidate))
             return nullptr;
     }
 
@@ -2510,7 +2525,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates,
         sacrificeTarget && sacrificeTarget != player &&
         !player->HasAura(6940) &&
-        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 6940) &&
+        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHandOfSacrificeCooldownToken) &&
         !HasAuraFromSpellChain(sacrificeTarget, 6940) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1022) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1044), 53.0f,

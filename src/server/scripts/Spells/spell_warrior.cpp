@@ -229,6 +229,11 @@ public:
     {
         PolearmStaffInnerAuras::Sync(player);
     }
+
+    void OnPlayerResurrect(Player* player) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
+    }
 };
 
 // 71, 2457, 2458 - Warrior Stances
@@ -555,35 +560,35 @@ class spell_warr_execute : public SpellScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_WARRIOR_EXECUTE, SPELL_WARRIOR_GLYPH_OF_EXECUTION });
+        return ValidateSpellInfo({ SPELL_WARRIOR_EXECUTE });
     }
 
     void HandleEffect(SpellEffIndex /*effIndex*/)
     {
         Unit* caster = GetCaster();
-        if (Unit* target = GetHitUnit())
-        {
-            SpellInfo const* spellInfo = GetSpellInfo();
-            int32 rageUsed = std::min<int32>(300 - spellInfo->CalcPowerCost(caster, SpellSchoolMask(spellInfo->SchoolMask)), caster->GetPower(POWER_RAGE));
-            int32 newRage = std::max<int32>(0, caster->GetPower(POWER_RAGE) - rageUsed);
+        Unit* target = GetHitUnit();
 
-            // Sudden Death rage save
-            if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_AURA_PROC_TRIGGER_SPELL, SPELLFAMILY_GENERIC, WARRIOR_ICON_ID_SUDDEN_DEATH, EFFECT_0))
-            {
-                int32 ragesave = aurEff->GetSpellInfo()->GetEffect(EFFECT_1).CalcValue() * 10;
-                newRage = std::max(newRage, ragesave);
-            }
+        if (!caster || !target)
+            return;
 
-            caster->SetPower(POWER_RAGE, uint32(newRage));
-            // Glyph of Execution bonus
-            if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
-                rageUsed += aurEff->GetAmount() * 10;
+        // TC stores rage as rage * 10.
+        // The normal spell system has already paid Execute's base rage cost
+        // before this dummy effect is handled, so this is the remaining rage.
+        int32 rageUsed = caster->GetPower(POWER_RAGE);
 
-            int32 bp = GetEffectValue() + rageUsed * 15;
-            CastSpellExtraArgs args(GetOriginalCaster()->GetGUID());
-            args.AddSpellBP0(bp);
-            caster->CastSpell(target, SPELL_WARRIOR_EXECUTE, args);
-        }
+        // Vanilla Execute consumes all remaining rage on a successful hit.
+        if (rageUsed > 0)
+            caster->SetPower(POWER_RAGE, 0);
+
+        // 1.12-style damage: base Execute damage + bonus from extra rage.
+        // DamageMultiplier comes from the Execute spell data.
+        int32 bp = GetEffectValue()
+            + int32(rageUsed * GetEffectInfo().DamageMultiplier);
+
+        CastSpellExtraArgs args(GetOriginalCaster()->GetGUID());
+        args.AddSpellBP0(bp);
+
+        caster->CastSpell(target, SPELL_WARRIOR_EXECUTE, args);
     }
 
     void Register() override
@@ -591,7 +596,6 @@ class spell_warr_execute : public SpellScript
         OnEffectHitTarget += SpellEffectFn(spell_warr_execute::HandleEffect, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
-
 // -29723 - Sudden Death
 // -46913 - Bloodsurge
 class spell_warr_extra_proc : public AuraScript
