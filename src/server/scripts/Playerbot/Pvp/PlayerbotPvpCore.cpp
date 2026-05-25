@@ -33,6 +33,7 @@
 #include "Pet.h"
 #include "Spell.h"
 #include "SpellAuras.h"
+#include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
