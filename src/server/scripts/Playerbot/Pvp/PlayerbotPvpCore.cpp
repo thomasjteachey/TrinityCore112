@@ -1721,6 +1721,23 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
     if (!player || !player->FindMap())
         return nullptr;
 
+    auto hasFearFromPlayer = [&](Player const* candidate)
+    {
+        if (!candidate)
+            return false;
+
+        Unit::AuraEffectList const& fearAuras = candidate->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR);
+        for (AuraEffect const* auraEffect : fearAuras)
+        {
+            if (!auraEffect)
+                continue;
+            if (auraEffect->GetCasterGUID() == player->GetGUID())
+                return true;
+        }
+
+        return false;
+    };
+
     SpellInfo const* fearInfo = sSpellMgr->GetSpellInfo(6215);
     DiminishingGroup const fearDrGroup = fearInfo ? fearInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
 
@@ -1744,11 +1761,7 @@ Unit const* SelectWarlockFearTarget(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!HasHostileTarget(player, candidate))
             continue;
-        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
-            continue;
-        if (isFearInvalidTarget(candidate))
-            continue;
-        if (candidate->HasAuraType(SPELL_AURA_MOD_FEAR))
+        if (hasFearFromPlayer(candidate))
             return nullptr;
     }
 
