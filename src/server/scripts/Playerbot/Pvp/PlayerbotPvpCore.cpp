@@ -57,6 +57,7 @@ constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
+constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -2510,7 +2511,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target)
     AddDecisionCandidate(candidates,
         sacrificeTarget && sacrificeTarget != player &&
         !player->HasAura(6940) &&
-        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 6940) &&
+        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHandOfSacrificeCooldownToken) &&
         !HasAuraFromSpellChain(sacrificeTarget, 6940) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1022) &&
         !HasAuraFromSpellChain(sacrificeTarget, 1044), 53.0f,
