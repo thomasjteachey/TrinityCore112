@@ -76,8 +76,9 @@ bool IsArcanumEnchant(uint32 spellId)
 {
     switch (spellId)
     {
-        case 22840: // Arcanum of Focus
-        case 22846: // Arcanum of Protection
+        case 22841: // Arcanum of Focus (aura)
+        case 22843: // Arcanum of Rapidity (aura)
+        case 22847: // Arcanum of Protection (aura)
             return true;
         default:
             return false;
