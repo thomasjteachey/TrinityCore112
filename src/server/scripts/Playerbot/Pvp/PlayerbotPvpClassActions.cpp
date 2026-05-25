@@ -58,6 +58,7 @@ bool IsLifeTapSpell(SpellInfo const* spellInfo)
 }
 
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
+constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
@@ -2936,8 +2937,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if ((context.spellId == 11719 || context.spellId == 11713) && target)
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
-    if (context.spellId == 6940)
-        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, std::chrono::seconds(10));
+    if (resolvedSpellId && IsPartOfSpellChain(resolvedSpellId, 6940))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHandOfSacrificeCooldownToken, std::chrono::seconds(10));
 
     // Shared tactical cooldown for dispel/decurse effects. This keeps
     // playerbots from spam-casting into protected or undispellable auras while
