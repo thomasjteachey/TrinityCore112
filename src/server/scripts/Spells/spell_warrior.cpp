@@ -574,6 +574,8 @@ class spell_warr_execute : public SpellScript
                 newRage = std::max(newRage, ragesave);
             }
 
+            newRage = 0;
+
             caster->SetPower(POWER_RAGE, uint32(newRage));
             // Glyph of Execution bonus
             if (AuraEffect* aurEff = caster->GetAuraEffect(SPELL_WARRIOR_GLYPH_OF_EXECUTION, EFFECT_0))
