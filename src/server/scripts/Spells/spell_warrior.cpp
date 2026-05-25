@@ -567,14 +567,21 @@ class spell_warr_execute : public SpellScript
     {
         Unit* caster = GetCaster();
         Unit* target = GetHitUnit();
+
         if (!caster || !target)
             return;
 
+        // TC stores rage as rage * 10.
+        // The normal spell system has already paid Execute's base rage cost
+        // before this dummy effect is handled, so this is the remaining rage.
         int32 rageUsed = caster->GetPower(POWER_RAGE);
 
+        // Vanilla Execute consumes all remaining rage on a successful hit.
         if (rageUsed > 0)
             caster->SetPower(POWER_RAGE, 0);
 
+        // 1.12-style damage: base Execute damage + bonus from extra rage.
+        // DamageMultiplier comes from the Execute spell data.
         int32 bp = GetEffectValue()
             + int32(rageUsed * GetEffectInfo().DamageMultiplier);
 
@@ -589,7 +596,6 @@ class spell_warr_execute : public SpellScript
         OnEffectHitTarget += SpellEffectFn(spell_warr_execute::HandleEffect, EFFECT_0, SPELL_EFFECT_DUMMY);
     }
 };
-
 // -29723 - Sudden Death
 // -46913 - Bloodsurge
 class spell_warr_extra_proc : public AuraScript
