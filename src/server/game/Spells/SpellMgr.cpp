@@ -72,6 +72,19 @@ bool IsZulGurubClassEnchant(uint32 spellId)
     return false;
 }
 
+bool IsArcanumEnchant(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 22841: // Arcanum of Focus (aura)
+        case 22843: // Arcanum of Rapidity (aura)
+        case 22847: // Arcanum of Protection (aura)
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool IsPrimaryProfessionSkill(uint32 skill)
 {
     SkillLineEntry const* pSkill = sSkillLineStore.LookupEntry(skill);
@@ -486,7 +499,8 @@ SpellGroupStackRule SpellMgr::CheckSpellGroupStackRules(SpellInfo const* spellIn
     ASSERT(spellInfo1);
     ASSERT(spellInfo2);
 
-    if (IsZulGurubClassEnchant(spellInfo1->Id) && IsZulGurubClassEnchant(spellInfo2->Id))
+    if ((IsZulGurubClassEnchant(spellInfo1->Id) && IsZulGurubClassEnchant(spellInfo2->Id)) ||
+        (IsArcanumEnchant(spellInfo1->Id) && IsArcanumEnchant(spellInfo2->Id)))
         return SPELL_GROUP_STACK_RULE_DEFAULT;
 
     uint32 spellid_1 = spellInfo1->GetFirstRankSpell()->Id;

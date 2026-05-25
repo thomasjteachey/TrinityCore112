@@ -1879,9 +1879,10 @@ bool Aura::CanStackWith(Aura const* existingAura) const
     if (this == existingAura)
         return true;
 
-    // HACK: Allow ZG class head/leg enchants to stack with each other (e.g. helm + legs)
+    // HACK: Allow ZG class head/leg enchants and Arcanums to stack with each other (e.g. helm + legs)
     uint32 const existingSpellId = existingAura->GetSpellInfo()->Id;
-    if (IsZulGurubClassEnchant(m_spellInfo->Id) && IsZulGurubClassEnchant(existingSpellId))
+    if ((IsZulGurubClassEnchant(m_spellInfo->Id) && IsZulGurubClassEnchant(existingSpellId)) ||
+        (IsArcanumEnchant(m_spellInfo->Id) && IsArcanumEnchant(existingSpellId)))
         return true;
 
     bool sameCaster = GetCasterGUID() == existingAura->GetCasterGUID();
