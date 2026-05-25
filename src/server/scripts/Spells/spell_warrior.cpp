@@ -229,6 +229,11 @@ public:
     {
         PolearmStaffInnerAuras::Sync(player);
     }
+
+    void OnPlayerResurrect(Player* player) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
+    }
 };
 
 // 71, 2457, 2458 - Warrior Stances
