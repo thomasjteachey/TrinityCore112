@@ -1260,6 +1260,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
     bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const hasFinalizedSpline = player->movespline && player->movespline->Initialized() && player->movespline->Finalized();
     bool const movementGeneratorHasNotLaunched = !player->isMoving() &&
         !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
@@ -1274,6 +1275,26 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     if (!forceMovementWhenAlreadyInRange && activeTargetRelativeMotion && currentDistance > (safeDistance + 0.75f))
     {
+        bool const staleFinalizedSplineHold =
+            sameStallTarget &&
+            activeTargetRelativeMotion &&
+            hasFinalizedSpline &&
+            !player->isMoving() &&
+            !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
+            !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
+            stallState.lastIssueMs != 0 &&
+            lastIssueAgeMs >= 500;
+
+        if (staleFinalizedSplineHold)
+        {
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            std::ostringstream resetDiag;
+            resetDiag << BuildRangedMovementDiag(player, target, "ranged_stale_finalized_spline_cleared",
+                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "none")
+                     << " issue_age_ms=" << lastIssueAgeMs;
+            SetLastMovementDebugStatus(player, resetDiag.str());
+        }
+
         if (staleUnlaunchedTargetRelative)
         {
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
