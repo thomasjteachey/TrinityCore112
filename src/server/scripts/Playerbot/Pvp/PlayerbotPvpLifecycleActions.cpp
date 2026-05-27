@@ -923,12 +923,21 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
     {
         if (directDropState.pending &&
             nowMs > directDropState.issueMs + 1200 &&
-            !player->isMoving() &&
-            player->GetDistance(directDropState.startPosition) < 3.0f)
+            !player->isMoving())
         {
-            directDropState.pending = false;
-            directDropState.suppressUntilMs = nowMs + 8000;
-            EmitBattlegroundGmDebug(player, "movepoint=direct-drop-stalled fallback=nav-segment", 0);
+            // Two failure shapes:
+            // 1) Never launched from the start point.
+            // 2) Launched, then settled/stuck on terrain partway down.
+            float const fromStart = player->GetDistance(directDropState.startPosition);
+            float const toDestination = player->GetDistance(safeDestination);
+            if (fromStart < 3.0f || toDestination > 8.0f)
+            {
+                directDropState.pending = false;
+                directDropState.suppressUntilMs = nowMs + 8000;
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
+                    " toDest=" + std::to_string(int32(toDestination)), 0);
+            }
         }
 
         if (nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
