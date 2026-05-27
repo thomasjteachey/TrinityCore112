@@ -660,7 +660,14 @@ bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
     if (IsForbiddenBattlegroundPathType(path.GetPathType()))
         return false;
 
-    float const pathLength = path.GetTotalLength();
+    Movement::PointsArray const& points = path.GetPath();
+    if (points.size() < 2)
+        return false;
+
+    float pathLength = 0.0f;
+    for (std::size_t i = 1; i < points.size(); ++i)
+        pathLength += (points[i] - points[i - 1]).length();
+
     return pathLength > destinationDistance * 1.35f;
 }
 
