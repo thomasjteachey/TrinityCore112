@@ -22,6 +22,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundEY.h"
+#include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
 #include "Item.h"
@@ -276,6 +277,18 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
         if (!bothFlagsNotAtBase)
             values.teamFlagCarrierNear = IsFlagCarrierNear(player, teamCarrierGuid, 200.0f);
 
+        return;
+    }
+
+    if (BattlegroundTP* bgTp = dynamic_cast<BattlegroundTP*>(battleground))
+    {
+        ObjectGuid const enemyCarrierGuid = bgTp->GetFlagPickerGUID(botTeam);
+        ObjectGuid const teamCarrierGuid = bgTp->GetFlagPickerGUID(enemyTeam);
+
+        values.playerHasFlag = (teamCarrierGuid == playerGuid);
+        values.enemyFlagCarrierActive = !enemyCarrierGuid.IsEmpty();
+        values.enemyFlagCarrierNear = IsFlagCarrierNear(player, enemyCarrierGuid, 100.0f);
+        values.teamFlagCarrierNear = IsFlagCarrierNear(player, teamCarrierGuid, 200.0f);
         return;
     }
 
