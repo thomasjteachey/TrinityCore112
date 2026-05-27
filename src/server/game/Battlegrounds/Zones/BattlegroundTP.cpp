@@ -12,6 +12,7 @@
 #include "ObjectMgr.h"
 #include "ObjectAccessor.h"
 #include "BattlegroundMgr.h"
+#include "Chat.h"
 #include "DBCStores.h"
 #include "Duration.h"
 #include "Map.h"
@@ -20,6 +21,8 @@
 #include "WorldPacket.h"
 #include "Battleground.h"
 #include <unordered_map>
+#include <iomanip>
+#include <sstream>
 
 #include "ScriptMgr.h"
 #include "Config.h"
@@ -84,6 +87,109 @@ BattlegroundTP::BattlegroundTP()
 
 BattlegroundTP::~BattlegroundTP() { }
 
+char const* BattlegroundTP::GetCTFFlagStateToken(uint8 flagState) const
+{
+    switch (flagState)
+    {
+        case BG_TP_FLAG_STATE_ON_BASE: return "BASE";
+        case BG_TP_FLAG_STATE_ON_PLAYER: return "PLAYER";
+        case BG_TP_FLAG_STATE_ON_GROUND: return "GROUND";
+        case BG_TP_FLAG_STATE_WAIT_RESPAWN: return "WAIT";
+        default: return "BASE";
+    }
+}
+
+std::string BattlegroundTP::FormatCTFCoord(float value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(4) << value;
+    return stream.str();
+}
+
+bool BattlegroundTP::GetCTFFlagWorldPositionByIdentity(TeamId flagTeam, float& x, float& y) const
+{
+    if (flagTeam != TEAM_ALLIANCE && flagTeam != TEAM_HORDE)
+        return false;
+
+    if (_flagState[flagTeam] == BG_TP_FLAG_STATE_ON_PLAYER)
+    {
+        if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[flagTeam]))
+        {
+            x = carrier->GetPositionX();
+            y = carrier->GetPositionY();
+            return true;
+        }
+    }
+    else if (_flagState[flagTeam] == BG_TP_FLAG_STATE_ON_GROUND)
+    {
+        if (Map* map = GetBgMap())
+            if (GameObject* droppedFlag = map->GetGameObject(GetDroppedFlagGUID(flagTeam)))
+            {
+                x = droppedFlag->GetPositionX();
+                y = droppedFlag->GetPositionY();
+                return true;
+            }
+    }
+
+    return false;
+}
+
+std::string BattlegroundTP::BuildCTFFlagFullPayload() const
+{
+    std::string allianceCarrier;
+    std::string hordeCarrier;
+    std::string allianceX;
+    std::string allianceY;
+    std::string hordeX;
+    std::string hordeY;
+
+    if (_flagState[TEAM_ALLIANCE] == BG_TP_FLAG_STATE_ON_PLAYER)
+        if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[TEAM_ALLIANCE]))
+            allianceCarrier = carrier->GetName();
+    if (_flagState[TEAM_HORDE] == BG_TP_FLAG_STATE_ON_PLAYER)
+        if (Player* carrier = ObjectAccessor::FindPlayer(_flagKeepers[TEAM_HORDE]))
+            hordeCarrier = carrier->GetName();
+
+    float x = 0.0f;
+    float y = 0.0f;
+    if (GetCTFFlagWorldPositionByIdentity(TEAM_ALLIANCE, x, y))
+    {
+        Map2ZoneCoordinates(x, y, 5031);
+        allianceX = FormatCTFCoord(x / 100.0f);
+        allianceY = FormatCTFCoord(y / 100.0f);
+    }
+    if (GetCTFFlagWorldPositionByIdentity(TEAM_HORDE, x, y))
+    {
+        Map2ZoneCoordinates(x, y, 5031);
+        hordeX = FormatCTFCoord(x / 100.0f);
+        hordeY = FormatCTFCoord(y / 100.0f);
+    }
+
+    return std::string("FULL:") + allianceCarrier + ":" + hordeCarrier + ":" + GetCTFFlagStateToken(_flagState[TEAM_ALLIANCE]) + ":" +
+        GetCTFFlagStateToken(_flagState[TEAM_HORDE]) + ":" + allianceX + ":" + allianceY + ":" + hordeX + ":" + hordeY;
+}
+
+void BattlegroundTP::SendCTFFlagAddonMessage(std::string const& payload)
+{
+    std::string message = "CWSG\t" + payload;
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
+    SendPacketToAll(&data);
+}
+
+void BattlegroundTP::BroadcastCTFFlagFullState() { SendCTFFlagAddonMessage(BuildCTFFlagFullPayload()); }
+
+void BattlegroundTP::SendCTFFlagFullStateTo(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    std::string message = "CWSG\t" + BuildCTFFlagFullPayload();
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
+    player->SendDirectMessage(&data);
+}
+
 void BattlegroundTP::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)
@@ -105,6 +211,9 @@ void BattlegroundTP::PostUpdateImpl(uint32 diff)
                 UpdateFlagState(TEAM_HORDE, 1);
                 SendBroadcastText(LANG_BG_TP_F_PLACED, CHAT_MSG_BG_SYSTEM_NEUTRAL);
                 PlaySoundToAll(BG_TP_SOUND_FLAGS_RESPAWNED);
+                SendCTFFlagAddonMessage("A:RETURN");
+                SendCTFFlagAddonMessage("H:RETURN");
+                BroadcastCTFFlagFullState();
                 break;
             case BG_TP_EVENT_ALLIANCE_DROP_FLAG:
                 RespawnFlagAfterDrop(TEAM_ALLIANCE);
@@ -167,6 +276,7 @@ void BattlegroundTP::StartingEventOpenDoors()
     UpdateFlagState(TEAM_ALLIANCE, 1);
     UpdateFlagState(TEAM_HORDE, 1);
     UpdateWorldState(BG_TP_STATE_TIMER_ACTIVE, 0);
+    BroadcastCTFFlagFullState();
 }
 
 void BattlegroundTP::AddPlayer(Player* player)
@@ -182,6 +292,8 @@ void BattlegroundTP::AddPlayer(Player* player)
         }
         PlayerScores[player->GetGUID().GetCounter()] = scoreEntry;
     }
+    if (GetStatus() == STATUS_IN_PROGRESS)
+        SendCTFFlagFullStateTo(player);
 }
 
 
@@ -206,6 +318,8 @@ void BattlegroundTP::RespawnFlagAfterDrop(TeamId teamId)
     _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
     RemoveAssaultAuras();
     HandleFlagRoomCapturePoint(GetOtherTwinPeaksTeamId(teamId));
+    SendCTFFlagAddonMessage(teamId == TEAM_ALLIANCE ? "A:RETURN" : "H:RETURN");
+    BroadcastCTFFlagFullState();
 }
 
 void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
@@ -219,7 +333,8 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
     AddPoints(player->GetTeamId(), 1);
     TeamId capturedFlagTeam = GetOtherTwinPeaksTeamId(player->GetTeamId());
     SetFlagPicker(ObjectGuid::Empty, capturedFlagTeam);
-    _flagState[capturedFlagTeam] = BG_TP_FLAG_STATE_ON_BASE;
+    _flagState[capturedFlagTeam] = BG_TP_FLAG_STATE_WAIT_RESPAWN;
+    _flagState[player->GetTeamId()] = BG_TP_FLAG_STATE_WAIT_RESPAWN;
     UpdateWorldState(capturedFlagTeam == TEAM_ALLIANCE ? BG_TP_FLAG_UNK_ALLIANCE : BG_TP_FLAG_UNK_HORDE, 0);
     UpdateFlagState(player->GetTeamId(), 1);
     if (player->GetTeamId() == TEAM_ALLIANCE)
@@ -237,6 +352,10 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
 
     SpawnBGObject(BG_TP_OBJECT_H_FLAG, BG_TP_FLAG_RESPAWN_TIME);
     SpawnBGObject(BG_TP_OBJECT_A_FLAG, BG_TP_FLAG_RESPAWN_TIME);
+    SendCTFFlagAddonMessage(capturedFlagTeam == TEAM_ALLIANCE ? "A:CAPTURE" : "H:CAPTURE");
+    SendCTFFlagAddonMessage("A:WAIT");
+    SendCTFFlagAddonMessage("H:WAIT");
+    BroadcastCTFFlagFullState();
 
     UpdateWorldState(player->GetTeamId() == TEAM_ALLIANCE ? BG_TP_FLAG_CAPTURES_ALLIANCE : BG_TP_FLAG_CAPTURES_HORDE, GetTeamScore(player->GetTeamId()));
     UpdatePlayerScore(player, SCORE_FLAG_CAPTURES, 1);      // +1 flag captures
@@ -286,6 +405,8 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
         player->CastSpell(player, BG_TP_SPELL_HORDE_FLAG_DROPPED, true);
         SendBroadcastText(LANG_BG_TP_DROPPED_HF, CHAT_MSG_BG_SYSTEM_HORDE, player);
         _bgEvents.RescheduleEvent(BG_TP_EVENT_HORDE_DROP_FLAG, Milliseconds(BG_TP_FLAG_DROP_TIME));
+        SendCTFFlagAddonMessage("H:DROP");
+        BroadcastCTFFlagFullState();
     }
     else
     {
@@ -295,6 +416,8 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
         player->CastSpell(player, BG_TP_SPELL_ALLIANCE_FLAG_DROPPED, true);
         SendBroadcastText(LANG_BG_TP_DROPPED_AF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
         _bgEvents.RescheduleEvent(BG_TP_EVENT_ALLIANCE_DROP_FLAG, Milliseconds(BG_TP_FLAG_DROP_TIME));
+        SendCTFFlagAddonMessage("A:DROP");
+        BroadcastCTFFlagFullState();
     }
 }
 
@@ -318,6 +441,8 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
         PlaySoundToAll(BG_TP_SOUND_ALLIANCE_FLAG_PICKED_UP);
         SendBroadcastText(LANG_BG_TP_PICKEDUP_AF, CHAT_MSG_BG_SYSTEM_HORDE, player);
+        SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+        BroadcastCTFFlagFullState();
 
         if (GetFlagState(TEAM_HORDE) != BG_TP_FLAG_STATE_ON_BASE)
         {
@@ -340,6 +465,8 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
         PlaySoundToAll(BG_TP_SOUND_HORDE_FLAG_PICKED_UP);
         SendBroadcastText(LANG_BG_TP_PICKEDUP_HF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
+        SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+        BroadcastCTFFlagFullState();
 
         if (GetFlagState(TEAM_ALLIANCE) != BG_TP_FLAG_STATE_ON_BASE)
         {
@@ -371,6 +498,8 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
             _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
             RemoveAssaultAuras();
             HandleFlagRoomCapturePoint(TEAM_HORDE);
+            SendCTFFlagAddonMessage("A:RETURN");
+            BroadcastCTFFlagFullState();
             return;
         }
         else
@@ -385,6 +514,8 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
             PlaySoundToAll(BG_TP_SOUND_ALLIANCE_FLAG_PICKED_UP);
             SendBroadcastText(LANG_BG_TP_PICKEDUP_AF, CHAT_MSG_BG_SYSTEM_HORDE, player);
+            SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+            BroadcastCTFFlagFullState();
             return;
         }
     }
@@ -407,6 +538,8 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
             _bgEvents.CancelEvent(BG_TP_EVENT_BOTH_FLAGS_KEPT15);
             RemoveAssaultAuras();
             HandleFlagRoomCapturePoint(TEAM_ALLIANCE);
+            SendCTFFlagAddonMessage("H:RETURN");
+            BroadcastCTFFlagFullState();
             return;
         }
         else
@@ -421,6 +554,8 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
             PlaySoundToAll(BG_TP_SOUND_HORDE_FLAG_PICKED_UP);
             SendBroadcastText(LANG_BG_TP_PICKEDUP_HF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
+            SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+            BroadcastCTFFlagFullState();
             return;
         }
     }
@@ -677,4 +812,3 @@ bool BattlegroundTP::CheckAchievementCriteriaMeet(uint32 criteriaId, Player cons
 
     return Battleground::CheckAchievementCriteriaMeet(criteriaId, player, target, miscValue);
 }
-

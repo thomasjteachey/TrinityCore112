@@ -9,6 +9,7 @@
 #include "Battleground.h"
 #include "EventMap.h"
 #include "WorldStatePackets.h"
+#include <string>
 
 enum TwinPeaksStrings {
     LANG_BG_TP_START_TWO_MINUTES        = 910020,
@@ -237,6 +238,13 @@ class BattlegroundTP : public Battleground
         uint32 GetAssaultSpellId() const;
         void RemoveAssaultAuras();
         void HandleFlagRoomCapturePoint(TeamId teamId);
+        char const* GetCTFFlagStateToken(uint8 flagState) const;
+        static std::string FormatCTFCoord(float value);
+        bool GetCTFFlagWorldPositionByIdentity(TeamId flagTeam, float& x, float& y) const;
+        std::string BuildCTFFlagFullPayload() const;
+        void SendCTFFlagAddonMessage(std::string const& payload);
+        void BroadcastCTFFlagFullState();
+        void SendCTFFlagFullStateTo(Player* player);
 
         /* Achievements*/
         bool CheckAchievementCriteriaMeet(uint32 criteriaId, Player const* source, Unit const* target = nullptr, uint32 miscvalue1 = 0) override;
