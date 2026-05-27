@@ -27,6 +27,7 @@
 #include "PathGenerator.h"
 #include "Player.h"
 #include "Random.h"
+#include "Log.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
@@ -158,18 +159,35 @@ void Sync(Player* player)
     if (!player)
         return;
 
+    if (!player->IsInWorld())
+    {
+        TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::Sync skipped for player {} ({}) because player is not in world yet", player->GetName(), player->GetGUID().ToString());
+        return;
+    }
+
+    TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::Sync start for player {} ({})", player->GetName(), player->GetGUID().ToString());
+
     for (AuraMapping const& mapping : AuraMappings)
     {
         bool const shouldHaveInnerAura = ShouldHaveInnerAura(player, mapping);
         bool const hasInnerAura = player->HasAura(mapping.InnerSpellId);
 
+        TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::Sync player {} outer {} inner {} shouldHave={} hasInner={}",
+            player->GetGUID().ToString(), mapping.OuterSpellId, mapping.InnerSpellId, shouldHaveInnerAura, hasInnerAura);
+
         if (shouldHaveInnerAura)
         {
             if (!hasInnerAura)
+            {
                 player->CastSpell(player, mapping.InnerSpellId, true);
+                TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::Sync applied inner aura {} for player {}", mapping.InnerSpellId, player->GetGUID().ToString());
+            }
         }
         else if (hasInnerAura)
+        {
             player->RemoveAurasDueToSpell(mapping.InnerSpellId);
+            TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::Sync removed inner aura {} for player {}", mapping.InnerSpellId, player->GetGUID().ToString());
+        }
     }
 }
 
@@ -227,7 +245,20 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        PolearmStaffInnerAuras::Sync(player);
+        if (!player)
+            return;
+
+        ObjectGuid const playerGuid = player->GetGUID();
+        player->m_Events.AddEventAtOffset([playerGuid]()
+        {
+            if (Player* loadedPlayer = ObjectAccessor::FindConnectedPlayer(playerGuid))
+            {
+                TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::OnLogin delayed sync for player {} ({})", loadedPlayer->GetName(), loadedPlayer->GetGUID().ToString());
+                PolearmStaffInnerAuras::Sync(loadedPlayer);
+            }
+            else
+                TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::OnLogin delayed sync skipped because player {} is no longer connected", playerGuid.ToString());
+        }, 1s);
     }
 
     void OnPlayerResurrect(Player* player) override
