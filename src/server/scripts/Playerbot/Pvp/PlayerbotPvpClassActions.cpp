@@ -2775,9 +2775,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
 
-    // Most combat/utility spells require an unmounted caster. Dismount before
-    // non-mount spell execution so bots do not keep kiting while mounted.
-    if (player->IsMounted() && !isMountSpell)
+    // Only force dismount when the bot is actually transitioning into combat
+    // pressure. Allow benign out-of-combat utility/self-maintenance actions to
+    // execute without unnecessarily dropping travel speed in battlegrounds.
+    bool const shouldForceCombatDismount = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy ||
+        player->IsInCombat();
+    if (player->IsMounted() && !isMountSpell && shouldForceCombatDismount)
         ForcePlayerbotDismount(player);
 
     // Food/drink should immediately break when the bot transitions into active

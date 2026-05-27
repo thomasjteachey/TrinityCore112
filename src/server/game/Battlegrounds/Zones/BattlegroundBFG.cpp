@@ -475,7 +475,8 @@ void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
 
 WorldSafeLocsEntry const* BattlegroundBFG::GetClosestGraveyard(Player* player)
 {
-    WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[static_cast<uint8>(GILNEAS_BG_SPIRIT_ALLIANCE) + player->GetTeamId()]);
+    TeamId const bgTeamId = GetTeamIndexByTeamId(player->GetBGTeam());
+    WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[static_cast<uint8>(GILNEAS_BG_SPIRIT_ALLIANCE) + bgTeamId]);
     WorldSafeLocsEntry const* nearestEntry = entry;
 
     float pX = player->GetPositionX();
@@ -484,7 +485,7 @@ WorldSafeLocsEntry const* BattlegroundBFG::GetClosestGraveyard(Player* player)
     float minDist = dist;
 
     for (uint8 i = GILNEAS_BG_NODE_LIGHTHOUSE; i < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++i)
-        if (_capturePointInfo[i]._ownerTeamId == player->GetTeamId())
+        if (_capturePointInfo[i]._ownerTeamId == bgTeamId)
         {
             entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[i]);
             dist = (entry->Loc.X - pX)*(entry->Loc.X - pX) + (entry->Loc.Y - pY)*(entry->Loc.Y - pY);
@@ -552,5 +553,4 @@ void BattlegroundBFG::ApplyPhaseMask()
         }
     }
 }
-
 
