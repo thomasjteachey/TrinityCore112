@@ -22,6 +22,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundEY.h"
+#include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
 #include "Item.h"
@@ -267,6 +268,7 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
         ObjectGuid const teamCarrierGuid = bgWs->GetFlagPickerGUID(enemyTeam);
 
         values.playerHasFlag = (teamCarrierGuid == playerGuid);
+        values.enemyFlagCarrierActive = !enemyCarrierGuid.IsEmpty();
         values.enemyFlagCarrierNear = IsFlagCarrierNear(player, enemyCarrierGuid, 100.0f);
 
         bool const bothFlagsNotAtBase =
@@ -275,6 +277,18 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
         if (!bothFlagsNotAtBase)
             values.teamFlagCarrierNear = IsFlagCarrierNear(player, teamCarrierGuid, 200.0f);
 
+        return;
+    }
+
+    if (BattlegroundTP* bgTp = dynamic_cast<BattlegroundTP*>(battleground))
+    {
+        ObjectGuid const enemyCarrierGuid = bgTp->GetFlagPickerGUID(botTeam);
+        ObjectGuid const teamCarrierGuid = bgTp->GetFlagPickerGUID(enemyTeam);
+
+        values.playerHasFlag = (teamCarrierGuid == playerGuid);
+        values.enemyFlagCarrierActive = !enemyCarrierGuid.IsEmpty();
+        values.enemyFlagCarrierNear = IsFlagCarrierNear(player, enemyCarrierGuid, 100.0f);
+        values.teamFlagCarrierNear = IsFlagCarrierNear(player, teamCarrierGuid, 200.0f);
         return;
     }
 
@@ -292,7 +306,10 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
         if (carrier->GetTeamId() == botTeam)
             values.teamFlagCarrierNear = player->IsWithinDistInMap(carrier, 200.0f);
         else
+        {
+            values.enemyFlagCarrierActive = true;
             values.enemyFlagCarrierNear = player->IsWithinDistInMap(carrier, 100.0f);
+        }
     }
 }
 
@@ -3136,6 +3153,8 @@ bool PvpCore::IsTriggerActive(PvpTrigger trigger, PvpValues const& values)
             return values.inBattleground;
         case PvpTrigger::PlayerHasFlag:
             return values.playerHasFlag;
+        case PvpTrigger::EnemyFlagCarrierActive:
+            return values.enemyFlagCarrierActive;
         case PvpTrigger::EnemyFlagCarrierNear:
             return values.enemyFlagCarrierNear;
         case PvpTrigger::TeamFlagCarrierNear:
@@ -3807,12 +3826,7 @@ BattlegroundObjectiveSelection PvpCore::SelectObjectiveSkeleton(PvpValues const&
 {
     BattlegroundObjectiveSelection objective;
 
-    // WSG brawl mode: ignore flag/objective play and let tactical movement
-    // converge bots to the shared midfield fight anchor.
-    if (values.battlegroundTypeId == BATTLEGROUND_WS)
-        return objective;
-
-    if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
+    if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierActive, values))
         objective.type = BattlegroundObjectiveType::AttackFlagCarrier;
     else if ((!values.battlegroundTeamHasHumans && IsTriggerActive(PvpTrigger::PlayerHasFlag, values)) ||
         IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
@@ -3844,10 +3858,7 @@ BattlegroundMovementPrimitive PvpCore::SelectMovementPrimitiveSkeleton(PvpValues
 
 FlagCarrierDirective PvpCore::SelectFlagCarrierDirectiveSkeleton(PvpValues const& values)
 {
-    if (values.battlegroundTypeId == BATTLEGROUND_WS)
-        return FlagCarrierDirective::None;
-
-    if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierNear, values))
+    if (IsTriggerActive(PvpTrigger::EnemyFlagCarrierActive, values))
         return FlagCarrierDirective::AttackEnemyCarrier;
 
     if ((!values.battlegroundTeamHasHumans && IsTriggerActive(PvpTrigger::PlayerHasFlag, values)) ||

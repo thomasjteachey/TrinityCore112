@@ -23,6 +23,7 @@
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
 #include "BattlegroundEY.h"
+#include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "DBCStores.h"
 #include "Time/GameTime.h"
@@ -1670,6 +1671,20 @@ Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirect
             carrierGuid = bgWs->GetFlagPickerGUID(botTeam);
         else if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier)
             carrierGuid = bgWs->GetFlagPickerGUID(enemyTeam);
+
+        if (carrierGuid.IsEmpty())
+            return nullptr;
+
+        return ObjectAccessor::FindConnectedPlayer(carrierGuid);
+    }
+
+    if (BattlegroundTP* bgTp = dynamic_cast<BattlegroundTP*>(battleground))
+    {
+        ObjectGuid carrierGuid = ObjectGuid::Empty;
+        if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier)
+            carrierGuid = bgTp->GetFlagPickerGUID(botTeam);
+        else if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier)
+            carrierGuid = bgTp->GetFlagPickerGUID(enemyTeam);
 
         if (carrierGuid.IsEmpty())
             return nullptr;
