@@ -3019,11 +3019,17 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
         float priority;
     };
 
-    // Blind pressure model for battlegrounds: once active, always drive toward
-    // enemy players rather than objective-specific behavior.
-    std::array<TacticalRule, 4> const rules =
+    // Keep pressure behavior generic, but elevate flag-carrier directives when
+    // objective triggers report an active carrier. This ensures CTF matches
+    // chase carriers instead of defaulting to midfield skirmishes.
+    bool const enemyFlagCarrierActive = values.enemyFlagCarrierActive;
+    bool const teamFlagCarrierNear = values.teamFlagCarrierNear;
+
+    std::array<TacticalRule, 6> const rules =
     {{
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
+        { "enemy flag carrier active", bgActive && enemyFlagCarrierActive, "attack enemy flag carrier", 95.0f },
+        { "team flag carrier near", bgActive && teamFlagCarrierNear, "bg protect fc", 80.0f },
         { "bg active", bgActive, "bg pursue enemy", 60.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
         { "low mana", lowMana, "bg use buff", 45.0f }
