@@ -2897,7 +2897,21 @@ bool BattlegroundTacticalActions::MoveToObjectivePrimitive(Player* player, Battl
     }
 
     if (player->IsInCombat())
+    {
+        if (context.flagCarrierDirective == FlagCarrierDirective::AttackEnemyCarrier)
+        {
+            if (Player* enemyCarrier = FindFlagCarrierForDirective(player, FlagCarrierDirective::AttackEnemyCarrier))
+            {
+                if (player->GetTarget() != enemyCarrier->GetGUID())
+                    player->SetTarget(enemyCarrier->GetGUID());
+
+                if (MoveTowardUnit(player, enemyCarrier, 15.0f))
+                    return true;
+            }
+        }
+
         return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
+    }
 
     if (TryPursueNearestEnemyInBattleground(player))
         return true;
