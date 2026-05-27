@@ -125,7 +125,8 @@ enum BG_TP_ObjectEntry
 
 enum BG_TP_FlagState
 {
-    BG_TP_FLAG_STATE_ON_BASE      = 1,
+    BG_TP_FLAG_STATE_ON_BASE      = 0,
+    BG_TP_FLAG_STATE_WAIT_RESPAWN = 1,
     BG_TP_FLAG_STATE_ON_PLAYER    = 2,
     BG_TP_FLAG_STATE_ON_GROUND    = 3
 };
