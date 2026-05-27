@@ -91,7 +91,10 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     NodeOccupied(node);
                     SendNodeUpdate(node);
 
-                    SendBroadcastText(LANG_BG_BFG_NODE_TAKEN, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE);
+                    if (teamId == TEAM_ALLIANCE)
+                        SendBroadcastText(BFGNodes[node].TextAllianceTaken, CHAT_MSG_BG_SYSTEM_ALLIANCE);
+                    else
+                        SendBroadcastText(BFGNodes[node].TextHordeTaken, CHAT_MSG_BG_SYSTEM_HORDE);
                     PlaySoundToAll(teamId == TEAM_ALLIANCE ? GILNEAS_BG_SOUND_NODE_CAPTURED_ALLIANCE : GILNEAS_BG_SOUND_NODE_CAPTURED_HORDE);
                     break;
                 }
@@ -345,7 +348,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
         _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
         _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
         sound = GILNEAS_BG_SOUND_NODE_CLAIMED;
-        message = LANG_BG_BFG_NODE_CLAIMED;
+        message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceClaims : BFGNodes[node].TextHordeClaims;
     }
     else if (_capturePointInfo[node]._state == GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED || _capturePointInfo[node]._state == GILNEAS_BG_NODE_STATUS_HORDE_CONTESTED)
     {
@@ -355,7 +358,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
             _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
             _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
             _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
-            message = LANG_BG_BFG_NODE_ASSAULTED;
+            message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceAssaulted : BFGNodes[node].TextHordeAssaulted;
         }
         else
         {
@@ -364,7 +367,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
             _capturePointInfo[node]._ownerTeamId = player->GetTeamId();
             _bgEvents.CancelEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node);
             NodeOccupied(node); // after setting team owner
-            message = LANG_BG_BFG_NODE_DEFENDED;
+            message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceDefended : BFGNodes[node].TextHordeDefended;
         }
         sound = player->GetTeamId() == TEAM_ALLIANCE ? GILNEAS_BG_SOUND_NODE_ASSAULTED_ALLIANCE : GILNEAS_BG_SOUND_NODE_ASSAULTED_HORDE;
     }
@@ -377,7 +380,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
 
         ApplyPhaseMask();
         _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
-        message = LANG_BG_BFG_NODE_ASSAULTED;
+        message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceAssaulted : BFGNodes[node].TextHordeAssaulted;
         sound = player->GetTeamId() == TEAM_ALLIANCE ? GILNEAS_BG_SOUND_NODE_ASSAULTED_ALLIANCE : GILNEAS_BG_SOUND_NODE_ASSAULTED_HORDE;
     }
 
@@ -551,4 +554,3 @@ void BattlegroundBFG::ApplyPhaseMask()
         }
     }
 }
-
