@@ -614,9 +614,10 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
 
     // Battleground cliff/ledge stalls regularly present as repeated CHASE/FOLLOW
     // orders that never launch (no spline, no movement signal, moving=no) while
-    // still very far from desired range. Do not preserve these beyond a tiny
-    // bootstrap window; reissue quickly so lifecycle/nav recovery can take over.
-    if (aggressiveUnlaunchedBattleground && ageMs > 120)
+    // still very far from desired range. These can be reissued every tick, which
+    // keeps age_ms near zero and would bypass any age-based gate. Break preserve
+    // immediately so callers can clear/reissue and recovery paths can engage.
+    if (aggressiveUnlaunchedBattleground)
         inSettleWindow = false;
 
     if (pathologicalUnlaunchedHold)
@@ -656,7 +657,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
                  << " aggressive_unlaunched_bg=" << (aggressiveUnlaunchedBattleground ? "yes" : "no")
                  << " pathological_unlaunched_hold=" << (pathologicalUnlaunchedHold ? "yes" : "no")
-                 << " reason=" << (aggressiveUnlaunchedBattleground && ageMs > 120
+                 << " reason=" << (aggressiveUnlaunchedBattleground
                     ? "aggressive_unlaunched_bg"
                     : (pathologicalUnlaunchedHold
                     ? "pathological_unlaunched_hold"
