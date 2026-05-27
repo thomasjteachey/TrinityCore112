@@ -639,6 +639,62 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 
+Position BuildDownhillEscapeDestination(Player* player, Position const& destination)
+{
+    if (!player)
+        return destination;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 0.5f)
+        return BuildCollisionSafeDestination(player, destination);
+
+    float const stepDistance = std::min(12.0f, std::max(4.0f, planarDistance * 0.35f));
+    float const nx = dx / planarDistance;
+    float const ny = dy / planarDistance;
+
+    Position probe(
+        player->GetPositionX() + nx * stepDistance,
+        player->GetPositionY() + ny * stepDistance,
+        player->GetPositionZ() - 6.0f,
+        destination.GetOrientation());
+
+    return BuildCollisionSafeDestination(player, probe);
+}
+
+bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    float const destinationDistance = player->GetDistance(destination);
+    if (destinationDistance < 15.0f || destinationDistance > 120.0f)
+        return false;
+
+    float const verticalDrop = player->GetPositionZ() - destination.GetPositionZ();
+    if (verticalDrop < 8.0f)
+        return false;
+
+    PathGenerator path(player);
+    path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
+    if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true))
+        return false;
+
+    if (IsForbiddenBattlegroundPathType(path.GetPathType()))
+        return false;
+
+    Movement::PointsArray const& points = path.GetPath();
+    if (points.size() < 2)
+        return false;
+
+    float pathLength = 0.0f;
+    for (std::size_t i = 1; i < points.size(); ++i)
+        pathLength += (points[i] - points[i - 1]).length();
+
+    return pathLength > destinationDistance * 1.35f;
+}
+
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
 {
     if (!player || points.size() < 2)
@@ -818,12 +874,21 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         Position lastDestination;
         uint32 lastIssueMs = 0;
     };
+    struct DirectDropState
+    {
+        Position startPosition;
+        uint32 issueMs = 0;
+        uint32 suppressUntilMs = 0;
+        bool pending = false;
+    };
 
     static std::unordered_map<uint64, MoveOrderState> stateByGuid;
     static std::unordered_map<uint64, uint8> stationaryReissueCountByGuid;
+    static std::unordered_map<uint64, DirectDropState> directDropStateByGuid;
     uint64 const botGuid = player->GetGUID().GetRawValue();
     MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
     uint8& stationaryReissueCount = stationaryReissueCountByGuid[botGuid];
+    DirectDropState& directDropState = directDropStateByGuid[botGuid];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
     bool const destinationChanged = state.lastIssueMs == 0 ||
@@ -880,13 +945,70 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (generatePath && player->InBattleground())
     {
+        if (directDropState.pending &&
+            nowMs > directDropState.issueMs + 1200 &&
+            !player->isMoving())
+        {
+            // Two failure shapes:
+            // 1) Never launched from the start point.
+            // 2) Launched, then settled/stuck on terrain partway down.
+            float const fromStart = player->GetDistance(directDropState.startPosition);
+            float const toDestination = player->GetDistance(safeDestination);
+            if (fromStart < 3.0f || toDestination > 8.0f)
+            {
+                directDropState.pending = false;
+                directDropState.suppressUntilMs = nowMs + 8000;
+                Position const escapeDestination = BuildDownhillEscapeDestination(player, safeDestination);
+                motionMaster->MovePoint(0, escapeDestination, false);
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
+                    " toDest=" + std::to_string(int32(toDestination)) +
+                    " escapeDist=" + std::to_string(int32(player->GetDistance(escapeDestination))), 0);
+
+                state.lastDestination = destination;
+                state.lastIssueMs = nowMs;
+                return true;
+            }
+        }
+
+        if (nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
+        {
+            motionMaster->MovePoint(0, safeDestination, false);
+            EmitBattlegroundGmDebug(player,
+                "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+            directDropState.startPosition = player->GetPosition();
+            directDropState.issueMs = nowMs;
+            directDropState.pending = true;
+
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
+        }
+        else
+        {
+            directDropState.pending = false;
+        }
+
         Position segmentDestination;
         PathType pathType = PathType(0);
         if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
         {
+            // Recovery path for segmented-nav failures (for example, after a
+            // partial drop where local nav probing can't find a legal segment):
+            // issue a direct movement order so the bot keeps progressing
+            // instead of stalling in place waiting on nav segment recovery.
+            motionMaster->MovePoint(0, safeDestination, false);
             EmitBattlegroundGmDebug(player,
-                "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
-            return false;
+                "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+
+            directDropState.startPosition = player->GetPosition();
+            directDropState.issueMs = nowMs;
+            directDropState.pending = true;
+            directDropState.suppressUntilMs = std::max(directDropState.suppressUntilMs, nowMs + 2500);
+
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
         }
 
         motionMaster->MovePoint(0, segmentDestination, true);

@@ -586,12 +586,26 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
     bool const credibleRecentDistanceProgress = recentDistanceProgress && (hasMovementSignal || recentPositionProgress || madePositionProgress);
     bool const farFromDesiredRange = desiredRange > 0.0f && currentDistance > (desiredRange + 4.0f);
+    bool const pathologicalUnlaunchedHold =
+        player->InBattleground() &&
+        farFromDesiredRange &&
+        !hasMovementSignal &&
+        !player->isMoving() &&
+        !splineStarted &&
+        !splineInitialized &&
+        !madeDistanceProgress &&
+        !madePositionProgress &&
+        distanceProgressAgeMs > 1500 &&
+        positionProgressAgeMs > 1500;
 
     // Elegant fail-safe for the "stuck but preserved" state:
     // if we are still significantly outside desired range and have neither
     // recent launch nor distance progress, stop preserving and reissue a fresh
     // target-relative order immediately.
     if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !credibleRecentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
+        inSettleWindow = false;
+
+    if (pathologicalUnlaunchedHold)
         inSettleWindow = false;
 
     bool const preserve = inSettleWindow || credibleRecentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
@@ -626,7 +640,10 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-                 << " reason=" << (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
+                 << " pathological_unlaunched_hold=" << (pathologicalUnlaunchedHold ? "yes" : "no")
+                 << " reason=" << (pathologicalUnlaunchedHold
+                    ? "pathological_unlaunched_hold"
+                    : (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress"));
             *reasonOut = diag.str();
         }
         return false;
@@ -660,6 +677,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
+             << " pathological_unlaunched_hold=" << (pathologicalUnlaunchedHold ? "yes" : "no")
              << " reason=" << (inSettleWindow
                     ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle")
                     : (credibleRecentLaunch ? "recent_launch" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress")));
