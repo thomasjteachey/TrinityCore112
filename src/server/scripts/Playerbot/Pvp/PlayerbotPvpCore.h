@@ -60,6 +60,7 @@ struct PvpValues
     bool hasArenaInvite = false;
     bool hasArenaTeamInvite = false;
     bool playerHasFlag = false;
+    bool enemyFlagCarrierActive = false;
     bool enemyFlagCarrierNear = false;
     bool teamFlagCarrierNear = false;
     uint32 battlegroundTeamHumanCount = 0;
@@ -75,6 +76,7 @@ enum class PvpTrigger : uint8
     BgInviteActive,
     InBattlegroundWithoutFlag,
     PlayerHasFlag,
+    EnemyFlagCarrierActive,
     EnemyFlagCarrierNear,
     TeamFlagCarrierNear
 };
