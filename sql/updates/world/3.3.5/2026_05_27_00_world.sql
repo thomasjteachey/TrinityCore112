@@ -1,0 +1,27 @@
+DELETE FROM `broadcast_text` WHERE `ID` BETWEEN 910055 AND 910078;
+
+INSERT INTO `broadcast_text` (`ID`, `LanguageID`, `Text`, `Text1`, `EmoteID1`, `EmoteID2`, `EmoteID3`, `EmoteDelay1`, `EmoteDelay2`, `EmoteDelay3`, `SoundEntriesID`, `EmotesID`, `Flags`, `VerifiedBuild`) VALUES
+(910055, 0, '$N has assaulted the Lighthouse!', '$N has assaulted the Lighthouse!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910056, 0, '$N has assaulted the Lighthouse!', '$N has assaulted the Lighthouse!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910057, 0, 'The Alliance has taken the Lighthouse!', 'The Alliance has taken the Lighthouse!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910058, 0, 'The Horde has taken the Lighthouse!', 'The Horde has taken the Lighthouse!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910059, 0, '$N has defended the Lighthouse!', '$N has defended the Lighthouse!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910060, 0, '$N has defended the Lighthouse!', '$N has defended the Lighthouse!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910061, 0, '$N claims the Lighthouse! If left unchallenged, the Alliance will control it in 1 minute!', '$N claims the Lighthouse! If left unchallenged, the Alliance will control it in 1 minute!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910062, 0, '$N claims the Lighthouse! If left unchallenged, the Horde will control it in 1 minute!', '$N claims the Lighthouse! If left unchallenged, the Horde will control it in 1 minute!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910063, 0, '$N has assaulted the Waterworks!', '$N has assaulted the Waterworks!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910064, 0, '$N has assaulted the Waterworks!', '$N has assaulted the Waterworks!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910065, 0, 'The Alliance has taken the Waterworks!', 'The Alliance has taken the Waterworks!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910066, 0, 'The Horde has taken the Waterworks!', 'The Horde has taken the Waterworks!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910067, 0, '$N has defended the Waterworks!', '$N has defended the Waterworks!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910068, 0, '$N has defended the Waterworks!', '$N has defended the Waterworks!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910069, 0, '$N claims the Waterworks! If left unchallenged, the Alliance will control it in 1 minute!', '$N claims the Waterworks! If left unchallenged, the Alliance will control it in 1 minute!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910070, 0, '$N claims the Waterworks! If left unchallenged, the Horde will control it in 1 minute!', '$N claims the Waterworks! If left unchallenged, the Horde will control it in 1 minute!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910071, 0, '$N has assaulted the Mine!', '$N has assaulted the Mine!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910072, 0, '$N has assaulted the Mine!', '$N has assaulted the Mine!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910073, 0, 'The Alliance has taken the Mine!', 'The Alliance has taken the Mine!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910074, 0, 'The Horde has taken the Mine!', 'The Horde has taken the Mine!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910075, 0, '$N has defended the Mine!', '$N has defended the Mine!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910076, 0, '$N has defended the Mine!', '$N has defended the Mine!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910077, 0, '$N claims the Mine! If left unchallenged, the Alliance will control it in 1 minute!', '$N claims the Mine! If left unchallenged, the Alliance will control it in 1 minute!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+(910078, 0, '$N claims the Mine! If left unchallenged, the Horde will control it in 1 minute!', '$N claims the Mine! If left unchallenged, the Horde will control it in 1 minute!', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);

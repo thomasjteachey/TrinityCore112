@@ -64,6 +64,25 @@ enum BattleForGilneasStrings {
     LANG_BG_BFG_H_NEAR_VICTORY              = 910054,
 };
 
+struct BFGNodeInfo
+{
+    uint32 TextAllianceAssaulted;
+    uint32 TextHordeAssaulted;
+    uint32 TextAllianceTaken;
+    uint32 TextHordeTaken;
+    uint32 TextAllianceDefended;
+    uint32 TextHordeDefended;
+    uint32 TextAllianceClaims;
+    uint32 TextHordeClaims;
+};
+
+BFGNodeInfo const BFGNodes[GILNEAS_BG_DYNAMIC_NODES_COUNT] =
+{
+    { 910055, 910056, 910057, 910058, 910059, 910060, 910061, 910062 }, // Lighthouse
+    { 910063, 910064, 910065, 910066, 910067, 910068, 910069, 910070 }, // Waterworks
+    { 910071, 910072, 910073, 910074, 910075, 910076, 910077, 910078 }  // Mine
+};
+
 enum GILNEAS_BG_WorldStates
 {
     GILNEAS_BG_OP_OCCUPIED_BASES_HORDE      = 6201,
