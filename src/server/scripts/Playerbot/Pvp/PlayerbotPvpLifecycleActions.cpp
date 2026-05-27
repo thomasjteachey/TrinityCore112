@@ -639,6 +639,38 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 
+bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    float const destinationDistance = player->GetDistance(destination);
+    if (destinationDistance < 15.0f || destinationDistance > 120.0f)
+        return false;
+
+    float const verticalDrop = player->GetPositionZ() - destination.GetPositionZ();
+    if (verticalDrop < 8.0f)
+        return false;
+
+    PathGenerator path(player);
+    path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
+    if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true))
+        return false;
+
+    if (IsForbiddenBattlegroundPathType(path.GetPathType()))
+        return false;
+
+    Movement::PointsArray const& points = path.GetPath();
+    if (points.size() < 2)
+        return false;
+
+    float pathLength = 0.0f;
+    for (std::size_t i = 1; i < points.size(); ++i)
+        pathLength += (points[i] - points[i - 1]).length();
+
+    return pathLength > destinationDistance * 1.35f;
+}
+
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
 {
     if (!player || points.size() < 2)
@@ -880,6 +912,17 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (generatePath && player->InBattleground())
     {
+        if (ShouldPreferDirectDropShortcut(player, safeDestination))
+        {
+            motionMaster->MovePoint(0, safeDestination, false);
+            EmitBattlegroundGmDebug(player,
+                "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
+        }
+
         Position segmentDestination;
         PathType pathType = PathType(0);
         if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
