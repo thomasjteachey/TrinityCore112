@@ -23,6 +23,7 @@
 #include "Channel.h"
 #include "ChannelMgr.h"
 #include "BattlegroundWS.h"
+#include "BattlegroundTP.h"
 #include "Chat.h"
 #include "ChatPackets.h"
 #include "DatabaseEnv.h"
@@ -207,8 +208,22 @@ bool HandleWSGFlagSyncRequest(Player* sender, uint32 type, uint32 lang, std::str
         return false;
 
     if (Battleground* battleground = sender->GetBattleground())
-        if (battleground->GetStatus() == STATUS_IN_PROGRESS && battleground->GetTypeID() == BATTLEGROUND_WS)
-            static_cast<BattlegroundWS*>(battleground)->SendWSGFlagFullStateTo(sender);
+    {
+        if (battleground->GetStatus() != STATUS_IN_PROGRESS)
+            return true;
+
+        switch (battleground->GetTypeID())
+        {
+            case BATTLEGROUND_WS:
+                static_cast<BattlegroundWS*>(battleground)->SendWSGFlagFullStateTo(sender);
+                break;
+            case BATTLEGROUND_TP:
+                static_cast<BattlegroundTP*>(battleground)->SendCTFFlagFullStateTo(sender);
+                break;
+            default:
+                break;
+        }
+    }
 
     return true;
 }

@@ -497,6 +497,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
     else
         SendBroadcastText(BG_WS_TEXT_CAPTURED_ALLIANCE_FLAG, CHAT_MSG_BG_SYSTEM_HORDE, player);
     SendWSGFlagAddonMessage(capturedFlagIdentity == TEAM_HORDE ? "H:CAPTURE" : "A:CAPTURE");
+    SendWSGFlagAddonMessage(capturedFlagIdentity == TEAM_HORDE ? "H:WAIT" : "A:WAIT");
     BroadcastWSGFlagFullState();
 
     UpdateFlagState(player->GetTeam(), 1);                  // flag state none
