@@ -1722,9 +1722,12 @@ public:
         VisitSnapshot(gameObjectMap, [this](ObjectGuid const& guid)
         {
             GameObject* gameObject = _map->GetGameObject(guid);
-            if (!gameObject || !gameObject->IsInWorld())
+            if (!gameObject || !gameObject->IsInWorld() || gameObject->GetMap() != _map)
                 return;
 
+            // OnGameEvent handlers can despawn or relocate gameobjects while
+            // events are being processed. Re-check that the looked up object
+            // is still owned by this map before touching AI state.
             if (GameObjectAI* ai = gameObject->AI())
                 ai->OnGameEvent(_activate, _eventId);
         });
