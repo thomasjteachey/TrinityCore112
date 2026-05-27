@@ -174,14 +174,13 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
 
     if (Map const* map = player->FindMap())
     {
-        float liquidLevel = INVALID_HEIGHT;
-        float floorLevel = INVALID_HEIGHT;
-        if (map->getLiquidStatus(player->GetPhaseMask(), adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(),
-                adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidLevel, &floorLevel))
+        LiquidData liquidData{};
+        if (map->GetLiquidStatus(player->GetPhaseMask(), adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(),
+                adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()))
         {
             bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
-            if (!canWalkOnWater && liquidLevel != INVALID_HEIGHT && floorLevel != INVALID_HEIGHT)
-                adjustedZ = std::max(floorLevel + 0.05f, std::min(adjustedZ, liquidLevel - 0.25f));
+            if (!canWalkOnWater)
+                adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.25f));
         }
     }
 
