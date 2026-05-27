@@ -1240,6 +1240,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     MovementGeneratorType const initialMotionType = motionMaster->GetCurrentMovementGeneratorType();
     bool const currentlyMoving = player->isMoving();
     bool const strictPathing = RequiresStrictHumanPathing(player);
+    bool const battleground = player->InBattleground();
+    float const verticalDeltaToTarget = player->GetPositionZ() - target->GetPositionZ();
+    float const dxToTarget = target->GetPositionX() - player->GetPositionX();
+    float const dyToTarget = target->GetPositionY() - player->GetPositionY();
+    float const planarDistanceToTarget = std::sqrt(dxToTarget * dxToTarget + dyToTarget * dyToTarget);
 
     // Important: SPELL_FAILED_LINE_OF_SIGHT is more authoritative than the
     // generic IsWithinLOSInMap() diagnostic. On custom BG maps/vmaps the simple
@@ -1334,6 +1339,48 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "Ranged approach cleared stalled point movement: guid={} target={} desiredRange={} currentDistance={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
+    }
+
+    // Battleground cliff descent recovery:
+    // When chasing a distant lower target from elevated terrain, repeatedly
+    // issuing CHASE/FOLLOW can route bots back uphill. Force a short direct
+    // downhill step toward the target to commit the descent before resuming
+    // target-relative pathing.
+    bool const shouldForceDownhillCommit =
+        battleground &&
+        strictPathing &&
+        verticalDeltaToTarget > 8.0f &&
+        planarDistanceToTarget > 30.0f &&
+        !currentlyMoving &&
+        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
+        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    if (shouldForceDownhillCommit)
+    {
+        float const stepDistance = std::min(16.0f, std::max(6.0f, planarDistanceToTarget * 0.3f));
+        float const invPlanar = 1.0f / std::max(0.01f, planarDistanceToTarget);
+        Position downhillProbe(
+            player->GetPositionX() + dxToTarget * invPlanar * stepDistance,
+            player->GetPositionY() + dyToTarget * invPlanar * stepDistance,
+            player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
+            player->GetOrientation());
+        Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
+        motionMaster->MovePoint(0, downhillDestination, false);
+
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = nowMs;
+        stallState.lastIssueMs = nowMs;
+        stallState.lastIssuedRange = safeDistance;
+        stallState.lastIssuedMode = 1;
+
+        std::ostringstream diag;
+        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_direct",
+            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "direct")
+             << " vertical_delta=" << verticalDeltaToTarget
+             << " planar_delta=" << planarDistanceToTarget
+             << " commit_dist=" << player->GetDistance(downhillDestination);
+        SetLastMovementDebugStatus(player, diag.str());
+        return;
     }
 
     // For target-relative ranged approach, do NOT use MovePoint here.
