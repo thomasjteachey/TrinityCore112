@@ -91,7 +91,7 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     NodeOccupied(node);
                     SendNodeUpdate(node);
 
-                    SendBroadcastText(LANG_BG_BFG_NODE_TAKEN, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, NULL, teamId == TEAM_ALLIANCE ? LANG_BG_BFG_ALLY : LANG_BG_BFG_HORDE, LANG_BG_BFG_NODE_LIGHTHOUSE + node);
+                    SendBroadcastText(LANG_BG_BFG_NODE_TAKEN, teamId == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE);
                     PlaySoundToAll(teamId == TEAM_ALLIANCE ? GILNEAS_BG_SOUND_NODE_CAPTURED_ALLIANCE : GILNEAS_BG_SOUND_NODE_CAPTURED_HORDE);
                     break;
                 }
@@ -335,7 +335,6 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
 
     uint32 sound = 0;
     uint32 message = 0;
-    uint32 message2 = 0;
     DeleteBanner(node);
     CreateBanner(node, true);
 
@@ -347,7 +346,6 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
         _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
         sound = GILNEAS_BG_SOUND_NODE_CLAIMED;
         message = LANG_BG_BFG_NODE_CLAIMED;
-        message2 = player->GetTeamId() == TEAM_ALLIANCE ? LANG_BG_BFG_ALLY : LANG_BG_BFG_HORDE;
     }
     else if (_capturePointInfo[node]._state == GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED || _capturePointInfo[node]._state == GILNEAS_BG_NODE_STATUS_HORDE_CONTESTED)
     {
@@ -385,7 +383,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
 
     SendNodeUpdate(node);
     PlaySoundToAll(sound);
-    SendBroadcastText(message, player->GetTeamId() == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player, LANG_BG_BFG_NODE_LIGHTHOUSE + node, message2);
+    SendBroadcastText(message, player->GetTeamId() == TEAM_ALLIANCE ? CHAT_MSG_BG_SYSTEM_ALLIANCE : CHAT_MSG_BG_SYSTEM_HORDE, player);
 }
 
 uint32 BattlegroundBFG::GetPrematureWinner()
