@@ -165,6 +165,12 @@ void BattlegroundBFG::StartingEventCloseDoors()
 
 void BattlegroundBFG::StartingEventOpenDoors()
 {
+    // Ensure home base spirit guides are always the correct faction at round start.
+    DelCreature(GILNEAS_BG_SPIRIT_ALLIANCE);
+    DelCreature(GILNEAS_BG_SPIRIT_HORDE);
+    AddSpiritGuide(GILNEAS_BG_SPIRIT_ALLIANCE, GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_ALLIANCE][0], GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_ALLIANCE][1], GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_ALLIANCE][2], GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_ALLIANCE][3], TEAM_ALLIANCE);
+    AddSpiritGuide(GILNEAS_BG_SPIRIT_HORDE, GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_HORDE][0], GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_HORDE][1], GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_HORDE][2], GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_SPIRIT_HORDE][3], TEAM_HORDE);
+
     // spawn neutral banners
     for (uint32 banner = GILNEAS_BG_OBJECT_BANNER_NEUTRAL, i = 0; i < GILNEAS_BG_DYNAMIC_NODES_COUNT; banner += GILNEAS_BG_OBJECT_PER_NODE, ++i)
         SpawnBGObject(banner, RESPAWN_IMMEDIATELY);
@@ -287,6 +293,9 @@ void BattlegroundBFG::SendNodeUpdate(uint8 node)
 void BattlegroundBFG::NodeOccupied(uint8 node)
 {
     ApplyPhaseMask();
+
+    // Ensure spirit guide always matches current owner after node control changes.
+    DelCreature(node);
     AddSpiritGuide(node, GILNEAS_BG_SpiritGuidePos[node][0], GILNEAS_BG_SpiritGuidePos[node][1], GILNEAS_BG_SpiritGuidePos[node][2], GILNEAS_BG_SpiritGuidePos[node][3], _capturePointInfo[node]._ownerTeamId);
 
     ++_controlledPoints[_capturePointInfo[node]._ownerTeamId];
