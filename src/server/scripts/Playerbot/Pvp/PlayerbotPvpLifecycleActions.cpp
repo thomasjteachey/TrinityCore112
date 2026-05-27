@@ -639,6 +639,30 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 
+Position BuildDownhillEscapeDestination(Player* player, Position const& destination)
+{
+    if (!player)
+        return destination;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 0.5f)
+        return BuildCollisionSafeDestination(player, destination);
+
+    float const stepDistance = std::min(12.0f, std::max(4.0f, planarDistance * 0.35f));
+    float const nx = dx / planarDistance;
+    float const ny = dy / planarDistance;
+
+    Position probe(
+        player->GetPositionX() + nx * stepDistance,
+        player->GetPositionY() + ny * stepDistance,
+        player->GetPositionZ() - 6.0f,
+        destination.GetOrientation());
+
+    return BuildCollisionSafeDestination(player, probe);
+}
+
 bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
 {
     if (!player)
@@ -934,9 +958,16 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             {
                 directDropState.pending = false;
                 directDropState.suppressUntilMs = nowMs + 8000;
+                Position const escapeDestination = BuildDownhillEscapeDestination(player, safeDestination);
+                motionMaster->MovePoint(0, escapeDestination, false);
                 EmitBattlegroundGmDebug(player,
                     "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
-                    " toDest=" + std::to_string(int32(toDestination)), 0);
+                    " toDest=" + std::to_string(int32(toDestination)) +
+                    " escapeDist=" + std::to_string(int32(player->GetDistance(escapeDestination))), 0);
+
+                state.lastDestination = destination;
+                state.lastIssueMs = nowMs;
+                return true;
             }
         }
 
