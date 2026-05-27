@@ -28,6 +28,7 @@
 #include "Player.h"
 #include "Random.h"
 #include "Log.h"
+#include "ObjectAccessor.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
