@@ -243,7 +243,7 @@ const float GILNEAS_BG_DoorPositions[4][8] =
 };
 
 const uint32 GILNEAS_BG_TickIntervals[4] = { 0, 12000, 6000, 1000 };
-const uint32 GILNEAS_BG_TickPoints[4] = { 0, 10, 10, 30 };
+const uint32 GILNEAS_BG_TickPoints[4] = { 0, 20, 20, 30 };
 
 
 const uint32 GILNEAS_BG_GraveyardIds[GILNEAS_BG_ALL_NODES_COUNT] = { 1736, 1737, 1735, 1739, 1738 };
