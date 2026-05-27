@@ -973,9 +973,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
         if (nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
         {
-            motionMaster->MovePoint(0, safeDestination, false);
+            Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
+            motionMaster->MovePoint(0, shortcutDestination, false);
             EmitBattlegroundGmDebug(player,
-                "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+                "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination))), 0);
             directDropState.startPosition = player->GetPosition();
             directDropState.issueMs = nowMs;
             directDropState.pending = true;
@@ -997,9 +999,11 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             // partial drop where local nav probing can't find a legal segment):
             // issue a direct movement order so the bot keeps progressing
             // instead of stalling in place waiting on nav segment recovery.
-            motionMaster->MovePoint(0, safeDestination, false);
+            Position const fallbackDestination = BuildDownhillEscapeDestination(player, safeDestination);
+            motionMaster->MovePoint(0, fallbackDestination, false);
             EmitBattlegroundGmDebug(player,
-                "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+                "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                " stepDist=" + std::to_string(int32(player->GetDistance(fallbackDestination))), 0);
 
             directDropState.startPosition = player->GetPosition();
             directDropState.issueMs = nowMs;
