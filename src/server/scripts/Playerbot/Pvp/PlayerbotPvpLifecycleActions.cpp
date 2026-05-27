@@ -612,6 +612,22 @@ Position BuildCollisionSafeDestination(Player const* player, Position const& des
     Position adjustedDestination = destination;
     float adjustedZ = adjustedDestination.GetPositionZ();
     player->UpdateAllowedPositionZ(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ);
+
+    // Prefer a physically grounded/swimming destination over liquid surface
+    // hovering when the location is in water and the bot is not water-walking.
+    if (Map const* map = player->FindMap())
+    {
+        float liquidLevel = INVALID_HEIGHT;
+        float floorLevel = INVALID_HEIGHT;
+        if (map->getLiquidStatus(player->GetPhaseMask(), adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(),
+                adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidLevel, &floorLevel))
+        {
+            bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
+            if (!canWalkOnWater && liquidLevel != INVALID_HEIGHT && floorLevel != INVALID_HEIGHT)
+                adjustedZ = std::max(floorLevel + 0.05f, std::min(adjustedZ, liquidLevel - 0.25f));
+        }
+    }
+
     adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
     return adjustedDestination;
 }
@@ -1665,7 +1681,7 @@ Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirect
     if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
         return nullptr;
 
-    TeamId const botTeam = player->GetTeamId();
+    TeamId const botTeam = ResolveBotTeamId(player);
     TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
 
     if (BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(battleground))
