@@ -586,12 +586,41 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     bool const recentPositionProgress = state.lastPositionProgressMs != 0 && positionProgressAgeMs < minRunMs;
     bool const credibleRecentDistanceProgress = recentDistanceProgress && (hasMovementSignal || recentPositionProgress || madePositionProgress);
     bool const farFromDesiredRange = desiredRange > 0.0f && currentDistance > (desiredRange + 4.0f);
+    bool const aggressiveUnlaunchedBattleground =
+        player->InBattleground() &&
+        farFromDesiredRange &&
+        !hasMovementSignal &&
+        !player->isMoving() &&
+        !splineStarted &&
+        !splineInitialized;
+    bool const pathologicalUnlaunchedHold =
+        player->InBattleground() &&
+        farFromDesiredRange &&
+        !hasMovementSignal &&
+        !player->isMoving() &&
+        !splineStarted &&
+        !splineInitialized &&
+        !madeDistanceProgress &&
+        !madePositionProgress &&
+        distanceProgressAgeMs > 1500 &&
+        positionProgressAgeMs > 1500;
 
     // Elegant fail-safe for the "stuck but preserved" state:
     // if we are still significantly outside desired range and have neither
     // recent launch nor distance progress, stop preserving and reissue a fresh
     // target-relative order immediately.
     if (inSettleWindow && farFromDesiredRange && ageMs > 900 && !credibleRecentLaunch && !madeDistanceProgress && !credibleRecentDistanceProgress)
+        inSettleWindow = false;
+
+    // Battleground cliff/ledge stalls regularly present as repeated CHASE/FOLLOW
+    // orders that never launch (no spline, no movement signal, moving=no) while
+    // still very far from desired range. These can be reissued every tick, which
+    // keeps age_ms near zero and would bypass any age-based gate. Break preserve
+    // immediately so callers can clear/reissue and recovery paths can engage.
+    if (aggressiveUnlaunchedBattleground)
+        inSettleWindow = false;
+
+    if (pathologicalUnlaunchedHold)
         inSettleWindow = false;
 
     bool const preserve = inSettleWindow || credibleRecentLaunch || madeDistanceProgress || madePositionProgress || credibleRecentDistanceProgress || recentPositionProgress;
@@ -626,7 +655,13 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
                  << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
                  << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
                  << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
-                 << " reason=" << (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress");
+                 << " aggressive_unlaunched_bg=" << (aggressiveUnlaunchedBattleground ? "yes" : "no")
+                 << " pathological_unlaunched_hold=" << (pathologicalUnlaunchedHold ? "yes" : "no")
+                 << " reason=" << (aggressiveUnlaunchedBattleground
+                    ? "aggressive_unlaunched_bg"
+                    : (pathologicalUnlaunchedHold
+                    ? "pathological_unlaunched_hold"
+                    : (!hasMovementSignal && ageMs >= effectiveSettleMs ? "unlaunched_settle_expired" : "no_position_or_distance_progress")));
             *reasonOut = diag.str();
         }
         return false;
@@ -660,6 +695,8 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
              << " far_desired=" << (farFromDesiredRange ? "yes" : "no")
              << " not_move=" << (player->HasUnitState(UNIT_STATE_NOT_MOVE) ? "yes" : "no")
              << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no")
+             << " aggressive_unlaunched_bg=" << (aggressiveUnlaunchedBattleground ? "yes" : "no")
+             << " pathological_unlaunched_hold=" << (pathologicalUnlaunchedHold ? "yes" : "no")
              << " reason=" << (inSettleWindow
                     ? (hasMovementSignal ? "settle_window" : "unlaunched_short_settle")
                     : (credibleRecentLaunch ? "recent_launch" : (madePositionProgress || recentPositionProgress ? "position_progress" : "distance_progress")));
@@ -1224,14 +1261,51 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
     bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    bool const hasFinalizedSpline = player->movespline && player->movespline->Initialized() && player->movespline->Finalized();
     bool const movementGeneratorHasNotLaunched = !player->isMoving() &&
         !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
         !hasActiveSpline;
     uint32 const lastIssueAgeMs = sameStallTarget && stallState.lastIssueMs != 0 && nowMs >= stallState.lastIssueMs ? nowMs - stallState.lastIssueMs : 0;
+    bool const staleUnlaunchedTargetRelative =
+        sameStallTarget &&
+        activeTargetRelativeMotion &&
+        movementGeneratorHasNotLaunched &&
+        stallState.lastIssueMs != 0 &&
+        lastIssueAgeMs >= 700;
 
     if (!forceMovementWhenAlreadyInRange && activeTargetRelativeMotion && currentDistance > (safeDistance + 0.75f))
     {
+        bool const staleFinalizedSplineHold =
+            sameStallTarget &&
+            activeTargetRelativeMotion &&
+            hasFinalizedSpline &&
+            !player->isMoving() &&
+            !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
+            !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) &&
+            stallState.lastIssueMs != 0 &&
+            lastIssueAgeMs >= 500;
+
+        if (staleFinalizedSplineHold)
+        {
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            std::ostringstream resetDiag;
+            resetDiag << BuildRangedMovementDiag(player, target, "ranged_stale_finalized_spline_cleared",
+                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "none")
+                     << " issue_age_ms=" << lastIssueAgeMs;
+            SetLastMovementDebugStatus(player, resetDiag.str());
+        }
+
+        if (staleUnlaunchedTargetRelative)
+        {
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            std::ostringstream resetDiag;
+            resetDiag << BuildRangedMovementDiag(player, target, "ranged_stale_unlaunched_cleared",
+                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "none")
+                     << " issue_age_ms=" << lastIssueAgeMs;
+            SetLastMovementDebugStatus(player, resetDiag.str());
+        }
+
         std::string preserveDiag;
         if (ShouldPreserveTargetRelativeMovement(player, target, safeDistance, 3000, "ranged_existing_motion_preserved", &preserveDiag))
         {
