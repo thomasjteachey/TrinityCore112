@@ -850,12 +850,21 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         Position lastDestination;
         uint32 lastIssueMs = 0;
     };
+    struct DirectDropState
+    {
+        Position startPosition;
+        uint32 issueMs = 0;
+        uint32 suppressUntilMs = 0;
+        bool pending = false;
+    };
 
     static std::unordered_map<uint64, MoveOrderState> stateByGuid;
     static std::unordered_map<uint64, uint8> stationaryReissueCountByGuid;
+    static std::unordered_map<uint64, DirectDropState> directDropStateByGuid;
     uint64 const botGuid = player->GetGUID().GetRawValue();
     MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
     uint8& stationaryReissueCount = stationaryReissueCountByGuid[botGuid];
+    DirectDropState& directDropState = directDropStateByGuid[botGuid];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
     bool const destinationChanged = state.lastIssueMs == 0 ||
@@ -912,15 +921,32 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (generatePath && player->InBattleground())
     {
-        if (ShouldPreferDirectDropShortcut(player, safeDestination))
+        if (directDropState.pending &&
+            nowMs > directDropState.issueMs + 1200 &&
+            !player->isMoving() &&
+            player->GetDistance(directDropState.startPosition) < 3.0f)
+        {
+            directDropState.pending = false;
+            directDropState.suppressUntilMs = nowMs + 8000;
+            EmitBattlegroundGmDebug(player, "movepoint=direct-drop-stalled fallback=nav-segment", 0);
+        }
+
+        if (nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
         {
             motionMaster->MovePoint(0, safeDestination, false);
             EmitBattlegroundGmDebug(player,
                 "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+            directDropState.startPosition = player->GetPosition();
+            directDropState.issueMs = nowMs;
+            directDropState.pending = true;
 
             state.lastDestination = destination;
             state.lastIssueMs = nowMs;
             return true;
+        }
+        else
+        {
+            directDropState.pending = false;
         }
 
         Position segmentDestination;
