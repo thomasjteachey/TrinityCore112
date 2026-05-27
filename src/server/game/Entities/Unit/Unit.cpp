@@ -3495,6 +3495,10 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
     if (!IsControlledByPlayer())
         return;
 
+    if (Player* player = ToPlayer())
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+            SetSwim(CanSwim() && IsInWater());
+
     // remove appropriate auras if we are swimming/not swimming respectively
     if (IsInWater())
     {
