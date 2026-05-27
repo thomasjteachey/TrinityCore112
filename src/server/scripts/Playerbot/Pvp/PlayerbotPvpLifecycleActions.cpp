@@ -639,6 +639,31 @@ bool IsForbiddenBattlegroundPathType(PathType pathType)
 constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 
+bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    float const destinationDistance = player->GetDistance(destination);
+    if (destinationDistance < 15.0f || destinationDistance > 120.0f)
+        return false;
+
+    float const verticalDrop = player->GetPositionZ() - destination.GetPositionZ();
+    if (verticalDrop < 8.0f)
+        return false;
+
+    PathGenerator path(player);
+    path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
+    if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true))
+        return false;
+
+    if (IsForbiddenBattlegroundPathType(path.GetPathType()))
+        return false;
+
+    float const pathLength = path.GetTotalLength();
+    return pathLength > destinationDistance * 1.35f;
+}
+
 bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
 {
     if (!player || points.size() < 2)
@@ -880,6 +905,17 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
     if (generatePath && player->InBattleground())
     {
+        if (ShouldPreferDirectDropShortcut(player, safeDestination))
+        {
+            motionMaster->MovePoint(0, safeDestination, false);
+            EmitBattlegroundGmDebug(player,
+                "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
+        }
+
         Position segmentDestination;
         PathType pathType = PathType(0);
         if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
