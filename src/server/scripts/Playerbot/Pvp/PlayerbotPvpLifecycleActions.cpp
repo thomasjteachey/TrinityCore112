@@ -953,9 +953,22 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
         PathType pathType = PathType(0);
         if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
         {
+            // Recovery path for segmented-nav failures (for example, after a
+            // partial drop where local nav probing can't find a legal segment):
+            // issue a direct movement order so the bot keeps progressing
+            // instead of stalling in place waiting on nav segment recovery.
+            motionMaster->MovePoint(0, safeDestination, false);
             EmitBattlegroundGmDebug(player,
-                "movepoint=blocked-no-nav destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 1000);
-            return false;
+                "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
+
+            directDropState.startPosition = player->GetPosition();
+            directDropState.issueMs = nowMs;
+            directDropState.pending = true;
+            directDropState.suppressUntilMs = std::max(directDropState.suppressUntilMs, nowMs + 2500);
+
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
         }
 
         motionMaster->MovePoint(0, segmentDestination, true);
