@@ -258,7 +258,9 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
     if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
         return;
 
-    TeamId const botTeam = player->GetTeamId();
+    uint32 const botTeamValue = player->GetBGTeam() ? player->GetBGTeam() : player->GetTeam();
+    TeamId const botTeam = (botTeamValue == ALLIANCE || botTeamValue == TEAM_ALLIANCE) ? TEAM_ALLIANCE :
+        (botTeamValue == HORDE || botTeamValue == TEAM_HORDE) ? TEAM_HORDE : player->GetTeamId();
     TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
     ObjectGuid const playerGuid = player->GetGUID();
 
