@@ -1770,6 +1770,30 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             if (player->GetVictim() != target || !player->IsInCombat())
                 player->Attack(target, false);
 
+            float const stealthTravelDistance = player->GetDistance(target);
+
+            // In battlegrounds, very distant rogue stealth openers can install
+            // FOLLOW_MOTION_TYPE without ever launching a spline. The visible
+            // diagnostic is motion=14/follow, moving=no, follow_move=no,
+            // finalized/zero-duration spline, and no position progress. Use
+            // the strict navmesh segment walker until the rogue is close enough
+            // for target-relative chase/follow to be reliable.
+            if (RequiresStrictHumanPathing(player) && stealthTravelDistance > 90.0f)
+            {
+                if (IssueStrictHumanFollow(player, target, 3.0f))
+                {
+                    g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+
+                    std::ostringstream diag;
+                    diag << "stealth_far_strict_segment_move"
+                         << " travel_dist=" << stealthTravelDistance
+                         << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+                         << " moving_after=" << (player->isMoving() ? "yes" : "no");
+                    SetLastMovementDebugStatus(player, diag.str());
+                    return;
+                }
+            }
+
             std::string preserveDiag;
             if (ShouldPreserveTargetRelativeMovement(player, target, 1.5f, 2000, "stealth_melee_existing_motion_preserved", &preserveDiag))
             {
@@ -1779,7 +1803,6 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
             bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
             bool const hasVictimLink = player->GetVictim() == target;
-            float const stealthTravelDistance = player->GetDistance(target);
             bool const useStealthTravelFollow = stealthTravelDistance > 8.0f;
             if (hasVictimLink && !useStealthTravelFollow)
             {
