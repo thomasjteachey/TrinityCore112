@@ -332,7 +332,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
             ++flagCarrierCount;
     }
 
-    WorldPacket data(MSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 4 + 16 * flagCarrierCount);
+    WorldPacket data(MSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 4 + 17 * flagCarrierCount);
     // Used to send several player positions (found used in AV)
     data << 0;  // CGBattlefieldInfo__m_numPlayerPositions
     /*
@@ -342,6 +342,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
     data << flagCarrierCount;
     if (allianceFlagCarrier)
     {
+        data << uint8(TEAM_ALLIANCE);
         data << uint64(allianceFlagCarrier->GetGUID());
         data << float(allianceFlagCarrier->GetPositionX());
         data << float(allianceFlagCarrier->GetPositionY());
@@ -349,6 +350,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
 
     if (hordeFlagCarrier)
     {
+        data << uint8(TEAM_HORDE);
         data << uint64(hordeFlagCarrier->GetGUID());
         data << float(hordeFlagCarrier->GetPositionX());
         data << float(hordeFlagCarrier->GetPositionY());
