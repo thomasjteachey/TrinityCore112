@@ -31,12 +31,17 @@
 #include "DBCStores.h"
 #include "GameTime.h"
 #include "Globals/ObjectAccessor.h"
+#include "Item.h"
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
 #include "Opcodes.h"
 #include "Player.h"
 #include "Realm.h"
+#include "SpellDefines.h"
+#include "SpellHistory.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "StringConvert.h"
 #include "Util.h"
 #include "World.h"
@@ -111,9 +116,12 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(1500);
+constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(500);
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
+std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextPlayerbotInsigniaCheckTimeByGuid;
+std::mutex g_PlayerbotInsigniaCheckLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
 bool g_StartupRevivePending = false;
@@ -125,6 +133,177 @@ void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint3
     (void)player;
     (void)detail;
     (void)throttleMs;
+}
+
+uint32 GetHumanInsigniaRacialSpell(uint8 classId)
+{
+    // Custom human racials mirror the five class-specific PvP insignia variants.
+    switch (classId)
+    {
+        case CLASS_WARRIOR:
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return 89148;
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return 89149;
+        case CLASS_DRUID:
+            return 89150;
+        case CLASS_PRIEST:
+        case CLASS_PALADIN:
+            return 89151;
+        case CLASS_MAGE:
+            return 89152;
+        default:
+            return 0;
+    }
+}
+
+bool HasClassInsigniaBreakableAura(Player const* player)
+{
+    if (!player)
+        return false;
+
+    bool const rooted = player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_ROOT);
+    bool const snared = player->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_SNARE);
+    bool const stunned = player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasAuraType(SPELL_AURA_MOD_STUN) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_STUN);
+    bool const charmed = player->HasAuraType(SPELL_AURA_MOD_CHARM) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_CHARM);
+    bool const feared = player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_FEAR) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_FEAR);
+    bool const polymorphed = player->IsPolymorphed() ||
+        player->HasAuraWithMechanic(1u << MECHANIC_POLYMORPH);
+
+    switch (player->GetClass())
+    {
+        case CLASS_WARRIOR:
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return rooted || snared || stunned;
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return charmed || feared || polymorphed;
+        case CLASS_DRUID:
+            return charmed || feared || stunned;
+        case CLASS_PRIEST:
+        case CLASS_PALADIN:
+            return feared || polymorphed || stunned;
+        case CLASS_MAGE:
+            return feared || polymorphed || snared;
+        default:
+            return false;
+    }
+}
+
+bool IsPlayerbotInsigniaCheckReady(Player const* player)
+{
+    if (!player)
+        return false;
+
+    uint64 const playerGuid = player->GetGUID().GetRawValue();
+    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+
+    std::lock_guard<std::mutex> lock(g_PlayerbotInsigniaCheckLock);
+    LifecycleCadenceTimePoint& nextCheckTime = g_NextPlayerbotInsigniaCheckTimeByGuid[playerGuid];
+    if (nextCheckTime > now)
+        return false;
+
+    nextCheckTime = now + PlayerbotInsigniaCheckInterval;
+    return true;
+}
+
+bool TryCastHumanInsigniaRacial(Player* player)
+{
+    uint32 const spellId = GetHumanInsigniaRacialSpell(player ? player->GetClass() : 0);
+    if (!spellId || !player->HasSpell(spellId))
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo || player->GetSpellHistory()->HasCooldown(spellId))
+        return false;
+
+    SpellCastResult const castResult = player->CastSpell(player, spellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)));
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP human insignia racial attempt: guid={} spell={} result={}.",
+        player->GetGUID().ToString(), spellId, uint32(castResult));
+    return castResult == SPELL_CAST_OK;
+}
+
+uint32 GetFirstOnUseItemSpell(ItemTemplate const* itemTemplate)
+{
+    if (!itemTemplate)
+        return 0;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = itemTemplate->Spells[i];
+        if (spellData.SpellId > 0 && spellData.SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+            return spellData.SpellId;
+    }
+
+    return 0;
+}
+
+bool TryUseEquippedInsigniaTrinket(Player* player)
+{
+    if (!player)
+        return false;
+
+    // Slot 13 is EQUIPMENT_SLOT_TRINKET2 in server-side zero-based equipment slots.
+    Item* trinket = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET2);
+    if (!trinket || player->CanUseItem(trinket) != EQUIP_ERR_OK)
+        return false;
+
+    uint32 const spellId = GetFirstOnUseItemSpell(trinket->GetTemplate());
+    SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
+    if (!spellInfo || player->GetSpellHistory()->HasCooldown(spellId))
+        return false;
+
+    SpellCastResult const castResult = player->CastSpell(player, spellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)).SetCastItem(trinket));
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP insignia trinket attempt: guid={} item={} spell={} slot={} result={}.",
+        player->GetGUID().ToString(), trinket->GetEntry(), spellId, uint32(EQUIPMENT_SLOT_TRINKET2), uint32(castResult));
+    return castResult == SPELL_CAST_OK;
+}
+
+bool TryUsePlayerbotInsigniaBreaker(Player* player)
+{
+    if (!player)
+        return false;
+
+    playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+    if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpClassSpellsEnabled)
+        return false;
+
+    if (!playerbot::IsManagedRandomBot(player) || !player->IsInWorld() || !player->IsAlive())
+        return false;
+
+    bool const inActiveBattleground = player->InBattleground() &&
+        player->GetBattleground() &&
+        player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
+    bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
+    if (!inActiveBattleground && !inActiveDuel)
+        return false;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    if (!IsPlayerbotInsigniaCheckReady(player))
+        return false;
+
+    if (!HasClassInsigniaBreakableAura(player))
+        return false;
+
+    if (player->GetRace() == RACE_HUMAN)
+        return TryCastHumanInsigniaRacial(player);
+
+    return TryUseEquippedInsigniaTrinket(player);
 }
 
 enum class LifecycleObservationReason : uint8
@@ -1251,14 +1430,24 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
     if (!player)
         return;
 
-    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
-    g_NextRandomBotLifecycleProcessTimeByGuid.erase(player->GetGUID().GetRawValue());
+    uint64 const rawGuid = player->GetGUID().GetRawValue();
+
+    {
+        std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+        g_NextRandomBotLifecycleProcessTimeByGuid.erase(rawGuid);
+    }
+
+    {
+        std::lock_guard<std::mutex> insigniaLock(g_PlayerbotInsigniaCheckLock);
+        g_NextPlayerbotInsigniaCheckTimeByGuid.erase(rawGuid);
+    }
 }
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingManagedBotTeleport(player);
+    TryUsePlayerbotInsigniaBreaker(player);
     ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
