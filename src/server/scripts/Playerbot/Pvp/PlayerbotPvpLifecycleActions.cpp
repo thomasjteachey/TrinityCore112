@@ -717,6 +717,9 @@ constexpr float PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT = 2400.0f;
 constexpr float PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE = 80.0f;
 
 constexpr float PLAYERBOT_BG_SHORTCUT_MAX_STEP_DISTANCE = 12.0f;
+constexpr float PLAYERBOT_BG_ELEVATION_ESCAPE_MIN_DROP = 2.0f;
+constexpr float PLAYERBOT_BG_ELEVATION_ESCAPE_MAX_DROP = 45.0f;
+constexpr float PLAYERBOT_BG_AIRBORNE_SEGMENT_MAX_CLEARANCE = 3.0f;
 
 enum class BattlegroundShortcutMoveType
 {
@@ -816,6 +819,106 @@ bool BuildBattlegroundDownhillShortcutDestination(Player* player, Position const
 
     shortcut.position = landing;
     shortcut.moveType = BattlegroundShortcutMoveType::VerticalSnap;
+    return true;
+}
+
+// Reject battleground point moves whose straight spline would be suspended far
+// above the ground between endpoints. PathGenerator can occasionally return an
+// apparently usable point toward an enemy on another elevation, but if the
+// segment itself crosses open air the server-side bot has no real client
+// steering/gravity to correct it and observers see a flying bot.
+bool IsBattlegroundGroundedSegment(Player const* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const dz = destination.GetPositionZ() - player->GetPositionZ();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 0.5f)
+        return std::fabs(dz) <= 2.0f;
+
+    uint8 const sampleCount = static_cast<uint8>(std::clamp(std::ceil(planarDistance / 6.0f), 2.0f, 12.0f));
+    Position previous = player->GetPosition();
+    for (uint8 i = 1; i <= sampleCount; ++i)
+    {
+        float const fraction = static_cast<float>(i) / static_cast<float>(sampleCount);
+        float const sampleX = player->GetPositionX() + dx * fraction;
+        float const sampleY = player->GetPositionY() + dy * fraction;
+        float const splineZ = player->GetPositionZ() + dz * fraction;
+        float groundZ = splineZ;
+        player->UpdateAllowedPositionZ(sampleX, sampleY, groundZ);
+
+        float const clearance = splineZ - groundZ;
+        if (clearance > PLAYERBOT_BG_AIRBORNE_SEGMENT_MAX_CLEARANCE)
+            return false;
+
+        float const stepDx = sampleX - previous.GetPositionX();
+        float const stepDy = sampleY - previous.GetPositionY();
+        float const stepPlanar = std::sqrt(stepDx * stepDx + stepDy * stepDy);
+        float const groundRise = groundZ - previous.GetPositionZ();
+        if (groundRise > std::max(2.0f, stepPlanar * 0.85f + 0.75f))
+            return false;
+
+        previous.Relocate(sampleX, sampleY, groundZ, destination.GetOrientation());
+    }
+
+    return true;
+}
+
+// If a battleground bot resurrects or idles on an isolated elevated shelf, do
+// not keep probing navmesh routes toward changing tactical targets. Pick a
+// nearby lower ground point in any generic direction and snap there. This is a
+// deliberate same-map correction for virtual sessions that otherwise oscillate
+// at graveyard lips and eventually receive an airborne point spline.
+bool BuildBattlegroundElevationEscapeDestination(Player* player, Position const& destination, BattlegroundShortcutDestination& shortcut)
+{
+    if (!player)
+        return false;
+
+    float const destinationDrop = player->GetPositionZ() - destination.GetPositionZ();
+    if (destinationDrop >= PLAYERBOT_BG_ELEVATION_ESCAPE_MIN_DROP)
+        return false;
+
+    float const preferredAngle = player->GetAbsoluteAngle(destination.GetPositionX(), destination.GetPositionY());
+    std::array<float, 3> const radii = { 8.0f, 12.0f, 16.0f };
+    BattlegroundShortcutDestination best;
+    float bestScore = -std::numeric_limits<float>::max();
+
+    for (float radius : radii)
+    {
+        for (uint8 i = 0; i < 16; ++i)
+        {
+            float const angle = preferredAngle + (static_cast<float>(i) * static_cast<float>(M_PI) / 8.0f);
+            float const x = player->GetPositionX() + std::cos(angle) * radius;
+            float const y = player->GetPositionY() + std::sin(angle) * radius;
+            float z = player->GetPositionZ();
+            player->UpdateAllowedPositionZ(x, y, z);
+
+            float const drop = player->GetPositionZ() - z;
+            if (drop < PLAYERBOT_BG_ELEVATION_ESCAPE_MIN_DROP || drop > PLAYERBOT_BG_ELEVATION_ESCAPE_MAX_DROP)
+                continue;
+
+            Position candidate(x, y, z, destination.GetOrientation());
+            if (player->GetDistance(candidate) <= 1.0f)
+                continue;
+
+            float const angleBias = std::cos(angle - preferredAngle) * 4.0f;
+            float const score = drop * 2.0f + angleBias - radius * 0.15f;
+            if (score <= bestScore)
+                continue;
+
+            best.position = candidate;
+            best.moveType = BattlegroundShortcutMoveType::VerticalSnap;
+            bestScore = score;
+        }
+    }
+
+    if (best.moveType == BattlegroundShortcutMoveType::None)
+        return false;
+
+    shortcut = best;
     return true;
 }
 
@@ -985,6 +1088,9 @@ bool TryBuildBattlegroundSegmentDestination(Player* player, Position const& safe
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
             return false;
 
+        if (!IsBattlegroundGroundedSegment(player, resolvedDestination))
+            return false;
+
         if (outPathType)
             *outPathType = pathType;
 
@@ -1139,10 +1245,35 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             return true;
         }
 
+        if (BuildBattlegroundElevationEscapeDestination(player, safeDestination, shortcutDestination))
+        {
+            IssueBattlegroundShortcutMove(player, motionMaster, shortcutDestination);
+            EmitBattlegroundGmDebug(player,
+                "movepoint=elevation-escape type=" + std::string(GetBattlegroundShortcutMoveLabel(shortcutDestination.moveType)) +
+                " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination.position))), 0);
+
+            state.lastDestination = destination;
+            state.lastIssueMs = nowMs;
+            return true;
+        }
+
         Position segmentDestination;
         PathType pathType = PathType(0);
         if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
         {
+            if (BuildBattlegroundElevationEscapeDestination(player, safeDestination, shortcutDestination))
+            {
+                IssueBattlegroundShortcutMove(player, motionMaster, shortcutDestination);
+                EmitBattlegroundGmDebug(player,
+                    "movepoint=blocked-no-nav fallback=elevation-escape type=" + std::string(GetBattlegroundShortcutMoveLabel(shortcutDestination.moveType)) +
+                    " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination.position))), 0);
+
+                state.lastDestination = destination;
+                state.lastIssueMs = nowMs;
+                return true;
+            }
+
             if (BuildBattlegroundDownhillShortcutDestination(player, safeDestination, shortcutDestination))
             {
                 IssueBattlegroundShortcutMove(player, motionMaster, shortcutDestination);
@@ -1156,9 +1287,10 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
             }
 
             // Do not fall back to unrestricted direct/no-path movement in
-            // battlegrounds. Only the downhill shortcut above may bypass navmesh, because
-            // it either walks a short grounded slope step or snaps down a
-            // cliff exit instead of using a falling/direct glide spline.
+            // battlegrounds. Only validated grounded/elevation shortcuts may
+            // bypass navmesh, because they either walk a short grounded slope
+            // step or snap to lower terrain instead of using a falling/direct
+            // glide spline.
             EmitBattlegroundGmDebug(player,
                 "movepoint=blocked-no-nav fallback=none destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
             return false;
