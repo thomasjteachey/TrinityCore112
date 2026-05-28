@@ -508,12 +508,6 @@ WorldSafeLocsEntry const* BattlegroundBFG::GetClosestGraveyard(Player* player)
         Creature* spiritGuide = GetBGCreature(i, false);
         if (!spiritGuide || !spiritGuide->IsInWorld())
         {
-            TC_LOG_INFO("bg.battleground", "BFG GY skip: player={} node={} owner={} state={} bgTeam={} reason=no-spirit-guide",
-                player->GetName(),
-                uint32(i),
-                uint32(_capturePointInfo[i]._ownerTeamId),
-                uint32(_capturePointInfo[i]._state),
-                uint32(bgTeamId));
             continue;
         }
 
