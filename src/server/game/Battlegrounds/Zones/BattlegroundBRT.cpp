@@ -26,6 +26,7 @@ BattlegroundBRT::BattlegroundBRT()
     _humanFaceoffEverHappened = false;
     _usePrimaryGraveyard = true;
     _graveyardSwapTimer = 0;
+    m_BuffChange = true;
 }
 
 void BattlegroundBRT::AddPlayer(Player* player)
@@ -57,6 +58,7 @@ void BattlegroundBRT::Reset()
     _humanFaceoffEverHappened = false;
     _usePrimaryGraveyard = true;
     _graveyardSwapTimer = 0;
+    m_BuffChange = true;
 }
 
 void BattlegroundBRT::PostUpdateImpl(uint32 diff)
@@ -161,7 +163,31 @@ bool BattlegroundBRT::SetupBattleground()
         || !AddObject(BG_BRT_OBJECT_IMPERIAL_THRONE, BG_BRT_OBJECT_IMPERIAL_THRONE_ENTRY,
             1380.52f, -834.296f, -86.6783f, 1.5708f,
             0.0f, 0.0f, 0.707108f, 0.707106f,
-            RESPAWN_IMMEDIATELY))
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_BUFF1_VARIANT_A, BG_OBJECTID_REGENBUFF_ENTRY,
+            1368.5f, -772.8f, -91.9816f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_BRT_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_BRT_OBJECT_BUFF1_VARIANT_B, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+            1368.5f, -772.8f, -91.9816f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_BRT_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_BRT_OBJECT_BUFF1_VARIANT_C, BG_OBJECTID_REGENBUFF_ENTRY,
+            1368.5f, -772.8f, -91.9816f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_BRT_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_A, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+            1392.5f, -772.8f, -91.9816f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_BRT_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_B, BG_OBJECTID_REGENBUFF_ENTRY,
+            1392.5f, -772.8f, -91.9816f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_BRT_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_C, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+            1392.5f, -772.8f, -91.9816f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            BG_BRT_BUFF_RESPAWN_TIME))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: failed to spawn one or more Blackrock Throne battleground objects.");
         return false;
@@ -207,6 +233,19 @@ void BattlegroundBRT::ApplyNonInteractableObjectFlags()
 
     if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
         ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* imperialThrone = GetBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE))
+        imperialThrone->SetFlag(GO_FLAG_NOT_SELECTABLE);
+}
+
+void BattlegroundBRT::SpawnRandomBuffSet(uint32 variantAIndex)
+{
+    SpawnBGObject(variantAIndex + 0, RESPAWN_ONE_DAY);
+    SpawnBGObject(variantAIndex + 1, RESPAWN_ONE_DAY);
+    SpawnBGObject(variantAIndex + 2, RESPAWN_ONE_DAY);
+
+    uint8 const buff = urand(0, 2);
+    SpawnBGObject(variantAIndex + buff, RESPAWN_IMMEDIATELY);
 }
 
 void BattlegroundBRT::StartingEventCloseDoors()
@@ -222,6 +261,9 @@ void BattlegroundBRT::StartingEventCloseDoors()
     SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE, RESPAWN_IMMEDIATELY);
 
+    for (uint32 type = BG_BRT_OBJECT_BUFF1_VARIANT_A; type <= BG_BRT_OBJECT_BUFF2_VARIANT_C; ++type)
+        SpawnBGObject(type, RESPAWN_ONE_DAY);
+
     ApplyNonInteractableObjectFlags();
 }
 
@@ -230,6 +272,9 @@ void BattlegroundBRT::StartingEventOpenDoors()
     DoorOpen(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT);
     DoorOpen(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT);
     DoorOpen(BG_BRT_OBJECT_HORDE_GATE);
+
+    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF1_VARIANT_A);
+    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF2_VARIANT_A);
 
     ApplyNonInteractableObjectFlags();
 }
@@ -319,6 +364,12 @@ void BattlegroundBRT::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
     packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_MAX_KILLS_UI, BG_BRT_KILL_LIMIT);
     packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_TIMER_ACTIVE, 0);
     packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_TIMER, 0);
+}
+
+
+uint32 BattlegroundBRT::GetBuffRespawnTime(uint32 /*type*/) const
+{
+    return BG_BRT_BUFF_RESPAWN_TIME;
 }
 
 bool BattlegroundBRT::HandlePlayerUnderMap(Player* player)

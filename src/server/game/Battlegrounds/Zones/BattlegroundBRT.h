@@ -47,6 +47,17 @@ enum BG_BRT_Objects
     BG_BRT_OBJECT_GHOST_WALL_LEFT,
     BG_BRT_OBJECT_GHOST_WALL_RIGHT,
     BG_BRT_OBJECT_IMPERIAL_THRONE,
+
+    // Buff group 1 must stay contiguous for Battleground buff respawn logic.
+    BG_BRT_OBJECT_BUFF1_VARIANT_A,
+    BG_BRT_OBJECT_BUFF1_VARIANT_B,
+    BG_BRT_OBJECT_BUFF1_VARIANT_C,
+
+    // Buff group 2 must stay contiguous for Battleground buff respawn logic.
+    BG_BRT_OBJECT_BUFF2_VARIANT_A,
+    BG_BRT_OBJECT_BUFF2_VARIANT_B,
+    BG_BRT_OBJECT_BUFF2_VARIANT_C,
+
     BG_BRT_OBJECT_MAX
 };
 
@@ -60,7 +71,8 @@ enum BG_BRT_ObjectEntries
 
 enum BG_BRT_Constants
 {
-    BG_BRT_KILL_LIMIT = 30
+    BG_BRT_KILL_LIMIT = 30,
+    BG_BRT_BUFF_RESPAWN_TIME = 60
 };
 
 struct BattlegroundBRTScore final : public BattlegroundScore
@@ -95,6 +107,7 @@ public:
     void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
     bool HandlePlayerUnderMap(Player* player) override;
     void EndBattleground(uint32 winner) override;
+    uint32 GetBuffRespawnTime(uint32 type) const override;
 
 private:
     WorldSafeLocsEntry const* GetCurrentTeamGraveyard(TeamId teamId) const;
@@ -105,6 +118,7 @@ private:
     void TrackHumanParticipantRemoved(Player const* player, uint32 team);
     void UpdateHumanFaceoffState();
     void ApplyNonInteractableObjectFlags();
+    void SpawnRandomBuffSet(uint32 variantAIndex);
 
     uint32 _allianceKills;
     uint32 _hordeKills;
