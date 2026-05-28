@@ -101,6 +101,7 @@ namespace
     uint32 g_LastScmSlotRefillAttemptMs = 0;
     bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
     bool RemoveMatchingQueues(Player* player, bool arenaOnly, bool invitedOnly, bool scheduleNonArenaUpdate);
+    uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType, bool respectQueueOnlySegments);
 
     bool IsScmManagedBotCandidate(Player const* player)
     {
@@ -298,7 +299,7 @@ namespace
         g_LastScmSlotRefillAttemptMs = nowMs;
 
         bool const rebalanceTriggered = playerbot::RandomBotParticipationManager::TriggerImmediateRebalance();
-        uint32 const queuedCount = playerbot::QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0);
+        uint32 const queuedCount = ::QueueEligibleManagedBotsForBattleground(BATTLEGROUND_SCM, 0, true);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP SCM refill attempt: guid={} instanceId={} players={} maxPlayers={} rebalanceTriggered={} queuedCount={}.",
             player->GetGUID().ToString(), battleground->GetInstanceID(), playersInInstance, maxPlayers, rebalanceTriggered ? 1 : 0, queuedCount);
@@ -1953,7 +1954,7 @@ namespace
         return false;
     }
 
-    uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
+    uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType, bool respectQueueOnlySegments)
     {
         std::vector<ObjectGuid> managedBotGuids;
         {
@@ -1982,6 +1983,29 @@ namespace
             // ineligible until their own lifecycle tick reaches recovery.
             RecoverStaleBattlegroundState(managedBot);
 
+            // Normal lifecycle/refill sweeps must honor account queue segmentation.
+            // GM forcequeue intentionally passes respectQueueOnlySegments=false so
+            // the command still does exactly what it says: force all eligible
+            // managed bots into the caller's current/queued battleground.
+            if (respectQueueOnlySegments)
+            {
+                if (IsArenaOnlyManagedBotAccount(managedBot))
+                {
+                    EmitLifecycleDiagnostic(managedBot, "queue-skip-arena-only-account",
+                        "Skipped battleground mass queue because account is configured arena-only.");
+                    continue;
+                }
+
+                BattlegroundTypeId const configuredTarget = ResolveManagedBotQueueTargetForAccount(managedBot);
+                if (configuredTarget != bgTypeId)
+                {
+                    EmitLifecycleDiagnostic(managedBot, "queue-skip-segment-mismatch",
+                        "Requested bgTypeId=" + std::to_string(uint32(bgTypeId)) +
+                        " but account target bgTypeId=" + std::to_string(uint32(configuredTarget)));
+                    continue;
+                }
+            }
+
             if (QueuePlayer(managedBot, bgTypeId, arenaType))
                 ++queuedCount;
         }
@@ -1995,7 +2019,7 @@ namespace playerbot
 {
     uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
-        return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType);
+        return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType, false);
     }
 
     void FinalizeManagedBotTeleportIfPending(Player* player)
@@ -2681,7 +2705,7 @@ namespace playerbot
                 player->GetGUID().ToString(), uint32(kManagedBattleground), rebalanceTriggered ? 1 : 0);
         }
 
-        uint32 const massQueued = QueueEligibleManagedBotsForBattleground(kManagedBattleground, 0);
+        uint32 const massQueued = ::QueueEligibleManagedBotsForBattleground(kManagedBattleground, 0, true);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP lifecycle mass queue attempt: guid={} bgTypeId={} queuedCount={}.",
             player->GetGUID().ToString(), uint32(kManagedBattleground), massQueued);
@@ -2851,7 +2875,7 @@ namespace playerbot
             player->LeaveBattleground();
             FinalizeManagedBotTeleportIfPending(player);
             player->RemoveAurasDueToSpell(SPELL_DESERTER);
-            QueuePlayer(player, BATTLEGROUND_SCM, 0);
+            QueuePlayer(player, ResolveManagedBotQueueTargetForAccount(player), 0);
             return true;
         }
 
