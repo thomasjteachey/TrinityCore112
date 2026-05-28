@@ -150,14 +150,13 @@ bool BattlegroundBRT::SetupBattleground()
             1380.119995f, -710.481995f, -92.009300f, -1.5708f,
             0.0f, 0.0f, -0.707108f, 0.707106f,
             RESPAWN_IMMEDIATELY)
-        // Ghost walls: placement logs provided coordinates only, so these use identity rotation as a first pass.
         || !AddObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
-            1372.210693f, -687.344177f, -92.055161f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1372.210693f, -687.344177f, -92.055161f, 4.71634f,
+            0.0f, 0.0f, 0.7057085f, -0.7085023f,
             RESPAWN_IMMEDIATELY)
         || !AddObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
-            1390.874756f, -687.270325f, -92.055161f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1390.874756f, -687.270325f, -92.055161f, 4.71634f,
+            0.0f, 0.0f, 0.7057085f, -0.7085023f,
             RESPAWN_IMMEDIATELY))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: failed to spawn one or more Blackrock Throne battleground objects.");
