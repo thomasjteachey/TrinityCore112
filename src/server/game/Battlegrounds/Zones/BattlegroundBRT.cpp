@@ -157,6 +157,10 @@ bool BattlegroundBRT::SetupBattleground()
         || !AddObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
             1390.874756f, -687.270325f, -92.055161f, 4.71634f,
             0.0f, 0.0f, 0.7057085f, -0.7085023f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_IMPERIAL_THRONE, BG_BRT_OBJECT_IMPERIAL_THRONE_ENTRY,
+            1380.52f, -834.296f, -86.6783f, 1.5708f,
+            0.0f, 0.0f, 0.707108f, 0.707106f,
             RESPAWN_IMMEDIATELY))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: failed to spawn one or more Blackrock Throne battleground objects.");
@@ -203,6 +207,9 @@ void BattlegroundBRT::ApplyNonInteractableObjectFlags()
 
     if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
         ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* imperialThrone = GetBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE))
+        imperialThrone->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundBRT::StartingEventCloseDoors()
@@ -216,6 +223,7 @@ void BattlegroundBRT::StartingEventCloseDoors()
     SpawnBGObject(BG_BRT_OBJECT_HORDE_GATE, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE, RESPAWN_IMMEDIATELY);
 
     ApplyNonInteractableObjectFlags();
 }
