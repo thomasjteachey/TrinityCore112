@@ -229,8 +229,8 @@ enum GILNEAS_BG_Objectives
 const float GILNEAS_BG_NodePositions[GILNEAS_BG_DYNAMIC_NODES_COUNT][4] =
 {
     { 1057.790f, 1278.285f, 3.1500f, 1.945662f },       // Lighthouse
-    { 1251.010f, 958.2685f, 5.6000f, 5.892280f },       // Waterworks
-    { 980.0446f, 948.7411f, 12.650f, 5.904071f }        // Mine
+    { 980.0446f, 948.7411f, 12.650f, 5.904071f },       // Waterworks
+    { 1251.010f, 958.2685f, 5.6000f, 5.892280f }        // Mine
 };
 
 // x, y, z, o, rot0, rot1, rot2, rot3
@@ -246,14 +246,14 @@ const uint32 GILNEAS_BG_TickIntervals[4] = { 0, 12000, 6000, 1000 };
 const uint32 GILNEAS_BG_TickPoints[4] = { 0, 20, 20, 30 };
 
 
-const uint32 GILNEAS_BG_GraveyardIds[GILNEAS_BG_ALL_NODES_COUNT] = { 1736, 1737, 1735, 1739, 1738 };
+const uint32 GILNEAS_BG_GraveyardIds[GILNEAS_BG_ALL_NODES_COUNT] = { 1736, 1735, 1737, 1739, 1738 };
 
 // x, y, z, o
 const float GILNEAS_BG_SpiritGuidePos[GILNEAS_BG_ALL_NODES_COUNT][4] =
 {
     { 1034.82f, 1335.58f, 12.0095f, 5.15f },     // Lighthouse
-    { 1252.23f, 836.547f, 27.7895f, 1.60f },     // Waterworks
-    { 887.578f, 937.337f, 23.7737f, 0.45f },     // Mine
+    { 887.578f, 937.337f, 23.7737f, 0.45f },     // Waterworks
+    { 1252.23f, 836.547f, 27.7895f, 1.60f },     // Mine
     { 908.274f, 1338.60f, 27.6449f, 5.95f },     // Alliance
     { 1401.38f, 977.125f, 7.44215f, 3.04f }      // Horde
 };
