@@ -535,6 +535,29 @@ struct ClassicProfileSelection
     bool unsupportedClass = false;
 };
 
+enum class HunterPvpSpec : uint8
+{
+    BeastMastery = 0,
+    Marksmanship,
+    Survival
+};
+
+HunterPvpSpec GetHunterPvpSpec(ClassicProfileSelection const& profileSelection)
+{
+    switch (profileSelection.profile)
+    {
+        case ClassicClassProfile::PrimaryClassic:
+            return HunterPvpSpec::BeastMastery;
+        case ClassicClassProfile::SecondaryClassic:
+            return HunterPvpSpec::Marksmanship;
+        case ClassicClassProfile::TertiaryClassic:
+            return HunterPvpSpec::Survival;
+        case ClassicClassProfile::UnknownClassic:
+        default:
+            return HunterPvpSpec::Marksmanship;
+    }
+}
+
 ClassicProfileSelection DetectClassicClassProfile(Player const* player)
 {
     ClassicProfileSelection selection;
@@ -1032,6 +1055,29 @@ bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId)
     return false;
 }
 
+bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId, ObjectGuid casterGuid)
+{
+    if (!unit || !baseSpellId || casterGuid.IsEmpty())
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return false;
+
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (unit->HasAura(chainSpellId, casterGuid))
+            return true;
+
+    return false;
+}
+
+bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
+{
+    return HasAuraFromSpellChain(unit, 25295, casterGuid) || // Serpent Sting
+        HasAuraFromSpellChain(unit, 14280, casterGuid) ||   // Viper Sting
+        HasAuraFromSpellChain(unit, 19386, casterGuid);     // Wyvern Sting
+}
+
 bool HasActivePaladinSeal(Player const* player)
 {
     if (!player)
@@ -1443,6 +1489,11 @@ bool IsPolymorphed(Unit const* unit)
     return HasAnyAura(unit, { 118, 12824, 12825, 12826, 28272, 28271, 61305, 61721 });
 }
 
+bool IsWyvernStung(Unit const* unit)
+{
+    return HasAuraFromSpellChain(unit, 19386);
+}
+
 bool HasDotAura(Unit const* unit)
 {
     if (!unit)
@@ -1634,6 +1685,68 @@ Unit const* SelectPolymorphTarget(Player const* player, Unit const* primaryTarge
             continue;
 
         if (candidate->GetClass() == CLASS_PALADIN || candidate->GetClass() == CLASS_PRIEST)
+            preferredTargets.push_back(candidate);
+        else
+            fallbackTargets.push_back(candidate);
+    }
+
+    if (!preferredTargets.empty())
+        return preferredTargets[urand(0, preferredTargets.size() - 1)];
+
+    if (!fallbackTargets.empty())
+        return fallbackTargets[urand(0, fallbackTargets.size() - 1)];
+
+    return nullptr;
+}
+
+bool AnyEnemyWyvernStung(Player const* player, float maxDistance)
+{
+    if (!player || !player->FindMap())
+        return false;
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (IsWyvernStung(candidate))
+            return true;
+    }
+
+    return false;
+}
+
+Unit const* SelectWyvernStingTarget(Player const* player, Unit const* primaryTarget, float maxDistance)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    SpellInfo const* wyvernInfo = sSpellMgr->GetSpellInfo(24133);
+    DiminishingGroup const wyvernDrGroup = wyvernInfo ? wyvernInfo->GetDiminishingReturnsGroupForSpell(false) : DIMINISHING_NONE;
+
+    std::vector<Unit const*> preferredTargets;
+    std::vector<Unit const*> fallbackTargets;
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (primaryTarget && candidate == primaryTarget)
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (HasDotAura(candidate) || IsWyvernStung(candidate))
+            continue;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (wyvernDrGroup != DIMINISHING_NONE && candidate->GetDiminishing(wyvernDrGroup) > DIMINISHING_LEVEL_0)
+            continue;
+
+        if (candidate->GetClass() == CLASS_SHAMAN || candidate->GetClass() == CLASS_DRUID || candidate->GetClass() == CLASS_PALADIN)
             preferredTargets.push_back(candidate);
         else
             fallbackTargets.push_back(candidate);
@@ -2251,7 +2364,7 @@ ObjectGuid SelectAllyTargetGuid(Player const* player)
     return selectedGuid;
 }
 
-SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool inMelee)
+SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool inMelee, ClassicProfileSelection const& profileSelection)
 {
     SpellDecision decision;
     if (!player)
@@ -2272,13 +2385,22 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 20.0f, activeTarget);
     Unit const* closeMeleeThreat = SelectNearbyMeleeTarget(player, enemyOnTopTarget, 5.0f);
     Unit const* rogueTarget = SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange());
-    Unit const* manaTarget = SelectNearbyEnemyTarget(player, activeTarget, GetConfiguredLongRange());
+    HunterPvpSpec const hunterSpec = GetHunterPvpSpec(profileSelection);
+    bool const isSurvivalHunter = hunterSpec == HunterPvpSpec::Survival;
+    bool const isMarksmanshipHunter = hunterSpec == HunterPvpSpec::Marksmanship;
+    Unit const* manaTarget = isSurvivalHunter
+        ? SelectNearbyEnemyManaTarget(player, activeTarget, GetConfiguredLongRange(), 0.0f)
+        : SelectNearbyEnemyTarget(player, activeTarget, GetConfiguredLongRange());
+    Unit const* wyvernTarget = (isSurvivalHunter && IsSpellReady(player, 24133) && !AnyEnemyWyvernStung(player, 40.0f))
+        ? SelectWyvernStingTarget(player, activeTarget, 30.0f)
+        : nullptr;
 
     target = activeTarget;
     bool const targetClose = player->IsWithinDistInMap(target, kReferenceHunterSwitchDistance);
     bool const enemyOnTop = HasHostileTarget(player, enemyOnTopTarget);
     bool const enemyNear = player->IsWithinDistInMap(target, GetConfiguredCloseRange());
     bool const rangedMode = IsHunterInRangedMode(player);
+    bool const preferredTrapReady = isSurvivalHunter && enemyOnTopTarget && HasDotAura(enemyOnTopTarget) ? IsSpellReady(player, 13809) : IsSpellReady(player, 14311);
 
     bool const targetSnaredOrStunned = target &&
         (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
@@ -2287,19 +2409,25 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, player->HealthBelowPct(35) && IsSpellReady(player, 19263), 35.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, enemyOnTop && HasAuraFromSpellChain(enemyOnTopTarget, 14268) && IsSpellReady(player, 5384) && IsSpellReady(player, 14311), 35.0f,
+    AddDecisionCandidate(candidates, enemyOnTop && HasAuraFromSpellChain(enemyOnTopTarget, 14268) && IsSpellReady(player, 5384) && preferredTrapReady, 35.0f,
         { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263), 34.0f,
+        { "hunter readiness", "reset cooldowns after deterrence has fallen", 23989, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 20910), 34.5f,
+        { "hunter counterattack", "strike any enemy in melee range when available", 20910, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isSurvivalHunter && wyvernTarget && IsSpellReady(player, 24133), 30.0f,
+        { "hunter wyvern sting", "crowd-control a non-dotted enemy support target", 24133, playerbot::PvpClassSpellContext::TargetMode::Enemy, wyvernTarget ? wyvernTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 14325) && IsSpellReady(player, 14325), 29.5f,
         { "hunter mark", "mark rogue targets for anti-stealth pressure", 14325, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 20906) && IsSpellReady(player, 20906), 27.5f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && !HasAuraFromSpellChain(player, 20906) && IsSpellReady(player, 20906), 27.5f,
         { "hunter trueshot aura", "maintain personal buff aura", 20906, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !hasLivingPet && !hasDeadPet && IsSpellReady(player, 883), 26.0f,
         { "hunter call pet", "summon active stable pet when no pet is present", 883, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasDeadPet && !player->IsInCombat() && IsSpellReady(player, 982), 25.0f,
         { "hunter revive pet", "recover pet out of combat", 982, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503), 23.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, nearbyCastingTarget && IsSpellReady(player, 19503), 23.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates,
         enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) &&
@@ -2309,9 +2437,12 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
             enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
         { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, isSurvivalHunter && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
+        !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, 25295), 19.75f,
+        { "hunter serpent sting", "apply ranged dot pressure to non-mana kill target", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 25295), 19.5f,
         { "hunter serpent sting", "apply ranged dot pressure", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -2319,9 +2450,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, manaTarget && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
         { "hunter viper sting", "drain mana on mana users", 14280, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget ? manaTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(enemyOnTopTarget), 14.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(enemyOnTopTarget), 14.0f,
         { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, enemyOnTop && closeMeleeThreat && !IsSpellReady(player, 19503) && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19263), 13.0f,
+    AddDecisionCandidate(candidates, enemyOnTop && closeMeleeThreat && (isSurvivalHunter || !IsSpellReady(player, 19503)) && (!IsSpellReady(player, 5384) || !preferredTrapReady) && IsSpellReady(player, 19263), 13.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
@@ -2814,7 +2945,7 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
     switch (player->GetClass())
     {
     case CLASS_HUNTER:
-        return SelectHunterSpell(player, target, inMelee);
+        return SelectHunterSpell(player, target, inMelee, profileSelection);
     case CLASS_MAGE:
     {
         SpellDecision mageDecision = SelectMageSpell(player, target, inMelee);
