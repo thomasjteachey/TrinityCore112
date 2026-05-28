@@ -332,14 +332,8 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
             ++flagCarrierCount;
     }
 
-    WorldPacket data(MSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 4 + 17 * flagCarrierCount);
-    // Used to send several player positions (found used in AV)
-    data << 0;  // CGBattlefieldInfo__m_numPlayerPositions
-    /*
-    for (CGBattlefieldInfo__m_numPlayerPositions)
-        data << guid << posx << posy;
-    */
-    data << flagCarrierCount;
+    WorldPacket data(MSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 16 * flagCarrierCount);
+    data << uint32(flagCarrierCount);
     if (allianceFlagCarrier)
     {
         data << uint8(TEAM_ALLIANCE);

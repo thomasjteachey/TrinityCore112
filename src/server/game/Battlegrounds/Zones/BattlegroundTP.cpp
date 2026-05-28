@@ -405,7 +405,10 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
         player->CastSpell(player, BG_TP_SPELL_HORDE_FLAG_DROPPED, true);
         SendBroadcastText(LANG_BG_TP_DROPPED_HF, CHAT_MSG_BG_SYSTEM_HORDE, player);
         _bgEvents.RescheduleEvent(BG_TP_EVENT_HORDE_DROP_FLAG, Milliseconds(BG_TP_FLAG_DROP_TIME));
-        SendCTFFlagAddonMessage("H:DROP");
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        Map2ZoneCoordinates(x, y, 5031);
+        SendCTFFlagAddonMessage("H:DROP:" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
         BroadcastCTFFlagFullState();
     }
     else
@@ -416,7 +419,10 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
         player->CastSpell(player, BG_TP_SPELL_ALLIANCE_FLAG_DROPPED, true);
         SendBroadcastText(LANG_BG_TP_DROPPED_AF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
         _bgEvents.RescheduleEvent(BG_TP_EVENT_ALLIANCE_DROP_FLAG, Milliseconds(BG_TP_FLAG_DROP_TIME));
-        SendCTFFlagAddonMessage("A:DROP");
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        Map2ZoneCoordinates(x, y, 5031);
+        SendCTFFlagAddonMessage("A:DROP:" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
         BroadcastCTFFlagFullState();
     }
 }
@@ -441,7 +447,10 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
         PlaySoundToAll(BG_TP_SOUND_ALLIANCE_FLAG_PICKED_UP);
         SendBroadcastText(LANG_BG_TP_PICKEDUP_AF, CHAT_MSG_BG_SYSTEM_HORDE, player);
-        SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        Map2ZoneCoordinates(x, y, 5031);
+        SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
         BroadcastCTFFlagFullState();
 
         if (GetFlagState(TEAM_HORDE) != BG_TP_FLAG_STATE_ON_BASE)
@@ -465,7 +474,10 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
         PlaySoundToAll(BG_TP_SOUND_HORDE_FLAG_PICKED_UP);
         SendBroadcastText(LANG_BG_TP_PICKEDUP_HF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
-        SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        Map2ZoneCoordinates(x, y, 5031);
+        SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
         BroadcastCTFFlagFullState();
 
         if (GetFlagState(TEAM_ALLIANCE) != BG_TP_FLAG_STATE_ON_BASE)
@@ -514,7 +526,10 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
             PlaySoundToAll(BG_TP_SOUND_ALLIANCE_FLAG_PICKED_UP);
             SendBroadcastText(LANG_BG_TP_PICKEDUP_AF, CHAT_MSG_BG_SYSTEM_HORDE, player);
-            SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+            float x = player->GetPositionX();
+            float y = player->GetPositionY();
+            Map2ZoneCoordinates(x, y, 5031);
+            SendCTFFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
             BroadcastCTFFlagFullState();
             return;
         }
@@ -554,7 +569,10 @@ void BattlegroundTP::EventPlayerClickedOnFlag(Player* player, GameObject* gameOb
 
             PlaySoundToAll(BG_TP_SOUND_HORDE_FLAG_PICKED_UP);
             SendBroadcastText(LANG_BG_TP_PICKEDUP_HF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
-            SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+            float x = player->GetPositionX();
+            float y = player->GetPositionY();
+            Map2ZoneCoordinates(x, y, 5031);
+            SendCTFFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatCTFCoord(x / 100.0f) + ":" + FormatCTFCoord(y / 100.0f));
             BroadcastCTFFlagFullState();
             return;
         }
