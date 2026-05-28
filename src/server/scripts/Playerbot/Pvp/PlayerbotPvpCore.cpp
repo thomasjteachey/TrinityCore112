@@ -3719,33 +3719,10 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    if (player->HasAuraWithMechanic((1 << MECHANIC_STUN) | (1 << MECHANIC_FEAR) | (1 << MECHANIC_CHARM) | (1 << MECHANIC_ROOT)))
-    {
-        if (IsSpellReady(player, 42292))
-        {
-            context.actionName = "pvp trinket";
-            context.reason = "break major crowd control with medallion";
-            context.spellId = 42292;
-            context.targetMode = PvpClassSpellContext::TargetMode::Self;
-            context.targetGuid = player->GetGUID();
-        }
-        else if (player->HasAuraWithMechanic(1 << MECHANIC_FEAR) && IsSpellReady(player, 7744))
-        {
-            context.actionName = "will of the forsaken";
-            context.reason = "break fear with racial";
-            context.spellId = 7744;
-            context.targetMode = PvpClassSpellContext::TargetMode::Self;
-            context.targetGuid = player->GetGUID();
-        }
-        else if (IsSpellReady(player, 20589))
-        {
-            context.actionName = "escape artist";
-            context.reason = "break movement-impairing control with racial";
-            context.spellId = 20589;
-            context.targetMode = PvpClassSpellContext::TargetMode::Self;
-            context.targetGuid = player->GetGUID();
-        }
-    }
+    // PvP insignia/class-trinket crowd-control breaks are handled by the
+    // per-player fast path in RandomBotParticipationManager::ProcessPlayerLifecycle.
+    // Keep them out of the normal class-spell decision graph so they are not
+    // throttled by decision cadence and do not consume the class action tick/GCD.
 
     context.shouldExecute = context.shouldExecute || context.spellId != 0;
 
