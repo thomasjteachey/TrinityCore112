@@ -52,6 +52,8 @@
 #include "Util.h"
 #include "Containers.h"
 #include "CommonHelpers.h"
+#include "Configuration/Config.h"
+#include "StringConvert.h"
 
 #include <cstring>
 #include <cstdint>
@@ -110,6 +112,63 @@ bool IsScmManagedBotCandidate(Player const* player)
 
     WorldSession const* session = player->GetSession();
     return session && session->IsVirtualSession();
+}
+
+std::unordered_set<uint32> ParseAccountIdSetFromConfig(char const* key)
+{
+    std::unordered_set<uint32> accountIds;
+    std::string const raw = sConfigMgr->GetStringDefault(key, "");
+    for (std::string_view token : Trinity::Tokenize(raw, ',', false))
+    {
+        if (Optional<uint32> accountId = Trinity::StringTo<uint32>(token))
+            if (*accountId > 0)
+                accountIds.insert(*accountId);
+    }
+
+    return accountIds;
+}
+
+BattlegroundTypeId ResolveManagedBotQueueTargetForAccount(Player const* player)
+{
+    if (!player)
+        return BATTLEGROUND_SCM;
+
+    uint32 const accountId = player->GetSession() ? player->GetSession()->GetAccountId() : 0;
+    if (!accountId)
+        return BATTLEGROUND_SCM;
+
+    if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts").count(accountId))
+        return BATTLEGROUND_SCM;
+
+    uint32 const blackrockThroneBgType = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId", 0));
+    if (blackrockThroneBgType > 0 && ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts").count(accountId))
+        return static_cast<BattlegroundTypeId>(blackrockThroneBgType);
+
+    if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
+        return BATTLEGROUND_BFG;
+
+    if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.TwinPeaksAccounts").count(accountId))
+        return BATTLEGROUND_TP;
+
+    if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ArathiBasinAccounts").count(accountId))
+        return BATTLEGROUND_AB;
+
+    if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.WarsongGulchAccounts").count(accountId))
+        return BATTLEGROUND_WS;
+
+    return BATTLEGROUND_SCM;
+}
+
+bool IsArenaOnlyManagedBotAccount(Player const* player)
+{
+    if (!player || !player->GetSession())
+        return false;
+
+    uint32 const accountId = player->GetSession()->GetAccountId();
+    if (!accountId)
+        return false;
+
+    return ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ArenaAccounts").count(accountId) != 0;
 }
 
 uint32 ComputeOverstackDepartureJitterMs(Player const* player, Battleground const* battleground)
@@ -2586,7 +2645,10 @@ bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return false;
 
-    constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
+    if (IsArenaOnlyManagedBotAccount(player))
+        return false;
+
+    BattlegroundTypeId const kManagedBattleground = ResolveManagedBotQueueTargetForAccount(player);
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const hasHumanInterest = HasAnyRealHumanInterestInBattleground(kManagedBattleground);
 
