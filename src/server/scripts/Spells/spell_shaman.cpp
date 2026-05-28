@@ -2325,6 +2325,21 @@ class spell_sha_purge : public SpellScript
 {
     PrepareSpellScript(spell_sha_purge);
 
+    static bool HasRehgarsMercyCrowdControl(Unit const* target)
+    {
+        if (!target)
+            return false;
+
+        if (target->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK))
+            return true;
+
+        return target->HasAuraType(SPELL_AURA_MOD_STUN)
+            || target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED)
+            || target->HasAuraType(SPELL_AURA_MOD_ROOT)
+            || target->HasAuraType(SPELL_AURA_MOD_CONFUSE)
+            || target->HasAuraType(SPELL_AURA_MOD_FEAR);
+    }
+
     static void AddVisiblePurgeCooldown(Unit* caster, uint32 cooldownMs)
     {
         if (!caster)
@@ -2371,7 +2386,12 @@ class spell_sha_purge : public SpellScript
         // Rehgar's Mercy turns wrapper Purge into a friendly spell.
         // The triggered real Purge spell is suppressed in HandleRehgarsMercy.
         if (caster->IsFriendlyTo(target))
-            return caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY) ? SPELL_CAST_OK : SPELL_FAILED_BAD_TARGETS;
+        {
+            if (!caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY))
+                return SPELL_FAILED_BAD_TARGETS;
+
+            return HasRehgarsMercyCrowdControl(target) ? SPELL_CAST_OK : SPELL_FAILED_NOTHING_TO_DISPEL;
+        }
 
         uint32 dispelMask = DISPEL_CURSE;
 
@@ -2403,7 +2423,8 @@ class spell_sha_purge : public SpellScript
         if (!caster || !target)
             return;
 
-        if (!caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY) || !caster->IsFriendlyTo(target))
+        if (!caster->HasAura(SPELL_SHAMAN_REHGARS_MERCY) || !caster->IsFriendlyTo(target)
+            || !HasRehgarsMercyCrowdControl(target))
             return;
 
         // Do not fire 370/8012 from the wrapper when Purge is used on a friendly target.
