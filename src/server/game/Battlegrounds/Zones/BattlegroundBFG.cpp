@@ -486,29 +486,61 @@ void BattlegroundBFG::EndBattleground(uint32 winnerTeamId)
 WorldSafeLocsEntry const* BattlegroundBFG::GetClosestGraveyard(Player* player)
 {
     TeamId const bgTeamId = GetTeamIndexByTeamId(player->GetBGTeam());
-    WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[static_cast<uint8>(GILNEAS_BG_SPIRIT_ALLIANCE) + bgTeamId]);
-    WorldSafeLocsEntry const* nearestEntry = entry;
 
-    float pX = player->GetPositionX();
-    float pY = player->GetPositionY();
-    float dist = (entry->Loc.X - pX)*(entry->Loc.X - pX)+(entry->Loc.Y - pY)*(entry->Loc.Y - pY);
-    float minDist = dist;
+    WorldSafeLocsEntry const* nearestEntry = nullptr;
+    float minDist = std::numeric_limits<float>::max();
+
+    float const pX = player->GetPositionX();
+    float const pY = player->GetPositionY();
+
+    uint8 const occupiedState = bgTeamId == TEAM_ALLIANCE
+        ? GILNEAS_BG_NODE_STATUS_ALLY_OCCUPIED
+        : GILNEAS_BG_NODE_STATUS_HORDE_OCCUPIED;
 
     for (uint8 i = GILNEAS_BG_NODE_LIGHTHOUSE; i < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++i)
-        if (_capturePointInfo[i]._ownerTeamId == bgTeamId)
+    {
+        if (_capturePointInfo[i]._ownerTeamId != bgTeamId)
+            continue;
+
+        if (_capturePointInfo[i]._state != occupiedState)
+            continue;
+
+        Creature* spiritGuide = GetBGCreature(i, false);
+        if (!spiritGuide || !spiritGuide->IsInWorld())
         {
-            entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[i]);
-            dist = (entry->Loc.X - pX)*(entry->Loc.X - pX) + (entry->Loc.Y - pY)*(entry->Loc.Y - pY);
-            if (dist < minDist)
-            {
-                minDist = dist;
-                nearestEntry = entry;
-            }
+            TC_LOG_INFO("bg.battleground", "BFG GY skip: player={} node={} owner={} state={} bgTeam={} reason=no-spirit-guide",
+                player->GetName(),
+                uint32(i),
+                uint32(_capturePointInfo[i]._ownerTeamId),
+                uint32(_capturePointInfo[i]._state),
+                uint32(bgTeamId));
+            continue;
         }
 
-    return nearestEntry;
-}
+        WorldSafeLocsEntry const* entry = sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[i]);
+        if (!entry)
+            continue;
 
+        float const dist =
+            (entry->Loc.X - pX) * (entry->Loc.X - pX) +
+            (entry->Loc.Y - pY) * (entry->Loc.Y - pY);
+
+        if (dist < minDist)
+        {
+            minDist = dist;
+            nearestEntry = entry;
+        }
+    }
+
+    if (nearestEntry)
+        return nearestEntry;
+
+    uint8 const fallbackNode = bgTeamId == TEAM_ALLIANCE
+        ? GILNEAS_BG_SPIRIT_ALLIANCE
+        : GILNEAS_BG_SPIRIT_HORDE;
+
+    return sWorldSafeLocsStore.LookupEntry(GILNEAS_BG_GraveyardIds[fallbackNode]);
+}
 bool BattlegroundBFG::UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor)
 {
     if (!Battleground::UpdatePlayerScore(player, type, value, doAddHonor))
