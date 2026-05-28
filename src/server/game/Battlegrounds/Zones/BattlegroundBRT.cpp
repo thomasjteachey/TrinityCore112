@@ -191,19 +191,19 @@ bool BattlegroundBRT::SetupBattleground()
 void BattlegroundBRT::ApplyNonInteractableObjectFlags()
 {
     if (GameObject* allianceGateLeft = GetBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT))
-        allianceGateLeft->SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE);
+        allianceGateLeft->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
     if (GameObject* allianceGateRight = GetBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT))
-        allianceGateRight->SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE);
+        allianceGateRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
     if (GameObject* hordeGate = GetBGObject(BG_BRT_OBJECT_HORDE_GATE))
-        hordeGate->SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE);
+        hordeGate->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
     if (GameObject* ghostWallLeft = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT))
-        ghostWallLeft->SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE);
+        ghostWallLeft->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
     if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
-        ghostWallRight->SetFlag(GAMEOBJECT_FLAGS, GO_FLAG_NOT_SELECTABLE);
+        ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundBRT::StartingEventCloseDoors()
