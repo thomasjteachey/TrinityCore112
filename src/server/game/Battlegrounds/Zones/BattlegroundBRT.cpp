@@ -177,16 +177,16 @@ bool BattlegroundBRT::SetupBattleground()
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_A, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            1404.745361f, -726.598328f, -91.981483f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1404.745361f, -726.598328f, -91.981483f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_B, BG_OBJECTID_REGENBUFF_ENTRY,
-            1404.745361f, -726.598328f, -91.981483f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1404.745361f, -726.598328f, -91.981483f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_C, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            1404.745361f, -726.598328f, -91.981483f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1404.745361f, -726.598328f, -91.981483f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF3_VARIANT_A, BG_OBJECTID_REGENBUFF_ENTRY,
             1356.383423f, -818.263794f, -91.981094f, 0.0f,
@@ -201,16 +201,16 @@ bool BattlegroundBRT::SetupBattleground()
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_A, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            1404.938232f, -818.510925f, -91.981621f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1404.938232f, -818.510925f, -91.981621f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_B, BG_OBJECTID_REGENBUFF_ENTRY,
-            1404.938232f, -818.510925f, -91.981621f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1404.938232f, -818.510925f, -91.981621f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
         || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_C, BG_OBJECTID_BERSERKERBUFF_ENTRY,
-            1404.938232f, -818.510925f, -91.981621f, 0.0f,
-            0.0f, 0.0f, 0.0f, 1.0f,
+            1404.938232f, -818.510925f, -91.981621f, 3.14159f,
+            0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: failed to spawn one or more Blackrock Throne battleground objects.");
