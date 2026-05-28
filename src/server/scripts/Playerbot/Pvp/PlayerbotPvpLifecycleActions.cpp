@@ -2453,9 +2453,9 @@ namespace playerbot
         return true;
     }
 
-    bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
+    bool EngageSelectedEnemyPlayer(Player* player, Unit* target, char const* reason)
     {
-        if (!player || !player->IsAlive())
+        if (!player || !player->IsAlive() || !target || !target->IsAlive() || !player->IsValidAttackTarget(target))
             return false;
 
         if (IsCrowdControlledForAction(player))
@@ -2464,14 +2464,7 @@ namespace playerbot
             return false;
         }
 
-        Unit* target = AcquireCombatTarget(player, scanDistance);
-        if (!target)
-        {
-            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                "Playerbot PvP movement skipped: bot={} reason=no-combat-target scanDistance={}.",
-                player ? player->GetGUID().ToString() : ObjectGuid::Empty.ToString(), scanDistance);
-            return false;
-        }
+        player->SetSelection(target->GetGUID());
 
         // Ensure mounted bots immediately transition into combat posture once an
         // enemy target is acquired. Without this, bots that don't cast right away
@@ -2519,11 +2512,28 @@ namespace playerbot
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP positioning profile: bot={} profile={} ranged={} createDistance={} meleeFallback={}.",
-            player->GetGUID().ToString(), profile.label, profile.primarilyRanged, profile.createDistanceWhenCrowded,
-            profile.meleeFallbackAcceptable);
+            "Playerbot PvP positioning profile: bot={} target={} reason={} profile={} ranged={} createDistance={} meleeFallback={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), reason ? reason : "combat", profile.label,
+            profile.primarilyRanged, profile.createDistanceWhenCrowded, profile.meleeFallbackAcceptable);
 
         return DriveCombatPositioning(player, target, profile);
+    }
+
+    bool EngageNearestEnemyPlayer(Player* player, float scanDistance)
+    {
+        if (!player || !player->IsAlive())
+            return false;
+
+        Unit* target = AcquireCombatTarget(player, scanDistance);
+        if (!target)
+        {
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP movement skipped: bot={} reason=no-combat-target scanDistance={}.",
+                player ? player->GetGUID().ToString() : ObjectGuid::Empty.ToString(), scanDistance);
+            return false;
+        }
+
+        return EngageSelectedEnemyPlayer(player, target, "nearest-enemy");
     }
 
     void ApplyDeterministicObjectiveOffset(Battleground const* battleground, Player const* player, Position& destination)
@@ -2961,16 +2971,9 @@ namespace playerbot
         if (player->IsInCombat())
         {
             if (context.flagCarrierDirective == FlagCarrierDirective::AttackEnemyCarrier)
-            {
                 if (Player* enemyCarrier = FindFlagCarrierForDirective(player, FlagCarrierDirective::AttackEnemyCarrier))
-                {
-                    if (player->GetTarget() != enemyCarrier->GetGUID())
-                        player->SetTarget(enemyCarrier->GetGUID());
-
-                    if (MoveTowardUnit(player, enemyCarrier, 15.0f))
+                    if (EngageSelectedEnemyPlayer(player, enemyCarrier, "enemy-flag-carrier"))
                         return true;
-                }
-            }
 
             return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
         }
@@ -3087,7 +3090,8 @@ namespace playerbot
                 "Playerbot PvP enemy-FC support selected: guid={} target={}.",
                 player->GetGUID().ToString(), enemyCarrier->GetGUID().ToString());
         }
-        return MoveTowardUnit(player, enemyCarrier, 15.0f);
+
+        return EngageSelectedEnemyPlayer(player, enemyCarrier, "enemy-flag-carrier");
     }
 
     bool BattlegroundTacticalActions::ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context)
