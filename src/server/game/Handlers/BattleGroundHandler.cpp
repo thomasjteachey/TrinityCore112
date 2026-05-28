@@ -336,6 +336,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
     data << uint32(flagCarrierCount);
     if (allianceFlagCarrier)
     {
+        data << uint8(TEAM_ALLIANCE);
         data << uint64(allianceFlagCarrier->GetGUID());
         data << float(allianceFlagCarrier->GetPositionX());
         data << float(allianceFlagCarrier->GetPositionY());
@@ -343,6 +344,7 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
 
     if (hordeFlagCarrier)
     {
+        data << uint8(TEAM_HORDE);
         data << uint64(hordeFlagCarrier->GetGUID());
         data << float(hordeFlagCarrier->GetPositionX());
         data << float(hordeFlagCarrier->GetPositionY());
