@@ -140,9 +140,8 @@ namespace
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts").count(accountId))
             return BATTLEGROUND_SCM;
 
-        uint32 const blackrockThroneBgType = std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId", 0));
-        if (blackrockThroneBgType > 0 && ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts").count(accountId))
-            return static_cast<BattlegroundTypeId>(blackrockThroneBgType);
+        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts").count(accountId))
+            return BATTLEGROUND_BRT;
 
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
             return BATTLEGROUND_BFG;
