@@ -722,7 +722,7 @@ enum class BattlegroundShortcutMoveType
 {
     None,
     GroundedSlope,
-    ControlledFall
+    VerticalSnap
 };
 
 struct BattlegroundShortcutDestination
@@ -732,9 +732,10 @@ struct BattlegroundShortcutDestination
 };
 
 // Battleground shortcuts are intentionally generic: walk short validated slope
-// steps when terrain supports it, but allow a real falling spline when the
-// terrain is a cliff (for example elevated graveyard exits). What we avoid is
-// the old long direct point spline that visually dragged bots through the air.
+// steps when terrain supports it, but snap down to the landing ground when the
+// terrain is a cliff (for example elevated graveyard exits). Virtual playerbot
+// sessions have no client-driven gravity correction, so falling/direct splines
+// still look like flying; same-map teleport is preferable for these drops.
 bool BuildBattlegroundDownhillShortcutDestination(Player* player, Position const& destination, BattlegroundShortcutDestination& shortcut)
 {
     if (!player)
@@ -814,7 +815,7 @@ bool BuildBattlegroundDownhillShortcutDestination(Player* player, Position const
         return false;
 
     shortcut.position = landing;
-    shortcut.moveType = BattlegroundShortcutMoveType::ControlledFall;
+    shortcut.moveType = BattlegroundShortcutMoveType::VerticalSnap;
     return true;
 }
 
@@ -855,20 +856,13 @@ void IssueBattlegroundShortcutMove(Player* player, MotionMaster* motionMaster, B
     if (!player || !motionMaster)
         return;
 
-    if (shortcut.moveType == BattlegroundShortcutMoveType::ControlledFall)
+    if (shortcut.moveType == BattlegroundShortcutMoveType::VerticalSnap)
     {
-        Position const landing = shortcut.position;
-        std::function<void(Movement::MoveSplineInit&)> initializer = [landing, player](Movement::MoveSplineInit& init)
-        {
-            init.MoveTo(landing.GetPositionX(), landing.GetPositionY(), landing.GetPositionZ(), false);
-            init.SetFall();
-            init.SetVelocity(std::max(1.0f, player->GetSpeed(MOVE_RUN)));
-        };
+        if (player->isMoving())
+            player->StopMoving();
 
-        GenericMovementGenerator* movement = new GenericMovementGenerator(std::move(initializer), EFFECT_MOTION_TYPE, 0);
-        movement->Priority = MOTION_PRIORITY_HIGHEST;
-        motionMaster->Add(movement);
-        player->SetFallInformation(0, player->GetPositionZ());
+        motionMaster->Clear();
+        player->NearTeleportTo(shortcut.position);
         return;
     }
 
@@ -881,8 +875,8 @@ char const* GetBattlegroundShortcutMoveLabel(BattlegroundShortcutMoveType moveTy
     {
         case BattlegroundShortcutMoveType::GroundedSlope:
             return "grounded-slope";
-        case BattlegroundShortcutMoveType::ControlledFall:
-            return "controlled-fall";
+        case BattlegroundShortcutMoveType::VerticalSnap:
+            return "vertical-snap";
         case BattlegroundShortcutMoveType::None:
             break;
     }
@@ -1163,8 +1157,8 @@ bool IssueMovePointThrottled(Player* player, Position const& destination, float 
 
             // Do not fall back to unrestricted direct/no-path movement in
             // battlegrounds. Only the downhill shortcut above may bypass navmesh, because
-            // it either walks a short grounded slope step or uses a real fall
-            // spline for cliff exits instead of a large direct glide.
+            // it either walks a short grounded slope step or snaps down a
+            // cliff exit instead of using a falling/direct glide spline.
             EmitBattlegroundGmDebug(player,
                 "movepoint=blocked-no-nav fallback=none destDist=" + std::to_string(int32(player->GetDistance(safeDestination))), 0);
             return false;
