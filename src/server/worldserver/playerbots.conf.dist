@@ -55,34 +55,6 @@ Playerbot.PvpTactics.Enable = 0
 
 Playerbot.PvpLifecycle.Enable = 0
 
-#    Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts
-#    Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts
-#    Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts
-#    Playerbot.PvpLifecycle.QueueOnly.TwinPeaksAccounts
-#    Playerbot.PvpLifecycle.QueueOnly.ArathiBasinAccounts
-#    Playerbot.PvpLifecycle.QueueOnly.WarsongGulchAccounts
-#    Playerbot.PvpLifecycle.QueueOnly.ArenaAccounts
-#        Description: Comma-separated account IDs for queue segmentation. Managed bots on these accounts
-#                     are constrained to the corresponding queue family only.
-#                     ArenaAccounts suppress battleground queue joins so those bots can queue arena only.
-#                     BlackrockThrone uses QueueOnly.BlackrockThroneBgTypeId for its battleground type ID.
-#        Default:     "" (empty list)
-
-Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts =
-Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts =
-Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts =
-Playerbot.PvpLifecycle.QueueOnly.TwinPeaksAccounts =
-Playerbot.PvpLifecycle.QueueOnly.ArathiBasinAccounts =
-Playerbot.PvpLifecycle.QueueOnly.WarsongGulchAccounts =
-Playerbot.PvpLifecycle.QueueOnly.ArenaAccounts =
-
-#    Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId
-#        Description: Battleground type ID used for Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts.
-#                     Set this to your custom Blackrock Throne battleground type ID.
-#        Default:     0 (disabled; accounts in BlackrockThroneAccounts fall back to other configured rules)
-
-Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId = 0
-
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
 #                     Current implementation provides reference-aligned trigger/action vocabulary
