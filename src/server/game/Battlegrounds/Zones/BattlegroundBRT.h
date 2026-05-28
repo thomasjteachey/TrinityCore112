@@ -58,6 +58,16 @@ enum BG_BRT_Objects
     BG_BRT_OBJECT_BUFF2_VARIANT_B,
     BG_BRT_OBJECT_BUFF2_VARIANT_C,
 
+    // Buff group 3 must stay contiguous for Battleground buff respawn logic.
+    BG_BRT_OBJECT_BUFF3_VARIANT_A,
+    BG_BRT_OBJECT_BUFF3_VARIANT_B,
+    BG_BRT_OBJECT_BUFF3_VARIANT_C,
+
+    // Buff group 4 must stay contiguous for Battleground buff respawn logic.
+    BG_BRT_OBJECT_BUFF4_VARIANT_A,
+    BG_BRT_OBJECT_BUFF4_VARIANT_B,
+    BG_BRT_OBJECT_BUFF4_VARIANT_C,
+
     BG_BRT_OBJECT_MAX
 };
 
