@@ -2,6 +2,7 @@
 
 #include "BattlegroundMgr.h"
 #include "DBCStores.h"
+#include "GameObject.h"
 #include "Log.h"
 #include "Player.h"
 #include "World.h"
@@ -16,6 +17,7 @@ void BattlegroundBRTScore::BuildObjectivesBlock(WorldPacket& data)
 
 BattlegroundBRT::BattlegroundBRT()
 {
+    BgObjects.resize(BG_BRT_OBJECT_MAX);
     BgCreatures.resize(BG_BRT_CREATURE_MAX);
     _allianceKills = 0;
     _hordeKills = 0;
@@ -135,6 +137,36 @@ void BattlegroundBRT::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, u
 
 bool BattlegroundBRT::SetupBattleground()
 {
+    // Alliance gates: orientation/rotation were not provided with the placement logs, so these use identity rotation as a first pass.
+    if (!AddObject(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT, BG_BRT_OBJECT_ALLIANCE_GATE_ENTRY,
+            1368.356323f, -826.367615f, -91.981422f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT, BG_BRT_OBJECT_ALLIANCE_GATE_ENTRY,
+            1389.290405f, -826.072998f, -92.415840f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_HORDE_GATE, BG_BRT_OBJECT_HORDE_GATE_ENTRY,
+            1380.119995f, -710.481995f, -92.009300f, -1.5708f,
+            0.0f, 0.0f, -0.707108f, 0.707106f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
+            1372.210693f, -687.344177f, -92.055161f, 4.71634f,
+            0.0f, 0.0f, 0.7057085f, -0.7085023f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
+            1390.874756f, -687.270325f, -92.055161f, 4.71634f,
+            0.0f, 0.0f, 0.7057085f, -0.7085023f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_IMPERIAL_THRONE, BG_BRT_OBJECT_IMPERIAL_THRONE_ENTRY,
+            1380.52f, -834.296f, -86.6783f, 1.5708f,
+            0.0f, 0.0f, 0.707108f, 0.707106f,
+            RESPAWN_IMMEDIATELY))
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: failed to spawn one or more Blackrock Throne battleground objects.");
+        return false;
+    }
+
     WorldSafeLocsEntry const* allianceA = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_A);
     WorldSafeLocsEntry const* allianceB = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_B);
     WorldSafeLocsEntry const* hordeA = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_A);
@@ -155,15 +187,51 @@ bool BattlegroundBRT::SetupBattleground()
     if (!AddSpiritGuide(BG_BRT_SPIRIT_HORDE_B, hordeB->Loc.X, hordeB->Loc.Y, hordeB->Loc.Z, 0.0f, TEAM_HORDE))
         return false;
 
+    ApplyNonInteractableObjectFlags();
     return true;
+}
+
+void BattlegroundBRT::ApplyNonInteractableObjectFlags()
+{
+    if (GameObject* allianceGateLeft = GetBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT))
+        allianceGateLeft->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* allianceGateRight = GetBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT))
+        allianceGateRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* hordeGate = GetBGObject(BG_BRT_OBJECT_HORDE_GATE))
+        hordeGate->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* ghostWallLeft = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT))
+        ghostWallLeft->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
+        ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundBRT::StartingEventCloseDoors()
 {
+    DoorClose(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT);
+    DoorClose(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT);
+    DoorClose(BG_BRT_OBJECT_HORDE_GATE);
+
+    SpawnBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_HORDE_GATE, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE, RESPAWN_IMMEDIATELY);
+
+    ApplyNonInteractableObjectFlags();
 }
 
 void BattlegroundBRT::StartingEventOpenDoors()
 {
+    DoorOpen(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT);
+    DoorOpen(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT);
+    DoorOpen(BG_BRT_OBJECT_HORDE_GATE);
+
+    ApplyNonInteractableObjectFlags();
 }
 
 WorldSafeLocsEntry const* BattlegroundBRT::GetCurrentTeamGraveyard(TeamId teamId) const

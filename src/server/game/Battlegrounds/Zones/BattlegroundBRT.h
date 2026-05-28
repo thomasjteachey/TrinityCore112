@@ -39,6 +39,25 @@ enum BG_BRT_Creatures
     BG_BRT_CREATURE_MAX      = 4
 };
 
+enum BG_BRT_Objects
+{
+    BG_BRT_OBJECT_ALLIANCE_GATE_LEFT = 0,
+    BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT,
+    BG_BRT_OBJECT_HORDE_GATE,
+    BG_BRT_OBJECT_GHOST_WALL_LEFT,
+    BG_BRT_OBJECT_GHOST_WALL_RIGHT,
+    BG_BRT_OBJECT_IMPERIAL_THRONE,
+    BG_BRT_OBJECT_MAX
+};
+
+enum BG_BRT_ObjectEntries
+{
+    BG_BRT_OBJECT_ALLIANCE_GATE_ENTRY = 185483,
+    BG_BRT_OBJECT_HORDE_GATE_ENTRY = 170575,
+    BG_BRT_OBJECT_GHOST_WALL_ENTRY = 180322,
+    BG_BRT_OBJECT_IMPERIAL_THRONE_ENTRY = 170592
+};
+
 enum BG_BRT_Constants
 {
     BG_BRT_KILL_LIMIT = 30
@@ -85,6 +104,7 @@ private:
     void TrackHumanParticipantAdded(Player const* player, bool isInBattleground);
     void TrackHumanParticipantRemoved(Player const* player, uint32 team);
     void UpdateHumanFaceoffState();
+    void ApplyNonInteractableObjectFlags();
 
     uint32 _allianceKills;
     uint32 _hordeKills;
