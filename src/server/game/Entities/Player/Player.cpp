@@ -145,7 +145,7 @@ namespace
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
         if (Battleground const* battleground = player->GetBattleground())
-            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM)
+            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT)
                 return true;
 
         switch (slot)
@@ -9833,6 +9833,9 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         // Scarlet Chapel can also report a non-canonical zone ID near spawn.
         // Fall back to battleground type so the top-frame world states initialize immediately.
         else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM)
+            battleground->FillInitialWorldStates(packet);
+        // Blackrock Throne can report stock BRD zone IDs; initialize from battleground type.
+        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BRT)
             battleground->FillInitialWorldStates(packet);
         break;
     }
@@ -26239,7 +26242,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     if (InBattleground())
     {
         Battleground const* battleground = GetBattleground();
-        if (!battleground || battleground->GetTypeID(true) != BATTLEGROUND_SCM)
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT))
             return;
     }
 

@@ -1,0 +1,278 @@
+#include "BattlegroundBRT.h"
+
+#include "BattlegroundMgr.h"
+#include "DBCStores.h"
+#include "Log.h"
+#include "Player.h"
+#include "World.h"
+#include "WorldPacket.h"
+#include "WorldStatePackets.h"
+#include "WorldSession.h"
+
+void BattlegroundBRTScore::BuildObjectivesBlock(WorldPacket& data)
+{
+    data << uint32(0); // no extra custom scoreboard columns yet
+}
+
+BattlegroundBRT::BattlegroundBRT()
+{
+    BgCreatures.resize(BG_BRT_CREATURE_MAX);
+    _allianceKills = 0;
+    _hordeKills = 0;
+    _allianceHumanParticipants = 0;
+    _hordeHumanParticipants = 0;
+    _humanFaceoffEverHappened = false;
+    _usePrimaryGraveyard = true;
+    _graveyardSwapTimer = 0;
+}
+
+void BattlegroundBRT::AddPlayer(Player* player)
+{
+    bool const isInBattleground = IsPlayerInBattleground(player->GetGUID());
+    TrackHumanParticipantAdded(player, isInBattleground);
+
+    Battleground::AddPlayer(player);
+
+    if (!isInBattleground)
+    {
+        uint32 const scoreboardTeamMarker = (player->GetBGTeam() == HORDE) ? 1u : 0u;
+        PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundBRTScore(player->GetGUID(), scoreboardTeamMarker);
+    }
+}
+
+void BattlegroundBRT::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 team)
+{
+    TrackHumanParticipantRemoved(player, team);
+}
+
+void BattlegroundBRT::Reset()
+{
+    Battleground::Reset();
+    _allianceKills = 0;
+    _hordeKills = 0;
+    _allianceHumanParticipants = 0;
+    _hordeHumanParticipants = 0;
+    _humanFaceoffEverHappened = false;
+    _usePrimaryGraveyard = true;
+    _graveyardSwapTimer = 0;
+}
+
+void BattlegroundBRT::PostUpdateImpl(uint32 diff)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    _graveyardSwapTimer += diff;
+    if (_graveyardSwapTimer >= GetResurrectionInterval())
+    {
+        _graveyardSwapTimer = 0;
+        _usePrimaryGraveyard = !_usePrimaryGraveyard;
+    }
+}
+
+void BattlegroundBRT::TrackHumanParticipantAdded(Player const* player, bool isInBattleground)
+{
+    if (!player || isInBattleground)
+        return;
+
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsVirtualSession())
+        return;
+
+    if (player->GetBGTeam() == ALLIANCE)
+        ++_allianceHumanParticipants;
+    else if (player->GetBGTeam() == HORDE)
+        ++_hordeHumanParticipants;
+
+    UpdateHumanFaceoffState();
+}
+
+void BattlegroundBRT::TrackHumanParticipantRemoved(Player const* player, uint32 team)
+{
+    if (!player)
+        return;
+
+    WorldSession const* session = player->GetSession();
+    if (!session || session->IsVirtualSession())
+        return;
+
+    if (team == ALLIANCE && _allianceHumanParticipants > 0)
+        --_allianceHumanParticipants;
+    else if (team == HORDE && _hordeHumanParticipants > 0)
+        --_hordeHumanParticipants;
+}
+
+void BattlegroundBRT::UpdateHumanFaceoffState()
+{
+    if (_allianceHumanParticipants > 0 && _hordeHumanParticipants > 0)
+        _humanFaceoffEverHappened = true;
+}
+
+uint32 BattlegroundBRT::GetHonorRewardForTeam() const
+{
+    uint32 reward = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP) / 2;
+
+    if (!_humanFaceoffEverHappened)
+        reward /= 2;
+
+    return reward;
+}
+
+void BattlegroundBRT::ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const
+{
+    if (winner != ALLIANCE && winner != HORDE)
+        return;
+
+    if (!_humanFaceoffEverHappened)
+    {
+        winnerHonor /= 2;
+        loserHonor /= 2;
+    }
+
+    winnerHonor = (winnerHonor * 3.5) / 5;
+    loserHonor = (loserHonor * 3.5) / 5;
+}
+
+bool BattlegroundBRT::SetupBattleground()
+{
+    WorldSafeLocsEntry const* allianceA = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_A);
+    WorldSafeLocsEntry const* allianceB = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_B);
+    WorldSafeLocsEntry const* hordeA = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_A);
+    WorldSafeLocsEntry const* hordeB = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_B);
+
+    if (!allianceA || !allianceB || !hordeA || !hordeB)
+    {
+        TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: one or more Blackrock Throne graveyards are missing in WorldSafeLocs.");
+        return false;
+    }
+
+    if (!AddSpiritGuide(BG_BRT_SPIRIT_ALLIANCE_A, allianceA->Loc.X, allianceA->Loc.Y, allianceA->Loc.Z, 0.0f, TEAM_ALLIANCE))
+        return false;
+    if (!AddSpiritGuide(BG_BRT_SPIRIT_ALLIANCE_B, allianceB->Loc.X, allianceB->Loc.Y, allianceB->Loc.Z, 0.0f, TEAM_ALLIANCE))
+        return false;
+    if (!AddSpiritGuide(BG_BRT_SPIRIT_HORDE_A, hordeA->Loc.X, hordeA->Loc.Y, hordeA->Loc.Z, 0.0f, TEAM_HORDE))
+        return false;
+    if (!AddSpiritGuide(BG_BRT_SPIRIT_HORDE_B, hordeB->Loc.X, hordeB->Loc.Y, hordeB->Loc.Z, 0.0f, TEAM_HORDE))
+        return false;
+
+    return true;
+}
+
+void BattlegroundBRT::StartingEventCloseDoors()
+{
+}
+
+void BattlegroundBRT::StartingEventOpenDoors()
+{
+}
+
+WorldSafeLocsEntry const* BattlegroundBRT::GetCurrentTeamGraveyard(TeamId teamId) const
+{
+    if (teamId == TEAM_ALLIANCE)
+        return _usePrimaryGraveyard ? sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_A)
+                                    : sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_B);
+
+    return _usePrimaryGraveyard ? sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_A)
+                                : sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_B);
+}
+
+WorldSafeLocsEntry const* BattlegroundBRT::GetClosestGraveyard(Player* player)
+{
+    if (!player)
+        return nullptr;
+
+    if (player->GetTeam() == ALLIANCE)
+    {
+        if (GetStatus() == STATUS_IN_PROGRESS)
+            return GetCurrentTeamGraveyard(TEAM_ALLIANCE);
+
+        return sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_START);
+    }
+
+    if (GetStatus() == STATUS_IN_PROGRESS)
+        return GetCurrentTeamGraveyard(TEAM_HORDE);
+
+    return sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_START);
+}
+
+void BattlegroundBRT::UpdateTeamScoreWorldStates()
+{
+    UpdateWorldState(BG_BRT_WORLDSTATE_SHOW, 1);
+    UpdateWorldState(BG_BRT_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
+    UpdateWorldState(BG_BRT_WORLDSTATE_HORDE_SCORE, _hordeKills);
+    UpdateWorldState(BG_BRT_WORLDSTATE_MAX_SCORE, BG_BRT_KILL_LIMIT);
+    UpdateWorldState(BG_BRT_WORLDSTATE_MAX_KILLS_UI, BG_BRT_KILL_LIMIT);
+}
+
+void BattlegroundBRT::HandleKillPlayer(Player* victim, Player* killer)
+{
+    Battleground::HandleKillPlayer(victim, killer);
+
+    if (GetStatus() != STATUS_IN_PROGRESS || !victim || !killer || victim == killer)
+        return;
+
+    uint32 killerTeam = GetPlayerTeam(killer->GetGUID());
+    uint32 victimTeam = GetPlayerTeam(victim->GetGUID());
+
+    if (!killerTeam || !victimTeam || killerTeam == victimTeam)
+        return;
+
+    if (killerTeam == ALLIANCE)
+    {
+        ++_allianceKills;
+        m_TeamScores[TEAM_ALLIANCE] = _allianceKills;
+
+        if ((_allianceKills % 10) == 0)
+            RewardHonorToTeam(GetHonorRewardForTeam(), ALLIANCE);
+    }
+    else if (killerTeam == HORDE)
+    {
+        ++_hordeKills;
+        m_TeamScores[TEAM_HORDE] = _hordeKills;
+
+        if ((_hordeKills % 10) == 0)
+            RewardHonorToTeam(GetHonorRewardForTeam(), HORDE);
+    }
+
+    UpdateTeamScoreWorldStates();
+
+    if (_allianceKills >= BG_BRT_KILL_LIMIT)
+        EndBattleground(ALLIANCE);
+    else if (_hordeKills >= BG_BRT_KILL_LIMIT)
+        EndBattleground(HORDE);
+}
+
+void BattlegroundBRT::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
+{
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_SHOW, 1);
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_ALLIANCE_SCORE, _allianceKills);
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_HORDE_SCORE, _hordeKills);
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_MAX_SCORE, BG_BRT_KILL_LIMIT);
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_MAX_KILLS_UI, BG_BRT_KILL_LIMIT);
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_TIMER_ACTIVE, 0);
+    packet.Worldstates.emplace_back(BG_BRT_WORLDSTATE_TIMER, 0);
+}
+
+bool BattlegroundBRT::HandlePlayerUnderMap(Player* player)
+{
+    if (!player)
+        return false;
+
+    WorldSafeLocsEntry const* safeLoc = nullptr;
+    if (player->GetTeam() == ALLIANCE)
+        safeLoc = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_START);
+    else
+        safeLoc = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_START);
+
+    if (!safeLoc)
+        return false;
+
+    player->TeleportTo(GetMapId(), safeLoc->Loc.X, safeLoc->Loc.Y, safeLoc->Loc.Z + 1.0f, player->GetOrientation());
+    return true;
+}
+
+void BattlegroundBRT::EndBattleground(uint32 winner)
+{
+    UpdateTeamScoreWorldStates();
+    Battleground::EndBattleground(winner);
+}

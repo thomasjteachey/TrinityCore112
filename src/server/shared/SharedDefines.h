@@ -3520,6 +3520,7 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_SV             = 31, // Slavery Valley
     BATTLEGROUND_RB             = 32, // Random Battleground
     BATTLEGROUND_SCM            = 100, // Scarlet Chapel
+    BATTLEGROUND_BRT            = 101, // Blackrock Throne
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
     BATTLEGROUND_TV             = 870, // Tol'Viron Arena
@@ -3687,9 +3688,10 @@ enum BattlegroundQueueTypeId
     BATTLEGROUND_QUEUE_4v4      = 10,
     BATTLEGROUND_QUEUE_5v5      = 11,
     BATTLEGROUND_QUEUE_SCM      = 12,
-    BATTLEGROUND_QUEUE_TP       = 13,
-    BATTLEGROUND_QUEUE_BFG      = 14,
-    BATTLEGROUND_QUEUE_SV       = 15,
+    BATTLEGROUND_QUEUE_BRT      = 13,
+    BATTLEGROUND_QUEUE_TP       = 14,
+    BATTLEGROUND_QUEUE_BFG      = 15,
+    BATTLEGROUND_QUEUE_SV       = 16,
     MAX_BATTLEGROUND_QUEUE_TYPES
 };
 

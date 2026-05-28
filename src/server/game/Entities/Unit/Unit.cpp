@@ -3507,7 +3507,7 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
 
         // Scarlet Chapel's shallow water is part of the intended battleground pathing and
         // should not force players out of mounts or Travel Form when they cross it.
-        if (!battleground || battleground->GetTypeID(true) != BATTLEGROUND_SCM)
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT))
             RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
     }
     else
