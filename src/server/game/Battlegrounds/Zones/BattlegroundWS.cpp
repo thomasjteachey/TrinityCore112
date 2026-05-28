@@ -542,100 +542,83 @@ void BattlegroundWS::HandleFlagRoomCapturePoint(int32 team)
 
 void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
 {
+    ObjectGuid const playerGuid = player->GetGUID();
+    bool const isAllianceFlagCarrier = GetFlagPickerGUID(TEAM_ALLIANCE) == playerGuid;
+    bool const isHordeFlagCarrier = GetFlagPickerGUID(TEAM_HORDE) == playerGuid;
+
+    if (!isAllianceFlagCarrier && !isHordeFlagCarrier)
+        return;
+
     if (GetStatus() != STATUS_IN_PROGRESS)
     {
-        // if not running, do not cast things at the dropper player (prevent spawning the "dropped" flag), neither send unnecessary messages
-        // just take off the aura
-        if (player->GetTeam() == ALLIANCE)
-        {
-            if (!IsHordeFlagPickedup())
-                return;
-
-            if (GetFlagPickerGUID(TEAM_HORDE) == player->GetGUID())
-            {
-                SetHordeFlagPicker(ObjectGuid::Empty);
-                player->RemoveAurasDueToSpell(BG_WS_SPELL_WARSONG_FLAG);
-            }
-        }
-        else
-        {
-            if (!IsAllianceFlagPickedup())
-                return;
-
-            if (GetFlagPickerGUID(TEAM_ALLIANCE) == player->GetGUID())
-            {
-                SetAllianceFlagPicker(ObjectGuid::Empty);
-                player->RemoveAurasDueToSpell(BG_WS_SPELL_SILVERWING_FLAG);
-            }
-        }
-        return;
-    }
-
-    bool set = false;
-    int32 droppedFlagIdentity = -1;
-
-    if (player->GetTeam() == ALLIANCE)
-    {
-        if (!IsHordeFlagPickedup())
-            return;
-        if (GetFlagPickerGUID(TEAM_HORDE) == player->GetGUID())
-        {
-            SetHordeFlagPicker(ObjectGuid::Empty);
-            player->RemoveAurasDueToSpell(BG_WS_SPELL_WARSONG_FLAG);
-            if (_flagDebuffState == 1)
-              player->RemoveAurasDueToSpell(WS_SPELL_FOCUSED_ASSAULT);
-            else if (_flagDebuffState == 2)
-              player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
-            _flagState[TEAM_HORDE] = BG_WS_FLAG_STATE_ON_GROUND;
-            player->CastSpell(player, BG_WS_SPELL_WARSONG_FLAG_DROPPED, true);
-            set = true;
-            droppedFlagIdentity = TEAM_HORDE;
-        }
-    }
-    else
-    {
-        if (!IsAllianceFlagPickedup())
-            return;
-        if (GetFlagPickerGUID(TEAM_ALLIANCE) == player->GetGUID())
+        // If not running, do not spawn dropped flag objects or send messages.
+        // Just remove the matching flag aura and clear the physical flag picker.
+        if (isAllianceFlagCarrier)
         {
             SetAllianceFlagPicker(ObjectGuid::Empty);
             player->RemoveAurasDueToSpell(BG_WS_SPELL_SILVERWING_FLAG);
-            if (_flagDebuffState == 1)
-              player->RemoveAurasDueToSpell(WS_SPELL_FOCUSED_ASSAULT);
-            else if (_flagDebuffState == 2)
-              player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
-            _flagState[TEAM_ALLIANCE] = BG_WS_FLAG_STATE_ON_GROUND;
-            player->CastSpell(player, BG_WS_SPELL_SILVERWING_FLAG_DROPPED, true);
-            set = true;
-            droppedFlagIdentity = TEAM_ALLIANCE;
         }
+
+        if (isHordeFlagCarrier)
+        {
+            SetHordeFlagPicker(ObjectGuid::Empty);
+            player->RemoveAurasDueToSpell(BG_WS_SPELL_WARSONG_FLAG);
+        }
+
+        return;
     }
 
-    if (set && (droppedFlagIdentity == TEAM_ALLIANCE || droppedFlagIdentity == TEAM_HORDE))
+    int32 droppedFlagIdentity = -1;
+
+    if (isAllianceFlagCarrier)
     {
-        //player->CastSpell(player, SPELL_RECENTLY_DROPPED_FLAG, true);
-        UpdateFlagState(droppedFlagIdentity == TEAM_HORDE ? ALLIANCE : HORDE, 1);
-
-        float dropX = player->GetPositionX();
-        float dropY = player->GetPositionY();
-        Map2ZoneCoordinates(dropX, dropY, 3277);
-        std::string dropCoords = ":" + FormatWSGCoord(dropX / 100.0f) + ":" + FormatWSGCoord(dropY / 100.0f);
-
-        if (droppedFlagIdentity == TEAM_HORDE)
-        {
-            SendBroadcastText(BG_WS_TEXT_HORDE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_HORDE, player);
-            SendWSGFlagAddonMessage("H:DROP" + dropCoords);
-            UpdateWorldState(BG_WS_FLAG_UNK_HORDE, uint32(-1));
-        }
-        else
-        {
-            SendBroadcastText(BG_WS_TEXT_ALLIANCE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
-            SendWSGFlagAddonMessage("A:DROP" + dropCoords);
-            UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1));
-        }
-
-        _flagsDropTimer[droppedFlagIdentity] = BG_WS_FLAG_DROP_TIME;
+        SetAllianceFlagPicker(ObjectGuid::Empty);
+        player->RemoveAurasDueToSpell(BG_WS_SPELL_SILVERWING_FLAG);
+        _flagState[TEAM_ALLIANCE] = BG_WS_FLAG_STATE_ON_GROUND;
+        player->CastSpell(player, BG_WS_SPELL_SILVERWING_FLAG_DROPPED, true);
+        droppedFlagIdentity = TEAM_ALLIANCE;
     }
+    else if (isHordeFlagCarrier)
+    {
+        SetHordeFlagPicker(ObjectGuid::Empty);
+        player->RemoveAurasDueToSpell(BG_WS_SPELL_WARSONG_FLAG);
+        _flagState[TEAM_HORDE] = BG_WS_FLAG_STATE_ON_GROUND;
+        player->CastSpell(player, BG_WS_SPELL_WARSONG_FLAG_DROPPED, true);
+        droppedFlagIdentity = TEAM_HORDE;
+    }
+
+    if (droppedFlagIdentity != TEAM_ALLIANCE && droppedFlagIdentity != TEAM_HORDE)
+        return;
+
+    if (_flagDebuffState == 1)
+        player->RemoveAurasDueToSpell(WS_SPELL_FOCUSED_ASSAULT);
+    else if (_flagDebuffState == 2)
+        player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
+
+    // Keep this as the stock row-state update. The team passed here is the team
+    // carrying the enemy physical flag, not the dropper's race/faction.
+    UpdateFlagState(droppedFlagIdentity == TEAM_HORDE ? ALLIANCE : HORDE, 1);
+
+    float dropX = player->GetPositionX();
+    float dropY = player->GetPositionY();
+    Map2ZoneCoordinates(dropX, dropY, 3277);
+    std::string dropCoords = ":" + FormatWSGCoord(dropX / 100.0f) + ":" + FormatWSGCoord(dropY / 100.0f);
+
+    if (droppedFlagIdentity == TEAM_HORDE)
+    {
+        SendBroadcastText(BG_WS_TEXT_HORDE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_HORDE, player);
+        SendWSGFlagAddonMessage("H:DROP" + dropCoords);
+        UpdateWorldState(BG_WS_FLAG_UNK_HORDE, uint32(-1));
+    }
+    else
+    {
+        SendBroadcastText(BG_WS_TEXT_ALLIANCE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
+        SendWSGFlagAddonMessage("A:DROP" + dropCoords);
+        UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1));
+    }
+
+    _flagsDropTimer[droppedFlagIdentity] = BG_WS_FLAG_DROP_TIME;
+    BroadcastWSGFlagFullState();
 }
 
 void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target_obj)

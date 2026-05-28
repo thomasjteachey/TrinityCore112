@@ -385,10 +385,17 @@ void BattlegroundTP::HandleFlagRoomCapturePoint(TeamId teamId)
 
 void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
 {
-    if (GetFlagPickerGUID(TEAM_HORDE) != player->GetGUID() && GetFlagPickerGUID(TEAM_ALLIANCE) != player->GetGUID())
+    ObjectGuid const playerGuid = player->GetGUID();
+    TeamId droppedFlagTeam = TEAM_NEUTRAL;
+
+    if (GetFlagPickerGUID(TEAM_ALLIANCE) == playerGuid)
+        droppedFlagTeam = TEAM_ALLIANCE;
+    else if (GetFlagPickerGUID(TEAM_HORDE) == playerGuid)
+        droppedFlagTeam = TEAM_HORDE;
+    else
         return;
 
-    SetFlagPicker(ObjectGuid::Empty, GetOtherTwinPeaksTeamId(player->GetTeamId()));
+    SetFlagPicker(ObjectGuid::Empty, droppedFlagTeam);
     player->RemoveAurasDueToSpell(BG_TP_SPELL_HORDE_FLAG);
     player->RemoveAurasDueToSpell(BG_TP_SPELL_ALLIANCE_FLAG);
     player->RemoveAurasDueToSpell(BG_TP_SPELL_FOCUSED_ASSAULT);
@@ -397,7 +404,7 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
-    if (player->GetTeamId() == TEAM_ALLIANCE)
+    if (droppedFlagTeam == TEAM_HORDE)
     {
         _flagState[TEAM_HORDE] = BG_TP_FLAG_STATE_ON_GROUND;
         UpdateFlagState(TEAM_ALLIANCE, 1);
@@ -405,6 +412,7 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
         player->CastSpell(player, BG_TP_SPELL_HORDE_FLAG_DROPPED, true);
         SendBroadcastText(LANG_BG_TP_DROPPED_HF, CHAT_MSG_BG_SYSTEM_HORDE, player);
         _bgEvents.RescheduleEvent(BG_TP_EVENT_HORDE_DROP_FLAG, Milliseconds(BG_TP_FLAG_DROP_TIME));
+
         float x = player->GetPositionX();
         float y = player->GetPositionY();
         Map2ZoneCoordinates(x, y, 5031);
@@ -419,6 +427,7 @@ void BattlegroundTP::EventPlayerDroppedFlag(Player* player)
         player->CastSpell(player, BG_TP_SPELL_ALLIANCE_FLAG_DROPPED, true);
         SendBroadcastText(LANG_BG_TP_DROPPED_AF, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
         _bgEvents.RescheduleEvent(BG_TP_EVENT_ALLIANCE_DROP_FLAG, Milliseconds(BG_TP_FLAG_DROP_TIME));
+
         float x = player->GetPositionX();
         float y = player->GetPositionY();
         Map2ZoneCoordinates(x, y, 5031);
