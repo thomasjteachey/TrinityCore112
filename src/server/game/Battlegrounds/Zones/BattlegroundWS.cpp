@@ -364,6 +364,8 @@ void BattlegroundWS::StartingEventOpenDoors()
 
     // players joining later are not eligibles
     StartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, WS_EVENT_START_BATTLE);
+
+    BroadcastWSGFlagFullState();
 }
 
 void BattlegroundWS::AddPlayer(Player* player)
@@ -614,16 +616,21 @@ void BattlegroundWS::EventPlayerDroppedFlag(Player* player)
         //player->CastSpell(player, SPELL_RECENTLY_DROPPED_FLAG, true);
         UpdateFlagState(droppedFlagIdentity == TEAM_HORDE ? ALLIANCE : HORDE, 1);
 
+        float dropX = player->GetPositionX();
+        float dropY = player->GetPositionY();
+        Map2ZoneCoordinates(dropX, dropY, 3277);
+        std::string dropCoords = ":" + FormatWSGCoord(dropX / 100.0f) + ":" + FormatWSGCoord(dropY / 100.0f);
+
         if (droppedFlagIdentity == TEAM_HORDE)
         {
             SendBroadcastText(BG_WS_TEXT_HORDE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_HORDE, player);
-            SendWSGFlagAddonMessage("H:DROP");
+            SendWSGFlagAddonMessage("H:DROP" + dropCoords);
             UpdateWorldState(BG_WS_FLAG_UNK_HORDE, uint32(-1));
         }
         else
         {
             SendBroadcastText(BG_WS_TEXT_ALLIANCE_FLAG_DROPPED, CHAT_MSG_BG_SYSTEM_ALLIANCE, player);
-            SendWSGFlagAddonMessage("A:DROP");
+            SendWSGFlagAddonMessage("A:DROP" + dropCoords);
             UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, uint32(-1));
         }
 
@@ -657,7 +664,10 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
           player->CastSpell(player, WS_SPELL_FOCUSED_ASSAULT, true);
         else if (_flagDebuffState == 2)
           player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
-        SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        Map2ZoneCoordinates(x, y, 3277);
+        SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
         BroadcastWSGFlagFullState();
     }
 
@@ -682,7 +692,10 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
           player->CastSpell(player, WS_SPELL_FOCUSED_ASSAULT, true);
         else if (_flagDebuffState == 2)
           player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
-        SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+        float x = player->GetPositionX();
+        float y = player->GetPositionY();
+        Map2ZoneCoordinates(x, y, 3277);
+        SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
         BroadcastWSGFlagFullState();
     }
 
@@ -717,7 +730,10 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
             else if (_flagDebuffState == 2)
               player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
             UpdateWorldState(BG_WS_FLAG_UNK_ALLIANCE, 1);
-            SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName());
+            float x = player->GetPositionX();
+            float y = player->GetPositionY();
+            Map2ZoneCoordinates(x, y, 3277);
+            SendWSGFlagAddonMessage(std::string("A:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
             BroadcastWSGFlagFullState();
         }
         //called in HandleGameObjectUseOpcode:
@@ -755,7 +771,10 @@ void BattlegroundWS::EventPlayerClickedOnFlag(Player* player, GameObject* target
             else if (_flagDebuffState == 2)
               player->CastSpell(player, WS_SPELL_BRUTAL_ASSAULT, true);
             UpdateWorldState(BG_WS_FLAG_UNK_HORDE, 1);
-            SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName());
+            float x = player->GetPositionX();
+            float y = player->GetPositionY();
+            Map2ZoneCoordinates(x, y, 3277);
+            SendWSGFlagAddonMessage(std::string("H:PICKUP:") + player->GetName() + ":" + FormatWSGCoord(x / 100.0f) + ":" + FormatWSGCoord(y / 100.0f));
             BroadcastWSGFlagFullState();
         }
         //called in HandleGameObjectUseOpcode:
