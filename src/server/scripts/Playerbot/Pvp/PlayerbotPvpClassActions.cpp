@@ -83,6 +83,11 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
     }
 }
 
+bool IsSurvivalHunter(Player const* player)
+{
+    return player && player->GetClass() == CLASS_HUNTER && player->HasTalent(19386, player->GetActiveSpec());
+}
+
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode);
 bool CanIssueFollowCommands(Player const* player);
 bool IsEffectivelyOutdoors(Player const* player);
@@ -2965,29 +2970,31 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             pressureTarget = player->GetVictim();
 
         bool const closeMeleePressure = pressureTarget && pressureTarget->IsAlive() && player->IsWithinDistInMap(pressureTarget, 5.0f);
-        if (closeMeleePressure && player->HasSpell(1499))
+        uint32 const trapSpellId = IsSurvivalHunter(player) && pressureTarget && (pressureTarget->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE) || pressureTarget->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT)) ? 13809 : 1499;
+        if (closeMeleePressure && player->HasSpell(trapSpellId))
         {
             ObjectGuid const hunterGuid = player->GetGUID();
             ObjectGuid const pressureTargetGuid = pressureTarget->GetGUID();
+            uint32 const delayedTrapSpellId = trapSpellId;
 
             player->StopMoving();
             player->SetSelection(ObjectGuid::Empty);
 
-            player->m_Events.AddEventAtOffset([hunterGuid, pressureTargetGuid]()
+            player->m_Events.AddEventAtOffset([hunterGuid, pressureTargetGuid, delayedTrapSpellId]()
             {
                 Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
                 if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
                     return;
 
-                SpellInfo const* freezingTrapInfo = sSpellMgr->GetSpellInfo(1499);
-                if (freezingTrapInfo &&
-                    !hunter->GetSpellHistory()->HasCooldown(1499) &&
-                    !hunter->GetSpellHistory()->HasGlobalCooldown(freezingTrapInfo) &&
+                SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(delayedTrapSpellId);
+                if (trapInfo &&
+                    !hunter->GetSpellHistory()->HasCooldown(delayedTrapSpellId) &&
+                    !hunter->GetSpellHistory()->HasGlobalCooldown(trapInfo) &&
                     !hunter->IsNonMeleeSpellCast(false, false, true))
                 {
-                    SpellCastResult const trapCastResult = hunter->CastSpell(hunter, 1499, false);
+                    SpellCastResult const trapCastResult = hunter->CastSpell(hunter, delayedTrapSpellId, false);
                     if (trapCastResult != SPELL_CAST_OK)
-                        TC_LOG_DEBUG("playerbots.pvp.class", "Hunter trap follow-up failed after feign death delay: guid={}, result={}.", hunter->GetGUID().ToString(), uint32(trapCastResult));
+                        TC_LOG_DEBUG("playerbots.pvp.class", "Hunter trap follow-up failed after feign death delay: guid={}, spell={}, result={}.", hunter->GetGUID().ToString(), delayedTrapSpellId, uint32(trapCastResult));
                 }
 
                 if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, pressureTargetGuid))
