@@ -631,13 +631,13 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
         case CLASS_MAGE:
             if (player->HasTalent(12042, activeSpec))
                 return { ClassicClassProfile::PrimaryClassic, "Arcane-like", false, false };
-            if (player->HasTalent(11129, activeSpec))
+            if (player->HasTalent(33041, activeSpec))
                 return { ClassicClassProfile::SecondaryClassic, "Fire-like", false, false };
             if (player->HasTalent(11426, activeSpec))
                 return { ClassicClassProfile::TertiaryClassic, "Frost-like", false, false };
             break;
         case CLASS_WARLOCK:
-            if (player->HasTalent(18220, activeSpec))
+            if (player->HasTalent(48181, activeSpec))
                 return { ClassicClassProfile::PrimaryClassic, "Affliction-like", false, false };
             if (player->HasTalent(19028, activeSpec))
                 return { ClassicClassProfile::SecondaryClassic, "Demonology-like", false, false };
