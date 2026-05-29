@@ -44,6 +44,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -58,10 +59,8 @@ bool IsFriendlySupportTarget(Player const* player, Unit const* target);
 bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 
+constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
-constexpr float kHunterMeleeExactRange = 5.0f;
-constexpr float kHunterRangedExactRange = 8.0f;
-constexpr float kHunterDeadzoneRetreatStep = 10.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
@@ -148,18 +147,21 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
         return;
     }
 
-    float const distance = player->GetDistance(target);
-    float const exactDistance = player->GetExactDist(target);
+    float const distance = player->GetExactDist(target);
     bool const previousRangedMode = rangedMode;
-
-    // Hunter spacing has three exact-distance bands:
-    //   <=5y: melee abilities are valid, so melee fallback is useful.
-    //   5-8y: deadzone; do not collapse to melee, create range instead.
-    //   >=8y: ranged weapon/spell envelope.
-    if (exactDistance <= kHunterMeleeExactRange)
-        rangedMode = false;
+    if (rangedMode)
+    {
+        // Do not collapse the 5-8y hunter dead-zone into melee mode. Melee
+        // pressure is only valid at true melee distance; the dead-zone must be
+        // handled by explicit retreat movement before ranged spell selection.
+        if (distance <= kReferenceHunterMeleeDistance)
+            rangedMode = false;
+    }
     else
-        rangedMode = true;
+    {
+        if (target->GetVictim() != player && distance >= kReferenceHunterSwitchDistance)
+            rangedMode = true;
+    }
 
     {
         std::lock_guard<std::mutex> lock(g_HunterRangedModeByBotLock);
@@ -169,9 +171,9 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
     if (previousRangedMode != rangedMode)
     {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Hunter mode switch: botGuid={} targetGuid={} previousMode={} newMode={} edgeDistance={} exactDistance={} targetVictimIsBot={}.",
+            "Hunter mode switch: botGuid={} targetGuid={} previousMode={} newMode={} distance={} targetVictimIsBot={}.",
             player->GetGUID().ToString(), target->GetGUID().ToString(), previousRangedMode ? "ranged" : "melee",
-            rangedMode ? "ranged" : "melee", distance, exactDistance, target->GetVictim() == player ? 1 : 0);
+            rangedMode ? "ranged" : "melee", distance, target->GetVictim() == player ? 1 : 0);
     }
 }
 
@@ -185,7 +187,10 @@ float GetHunterDeadZoneMaxRange()
     if (minRange <= 0.0f)
         return kReferenceHunterSwitchDistance;
 
-    return minRange;
+    // Some 3.3.5 spell metadata reports a lower min range than the classic
+    // hunter dead-zone actually enforced by the ranged weapon cast path. Keep
+    // the Classic 5-8y rule authoritative for PvP bot spacing.
+    return std::max(kReferenceHunterSwitchDistance, minRange);
 }
 
 uint8 IncrementCombatNoTargetTicks(Player const* player)
@@ -222,6 +227,60 @@ float GetConfiguredHealRange() { return g_PvpCoreConfig.healRange; }
 float GetConfiguredMeleeRange() { return g_PvpCoreConfig.meleeRange; }
 float GetConfiguredCloseRange() { return g_PvpCoreConfig.closeRange; }
 float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
+
+bool IsHunterExactDeadZone(Player const* player, Unit const* target)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
+        return false;
+
+    float const distance = player->GetExactDist(target);
+    float const meleeMax = std::max(0.0f, GetConfiguredMeleeRange());
+    float const rangedMin = std::max(meleeMax, GetHunterDeadZoneMaxRange());
+    return distance > meleeMax && distance < rangedMin;
+}
+
+Unit const* SelectHunterDeadZoneEnemy(Player const* player, Unit const* preferredTarget)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return nullptr;
+
+    if (HasHostileTarget(player, preferredTarget) &&
+        player->IsWithinLOSInMap(preferredTarget) &&
+        IsHunterExactDeadZone(player, preferredTarget))
+        return preferredTarget;
+
+    if (!player->FindMap())
+        return nullptr;
+
+    Unit const* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate) || !player->IsWithinLOSInMap(candidate) || !IsHunterExactDeadZone(player, candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return bestTarget;
+}
+
+float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return 6.0f;
+
+    float const currentDistance = player->GetExactDist(target);
+    float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange() + 4.0f, 12.0f);
+    return std::clamp(desiredExactDistance - currentDistance, 4.0f, 10.0f);
+}
 
 float GetConfiguredCombatRange()
 {
@@ -2813,6 +2872,12 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
 
     UpdateHunterCombatMode(player, activeTarget);
 
+    // Exact 5-8y is the classic hunter dead-zone: melee cannot reach, but
+    // ranged weapon shots also fail. Do not return a ranged fallback spell here;
+    // BuildClassSpellContext owns the high-priority retreat directive.
+    if (SelectHunterDeadZoneEnemy(player, activeTarget))
+        return decision;
+
     Pet const* pet = player->GetPet();
     bool const hasLivingPet = pet && pet->IsAlive();
     bool const hasDeadPet = pet && !pet->IsAlive();
@@ -4150,6 +4215,19 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     if (player->GetClass() == CLASS_HUNTER)
     {
+        Unit const* activeHunterTarget = resolveTargetByGuid(activeTargetGuid);
+        Unit const* deadZoneTarget = SelectHunterDeadZoneEnemy(player, activeHunterTarget);
+        if (deadZoneTarget)
+        {
+            ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, deadZoneTarget->GetGUID(),
+                ComputeHunterDeadZoneRetreatStep(player, deadZoneTarget),
+                "hunter deadzone retreat", "enemy in hunter dead-zone", 100.0f);
+            return context;
+        }
+    }
+
+    if (player->GetClass() == CLASS_HUNTER)
+    {
         TC_LOG_DEBUG("playerbots.pvp.classspell",
             "BuildClassSpellContext snapshot: botGuid={} inBg={} bgActive={} inPrep={} inDuel={} hasValidTarget={} targetGuid={} allyGuid={}.",
             player->GetGUID().ToString(), values.inBattleground ? 1 : 0, IsTriggerActive(PvpTrigger::BgActive, values) ? 1 : 0,
@@ -4337,29 +4415,25 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else if (minRange > 0.0f && distance < std::max(0.0f, minRange + kRangedSpacingEnterTooCloseBuffer))
             {
-                bool collapseToMelee = false;
-                if (player->GetClass() == CLASS_HUNTER)
+                bool issuedHunterDeadZoneRetreat = false;
+                if (IsHunterExactDeadZone(player, spacingTarget))
                 {
-                    float const exactDistance = player->GetExactDist(spacingTarget);
-                    if (exactDistance <= kHunterMeleeExactRange)
-                    {
-                        ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, spacingTarget->GetGUID(),
-                            std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "selected spell true melee range", 84.0f);
-                        collapseToMelee = true;
-                    }
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
+                        ComputeHunterDeadZoneRetreatStep(player, spacingTarget),
+                        "hunter deadzone retreat", "selected hunter spell in dead-zone", 100.0f);
+                    issuedHunterDeadZoneRetreat = true;
                 }
 
-                if (!collapseToMelee)
+                if (!issuedHunterDeadZoneRetreat)
                 {
                     // Enter too-close movement before strict dead-zone boundaries so
                     // ranged users do not idle in 5-8y style min-range gaps.
-                    // Hunters specifically flee the exact 5-8y deadzone instead of
-                    // collapsing inward, because melee is not valid there either.
-                    float const fleeFollowRange = player->GetClass() == CLASS_HUNTER
-                        ? std::max(kHunterDeadzoneRetreatStep, minRange + 2.0f)
-                        : std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
+                    // Keep an extra cushion over strict spell minimum range so ranged
+                    // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
+                    // immediately re-enter the dead-zone from minor pathing drift.
+                    float const fleeFollowRange = std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
-                        fleeFollowRange, "flee", player->GetClass() == CLASS_HUNTER ? "selected spell hunter dead-zone retreat" : "selected spell minimum range violation", 84.0f);
+                        fleeFollowRange, "flee", "selected spell minimum range violation", 84.0f);
                 }
                 context.spellId = 0;
                 context.itemEntry = 0;
@@ -4416,15 +4490,14 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
                     ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy out of spell range", 70.0f);
             }
-            else if (player->GetClass() == CLASS_HUNTER &&
-                player->GetExactDist(movementTarget) > kHunterMeleeExactRange &&
-                player->GetExactDist(movementTarget) < kHunterRangedExactRange)
+            else if (IsHunterExactDeadZone(player, movementTarget))
             {
                 // No castable spell + hunter dead-zone often left the bot in a
-                // bow-raise idle loop. For this exact 5-8y band, back out into
-                // ranged weapon range instead of collapsing inward to melee.
+                // bow-raise idle loop. Force retreat out past ranged minimum
+                // instead of collapsing into melee.
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, movementTarget->GetGUID(),
-                    kHunterDeadzoneRetreatStep, "flee", "enemy in hunter dead-zone", 71.0f);
+                    ComputeHunterDeadZoneRetreatStep(player, movementTarget),
+                    "hunter deadzone retreat", "enemy in hunter dead-zone", 100.0f);
             }
             else if (distance < std::max(0.0f, GetConfiguredMeleeRange() + kRangedSpacingEnterTooCloseBuffer))
             {

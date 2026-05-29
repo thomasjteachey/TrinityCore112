@@ -76,11 +76,6 @@ constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 
-constexpr float kHunterMeleeExactRange = 5.0f;
-constexpr float kHunterRangedExactRange = 8.0f;
-constexpr float kHunterDeadzoneRetreatExactRange = 10.0f;
-
-
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
     if (!spellId)
@@ -1150,73 +1145,59 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
     return diag.str();
 }
 
-bool IsHunterExactDeadzone(Player const* player, Unit const* target)
+bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 {
-    if (!player || !target || player->GetClass() != CLASS_HUNTER || !target->IsAlive())
+    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
         return false;
 
-    if (!player->IsValidAttackTarget(target))
-        return false;
-
-    float const exactDistance = player->GetExactDist(target);
-    return exactDistance > kHunterMeleeExactRange && exactDistance < kHunterRangedExactRange;
+    float const distance = player->GetExactDist(target);
+    return distance > 5.0f && distance < 8.0f;
 }
 
-float GetHunterDeadzoneRetreatEdgeDistance(Player const* player, Unit const* target)
+float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
 {
     if (!player || !target)
-        return kHunterRangedExactRange;
+        return 6.0f;
 
-    float const hitboxSum = player->GetCombatReach() + target->GetCombatReach();
-    return std::max(1.0f, kHunterDeadzoneRetreatExactRange - hitboxSum);
+    float const currentDistance = player->GetExactDist(target);
+    return std::clamp(12.0f - currentDistance, 4.0f, 10.0f);
 }
 
-void IssueHunterDeadzoneRetreatMovement(Player* player, Unit* target, float requestedEdgeDistance, bool targetLos,
-    bool targetAttackable, MovementGeneratorType initialMotionType)
+void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const* reason)
 {
-    if (!player || !target)
+    if (!player || !target || !target->IsAlive())
         return;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
         return;
 
-    float const retreatEdgeDistance = GetHunterDeadzoneRetreatEdgeDistance(player, target);
-    MovementGeneratorType const currentMotionType = motionMaster->GetCurrentMovementGeneratorType();
+    float const currentDistance = player->GetExactDist(target);
+    float const retreatStep = ComputeHunterDeadZoneRetreatStep(player, target);
+    float const angleToTarget = player->GetAbsoluteAngle(target->GetPosition());
 
-    auto const orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    bool const alreadyRetreating = orderItr != g_TargetRelativeMoveOrderByGuid.end() &&
-        orderItr->second.targetGuid == target->GetGUID() &&
-        std::fabs(orderItr->second.issuedRange - retreatEdgeDistance) < 0.5f &&
-        currentMotionType == FOLLOW_MOTION_TYPE;
-    if (alreadyRetreating)
+    Position destination = player->GetPosition();
+    destination.RelocateOffset({ std::cos(angleToTarget + static_cast<float>(M_PI)) * retreatStep,
+        std::sin(angleToTarget + static_cast<float>(M_PI)) * retreatStep, 0.0f, 0.0f });
+
+    MovementGeneratorType const motionBefore = motionMaster->GetCurrentMovementGeneratorType();
+    bool issuedStrict = false;
+    if (RequiresStrictHumanPathing(player))
+        issuedStrict = IssueStrictHumanMove(player, destination, 2.0f, 150);
+
+    if (!issuedStrict)
     {
-        std::string preserveDiag;
-        if (ShouldPreserveTargetRelativeMovement(player, target, retreatEdgeDistance, 1200, "hunter_deadzone_retreat_preserved", &preserveDiag))
-        {
-            SetLastMovementDebugStatus(player, preserveDiag);
-            return;
-        }
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
     }
 
-    bool const cleared = currentMotionType != IDLE_MOTION_TYPE;
-    if (cleared)
-        motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
-    bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
-    motionMaster->MoveFollow(target, retreatEdgeDistance, player->GetFollowAngle());
-    RecordTargetRelativeMovementOrder(player, target, retreatEdgeDistance, 2);
-    MotionPrimeResult primeResult = PrimeTargetRelativeMotion(player);
-    MarkTargetRelativeMovementLaunch(player);
-    primeResult.addToWorldCalled = preparedMotionMaster;
-
     std::ostringstream diag;
-    diag << BuildRangedMovementDiag(player, target, "hunter_deadzone_retreat_from_ranged_approach",
-        requestedEdgeDistance, retreatEdgeDistance, targetLos, targetAttackable, cleared, initialMotionType, "follow")
-         << " deadzone_min_exact=" << kHunterMeleeExactRange
-         << " deadzone_max_exact=" << kHunterRangedExactRange
-         << " retreat_exact=" << kHunterDeadzoneRetreatExactRange;
-    AppendMotionPrimeDiag(diag, primeResult);
+    diag << BuildRangedMovementDiag(player, target,
+        reason ? reason : "hunter_deadzone_retreat", 8.0f, 12.0f,
+        player->IsWithinLOSInMap(target), player->IsValidAttackTarget(target), true, motionBefore,
+        issuedStrict ? "strict_retreat" : "point_retreat")
+         << " current_exact=" << currentDistance
+         << " retreat_step=" << retreatStep;
     SetLastMovementDebugStatus(player, diag.str());
 }
 
@@ -1371,23 +1352,6 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     bool const nearRangeEdge = currentDistance > (safeDistance + 1.0f) && currentDistance <= (safeDistance + 8.0f);
     uint32 const nowMs = GameTime::GetGameTimeMS();
-
-    if (IsHunterExactDeadzone(player, target))
-    {
-        float const retreatEdgeDistance = GetHunterDeadzoneRetreatEdgeDistance(player, target);
-        IssueHunterDeadzoneRetreatMovement(player, target, requestedSafeDistance, targetLos, targetAttackable, initialMotionType);
-
-        stallState.targetGuid = target->GetGUID();
-        stallState.lastDistance = currentDistance;
-        stallState.lastSampleMs = nowMs;
-        stallState.lastFallbackMs = nowMs;
-        stallState.lastIssueMs = nowMs;
-        stallState.lastIssuedRange = retreatEdgeDistance;
-        stallState.lastIssuedMode = 2;
-        stallState.stagnantSamples = 0;
-        return;
-    }
-
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
     bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
@@ -3164,7 +3128,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
-                if (shouldMoveBehindForEnemySpell)
+                if (IsHunterExactDeadZone(player, target))
+                    IssueHunterDeadZoneRetreatMovement(player, target, "hunter_deadzone_retreat_from_out_of_range_cast");
+                else if (shouldMoveBehindForEnemySpell)
                     IssueBehindTargetMeleeMovement(player, target);
                 else if (shouldUseMeleeApproachForEnemySpell)
                     IssueMeleeApproachMovement(player, target);
@@ -3176,8 +3142,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             }
             else if (castResult == SPELL_FAILED_TOO_CLOSE)
             {
-                float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
-                player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                if (IsHunterExactDeadZone(player, target))
+                    IssueHunterDeadZoneRetreatMovement(player, target, "hunter_deadzone_retreat_from_too_close_cast");
+                else
+                {
+                    float const desiredRange = minRange > 0.0f ? std::max(1.0f, minRange + 1.0f) : std::max(1.0f, playerbot::PvpCore::GetConfig().closeRange);
+                    player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());
+                }
             }
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
