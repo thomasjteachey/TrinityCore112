@@ -273,9 +273,6 @@ void BattlegroundBRT::ApplyNonInteractableObjectFlags()
 
     if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
         ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
-
-    if (GameObject* imperialThrone = GetBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE))
-        imperialThrone->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundBRT::SpawnRandomBuffSet(uint32 variantAIndex)
