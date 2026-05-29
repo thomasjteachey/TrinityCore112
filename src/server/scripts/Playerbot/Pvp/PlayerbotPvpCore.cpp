@@ -2631,6 +2631,28 @@ uint32 CountNearbyEnemies(Player const* player, float maxDistance)
     return count;
 }
 
+uint32 CountNearbyMeleeThreats(Player const* player, float maxDistance)
+{
+    if (!player || !player->FindMap())
+        return 0;
+
+    uint32 count = 0;
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate) || !IsMeleeClass(candidate))
+            continue;
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        ++count;
+    }
+
+    return count;
+}
+
 uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
 {
     if (!player || !player->FindMap())
@@ -2942,6 +2964,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
     Unit const* rejuvTarget = IsSpellReady(player, 25299) ? SelectFriendlyHealthTarget(player, 40.0f, 90.0f) : nullptr;
     Unit const* rogueTarget = SelectEnemyClassTarget(player, CLASS_ROGUE, 30.0f);
     Unit const* meleeThreat = SelectNearbyMeleeTarget(player, target, 8.0f);
+    uint32 const nearbyMeleeThreats = CountNearbyMeleeThreats(player, 8.0f);
+    bool const heavyMeleePressure = nearbyMeleeThreats >= 2;
     Unit const* moonfireExecuteTarget = nullptr;
     if (IsSpellReady(player, 8921))
     {
@@ -2958,7 +2982,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         bool const isProwling = HasAuraFromSpellChain(player, 9913);
         Unit const* lowAlly = SelectFriendlyHealthTarget(player, 40.0f, 80.0f);
         Unit const* rootTarget = SelectPredatorsSwiftnessRootTarget(player, target, 30.0f);
-        bool const safeAgain = !player->HealthBelowPct(60) || !SelectNearbyMeleeTarget(player, target, 8.0f);
+        bool const safeAgain = !player->HealthBelowPct(60) || !heavyMeleePressure;
 
         std::vector<PrioritizedSpellDecision> feralCandidates;
         AddDecisionCandidate(feralCandidates, isCasterForm && lowManaAlly && !lowManaAlly->HasAura(29166), 72.0f,
@@ -2977,8 +3001,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid regrowth", "predator's swiftness regrowth on lowest ally", 9858, lowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lowAlly ? lowAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, player->HasAura(69369) && AllFriendlyPlayersHealthy(player, 40.0f, 80.0f) && rootTarget && IsSpellReady(player, 9853), 69.0f,
             { "druid entangling roots", "predator's swiftness root when allies are healthy", 9853, playerbot::PvpClassSpellContext::TargetMode::Enemy, rootTarget ? rootTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(feralCandidates, player->HealthBelowPct(60) && meleeThreat && !inBear && IsSpellReady(player, 5487), 68.0f,
-            { "druid bear form", "swap bear under melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self });
+        AddDecisionCandidate(feralCandidates, player->HealthBelowPct(60) && heavyMeleePressure && !inBear && IsSpellReady(player, 5487), 68.0f,
+            { "druid bear form", "swap bear under heavy melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, inBear && player->GetComboPoints() >= 5 && player->GetPowerPct(POWER_MANA) < 50.0f && !player->HasAura(89758) && IsSpellReady(player, 89758), 67.0f,
             { "druid thinnervate", "bear combo point thinnervate", 89758, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 16979), 66.0f,
@@ -3044,8 +3068,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         { "druid faerie fire feral", "apply feral faerie fire to nearby rogues", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isFeralDruid && feralMayUseCasterUtility && rogueTarget && !HasAuraFromSpellChain(rogueTarget, 9907) && IsSpellReady(player, 9907), 30.0f,
         { "druid faerie fire", "apply faerie fire to nearby rogues", 9907, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, meleeThreat && IsSpellReady(player, 5487), 29.0f,
-        { "druid bear form", "swap to bear under physical melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, ((!isFeralDruid && meleeThreat) || (isFeralDruid && player->HealthBelowPct(60) && heavyMeleePressure)) && IsSpellReady(player, 5487), 29.0f,
+        { "druid bear form", isFeralDruid ? "swap to bear only under heavy melee pressure below 60 percent health" : "swap to bear under physical melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HasAura(5487) && meleeThreat && IsSpellReady(player, 16979), 28.0f,
         { "druid feral charge", "charge away from melee pressure in bear form", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
 
