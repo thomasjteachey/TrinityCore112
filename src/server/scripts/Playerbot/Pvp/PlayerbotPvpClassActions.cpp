@@ -74,7 +74,9 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
 
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
+constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
+constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
@@ -3329,6 +3331,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHandOfSacrificeCooldownToken, std::chrono::seconds(10));
     if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(32593))
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, 32593, std::chrono::seconds(12));
+    if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(kDruidCasterFaerieFireSpellId))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kDruidCasterFaerieFireSpellId, kDruidCasterFaerieFireCooldown);
 
     // Shared tactical cooldown for dispel/decurse effects. This keeps
     // playerbots from spam-casting into protected or undispellable auras while
