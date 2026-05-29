@@ -3004,7 +3004,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         AddDecisionCandidate(feralCandidates, player->HealthBelowPct(60) && heavyMeleePressure && !inBear && IsSpellReady(player, 5487), 68.0f,
             { "druid bear form", "swap bear under heavy melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, inBear && player->GetComboPoints() >= 5 && player->GetPowerPct(POWER_MANA) < 50.0f && !player->HasAura(89758) && IsSpellReady(player, 89758), 67.0f,
-            { "druid thinnervate", "bear combo point thinnervate", 89758, playerbot::PvpClassSpellContext::TargetMode::Self });
+            { "druid thinnervate", "bear combo point thinnervate", 89758, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 16979), 66.0f,
             { "druid feral charge bear", "escape by charging a distant target", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 22842), 65.0f,
