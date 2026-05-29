@@ -233,10 +233,13 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
         return false;
 
+    // This must be the Classic hunter weapon dead-zone, not the configurable
+    // PvP melee spacing band. Playerbot.PvpClassSpells.Range.Melee defaults to
+    // 8y in LoadConfig(), which accidentally made the old check become
+    // distance > 8 && distance < 8 and disabled every dead-zone guard. That is
+    // why Viper Sting/Arcane Shot kept getting selected at exact 5-8y.
     float const distance = player->GetExactDist(target);
-    float const meleeMax = std::max(0.0f, GetConfiguredMeleeRange());
-    float const rangedMin = std::max(meleeMax, GetHunterDeadZoneMaxRange());
-    return distance > meleeMax && distance < rangedMin;
+    return distance > kReferenceHunterMeleeDistance && distance < kReferenceHunterSwitchDistance;
 }
 
 Unit const* SelectHunterDeadZoneEnemy(Player const* player, Unit const* preferredTarget)
