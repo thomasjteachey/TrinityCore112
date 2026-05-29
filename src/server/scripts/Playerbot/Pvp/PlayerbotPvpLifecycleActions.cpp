@@ -1565,9 +1565,25 @@ namespace
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
+    bool HasActiveStationaryChannel(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        Spell const* channel = player->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+        if (!channel || channel->getState() == SPELL_STATE_FINISHED)
+            return false;
+
+        SpellInfo const* spellInfo = channel->GetSpellInfo();
+        return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
+    }
+
     bool CanIssueBotMovement(Player* player)
     {
         if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            return false;
+
+        if (HasActiveStationaryChannel(player))
             return false;
 
         if (IsCrowdControlledForAction(player))

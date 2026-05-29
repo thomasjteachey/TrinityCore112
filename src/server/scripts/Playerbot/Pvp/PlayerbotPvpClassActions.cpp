@@ -2287,9 +2287,41 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
     }
 }
 
+bool HasActiveStationaryChannel(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Spell const* channel = player->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    if (!channel || channel->getState() == SPELL_STATE_FINISHED)
+        return false;
+
+    SpellInfo const* spellInfo = channel->GetSpellInfo();
+    return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
+}
+
+void StopPlayerbotForStationaryCast(Player* player)
+{
+    if (!player)
+        return;
+
+    player->StopMoving();
+    if (MotionMaster* motionMaster = player->GetMotionMaster())
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    {
+        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        player->SendMovementFlagUpdate();
+    }
+}
+
 bool CanIssueFollowCommands(Player const* player)
 {
     if (!player || !player->IsAlive())
+        return false;
+
+    if (HasActiveStationaryChannel(player))
         return false;
 
     if (IsCrowdControlledForAction(player) ||
@@ -2918,7 +2950,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // stop_moving_request reason=cast_time_or_autorepeat killed the spline and
     // left the bot inching or stuck.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell;
+    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
+        (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
     if (requiresStationaryCast)
     {
         std::string stationaryDeferDiag;
@@ -2930,12 +2963,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
-        player->StopMoving();
-        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-        {
-            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            player->SendMovementFlagUpdate();
-        }
+        StopPlayerbotForStationaryCast(player);
     }
 
     // Blink (1953) is a leap-forward spell with a destination target
@@ -2995,6 +3023,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = reasonText.Title;
         return false;
     }
+
+    if (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel())
+        StopPlayerbotForStationaryCast(player);
 
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
