@@ -53,8 +53,6 @@ namespace
 {
 std::array<std::string_view, 2> const CHROMI_WHISPER_NAMES = { "Chromi", "Chromie" };
 ObjectGuid::LowType constexpr CHROMIE_FAKE_GUID = 1;
-char const* const CHROMIE_WHISPER_NAME = "Chromie";
-
 bool IsChromiWhisperTarget(std::string const& targetName)
 {
     std::string normalizedTarget = targetName;
@@ -520,17 +518,6 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 {
                     sender->Whisper(msg, Language(lang), chromi);
                     chromi->Whisper(GetRandomChromiCatFact(), LANG_UNIVERSAL, sender);
-                }
-                else
-                {
-                    ObjectGuid chromieGuid = ObjectGuid::Create<HighGuid::Player>(CHROMIE_FAKE_GUID);
-
-                    WorldPacket data;
-                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_INFORM, LANG_UNIVERSAL, chromieGuid, chromieGuid, msg, 0);
-                    sender->SendDirectMessage(&data);
-
-                    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, sender->GetGUID(), GetRandomChromiCatFact(), 0, CHROMIE_WHISPER_NAME);
-                    sender->SendDirectMessage(&data);
                 }
 
                 return;

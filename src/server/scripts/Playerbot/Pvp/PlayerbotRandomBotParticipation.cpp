@@ -708,6 +708,15 @@ void TryReviveManagedBotAfterStartup(Player* player)
     TC_LOG_INFO("playerbots.population", "Startup managed bot revive applied: guid={}", player->GetGUID().ToString());
 }
 
+bool IsChromieWhisperFacade(Player const* player)
+{
+    if (!player)
+        return false;
+
+    std::string const& name = player->GetName();
+    return name == "Chromie" || name == "Chromi";
+}
+
 uint32 ResolvePlayerAccountId(Player const* player)
 {
     if (!player)
@@ -722,6 +731,9 @@ uint32 ResolvePlayerAccountId(Player const* player)
 bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts)
 {
     if (!player)
+        return false;
+
+    if (IsChromieWhisperFacade(player))
         return false;
 
     if (WorldSession const* session = player->GetSession(); session && session->IsVirtualSession())
