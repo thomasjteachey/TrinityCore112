@@ -2885,7 +2885,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter arcane shot", "instant survival pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, manaTarget && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
         { "hunter viper sting", "drain mana on mana users", 14280, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget ? manaTarget->GetGUID() : ObjectGuid::Empty });
