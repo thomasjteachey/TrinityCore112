@@ -2901,6 +2901,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid entangling roots", "predator's swiftness root when allies are healthy", 9853, playerbot::PvpClassSpellContext::TargetMode::Enemy, rootTarget ? rootTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, player->HealthBelowPct(60) && meleeThreat && !inBear && IsSpellReady(player, 5487), 68.0f,
             { "druid bear form", "swap bear under melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self });
+        AddDecisionCandidate(feralCandidates, inBear && player->GetComboPoints() >= 5 && player->GetPowerPct(POWER_MANA) < 50.0f && !player->HasAura(89758) && IsSpellReady(player, 89758), 67.0f,
+            { "druid thinnervate", "bear combo point thinnervate", 89758, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 16979), 66.0f,
             { "druid feral charge bear", "escape by charging a distant target", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 22842), 65.0f,
@@ -2921,12 +2923,16 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid dash", "catch target in cat form", 9821, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inCat && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 49376), 57.0f,
             { "druid feral charge cat", "close gap in cat form", 49376, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+        AddDecisionCandidate(feralCandidates, inCat && player->GetComboPoints() >= 5 && player->GetPowerPct(POWER_MANA) < 50.0f && !player->HasAura(89758) && IsSpellReady(player, 89758), 56.0f,
+            { "druid thinnervate", "restore mana with combo points", 89758, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inCat && player->GetComboPoints() >= 5 && IsSpellReady(player, 9896), 55.0f,
             { "druid rip", "feral combo point bleed finisher", 9896, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inCat && !HasAuraFromSpellChain(target, 33876) && IsSpellReady(player, 9850), 54.0f,
             { "druid claw", "build combo points when mangle is missing", 9850, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inCat && !HasAuraFromSpellChain(target, 9904) && IsSpellReady(player, 9904), 53.0f,
             { "druid rake", "maintain rake bleed", 9904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+        AddDecisionCandidate(feralCandidates, inCat && IsSpellReady(player, 17392), 52.0f,
+            { "druid faerie fire feral", "feral armor debuff filler", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inCat && IsSpellReady(player, 9830), 51.0f,
             { "druid shred", "behind-target combo point builder", 9830, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
