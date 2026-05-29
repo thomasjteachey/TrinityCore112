@@ -570,7 +570,11 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
         classContext.shouldExecute &&
         classContext.movementDirective != playerbot::PvpClassSpellContext::MovementDirective::None &&
         movementIdle;
-    bool const didExecuteClassSpell = shouldForceClassMovementTick && playerbot::PvpClassActions::Execute(player, classContext);
+    bool const shouldForcePetSpellTick = classContext.classSpellsEnabled &&
+        classContext.shouldExecute &&
+        playerbot::PvpClassActions::IsPetSpellAction(player, classContext);
+    bool const didExecuteClassSpell = (shouldForceClassMovementTick || shouldForcePetSpellTick) &&
+        playerbot::PvpClassActions::Execute(player, classContext);
 
     playerbot::BattlegroundLifecycleContext inProgressContext;
     inProgressContext.lifecycleEnabled = true;
@@ -584,6 +588,7 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
                << " class_force=" << (shouldForceClassMovementTick ? 1 : 0)
+               << " pet_spell_force=" << (shouldForcePetSpellTick ? 1 : 0)
                << " class_exec=" << (didExecuteClassSpell ? 1 : 0)
                << " class_directive=" << static_cast<uint32>(classContext.movementDirective)
                << " class_spell=" << classContext.spellId
@@ -1574,12 +1579,13 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext);
     if (didExecuteClassSpell &&
         (classSpellContext.spellId == 16166 ||
-         classSpellContext.spellId == 17116))
+         classSpellContext.spellId == 17116 ||
+         PvpClassActions::IsPetSpellAction(player, classSpellContext)))
     {
         std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
         g_NextRandomBotLifecycleProcessTimeByGuid[guid.GetRawValue()] = LifecycleCadenceClock::now();
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP cadence bypass applied: guid={} spell={} reason=off-gcd-burst-window.",
+            "Playerbot PvP cadence bypass applied: guid={} spell={} reason=off-gcd-or-pet-action.",
             guidRaw, classSpellContext.spellId);
     }
 
