@@ -54,6 +54,7 @@ struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
 bool IsPetSpellReady(Player const* player, uint32 spellId);
 bool IsFriendlySupportTarget(Player const* player, Unit const* target);
+bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
@@ -68,6 +69,27 @@ std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
+
+bool IsPriestFlashHealSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+    return firstRankSpellId == 2061; // Flash Heal (rank 1)
+}
+
+bool IsPriestInSpiritOfRedemption(Player const* player)
+{
+    return player && player->GetClass() == CLASS_PRIEST &&
+        (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION) || HasAuraFromSpellChain(player, 27827));
+}
+
+bool IsSpiritOfRedemptionFreeHeal(Player const* player, uint32 spellId)
+{
+    return IsPriestInSpiritOfRedemption(player) && IsPriestFlashHealSpell(spellId);
+}
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
@@ -511,7 +533,7 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     // choose a castable alternative (wand, movement, etc.) instead of
     // repeatedly selecting an OOM support spell.
     Unit const* powerCaster = knownByPet ? static_cast<Unit const*>(player->GetPet()) : static_cast<Unit const*>(player);
-    if (powerCaster && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
+    if (powerCaster && !IsSpiritOfRedemptionFreeHeal(player, decision.spellId) && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
     {
         Powers const powerType = Powers(spellInfo->PowerType);
         int32 const powerCost = spellInfo->CalcPowerCost(powerCaster, spellInfo->GetSchoolMask());
@@ -2845,7 +2867,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* rogueTarget = IsSpellReady(player, 27605) ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr;
     bool const isHolyPriest = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest;
-    Unit const* spiritHealTarget = (isHolyPriest && HasAuraFromSpellChain(player, 27827) && IsSpellReady(player, 10917)) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
+    Unit const* spiritHealTarget = (isHolyPriest && IsPriestInSpiritOfRedemption(player) && IsSpellReady(player, 10917)) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
     Unit const* fearWardTarget = (player->GetRace() == RACE_DWARF && IsSpellReady(player, 6346)) ? SelectFriendlyMissingBuffTarget(player, 6346, 40.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
