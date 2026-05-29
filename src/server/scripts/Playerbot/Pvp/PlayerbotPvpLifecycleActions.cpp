@@ -449,6 +449,7 @@ namespace
     bool CanIssueBotMovement(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
+    bool TryCaptureNearbyBattlegroundObjective(Battleground* battleground, Player* player);
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
@@ -2539,10 +2540,92 @@ namespace playerbot
         destination.RelocateOffset(Position(std::cos(angle) * radius, std::sin(angle) * radius, 0.0f, 0.0f));
     }
 
+    bool IsCapturableNodeBannerForTeam(Player const* player, GameObject const* gameObject)
+    {
+        if (!player || !gameObject || !gameObject->IsInWorld() || !gameObject->isSpawned())
+            return false;
+
+        if (gameObject->GetGoType() != GAMEOBJECT_TYPE_FLAGSTAND)
+            return false;
+
+        // Node-control battlegrounds use neutral per-node banner entries plus
+        // shared alliance/horde occupied and contested banner entries. Treat
+        // neutral and enemy-owned banners as generic capture objectives while
+        // ignoring banners already owned or contested by the bot's team.
+        uint32 const entry = gameObject->GetEntry();
+        if (entry >= 180087 && entry <= 180091)
+            return true;
+
+        TeamId const botTeam = ResolveBotTeamId(player);
+        if (botTeam == TEAM_ALLIANCE)
+            return entry == 180060 || entry == 180061;
+
+        if (botTeam == TEAM_HORDE)
+            return entry == 180058 || entry == 180059;
+
+        return false;
+    }
+
+    GameObject* FindNearestCapturableNodeBanner(Battleground* battleground, Player* player)
+    {
+        if (!battleground || !player || !battleground->GetBgMap())
+            return nullptr;
+
+        GameObject* nearestBanner = nullptr;
+        float nearestDistance = std::numeric_limits<float>::max();
+
+        for (ObjectGuid const& objectGuid : battleground->BgObjects)
+        {
+            if (objectGuid.IsEmpty())
+                continue;
+
+            GameObject* gameObject = battleground->GetBgMap()->GetGameObject(objectGuid);
+            if (!IsCapturableNodeBannerForTeam(player, gameObject))
+                continue;
+
+            float const distance = player->GetDistance(gameObject);
+            if (distance >= nearestDistance)
+                continue;
+
+            nearestDistance = distance;
+            nearestBanner = gameObject;
+        }
+
+        return nearestBanner;
+    }
+
+    bool TryCaptureNearbyBattlegroundObjective(Battleground* battleground, Player* player)
+    {
+        if (!battleground || !player)
+            return false;
+
+        GameObject* banner = FindNearestCapturableNodeBanner(battleground, player);
+        if (!banner || !player->IsWithinDistInMap(banner, 10.0f))
+            return false;
+
+        if (player->CanUseBattlegroundObject(banner))
+        {
+            banner->Use(player);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP node objective capture attempted: guid={} banner={} entry={}.",
+                player->GetGUID().ToString(), banner->GetGUID().ToString(), banner->GetEntry());
+            return true;
+        }
+
+        return false;
+    }
+
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination)
     {
         if (!battleground || !player)
             return false;
+
+        if (GameObject* banner = FindNearestCapturableNodeBanner(battleground, player))
+        {
+            destination = banner->GetPosition();
+            ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            return true;
+        }
 
         if (IsWarsongGulch(player))
         {
@@ -2895,7 +2978,12 @@ namespace playerbot
         if (IsTacticalAction(context.actionName, "bg move to start"))
             return MoveToStartPrimitive(player);
         if (IsTacticalAction(context.actionName, "bg pursue enemy"))
-            return PursueEnemyPrimitive(player);
+        {
+            if (PursueEnemyPrimitive(player))
+                return true;
+
+            return MoveToObjectivePrimitive(player, context);
+        }
         if (IsTacticalAction(context.actionName, "bg move to objective"))
             return MoveToObjectivePrimitive(player, context);
         if (IsTacticalAction(context.actionName, "bg reset objective force"))
@@ -2975,11 +3063,30 @@ namespace playerbot
             return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
         }
 
-        if (TryPursueNearestEnemyInBattleground(player))
+        float const nearbyEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
+        if (EngageNearestEnemyPlayer(player, nearbyEngageDistance))
             return true;
 
-        // Evaluate target pursuit before this guard so stale movement flags do not
-        // suppress nearest-enemy pathing after battleground resurrection.
+        bool const hasObjectivePositionMovement = context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition;
+        if (hasObjectivePositionMovement && battleground)
+        {
+            if (TryCaptureNearbyBattlegroundObjective(battleground, player))
+                return true;
+
+            Position destination;
+            if (TryGetObjectivePosition(battleground, player, destination))
+            {
+                bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 10.0f);
+                if (!withinObjectiveRange)
+                    IssueMovePointThrottled(player, destination);
+                else
+                    EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=10", 1000);
+                return true;
+            }
+        }
+
+        // Nearby enemies and objective redirects are evaluated before this guard
+        // so a stale long-range chase cannot prevent base capture opportunities.
         if (player->isMoving())
             return false;
 
@@ -3016,33 +3123,17 @@ namespace playerbot
             }
         }
 
-        if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition)
+        if (context.movement == BattlegroundMovementPrimitive::MoveToObjectivePosition &&
+            battleground && battleground->GetTypeID() == BATTLEGROUND_SCM)
         {
-            if (battleground)
-            {
-                Position destination;
-                if (TryGetObjectivePosition(battleground, player, destination))
-                {
-                    bool const withinObjectiveRange = player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f);
-                    if (!withinObjectiveRange)
-                        IssueMovePointThrottled(player, destination);
-                    else
-                        EmitBattlegroundGmDebug(player, "objective-skip reason=already-near-objective range=12", 1000);
-                    return true;
-                }
+            float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
+            if (EngageNearestEnemyPlayer(player, engageDistance))
+                return true;
 
-                if (battleground->GetTypeID() == BATTLEGROUND_SCM)
-                {
-                    float const engageDistance = GetAggressiveCombatScanDistance(player, 100.0f);
-                    if (EngageNearestEnemyPlayer(player, engageDistance))
-                        return true;
+            if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
+                return MoveTowardUnit(player, nearestEnemy, 20.0f);
 
-                    if (Player* nearestEnemy = FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr))
-                        return MoveTowardUnit(player, nearestEnemy, 20.0f);
-                }
-
-                return false;
-            }
+            return false;
         }
 
         return false;
@@ -3053,7 +3144,8 @@ namespace playerbot
         if (!player || !player->InBattleground())
             return false;
 
-        return TryPursueNearestEnemyInBattleground(player);
+        float const nearbyEngageDistance = std::clamp(GetAggressiveCombatScanDistance(player, 100.0f), 25.0f, 60.0f);
+        return EngageNearestEnemyPlayer(player, nearbyEngageDistance);
     }
 
     bool BattlegroundTacticalActions::ResetObjectiveForcePrimitive(Player* player)
