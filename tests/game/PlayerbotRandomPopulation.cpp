@@ -73,3 +73,11 @@ TEST_CASE("Playerbot battleground queue target remains Warsong", "[playerbot][po
     CHECK(source.find("ManagedRandomBotQueueTarget") != std::string::npos);
     CHECK(source.find("BATTLEGROUND_WS") != std::string::npos);
 }
+
+TEST_CASE("Playerbot class spell fallback skips player spell cooldowns during selection", "[playerbot][pvp]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp");
+    CHECK(source.find("knownPlayerSpellId") != std::string::npos);
+    CHECK(source.find("player->GetSpellHistory()->HasCooldown(knownPlayerSpellId)") != std::string::npos);
+    CHECK(source.find("suppressedSpellId = candidate.spellId") != std::string::npos);
+}
