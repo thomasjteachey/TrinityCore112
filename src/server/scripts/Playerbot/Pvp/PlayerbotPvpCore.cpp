@@ -717,6 +717,36 @@ bool IsSpellReady(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
+bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
+{
+    uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
+    if (!player || !resolvedSpellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(resolvedSpellId);
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->CasterAuraState && !player->HasAuraState(AuraStateType(spellInfo->CasterAuraState), spellInfo, player))
+        return false;
+
+    if (spellInfo->CasterAuraStateNot && player->HasAuraState(AuraStateType(spellInfo->CasterAuraStateNot), spellInfo, player))
+        return false;
+
+    if (spellInfo->CasterAuraSpell && !player->HasAura(sSpellMgr->GetSpellIdForDifficulty(spellInfo->CasterAuraSpell, player)))
+        return false;
+
+    if (spellInfo->ExcludeCasterAuraSpell && player->HasAura(sSpellMgr->GetSpellIdForDifficulty(spellInfo->ExcludeCasterAuraSpell, player)))
+        return false;
+
+    return true;
+}
+
+bool IsSpellReadyAndCasterAuraAllowed(Player const* player, uint32 spellId)
+{
+    return IsSpellReady(player, spellId) && MeetsCasterAuraStateRequirements(player, spellId);
+}
+
 bool IsPetSpellReady(Player const* player, uint32 spellId)
 {
     if (!player || !spellId)
@@ -2820,8 +2850,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263), 34.0f,
         { "hunter readiness", "reset cooldowns after deterrence has fallen", 23989, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 20910), 34.5f,
-        { "hunter counterattack", "strike any enemy in melee range when available", 20910, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReadyAndCasterAuraAllowed(player, 20910), 34.5f,
+        { "hunter counterattack", "strike any enemy in melee range after a parry", 20910, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isSurvivalHunter && wyvernTarget && IsSpellReady(player, 24133), 30.0f,
         { "hunter wyvern sting", "crowd-control a non-dotted enemy support target", 24133, playerbot::PvpClassSpellContext::TargetMode::Enemy, wyvernTarget ? wyvernTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 14325) && IsSpellReady(player, 14325), 29.5f,
