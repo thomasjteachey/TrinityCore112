@@ -2405,13 +2405,53 @@ Unit const* SelectFriendlySnaredTarget(Player const* player, float maxDistance)
 }
 
 
+bool IsStealthMovementPenalty(SpellInfo const* spellInfo)
+{
+    return spellInfo && spellInfo->HasAura(SPELL_AURA_MOD_STEALTH);
+}
+
+bool HasNonStealthDecreaseSpeedAura(Unit const* unit)
+{
+    Unit::AuraEffectList const& slowAuras = unit->GetAuraEffectsByType(SPELL_AURA_MOD_DECREASE_SPEED);
+    for (AuraEffect const* slowAura : slowAuras)
+        if (slowAura && !IsStealthMovementPenalty(slowAura->GetSpellInfo()))
+            return true;
+
+    return false;
+}
+
+bool HasNonStealthRootOrSnareMechanic(Unit const* unit)
+{
+    uint32 const rootOrSnareMask = (1 << MECHANIC_ROOT) | (1 << MECHANIC_SNARE);
+
+    for (Unit::AuraApplicationMap::value_type const& appliedAura : unit->GetAppliedAuras())
+    {
+        AuraApplication const* aurApp = appliedAura.second;
+        SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
+        if (!spellInfo || IsStealthMovementPenalty(spellInfo))
+            continue;
+
+        if (spellInfo->Mechanic && (rootOrSnareMask & (1 << spellInfo->Mechanic)))
+            return true;
+
+        for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
+            if (aurApp->HasEffect(spellEffectInfo.EffectIndex) && spellEffectInfo.IsEffect() && spellEffectInfo.Mechanic &&
+                (rootOrSnareMask & (1 << spellEffectInfo.Mechanic)))
+                return true;
+    }
+
+    return false;
+}
+
 bool IsRootedOrSnared(Unit const* unit)
 {
     if (!unit)
         return false;
 
-    return unit->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
-        unit->HasAuraWithMechanic((1 << MECHANIC_ROOT) | (1 << MECHANIC_SNARE));
+    return unit->HasUnitState(UNIT_STATE_ROOT) ||
+        unit->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        HasNonStealthDecreaseSpeedAura(unit) ||
+        HasNonStealthRootOrSnareMechanic(unit);
 }
 
 bool HasShieldEquipped(Player const* player)
