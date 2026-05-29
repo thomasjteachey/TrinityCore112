@@ -3184,7 +3184,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         AddDecisionCandidate(feralCandidates, !inCat && !inBear && IsSpellReady(player, 768), 60.0f,
             { "druid cat form", "prefer cat form for feral pressure", 768, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inCat && IsRootedOrSnared(player) && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 768), 59.0f,
-            { "druid cat form", "powershift root or snare", 768, playerbot::PvpClassSpellContext::TargetMode::Self });
+            { "druid cat form", "powershift root or snare", 768, playerbot::PvpClassSpellContext::TargetMode::Self, target ? target->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, inCat && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 9821), 58.0f,
             { "druid dash", "catch target in cat form", 9821, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inCat && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 49376), 57.0f,
