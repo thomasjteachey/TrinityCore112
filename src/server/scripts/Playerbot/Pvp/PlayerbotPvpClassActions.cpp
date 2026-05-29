@@ -57,6 +57,21 @@ bool IsLifeTapSpell(SpellInfo const* spellInfo)
     return firstRank && firstRank->Id == 1454; // Life Tap (rank 1)
 }
 
+bool IsPriestFlashHealSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 2061; // Flash Heal (rank 1)
+}
+
+bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellInfo)
+{
+    return player && player->GetClass() == CLASS_PRIEST && IsPriestFlashHealSpell(spellInfo) &&
+        player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
+}
+
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
@@ -2864,7 +2879,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // by the core cast pipeline and should not be blocked by this local
     // pre-check. For low-mana caster fallbacks we intentionally allow entering
     // the cast flow so the server can apply the spell-specific resource rules.
-    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell() || IsLifeTapSpell(spellInfo);
+    bool const bypassPowerPrecheck = spellInfo->IsAutoRepeatRangedSpell() || IsLifeTapSpell(spellInfo) ||
+        IsSpiritOfRedemptionFreeHeal(player, spellInfo);
     if (!bypassPowerPrecheck && spellInfo->PowerType >= 0 && spellInfo->PowerType < MAX_POWERS)
         if (player->GetPower(Powers(spellInfo->PowerType)) < int32(spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask())))
         {
