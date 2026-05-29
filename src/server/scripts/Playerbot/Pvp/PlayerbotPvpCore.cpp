@@ -1387,6 +1387,66 @@ Unit const* SelectWarriorPriorityTarget(Player const* player, Unit const* prefer
     return best;
 }
 
+Unit const* SelectWarriorTauntTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        return HasHostileTarget(player, candidate) &&
+            !IsTargetInvalidByImmunity(player, candidate) &&
+            player->IsWithinLOSInMap(candidate) &&
+            player->IsWithinDistInMap(candidate, maxDistance);
+    };
+
+    auto isPressuringFriendly = [&](Unit const* candidate)
+    {
+        if (!isCandidateUsable(candidate))
+            return false;
+
+        Unit const* victim = candidate->GetVictim();
+        return victim && victim != player && IsFriendlySupportTarget(player, victim);
+    };
+
+    if (isPressuringFriendly(preferredTarget))
+        return preferredTarget;
+
+    Unit const* bestPressureTarget = nullptr;
+    float bestPressureDistance = std::numeric_limits<float>::max();
+    Unit const* bestFallbackTarget = nullptr;
+    float bestFallbackDistance = std::numeric_limits<float>::max();
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (isPressuringFriendly(candidate) && distance < bestPressureDistance)
+        {
+            bestPressureTarget = candidate;
+            bestPressureDistance = distance;
+        }
+
+        if (candidate->GetVictim() != player && distance < bestFallbackDistance)
+        {
+            bestFallbackTarget = candidate;
+            bestFallbackDistance = distance;
+        }
+    }
+
+    if (bestPressureTarget)
+        return bestPressureTarget;
+
+    if (isCandidateUsable(preferredTarget) && preferredTarget->GetVictim() != player)
+        return preferredTarget;
+
+    return bestFallbackTarget;
+}
+
 Unit const* SelectNearbyMeleeTarget(Player const* player, Unit const* preferredTarget, float maxDistance)
 {
     if (!player || !player->FindMap())
@@ -2784,6 +2844,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
     Unit const* rogueTarget = IsSpellReady(player, 27605) ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr;
     bool const isHolyPriest = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
+    bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest;
     Unit const* spiritHealTarget = (isHolyPriest && HasAuraFromSpellChain(player, 27827) && IsSpellReady(player, 10917)) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
     Unit const* fearWardTarget = (player->GetRace() == RACE_DWARF && IsSpellReady(player, 6346)) ? SelectFriendlyMissingBuffTarget(player, 6346, 40.0f) : nullptr;
 
@@ -2795,7 +2856,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     AddDecisionCandidate(candidates, fearWardTarget, 60.2f,
         { "priest fear ward", "place fear ward on a random unwarded ally", 6346, fearWardTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, fearWardTarget ? fearWardTarget->GetGUID() : ObjectGuid::Empty });
 
-    if (profileSelection.profile == ClassicClassProfile::PrimaryClassic)
+    if (isHealingPriest)
     {
         AddDecisionCandidate(candidates, emergencyLowAlly, 47.0f,
             { "priest flash heal", "prioritize emergency healing for nearby ally below 25 percent health", 10917, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
@@ -3150,6 +3211,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const canInterceptByRange = !player->IsWithinDistInMap(gapCloseTarget, interceptMinRange);
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
+    Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
     bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
     bool const canDisarmNearbyMeleeThreat = hasNearbyMeleeThreat &&
@@ -3173,8 +3235,10 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior disarm", "disarm threatening melee weapon users", 81492, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 81492) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
         { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isProtWarrior && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 355), 56.8f,
-        { "warrior taunt", "taunt when surrounded by enemies", 355, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, tauntTarget && !inDefensiveStance && IsSpellReady(player, 71), 57.2f,
+        { "warrior defensive stance", "swap defensive before taunt", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, tauntTarget && inDefensiveStance, 56.8f,
+        { "warrior taunt", "taunt enemy pressuring an ally or current kill target", 355, playerbot::PvpClassSpellContext::TargetMode::Enemy, tauntTarget ? tauntTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323), 56.0f,
         { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, activeTarget) && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 5246), 55.5f,
@@ -3182,7 +3246,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, isProtWarrior ? uint32(23925) : uint32(21553))) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
+    AddDecisionCandidate(candidates, !isProtWarrior && inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
         { "warrior berserker stance", "leave defensive stance when disarm is unavailable or no melee threat is nearby", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && !inBattleStance && IsSpellReady(player, 2457), 52.5f,
         { "warrior battle stance", "switch to battle stance before out-of-combat charge", 2457, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -3192,7 +3256,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior berserker stance", "switch to berserker stance before intercept gap close", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617), 51.0f,
         { "warrior intercept", "close gap to target while in combat", 20617, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && !inBerserkerStance &&
+    AddDecisionCandidate(candidates, !isProtWarrior && player->IsWithinMeleeRange(activeTarget) && !inBerserkerStance &&
             IsSpellReady(player, 1680) && IsSpellReady(player, 2458), 50.4f,
         { "warrior berserker stance", "switch to berserker stance to enable whirlwind in melee", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662), 50.0f,
