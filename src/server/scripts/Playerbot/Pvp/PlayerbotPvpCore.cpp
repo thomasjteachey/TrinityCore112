@@ -3338,8 +3338,11 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     Unit const* devourEnemyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
 
+    bool const canUseVoidwalkerSacrifice = !isAfflictionWarlock && player->HealthBelowPct(25) && !player->HasAura(19443) &&
+        hasLivingPet && IsPetSpellReady(player, 19443);
+
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, !isAfflictionWarlock && player->HealthBelowPct(25) && hasLivingPet && IsPetSpellReady(player, 19443), 70.0f,
+    AddDecisionCandidate(candidates, canUseVoidwalkerSacrifice, 70.0f,
         { "warlock sacrifice", "emergency voidwalker sacrifice at or below 25 percent health", 19443, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && target->HasUnitState(UNIT_STATE_CASTING) && IsPetSpellReady(player, 19244), 54.0f,
         { "warlock spell lock", "pet interrupt when available", 19244, playerbot::PvpClassSpellContext::TargetMode::Enemy });
