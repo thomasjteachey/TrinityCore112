@@ -2611,6 +2611,11 @@ void Spell::EffectDispel()
     uint32 dispel_type = effectInfo->MiscValue;
     uint32 dispelMask  = SpellInfo::GetDispelMask(DispelType(dispel_type));
 
+    if (damage <= 0)
+        return;
+
+    uint32 dispelCount = uint32(damage);
+
     DispelChargesList dispelList;
     unitTarget->GetDispellableAuraList(m_caster, dispelMask, dispelList, targetMissInfo == SPELL_MISS_REFLECT);
     if (dispelList.empty())
@@ -2621,11 +2626,11 @@ void Spell::EffectDispel()
     // Ok if exist some buffs for dispel try dispel it
     uint32 failCount = 0;
     DispelChargesList successList;
-    successList.reserve(damage);
+    successList.reserve(std::min<size_t>(dispelCount, dispelList.size()));
 
-    WorldPacket dataFail(SMSG_DISPEL_FAILED, 8 + 8 + 4 + 4 + damage * 4);
+    WorldPacket dataFail(SMSG_DISPEL_FAILED, 8 + 8 + 4 + 4 + dispelCount * 4);
     // dispel N = damage buffs (or while exist buffs for dispel)
-    for (int32 count = 0; count < damage && remaining > 0;)
+    for (uint32 count = 0; count < dispelCount && remaining > 0;)
     {
         // Random select buff for dispel
         auto itr = dispelList.begin();
@@ -5425,16 +5430,21 @@ void Spell::EffectStealBeneficialBuff()
     if (stealList.empty())
         return;
 
+    if (damage <= 0)
+        return;
+
+    uint32 dispelCount = uint32(damage);
+
     size_t remaining = stealList.size();
 
     // Ok if exist some buffs for dispel try dispel it
     uint32 failCount = 0;
     DispelList successList;
-    successList.reserve(damage);
+    successList.reserve(std::min<size_t>(dispelCount, stealList.size()));
 
-    WorldPacket dataFail(SMSG_DISPEL_FAILED, 8 + 8 + 4 + 4 + damage * 4);
+    WorldPacket dataFail(SMSG_DISPEL_FAILED, 8 + 8 + 4 + 4 + dispelCount * 4);
     // dispel N = damage buffs (or while exist buffs for dispel)
-    for (int32 count = 0; count < damage && remaining > 0;)
+    for (uint32 count = 0; count < dispelCount && remaining > 0;)
     {
         // Random select buff for dispel
         DispelChargesList::iterator itr = stealList.begin();
@@ -5470,7 +5480,7 @@ void Spell::EffectStealBeneficialBuff()
     if (successList.empty())
         return;
 
-    WorldPacket dataSuccess(SMSG_SPELLSTEALLOG, 8 + 8 + 4 + 1 + 4 + damage * 5);
+    WorldPacket dataSuccess(SMSG_SPELLSTEALLOG, 8 + 8 + 4 + 1 + 4 + successList.size() * 5);
     dataSuccess << unitTarget->GetPackGUID();   // Victim GUID
     dataSuccess << m_caster->GetPackGUID();     // Caster GUID
     dataSuccess << uint32(m_spellInfo->Id);     // dispel spell id
