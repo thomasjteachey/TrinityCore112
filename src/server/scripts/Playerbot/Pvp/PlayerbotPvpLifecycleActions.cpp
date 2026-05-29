@@ -1662,6 +1662,22 @@ namespace
         return player->GetPowerPct(POWER_MANA) <= 10.0f || player->GetPower(POWER_MANA) < 250;
     }
 
+    constexpr float kHunterMeleeExactRange = 5.0f;
+    constexpr float kHunterRangedExactRange = 8.0f;
+    constexpr float kHunterDeadzoneRetreatExactRange = 10.0f;
+
+    bool IsHunterExactDeadzone(Player const* player, Unit const* target)
+    {
+        if (!player || !target || player->GetClass() != CLASS_HUNTER || !target->IsAlive())
+            return false;
+
+        if (!player->IsValidAttackTarget(target))
+            return false;
+
+        float const exactDistance = player->GetExactDist(target);
+        return exactDistance > kHunterMeleeExactRange && exactDistance < kHunterRangedExactRange;
+    }
+
     struct CombatPositioningProfile
     {
         float preferredMinRange = 0.0f;
@@ -2335,13 +2351,18 @@ namespace playerbot
         if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
             return false;
 
+        float const distance = player->GetDistance(target);
+        float const exactDistance = player->GetExactDist(target);
+        bool const hunterDeadzone = IsHunterExactDeadzone(player, target);
+
         // Class spell actions can issue target-relative chase/follow in the same
         // scheduler frame. Do not immediately override those orders from lifecycle
         // distance-band helpers (follow/stop), or bots can visibly inch/stop.
-        if (playerbot::PvpClassActions::HasRecentTargetRelativeMovementOrder(player, nullptr, 1500))
+        // Hunter exact 5-8y deadzone is an exception: a preserved old ranged
+        // approach order can pin the bot in a no-shot/no-melee band.
+        if (!hunterDeadzone && playerbot::PvpClassActions::HasRecentTargetRelativeMovementOrder(player, nullptr, 1500))
             return true;
 
-        float const distance = player->GetDistance(target);
         bool const hasLos = player->IsWithinLOSInMap(target);
         if (!hasLos)
             return TryRecoverLineOfSight(player, target, profile, "drive-combat-positioning");
@@ -2361,6 +2382,18 @@ namespace playerbot
                 uint32 const nowMs = GameTime::GetGameTimeMS();
                 uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
                 uint32& pauseUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
+
+                if (hunterDeadzone)
+                {
+                    pauseUntilMs = 0;
+                    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                        "Playerbot PvP distance band: bot={} profile={} decision=hunter-deadzone-retreat edgeDistance={} exactDistance={} minExact={} maxExact={} retreatExact={}.",
+                        player->GetGUID().ToString(), profile.label, distance, exactDistance, kHunterMeleeExactRange,
+                        kHunterRangedExactRange, kHunterDeadzoneRetreatExactRange);
+                    bool const moved = MoveAwayFromUnit(player, target, std::max(profile.preferredIdealRange, kHunterDeadzoneRetreatExactRange));
+                    return moved || player->isMoving();
+                }
+
                 if (pauseUntilMs > nowMs)
                 {
                     player->StopMoving();

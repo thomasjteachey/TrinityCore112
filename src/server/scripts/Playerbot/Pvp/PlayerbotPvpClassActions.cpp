@@ -76,6 +76,11 @@ constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 
+constexpr float kHunterMeleeExactRange = 5.0f;
+constexpr float kHunterRangedExactRange = 8.0f;
+constexpr float kHunterDeadzoneRetreatExactRange = 10.0f;
+
+
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
     if (!spellId)
@@ -1145,6 +1150,76 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
     return diag.str();
 }
 
+bool IsHunterExactDeadzone(Player const* player, Unit const* target)
+{
+    if (!player || !target || player->GetClass() != CLASS_HUNTER || !target->IsAlive())
+        return false;
+
+    if (!player->IsValidAttackTarget(target))
+        return false;
+
+    float const exactDistance = player->GetExactDist(target);
+    return exactDistance > kHunterMeleeExactRange && exactDistance < kHunterRangedExactRange;
+}
+
+float GetHunterDeadzoneRetreatEdgeDistance(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return kHunterRangedExactRange;
+
+    float const hitboxSum = player->GetCombatReach() + target->GetCombatReach();
+    return std::max(1.0f, kHunterDeadzoneRetreatExactRange - hitboxSum);
+}
+
+void IssueHunterDeadzoneRetreatMovement(Player* player, Unit* target, float requestedEdgeDistance, bool targetLos,
+    bool targetAttackable, MovementGeneratorType initialMotionType)
+{
+    if (!player || !target)
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    float const retreatEdgeDistance = GetHunterDeadzoneRetreatEdgeDistance(player, target);
+    MovementGeneratorType const currentMotionType = motionMaster->GetCurrentMovementGeneratorType();
+
+    auto const orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    bool const alreadyRetreating = orderItr != g_TargetRelativeMoveOrderByGuid.end() &&
+        orderItr->second.targetGuid == target->GetGUID() &&
+        std::fabs(orderItr->second.issuedRange - retreatEdgeDistance) < 0.5f &&
+        currentMotionType == FOLLOW_MOTION_TYPE;
+    if (alreadyRetreating)
+    {
+        std::string preserveDiag;
+        if (ShouldPreserveTargetRelativeMovement(player, target, retreatEdgeDistance, 1200, "hunter_deadzone_retreat_preserved", &preserveDiag))
+        {
+            SetLastMovementDebugStatus(player, preserveDiag);
+            return;
+        }
+    }
+
+    bool const cleared = currentMotionType != IDLE_MOTION_TYPE;
+    if (cleared)
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
+    motionMaster->MoveFollow(target, retreatEdgeDistance, player->GetFollowAngle());
+    RecordTargetRelativeMovementOrder(player, target, retreatEdgeDistance, 2);
+    MotionPrimeResult primeResult = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
+    primeResult.addToWorldCalled = preparedMotionMaster;
+
+    std::ostringstream diag;
+    diag << BuildRangedMovementDiag(player, target, "hunter_deadzone_retreat_from_ranged_approach",
+        requestedEdgeDistance, retreatEdgeDistance, targetLos, targetAttackable, cleared, initialMotionType, "follow")
+         << " deadzone_min_exact=" << kHunterMeleeExactRange
+         << " deadzone_max_exact=" << kHunterRangedExactRange
+         << " retreat_exact=" << kHunterDeadzoneRetreatExactRange;
+    AppendMotionPrimeDiag(diag, primeResult);
+    SetLastMovementDebugStatus(player, diag.str());
+}
+
 bool IsStaleTargetRelativeMotion(Player const* player)
 {
     if (!player)
@@ -1296,6 +1371,23 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     bool const nearRangeEdge = currentDistance > (safeDistance + 1.0f) && currentDistance <= (safeDistance + 8.0f);
     uint32 const nowMs = GameTime::GetGameTimeMS();
+
+    if (IsHunterExactDeadzone(player, target))
+    {
+        float const retreatEdgeDistance = GetHunterDeadzoneRetreatEdgeDistance(player, target);
+        IssueHunterDeadzoneRetreatMovement(player, target, requestedSafeDistance, targetLos, targetAttackable, initialMotionType);
+
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = nowMs;
+        stallState.lastFallbackMs = nowMs;
+        stallState.lastIssueMs = nowMs;
+        stallState.lastIssuedRange = retreatEdgeDistance;
+        stallState.lastIssuedMode = 2;
+        stallState.stagnantSamples = 0;
+        return;
+    }
+
     bool const sameStallTarget = stallState.targetGuid == target->GetGUID();
     bool const activeTargetRelativeMotion = initialMotionType == CHASE_MOTION_TYPE || initialMotionType == FOLLOW_MOTION_TYPE;
     bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
