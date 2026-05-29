@@ -1771,6 +1771,71 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     }
 }
 
+void IssueBehindTargetMeleeMovement(Player* player, Unit* target)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (player->IsValidAttackTarget(target) && (player->GetVictim() != target || !player->IsInCombat()))
+        player->Attack(target, false);
+
+    float constexpr behindFollowRange = 1.5f;
+    float constexpr behindAngle = static_cast<float>(M_PI);
+    float constexpr behindAngleTolerance = static_cast<float>(M_PI_4);
+
+    struct BehindFollowOrderState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, BehindFollowOrderState> stateByGuid;
+    BehindFollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + 750;
+    bool const targetChanged = state.targetGuid != target->GetGUID();
+    if (!targetChanged && !canReissueByTime && motionMaster->GetCurrentMovementGeneratorType() == FOLLOW_MOTION_TYPE)
+    {
+        SetLastMovementDebugStatus(player, "behind_target_follow_preserved");
+        return;
+    }
+
+    RangedPathProbeResult const behindProbe = ProbeFollowPath(player, target, behindFollowRange, behindAngle);
+    bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
+    motionMaster->MoveFollow(target, behindFollowRange, ChaseAngle(behindAngle, behindAngleTolerance));
+    RecordTargetRelativeMovementOrder(player, target, behindFollowRange, 2);
+    MotionPrimeResult prime = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
+    prime.addToWorldCalled = preparedMotionMaster;
+
+    state.targetGuid = target->GetGUID();
+    state.lastIssueMs = nowMs;
+
+    std::ostringstream diag;
+    diag << "behind_target_follow"
+         << " target_has_caster_in_front=" << (target->HasInArc(static_cast<float>(M_PI), player) ? "yes" : "no")
+         << " follow_range=" << behindFollowRange
+         << " follow_angle=" << behindAngle
+         << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+         << " moving_after=" << (player->isMoving() ? "yes" : "no")
+         << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
+         << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no");
+    AppendMotionPrimeDiag(diag, prime);
+    AppendProbeDiag(diag, "behind_probe", behindProbe);
+    SetLastMovementDebugStatus(player, diag.str());
+}
+
+bool IsBehindTargetRequiredAndMissing(Player const* player, Unit const* target, SpellInfo const* spellInfo)
+{
+    return player && target && spellInfo &&
+        spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET) &&
+        target->HasInArc(static_cast<float>(M_PI), player);
+}
+
 void IssueMeleeApproachMovement(Player* player, Unit* target)
 {
     if (!player || !target)
@@ -2749,11 +2814,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         IsPrimaryMeleeClassForSpacing(player->GetClass()) &&
         maxRange > 0.0f && maxRange <= 5.5f;
+    bool const shouldMoveBehindForEnemySpell =
+        shouldUseMeleeApproachForEnemySpell &&
+        spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET);
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
         if (CanIssueFollowCommands(player))
         {
-            if (shouldUseMeleeApproachForEnemySpell)
+            if (shouldMoveBehindForEnemySpell)
+                IssueBehindTargetMeleeMovement(player, target);
+            else if (shouldUseMeleeApproachForEnemySpell)
                 IssueMeleeApproachMovement(player, target);
             else
             {
@@ -2782,7 +2852,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // close the gap instead of idling and repeating failed cast attempts.
         if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
-            if (shouldUseMeleeApproachForEnemySpell)
+            if (shouldMoveBehindForEnemySpell)
+                IssueBehindTargetMeleeMovement(player, target);
+            else if (shouldUseMeleeApproachForEnemySpell)
                 IssueMeleeApproachMovement(player, target);
             else
             {
@@ -2822,6 +2894,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
 
         failureReason = "too_close";
+        return false;
+    }
+
+    if (!itemTarget && shouldMoveBehindForEnemySpell && IsBehindTargetRequiredAndMissing(player, target, spellInfo))
+    {
+        if (CanIssueFollowCommands(player))
+            IssueBehindTargetMeleeMovement(player, target);
+
+        failureReason = "not_behind";
         return false;
     }
 
@@ -2963,7 +3044,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
-                if (shouldUseMeleeApproachForEnemySpell)
+                if (shouldMoveBehindForEnemySpell)
+                    IssueBehindTargetMeleeMovement(player, target);
+                else if (shouldUseMeleeApproachForEnemySpell)
                     IssueMeleeApproachMovement(player, target);
                 else
                 {
@@ -2978,7 +3061,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             }
             else if (castResult == SPELL_FAILED_LINE_OF_SIGHT)
             {
-                if (shouldUseMeleeApproachForEnemySpell)
+                if (shouldMoveBehindForEnemySpell)
+                    IssueBehindTargetMeleeMovement(player, target);
+                else if (shouldUseMeleeApproachForEnemySpell)
                     IssueMeleeApproachMovement(player, target);
                 else
                 {
@@ -2988,6 +3073,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     IssueRangedApproachMovement(player, target, desiredRange, true, "cast_failed_spell_los");
                 }
             }
+            else if (castResult == SPELL_FAILED_NOT_BEHIND && shouldMoveBehindForEnemySpell)
+                IssueBehindTargetMeleeMovement(player, target);
         }
 
         NotifySpellCastFailureToGameMasters(player, context, castResult);
