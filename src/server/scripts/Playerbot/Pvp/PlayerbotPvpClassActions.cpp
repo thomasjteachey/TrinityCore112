@@ -3101,6 +3101,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId))
             player->GetSpellHistory()->AddCooldown(resolvedSpellId, 0, std::chrono::seconds(8));
     }
+    if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(9898))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, 9898, std::chrono::seconds(10));
 
     if ((context.spellId == 11719 || context.spellId == 11713) && target)
         playerbot::PvpClassActions::RegisterWarlockCurseTargetCooldown(player, target, context.spellId, std::chrono::seconds(12));
