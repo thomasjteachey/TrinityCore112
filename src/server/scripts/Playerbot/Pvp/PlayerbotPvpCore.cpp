@@ -3212,6 +3212,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
+    bool const revengeReady = isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 25288);
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
     bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
     bool const canDisarmNearbyMeleeThreat = hasNearbyMeleeThreat &&
@@ -3237,6 +3238,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, tauntTarget && !inDefensiveStance && IsSpellReady(player, 71), 57.2f,
         { "warrior defensive stance", "swap defensive before taunt", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, revengeReady && !inDefensiveStance && IsSpellReady(player, 71), 57.1f,
+        { "warrior defensive stance", "swap defensive before revenge", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, tauntTarget && inDefensiveStance, 56.8f,
         { "warrior taunt", "taunt enemy pressuring an ally or current kill target", 355, playerbot::PvpClassSpellContext::TargetMode::Enemy, tauntTarget ? tauntTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323), 56.0f,
@@ -3263,8 +3266,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior execute", "finisher at low enemy health", 20662, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 25289) && IsSpellReady(player, 25289), 40.0f,
         { "warrior battle shout", "maintain attack power buff", 25289, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 25228), 39.8f,
-        { "warrior revenge", "use reactive revenge whenever available", 25228, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, revengeReady && inDefensiveStance, 40.5f,
+        { "warrior revenge", "use reactive revenge whenever available", 25288, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     Unit const* concussionTarget = isProtWarrior && IsSpellReady(player, 12809) ? SelectUnstunDREnemyTarget(player, activeTarget, 5.0f, 12809) : nullptr;
     AddDecisionCandidate(candidates, concussionTarget, 39.6f,
         { "warrior concussion blow", "stun a target without stun diminishing returns", 12809, playerbot::PvpClassSpellContext::TargetMode::Enemy, concussionTarget ? concussionTarget->GetGUID() : ObjectGuid::Empty });
