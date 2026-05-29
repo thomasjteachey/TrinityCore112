@@ -39,6 +39,7 @@ public:
     static std::string GetLastExecutionStatus(Player const* player);
     static std::string GetLastMovementDebugStatus(Player const* player);
     static bool HasRecentTargetRelativeMovementOrder(Player const* player, Unit const* target, uint32 maxAgeMs = 1500);
+    static bool IsPetSpellAction(Player const* player, PvpClassSpellContext const& context);
 };
 }
 

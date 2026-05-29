@@ -2142,16 +2142,31 @@ void CommandPetAttackTarget(Player* player, Unit* target)
     if (!pet || !pet->IsAlive() || !pet->IsValidAttackTarget(target))
         return;
 
-    if (pet->GetVictim() != target)
-        pet->Attack(target, true);
-
     if (CharmInfo* charmInfo = pet->GetCharmInfo())
     {
+        // Mirror an owner pet-attack command before issuing combat movement so
+        // passive/stay pets are allowed to leave their current command state and
+        // pursue the selected target.
         charmInfo->SetIsCommandAttack(true);
         charmInfo->SetIsAtStay(false);
         charmInfo->SetIsCommandFollow(false);
         charmInfo->SetCommandState(COMMAND_ATTACK);
     }
+
+    if (pet->GetVictim() != target)
+    {
+        pet->AttackStop();
+        pet->Attack(target, true);
+    }
+
+    if (!pet->IsWithinMeleeRange(target) ||
+        !pet->HasUnitState(UNIT_STATE_CHASE | UNIT_STATE_CHASE_MOVE))
+    {
+        if (MotionMaster* motionMaster = pet->GetMotionMaster())
+            motionMaster->MoveChase(target, ChaseRange(0.0f, pet->GetPetChaseDistance()));
+    }
+
+    pet->SetUnitFlag(UNIT_FLAG_PET_IN_COMBAT);
 }
 
 void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& context, bool casted, std::string const& failureReason)
@@ -2537,6 +2552,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 failureReason = "invalid_enemy_target";
                 return false;
             }
+
+            // Pet utility spells are off the owner's global cooldown, but the
+            // pet still needs an explicit attack/chase command when the target
+            // is not already in its face. Issue that command before range/LOS
+            // validation so an out-of-range pet begins closing immediately
+            // instead of spending repeated decision ticks on failed casts.
+            CommandPetAttackTarget(player, target);
 
             if (!petCaster->IsWithinLOSInMap(target))
             {
@@ -3257,6 +3279,11 @@ bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player,
     uint32 const nowMs = GameTime::GetGameTimeMS();
     uint32 const ageMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : std::numeric_limits<uint32>::max();
     return ageMs <= maxAgeMs;
+}
+
+bool PvpClassActions::IsPetSpellAction(Player const* player, PvpClassSpellContext const& context)
+{
+    return player && context.spellId != 0 && ResolveKnownPetSpellInChain(player, context.spellId) != 0;
 }
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
