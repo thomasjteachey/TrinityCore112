@@ -52,6 +52,7 @@ namespace
 {
 struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
+uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId);
 bool IsPetSpellReady(Player const* player, uint32 spellId);
 bool IsFriendlySupportTarget(Player const* player, Unit const* target);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
@@ -451,9 +452,13 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (!decision.spellId)
         return false;
 
-    bool const knownByPlayer = player->HasSpell(decision.spellId);
+    uint32 const knownPlayerSpellId = ResolveKnownPlayerSpellInChain(player, decision.spellId);
+    bool const knownByPlayer = knownPlayerSpellId != 0;
     bool const knownByPet = IsPetSpellReady(player, decision.spellId);
     if (!knownByPlayer && !knownByPet)
+        return false;
+
+    if (knownByPlayer && player->GetSpellHistory()->HasCooldown(knownPlayerSpellId))
         return false;
 
     // Treat the shared playerbot dispel cooldown as an immediate castability
@@ -662,14 +667,14 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
     return selection;
 }
 
-bool IsSpellReady(Player const* player, uint32 spellId)
+uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
 {
     if (!player || !spellId)
-        return false;
+        return 0;
 
     SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!baseSpellInfo)
-        return false;
+        return 0;
 
     uint32 resolvedSpellId = 0;
     for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
@@ -678,6 +683,12 @@ bool IsSpellReady(Player const* player, uint32 spellId)
             resolvedSpellId = chainSpellId;
     }
 
+    return resolvedSpellId;
+}
+
+bool IsSpellReady(Player const* player, uint32 spellId)
+{
+    uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
     if (!resolvedSpellId)
         return false;
 
