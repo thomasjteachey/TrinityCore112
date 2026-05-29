@@ -690,6 +690,51 @@ namespace
         return adjustedDestination;
     }
 
+    bool RecoverBattlegroundBotBelowSurface(Player* player)
+    {
+        if (!player || !player->InBattleground() || !player->IsAlive())
+            return false;
+
+        Map* map = player->FindMap();
+        if (!map)
+            return false;
+
+        float const x = player->GetPositionX();
+        float const y = player->GetPositionY();
+        float const currentZ = player->GetPositionZ();
+
+        // Prefer a tight local probe first so valid lower floors, tunnels and
+        // small drops are not mistaken for an under-terrain fall.
+        float surfaceZ = map->GetHeight(player->GetPhaseMask(), x, y, currentZ + 2.0f, true, 5.0f);
+        if (surfaceZ > INVALID_HEIGHT && currentZ + 3.0f >= surfaceZ)
+            return false;
+
+        // When the bot has already fallen below a map tile, asking for height at
+        // its current Z can legitimately return no terrain because Map::GetHeight
+        // only considers raw map ground that is below the search origin.  Fall
+        // back to a raised origin to find the walkable surface the bot should be
+        // standing on without adding battleground-specific coordinates.
+        if (surfaceZ <= INVALID_HEIGHT)
+            surfaceZ = map->GetHeight(player->GetPhaseMask(), x, y, currentZ + 50.0f, true, 80.0f);
+
+        if (surfaceZ <= INVALID_HEIGHT || currentZ + 3.0f >= surfaceZ)
+            return false;
+
+        if (player->isMoving())
+            player->StopMoving();
+
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+
+        float safeZ = surfaceZ;
+        player->UpdateAllowedPositionZ(x, y, safeZ);
+        player->NearTeleportTo(x, y, safeZ, player->GetOrientation());
+        EmitBattlegroundGmDebug(player,
+            "surface-recovery currentZ=" + std::to_string(int32(currentZ)) +
+            " surfaceZ=" + std::to_string(int32(surfaceZ)), 0);
+        return true;
+    }
+
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
     {
         if (!player || !target)
@@ -2937,6 +2982,9 @@ namespace playerbot
             return false;
 
         ClearStaleWaitingForResurrectAura(player);
+
+        if (RecoverBattlegroundBotBelowSurface(player))
+            return true;
 
         if (IsRecoveringByEatingOrDrinking(player))
         {
