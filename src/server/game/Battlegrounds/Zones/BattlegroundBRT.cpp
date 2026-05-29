@@ -211,7 +211,23 @@ bool BattlegroundBRT::SetupBattleground()
         || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_C, BG_OBJECTID_BERSERKERBUFF_ENTRY,
             1404.938232f, -818.510925f, -91.981621f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
-            BG_BRT_BUFF_RESPAWN_TIME))
+            BG_BRT_BUFF_RESPAWN_TIME)
+        || !AddObject(BG_BRT_OBJECT_TRAMPOLINE_1, BG_BRT_OBJECT_TRAMPOLINE_1_ENTRY,
+            1364.920044f, -796.376343f, -91.980911f, 3.188712f,
+            0.0f, 0.0f, 0.999722f, -0.023557f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_TRAMPOLINE_2, BG_BRT_OBJECT_TRAMPOLINE_2_ENTRY,
+            1365.070312f, -750.247498f, -91.980797f, 3.180859f,
+            0.0f, 0.0f, 0.999807f, -0.019632f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_TRAMPOLINE_3, BG_BRT_OBJECT_TRAMPOLINE_3_ENTRY,
+            1396.604004f, -750.191956f, -91.980957f, 0.031410f,
+            0.0f, 0.0f, 0.015704f, 0.999877f,
+            RESPAWN_IMMEDIATELY)
+        || !AddObject(BG_BRT_OBJECT_TRAMPOLINE_4, BG_BRT_OBJECT_TRAMPOLINE_4_ENTRY,
+            1395.587158f, -795.910645f, -91.980957f, 0.003896f,
+            0.0f, 0.0f, 0.001948f, 0.999998f,
+            RESPAWN_IMMEDIATELY))
     {
         TC_LOG_ERROR("bg.battleground", "BattlegroundBRT::SetupBattleground: failed to spawn one or more Blackrock Throne battleground objects.");
         return false;
@@ -257,6 +273,9 @@ void BattlegroundBRT::ApplyNonInteractableObjectFlags()
 
     if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
         ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* imperialThrone = GetBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE))
+        imperialThrone->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundBRT::SpawnRandomBuffSet(uint32 variantAIndex)
@@ -281,6 +300,10 @@ void BattlegroundBRT::StartingEventCloseDoors()
     SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_1, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_2, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_3, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_4, RESPAWN_IMMEDIATELY);
 
     for (uint32 type = BG_BRT_OBJECT_BUFF1_VARIANT_A; type <= BG_BRT_OBJECT_BUFF4_VARIANT_C; ++type)
         SpawnBGObject(type, RESPAWN_ONE_DAY);
