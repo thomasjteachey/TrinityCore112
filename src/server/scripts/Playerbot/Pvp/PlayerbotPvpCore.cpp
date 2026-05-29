@@ -2943,6 +2943,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
     {
         bool const inCat = HasAuraFromSpellChain(player, 768);
         bool const inBear = HasAuraFromSpellChain(player, 5487);
+        bool const inFeralForm = inCat || inBear;
+        bool const isProwling = HasAuraFromSpellChain(player, 9913);
         Unit const* lowAlly = SelectFriendlyHealthTarget(player, 40.0f, 80.0f);
         Unit const* rootTarget = SelectPredatorsSwiftnessRootTarget(player, target, 30.0f);
         bool const safeAgain = !player->HealthBelowPct(60) || !SelectNearbyMeleeTarget(player, target, 8.0f);
@@ -2954,8 +2956,12 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid remove curse", "feral caster-form curse removal", 2782, cursedTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, isCasterForm && poisonedTarget && !HasAuraFromSpellChain(poisonedTarget, 2893), 71.0f,
             { "druid abolish poison", "feral caster-form poison removal", 2893, poisonedTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, poisonedTarget ? poisonedTarget->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(feralCandidates, isCasterForm && target && !HasAuraFromSpellChain(target, 9907) && IsSpellReady(player, 9907), 70.5f,
-            { "druid faerie fire", "feral caster-form armor debuff", 9907, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+        AddDecisionCandidate(feralCandidates, !player->IsInCombat() && !isProwling && !HasAuraFromSpellChain(player, 16864) && IsSpellReady(player, 16864), 70.9f,
+            { "druid omen of clarity", "maintain omen of clarity before prowling or engaging", 16864, playerbot::PvpClassSpellContext::TargetMode::Self });
+        AddDecisionCandidate(feralCandidates, inCat && !player->IsInCombat() && !isProwling && IsSpellReady(player, 9913), 70.8f,
+            { "druid prowl", "stealth before opening as feral cat", 9913, playerbot::PvpClassSpellContext::TargetMode::Self });
+        AddDecisionCandidate(feralCandidates, inFeralForm && !isProwling && target && !HasAuraFromSpellChain(target, 17392) && !HasAuraFromSpellChain(target, 9907) && IsSpellReady(player, 17392), 70.5f,
+            { "druid faerie fire feral", "feral-form armor debuff", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, player->HasAura(69369) && lowAlly && IsSpellReady(player, 9858), 70.0f,
             { "druid regrowth", "predator's swiftness regrowth on lowest ally", 9858, lowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lowAlly ? lowAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, player->HasAura(69369) && AllFriendlyPlayersHealthy(player, 40.0f, 80.0f) && rootTarget && IsSpellReady(player, 9853), 69.0f,
@@ -2992,7 +2998,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid claw", "build combo points when mangle is missing", 9850, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inCat && !HasAuraFromSpellChain(target, 9904) && IsSpellReady(player, 9904), 53.0f,
             { "druid rake", "maintain rake bleed", 9904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-        AddDecisionCandidate(feralCandidates, inCat && IsSpellReady(player, 17392), 52.0f,
+        AddDecisionCandidate(feralCandidates, inFeralForm && !isProwling && target && !HasAuraFromSpellChain(target, 17392) && !HasAuraFromSpellChain(target, 9907) && IsSpellReady(player, 17392), 52.0f,
             { "druid faerie fire feral", "feral armor debuff filler", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy });
         AddDecisionCandidate(feralCandidates, inCat && IsSpellReady(player, 9830), 51.0f,
             { "druid shred", "behind-target combo point builder", 9830, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -3003,6 +3009,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, recoveredFromPolymorph && IsSpellReady(player, 783), 55.0f,
         { "druid travel form recovery", "recovering from polymorph by travel-form reposition", 783, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isFeralDruid && !player->IsInCombat() && !player->HasStealthAura() && !HasAuraFromSpellChain(player, 16864) && IsSpellReady(player, 16864), 54.5f,
+        { "druid omen of clarity", "maintain omen of clarity out of combat", 16864, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, feralMayUseCasterUtility && lowManaAlly && !lowManaAlly->HasAura(29166), 50.0f,
         { "druid innervate", "stabilize low-mana ally with innervate", 29166, lowManaAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lowManaAlly ? lowManaAlly->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, cursedTarget, 49.0f,
@@ -3021,7 +3029,9 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         { "druid rejuvenation", "maintain rejuvenation on injured allies", 25299, rejuvTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, rejuvTarget ? rejuvTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, moonfireExecuteTarget, 42.0f,
         { "druid moonfire execute", "spam moonfire pressure on nearby low-health enemies", 8921, playerbot::PvpClassSpellContext::TargetMode::Enemy, moonfireExecuteTarget ? moonfireExecuteTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, feralMayUseCasterUtility && rogueTarget && !HasAuraFromSpellChain(rogueTarget, 9907) && IsSpellReady(player, 9907), 30.0f,
+    AddDecisionCandidate(candidates, isFeralDruid && (HasAuraFromSpellChain(player, 768) || HasAuraFromSpellChain(player, 5487)) && rogueTarget && !HasAuraFromSpellChain(rogueTarget, 17392) && !HasAuraFromSpellChain(rogueTarget, 9907) && IsSpellReady(player, 17392), 30.5f,
+        { "druid faerie fire feral", "apply feral faerie fire to nearby rogues", 17392, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, !isFeralDruid && feralMayUseCasterUtility && rogueTarget && !HasAuraFromSpellChain(rogueTarget, 9907) && IsSpellReady(player, 9907), 30.0f,
         { "druid faerie fire", "apply faerie fire to nearby rogues", 9907, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, meleeThreat && IsSpellReady(player, 5487), 29.0f,
         { "druid bear form", "swap to bear under physical melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
