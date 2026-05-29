@@ -48,6 +48,15 @@ using namespace Trinity::ChatCommands;
 
 namespace
 {
+bool IsChromieWhisperFacade(Player const* player)
+{
+    if (!player)
+        return false;
+
+    std::string const& name = player->GetName();
+    return name == "Chromie" || name == "Chromi";
+}
+
 char const* ToString(playerbot::BattlegroundState state)
 {
     switch (state)
@@ -636,6 +645,12 @@ public:
             return;
 
         if (lang == LANG_ADDON)
+            return;
+
+        // The hard-coded Chromie whisper responder uses a virtual player so whispers
+        // look like real player whispers. Do not treat her as a playerbot or reply
+        // with diagnostics, otherwise bot-to-bot whisper hooks can recurse indefinitely.
+        if (IsChromieWhisperFacade(sender) || IsChromieWhisperFacade(receiver))
             return;
 
         if (!playerbot::IsManagedRandomBot(receiver))
