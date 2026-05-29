@@ -3374,13 +3374,11 @@ SpellDecision SelectRogueSpell(Player const* player, Unit const* target, Classic
     AddDecisionCandidate(candidates, (isCombatRogue ? player->GetComboPoints() >= 5 : player->GetComboPoints() >= 5) && IsSpellReady(player, 8643), 44.0f,
         { "rogue kidney shot", "primary stun finisher at full combo points", 8643, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isCombatRogue && player->GetComboPoints() >= 2 && !HasAuraFromSpellChain(player, 6774) && IsSpellReady(player, 6774), 43.5f,
-        { "rogue slice and dice", "maintain slice and dice at two combo points", 6774, playerbot::PvpClassSpellContext::TargetMode::Self });
+        { "rogue slice and dice", "maintain slice and dice at two combo points", 6774, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isCombatRogue && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 81308), 43.2f,
         { "rogue deadly shot", "ranged fallback when kill target is out of melee", 81308, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->GetComboPoints() >= 5 && IsSpellReady(player, 11300), 43.0f,
         { "rogue eviscerate", "combo finisher pressure", 11300, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !player->IsWithinMeleeRange(target) && player->IsWithinDistInMap(target, 25.0f) && IsSpellReady(player, 36554), 42.0f,
-        { "rogue shadowstep", "bridge short gap before melee globals", 36554, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, isCombatRogue ? uint32(11294) : uint32(16511)), 20.0f,
         { isCombatRogue ? "rogue sinister strike" : "rogue hemorrhage", isCombatRogue ? "default combat combo point builder" : "default subtlety combo point builder", isCombatRogue ? uint32(11294) : uint32(16511), playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
