@@ -174,9 +174,11 @@ void WorldSession::HandleMoveWorldportAck()
         // join to bg case
         else if (Battleground* bg = player->GetBattleground())
         {
+            bool const isReplaySpectatorTransfer = bg->IsReplay()
+                && player->IsSpectator()
+                && player->HasPendingSpectatorForBG(bg->GetInstanceID());
             if (player->IsInvitedForBattlegroundInstance(player->GetBattlegroundId())
-                || player->IsSpectator()
-                )
+                || (player->IsSpectator() && !isReplaySpectatorTransfer))
                 bg->AddPlayer(player);
         }
     }
