@@ -370,12 +370,8 @@ public:
             return;
 
         if (!bg->IsReplay()) return;
-        int32 startDelayTime = bg->GetStartDelayTime();
-        if (startDelayTime > 5000)
-        {
-            bg->SetStartDelayTime(5000);
-            bg->SetStartTime(bg->GetStartTime() + (startDelayTime - 5000));
-        }
+        // Do not fast-forward replay elapsed time while the viewer is loading. Replay arenas are
+        // started explicitly once the spectator map transfer has completed below.
         //retrieve replay data
         auto it = loadedReplays.find(bg->GetReplayId());
         if (it == loadedReplays.end()) return;
@@ -538,15 +534,6 @@ public:
             player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, PLAYER_MAX_BATTLEGROUND_QUEUES, false, false, TEAM_NEUTRAL);
             player->SetEntryPoint();
             sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bgTypeId);
-
-            MatchRecord& loadedRecord = loadedReplays[player->GetGUID()];
-            if (!SpawnReplayCopies(bg, loadedRecord, handler))
-            {
-                loadedReplays.erase(player->GetGUID());
-                bg->EndNow();
-                bg->toggleReplay(0);
-                return false;
-            }
 
             handler.PSendSysMessage("Replay begins.");
             return true;
