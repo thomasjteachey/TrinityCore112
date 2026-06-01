@@ -376,34 +376,49 @@ public:
             bg->SetStartDelayTime(5000);
             bg->SetStartTime(bg->GetStartTime() + (startDelayTime - 5000));
         }
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
-
         //retrieve replay data
         auto it = loadedReplays.find(bg->GetReplayId());
         if (it == loadedReplays.end()) return;
         MatchRecord& match = it->second;
 
-        //if replay ends or spectator left > free replay data and/or kick player
-        if (match.packets.empty() || bg->GetPlayers().empty()) {
-            DespawnReplayCopies(bg, match);
-            loadedReplays.erase(it);
-
-            if (!bg->GetPlayers().empty())
-            {
-                uint32 playerGUID = bg->GetReplayId();
-                bg->EndNow();
-                bg->toggleReplay(0);
-                Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-                if (player)
-                    player->LeaveBattleground(bg);
-            }
-            return;
-        }
-
         uint32 playerGUID = bg->GetReplayId();
         Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
         if (!player)
+        {
+            DespawnReplayCopies(bg, match);
+            loadedReplays.erase(it);
+            bg->toggleReplay(0);
             return;
+        }
+
+        if (bg->GetStatus() == BattlegroundStatus::STATUS_WAIT_JOIN)
+        {
+            // Replay viewers are spectators, not battleground participants. A normal arena only advances
+            // from WAIT_JOIN after a participant joins, so force the replay arena to start once the
+            // spectator transfer has created the map.
+            if (bg->FindBgMap())
+                bg->SkipStartDelay();
+
+            return;
+        }
+
+        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
+
+        bool spectatorInReplay = player->IsInWorld() && player->GetBattleground() == bg && player->IsSpectator();
+
+        // If the spectator has not finished teleporting into the replay map yet, keep the replay data
+        // loaded and wait instead of treating the empty participant list as a finished replay.
+        if (!spectatorInReplay)
+            return;
+
+        //if replay ends > free replay data and return the spectator without sending the arena score screen
+        if (match.packets.empty()) {
+            DespawnReplayCopies(bg, match);
+            loadedReplays.erase(it);
+            bg->toggleReplay(0);
+            player->LeaveBattleground(bg);
+            return;
+        }
 
         if (!match.players.empty() && match.replaySummons.empty())
         {
@@ -424,9 +439,6 @@ public:
 
         //apply replay data to the server-spawned replay copies
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
-            if (bg->GetPlayers().empty())
-                break;
-
             ApplyReplayMovementPacket(bg, match, match.packets.front().packet);
             match.packets.pop_front();
         }
@@ -517,21 +529,15 @@ public:
                 handler.SetSentErrorMessage(true);
                 return false;
             }
-            player->SetIsSpectator(true);
             bg->toggleReplay(player->GetGUID());
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
             bg->StartBattleground();
 
             BattlegroundTypeId bgTypeId = bg->GetTypeID();
 
-            uint32 queueSlot = 0;
-            WorldPacket data;
-            TeamId teamId = TEAM_NEUTRAL;
-
-            player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, queueSlot, true, false, TEAM_NEUTRAL);
+            player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, PLAYER_MAX_BATTLEGROUND_QUEUES, false, false, TEAM_NEUTRAL);
+            player->SetEntryPoint();
             sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bgTypeId);
-            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), teamId);
-            player->GetSession()->SendPacket(&data);
 
             MatchRecord& loadedRecord = loadedReplays[player->GetGUID()];
             if (!SpawnReplayCopies(bg, loadedRecord, handler))
