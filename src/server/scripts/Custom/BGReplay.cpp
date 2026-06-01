@@ -167,11 +167,7 @@ static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler&
 {
     BattlegroundMap* map = bg ? bg->FindBgMap() : nullptr;
     if (!map)
-    {
-        handler.PSendSysMessage("Replay map is not available for spawning replay players.");
-        handler.SetSentErrorMessage(true);
         return false;
-    }
 
     for (ReplayPlayerSnapshot& replayPlayer : match.players)
     {
@@ -404,13 +400,31 @@ public:
             return;
         }
 
+        uint32 playerGUID = bg->GetReplayId();
+        Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
+        if (!player)
+            return;
+
+        if (!match.players.empty() && match.replaySummons.empty())
+        {
+            // Battleground maps are created when the spectator transfer completes, so delay replay-copy spawning until then.
+            if (!bg->FindBgMap())
+                return;
+
+            ChatHandler handler(player->GetSession());
+            if (!SpawnReplayCopies(bg, match, handler))
+            {
+                loadedReplays.erase(it);
+                bg->EndNow();
+                bg->toggleReplay(0);
+                player->LeaveBattleground(bg);
+                return;
+            }
+        }
+
         //apply replay data to the server-spawned replay copies
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
             if (bg->GetPlayers().empty())
-                break;
-            uint32 playerGUID = bg->GetReplayId();
-            Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-            if (!player)
                 break;
 
             ApplyReplayMovementPacket(bg, match, match.packets.front().packet);
