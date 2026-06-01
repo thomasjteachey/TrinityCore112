@@ -25,6 +25,7 @@
 #include <DBCStores.h>
 #include <array>
 #include <memory>
+#include <sstream>
 
 
 std::vector<Opcodes> watchList = {
@@ -180,6 +181,61 @@ static void CaptureReplayPlayers(Battleground* bg, MatchRecord& record)
         snapshot->z = player->GetPositionZ();
         snapshot->o = player->GetOrientation();
     }
+}
+
+
+static void ApplyEquipmentCacheToReplaySnapshot(ReplayPlayerSnapshot& replayPlayer, std::string const& equipmentCache)
+{
+    std::istringstream equipment(equipmentCache);
+    for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        uint32 itemEntry = 0;
+        uint32 enchantments = 0;
+        if (!(equipment >> itemEntry))
+            break;
+
+        if (!(equipment >> enchantments))
+            enchantments = 0;
+
+        replayPlayer.visibleItems[slot] = itemEntry;
+        replayPlayer.visibleItemEnchants[slot] = enchantments;
+    }
+}
+
+static void HydrateReplayPlayerSnapshotFromCharacterDB(ReplayPlayerSnapshot& replayPlayer)
+{
+    if (!replayPlayer.originalGuid)
+        return;
+
+    CharacterDatabasePreparedStatement* appearanceStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_APPEARANCE_BY_GUID);
+    appearanceStmt->setUInt32(0, replayPlayer.originalGuid.GetCounter());
+
+    if (PreparedQueryResult appearanceResult = CharacterDatabase.Query(appearanceStmt))
+    {
+        Field* fields = appearanceResult->Fetch();
+        if (fields)
+        {
+            if (replayPlayer.name.empty())
+                replayPlayer.name = fields[0].GetString();
+
+            replayPlayer.race = fields[1].GetUInt8();
+            replayPlayer.playerClass = fields[2].GetUInt8();
+            replayPlayer.gender = fields[3].GetUInt8();
+            replayPlayer.skin = fields[4].GetUInt8();
+            replayPlayer.face = fields[5].GetUInt8();
+            replayPlayer.hairStyle = fields[6].GetUInt8();
+            replayPlayer.hairColor = fields[7].GetUInt8();
+            replayPlayer.facialHair = fields[8].GetUInt8();
+            ApplyEquipmentCacheToReplaySnapshot(replayPlayer, fields[10].GetString());
+        }
+    }
+
+    CharacterDatabasePreparedStatement* levelStmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_NAME_DATA);
+    levelStmt->setUInt32(0, replayPlayer.originalGuid.GetCounter());
+
+    if (PreparedQueryResult levelResult = CharacterDatabase.Query(levelStmt))
+        if (Field* fields = levelResult->Fetch())
+            replayPlayer.level = fields[3].GetUInt8();
 }
 
 static void DespawnReplayCopies(Battleground* bg, MatchRecord& match)
@@ -498,7 +554,10 @@ static bool RemapReplayPacketGuids(MatchRecord& match, WorldPacket const& source
             continue;
 
         changed |= ReplaceAllGuidBytes(payload, GetRawGuidBytes(replayPlayer.originalGuid), GetRawGuidBytes(replayPlayer.replayGuid));
-        changed |= ReplaceAllGuidBytes(payload, GetPackedGuidBytes(replayPlayer.originalGuid), GetPackedGuidBytes(replayPlayer.replayGuid));
+
+        std::vector<uint8> originalPackedGuid = GetPackedGuidBytes(replayPlayer.originalGuid);
+        if (originalPackedGuid.size() >= 4)
+            changed |= ReplaceAllGuidBytes(payload, originalPackedGuid, GetPackedGuidBytes(replayPlayer.replayGuid));
     }
 
     if (!changed)
@@ -888,6 +947,10 @@ public:
                             buffer >> replayPlayer.y;
                             buffer >> replayPlayer.z;
                             buffer >> replayPlayer.o;
+
+                            if (version < 2)
+                                HydrateReplayPlayerSnapshotFromCharacterDB(replayPlayer);
+
                             record.players.push_back(replayPlayer);
                         }
                     }
