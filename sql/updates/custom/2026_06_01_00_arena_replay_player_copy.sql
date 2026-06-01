@@ -1,0 +1,4 @@
+INSERT INTO `creature_template` (`entry`, `modelid1`, `name`, `subname`, `minlevel`, `maxlevel`, `exp`, `faction`, `npcflag`, `speed_walk`, `speed_run`, `scale`, `rank`, `dmgschool`, `BaseAttackTime`, `RangeAttackTime`, `BaseVariance`, `RangeVariance`, `unit_class`, `unit_flags`, `unit_flags2`, `dynamicflags`, `family`, `type`, `type_flags`, `AIName`, `MovementType`, `HoverHeight`, `HealthModifier`, `ManaModifier`, `ArmorModifier`, `DamageModifier`, `ExperienceModifier`, `RacialLeader`, `movementId`, `RegenHealth`, `flags_extra`, `ScriptName`)
+VALUES
+(900001, 49, 'Arena Replay Player', '', 80, 80, 0, 35, 0, 1, 1.14286, 1, 0, 0, 2000, 2000, 1, 1, 1, 0, 0, 0, 0, 7, 0, '', 0, 1, 1, 1, 1, 1, 0, 0, 1, 0, '')
+ON DUPLICATE KEY UPDATE `name`=VALUES(`name`), `subname`=VALUES(`subname`), `faction`=VALUES(`faction`), `npcflag`=VALUES(`npcflag`), `ScriptName`=VALUES(`ScriptName`);

@@ -15,8 +15,10 @@
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "GameEventMgr.h"
+#include "Map.h"
 #include "Player.h"
 #include "WorldSession.h"
+#include "TemporarySummon.h"
 #include <DBCStores.h>
 
 
@@ -72,10 +74,233 @@ std::vector<Opcodes> watchList = {
 };
 
 
+namespace
+{
+    constexpr uint32 REPLAY_PLAYER_CREATURE_ENTRY = 900001;
+    constexpr uint32 REPLAY_FORMAT_MAGIC = 0x52504742; // BGPR
+    constexpr uint32 REPLAY_FORMAT_VERSION = 1;
+}
+
 struct PacketRecord { uint32 timestamp; WorldPacket packet; };
-struct MatchRecord { BattlegroundTypeId typeId; uint8 arenaTypeId; uint32 mapId; std::deque<PacketRecord> packets; };
+
+struct ReplayPlayerSnapshot
+{
+    ObjectGuid originalGuid;
+    ObjectGuid replayGuid;
+    std::string name;
+    uint32 team = 0;
+    uint32 faction = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float o = 0.0f;
+};
+
+struct MatchRecord
+{
+    BattlegroundTypeId typeId;
+    uint8 arenaTypeId;
+    uint32 mapId;
+    std::vector<ReplayPlayerSnapshot> players;
+    std::vector<ObjectGuid> replaySummons;
+    std::deque<PacketRecord> packets;
+};
+
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
+
+
+static ReplayPlayerSnapshot* FindReplayPlayerSnapshot(MatchRecord& record, ObjectGuid const& guid)
+{
+    auto itr = std::find_if(record.players.begin(), record.players.end(), [guid](ReplayPlayerSnapshot const& player)
+    {
+        return player.originalGuid == guid;
+    });
+
+    return itr != record.players.end() ? &(*itr) : nullptr;
+}
+
+static void CaptureReplayPlayers(Battleground* bg, MatchRecord& record)
+{
+    for (auto const& itr : bg->GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(itr.first);
+        if (!player)
+            continue;
+
+        ReplayPlayerSnapshot* snapshot = FindReplayPlayerSnapshot(record, player->GetGUID());
+        if (!snapshot)
+        {
+            record.players.push_back(ReplayPlayerSnapshot());
+            snapshot = &record.players.back();
+            snapshot->originalGuid = player->GetGUID();
+        }
+
+        snapshot->name = player->GetName();
+        snapshot->team = itr.second.Team;
+        snapshot->faction = player->GetFaction();
+        snapshot->x = player->GetPositionX();
+        snapshot->y = player->GetPositionY();
+        snapshot->z = player->GetPositionZ();
+        snapshot->o = player->GetOrientation();
+    }
+}
+
+static void DespawnReplayCopies(Battleground* bg, MatchRecord& match)
+{
+    BattlegroundMap* map = bg ? bg->FindBgMap() : nullptr;
+    if (!map)
+    {
+        match.replaySummons.clear();
+        return;
+    }
+
+    for (ObjectGuid const& guid : match.replaySummons)
+        if (Creature* creature = map->GetCreature(guid))
+            creature->DespawnOrUnsummon();
+
+    match.replaySummons.clear();
+}
+
+
+static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler& handler)
+{
+    BattlegroundMap* map = bg ? bg->FindBgMap() : nullptr;
+    if (!map)
+    {
+        handler.PSendSysMessage("Replay map is not available for spawning replay players.");
+        handler.SetSentErrorMessage(true);
+        return false;
+    }
+
+    for (ReplayPlayerSnapshot& replayPlayer : match.players)
+    {
+        Position position(replayPlayer.x, replayPlayer.y, replayPlayer.z, replayPlayer.o);
+        if (position.GetPositionX() == 0.0f && position.GetPositionY() == 0.0f && position.GetPositionZ() == 0.0f)
+            if (Position const* startPosition = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(replayPlayer.team)))
+                position = *startPosition;
+
+        TempSummon* summon = map->SummonCreature(REPLAY_PLAYER_CREATURE_ENTRY, position);
+        if (!summon)
+        {
+            handler.PSendSysMessage("Couldn't create replay player copy for %s.", replayPlayer.name.c_str());
+            handler.SetSentErrorMessage(true);
+            DespawnReplayCopies(bg, match);
+            return false;
+        }
+
+        Creature* creature = summon->ToCreature();
+        creature->CopyAppearanceFromPlayerGuid(replayPlayer.originalGuid, true, true, false, false);
+        creature->SetName(replayPlayer.name + " (Replay)");
+        creature->SetFaction(replayPlayer.faction);
+        creature->SetReactState(REACT_PASSIVE);
+        replayPlayer.replayGuid = creature->GetGUID();
+        match.replaySummons.push_back(creature->GetGUID());
+    }
+
+    return true;
+}
+
+
+static bool IsReplayMovementOpcode(uint16 opcode)
+{
+    switch (opcode)
+    {
+        case MSG_MOVE_START_FORWARD:
+        case MSG_MOVE_SET_FACING:
+        case MSG_MOVE_HEARTBEAT:
+        case MSG_MOVE_JUMP:
+        case MSG_MOVE_FALL_LAND:
+        case MSG_MOVE_START_STRAFE_RIGHT:
+        case MSG_MOVE_STOP_STRAFE:
+        case MSG_MOVE_START_STRAFE_LEFT:
+        case MSG_MOVE_STOP:
+        case MSG_MOVE_START_BACKWARD:
+        case MSG_MOVE_START_TURN_LEFT:
+        case MSG_MOVE_STOP_TURN:
+        case MSG_MOVE_START_TURN_RIGHT:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool ReadReplayMovementInfo(WorldPacket& source, MovementInfo& movementInfo)
+{
+    WorldPacket data(source);
+    data.rpos(0);
+
+    if (data.rpos() >= data.size())
+        return false;
+
+    data >> movementInfo.guid.ReadAsPacked();
+    data >> movementInfo.flags;
+    data >> movementInfo.flags2;
+    data >> movementInfo.time;
+    data >> movementInfo.pos.PositionXYZOStream();
+
+    if (!movementInfo.pos.IsPositionValid())
+        return false;
+
+    if (movementInfo.HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT))
+    {
+        data >> movementInfo.transport.guid.ReadAsPacked();
+        data >> movementInfo.transport.pos.PositionXYZOStream();
+        data >> movementInfo.transport.time;
+        data >> movementInfo.transport.seat;
+
+        if (movementInfo.HasExtraMovementFlag(MOVEMENTFLAG2_INTERPOLATED_MOVEMENT))
+            data >> movementInfo.transport.time2;
+    }
+
+    if (movementInfo.HasMovementFlag(MovementFlags(MOVEMENTFLAG_SWIMMING | MOVEMENTFLAG_FLYING)) || movementInfo.HasExtraMovementFlag(MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING))
+        data >> movementInfo.pitch;
+
+    data >> movementInfo.fallTime;
+
+    if (movementInfo.HasMovementFlag(MOVEMENTFLAG_FALLING))
+    {
+        data >> movementInfo.jump.zspeed;
+        data >> movementInfo.jump.sinAngle;
+        data >> movementInfo.jump.cosAngle;
+        data >> movementInfo.jump.xyspeed;
+    }
+
+    if (movementInfo.HasMovementFlag(MOVEMENTFLAG_SPLINE_ELEVATION))
+        data >> movementInfo.splineElevation;
+
+    return true;
+}
+
+static void ApplyReplayMovementPacket(Battleground* bg, MatchRecord& match, WorldPacket& packet)
+{
+    if (!IsReplayMovementOpcode(packet.GetOpcode()))
+        return;
+
+    MovementInfo movementInfo;
+    if (!ReadReplayMovementInfo(packet, movementInfo))
+        return;
+
+    ReplayPlayerSnapshot* replayPlayer = FindReplayPlayerSnapshot(match, movementInfo.guid);
+    if (!replayPlayer || !replayPlayer->replayGuid)
+        return;
+
+    BattlegroundMap* map = bg ? bg->FindBgMap() : nullptr;
+    if (!map)
+        return;
+
+    Creature* creature = map->GetCreature(replayPlayer->replayGuid);
+    if (!creature)
+        return;
+
+    movementInfo.guid = replayPlayer->replayGuid;
+    creature->m_movementInfo = movementInfo;
+    creature->UpdatePosition(movementInfo.pos.GetPositionX(), movementInfo.pos.GetPositionY(), movementInfo.pos.GetPositionZ(), movementInfo.pos.GetOrientation(), false);
+
+    WorldPacket data(packet.GetOpcode(), packet.size());
+    WorldSession::WriteMovementInfo(&data, &creature->m_movementInfo);
+    creature->SendMessageToSet(&data, true);
+}
 
 class BGReplayServerScript : public ServerScript {
 public:
@@ -109,6 +334,7 @@ public:
         if (records.find(bg->GetInstanceID()) == records.end())
             records[bg->GetInstanceID()].packets.clear();
         MatchRecord& record = records[bg->GetInstanceID()];
+        CaptureReplayPlayers(bg, record);
 
         uint32 timestamp = bg->GetStartTime();
         record.typeId = bg->GetTypeID(false);
@@ -163,6 +389,7 @@ public:
 
         //if replay ends or spectator left > free replay data and/or kick player
         if (match.packets.empty() || bg->GetPlayers().empty()) {
+            DespawnReplayCopies(bg, match);
             loadedReplays.erase(it);
 
             if (!bg->GetPlayers().empty())
@@ -171,12 +398,13 @@ public:
                 bg->EndNow();
                 bg->toggleReplay(0);
                 Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
-                player->LeaveBattleground(bg);
+                if (player)
+                    player->LeaveBattleground(bg);
             }
             return;
         }
 
-        //send replay data to spectator
+        //apply replay data to the server-spawned replay copies
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
             if (bg->GetPlayers().empty())
                 break;
@@ -184,7 +412,8 @@ public:
             Player* player = ObjectAccessor::FindPlayerByLowGUID(playerGUID);
             if (!player)
                 break;
-            player->GetSession()->SendPacket(&match.packets.front().packet);
+
+            ApplyReplayMovementPacket(bg, match, match.packets.front().packet);
             match.packets.pop_front();
         }
     }
@@ -197,6 +426,21 @@ public:
 
         //serialize arena replay data
         ByteBuffer buffer;
+        buffer << REPLAY_FORMAT_MAGIC;
+        buffer << REPLAY_FORMAT_VERSION;
+        buffer << uint32(match.players.size());
+        for (ReplayPlayerSnapshot const& replayPlayer : match.players)
+        {
+            buffer << replayPlayer.originalGuid;
+            buffer << replayPlayer.name;
+            buffer << replayPlayer.team;
+            buffer << replayPlayer.faction;
+            buffer << replayPlayer.x;
+            buffer << replayPlayer.y;
+            buffer << replayPlayer.z;
+            buffer << replayPlayer.o;
+        }
+
         uint32 headerSize;
         uint32 timestamp;
         for (auto it : match.packets) {
@@ -275,6 +519,15 @@ public:
             sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), teamId);
             player->GetSession()->SendPacket(&data);
 
+            MatchRecord& loadedRecord = loadedReplays[player->GetGUID()];
+            if (!SpawnReplayCopies(bg, loadedRecord, handler))
+            {
+                loadedReplays.erase(player->GetGUID());
+                bg->EndNow();
+                bg->toggleReplay(0);
+                return false;
+            }
+
             handler.PSendSysMessage("Replay begins.");
             return true;
         }
@@ -323,27 +576,60 @@ public:
         void deserializeMatchData(MatchRecord& record, Field* fields) {
             record.arenaTypeId = uint8(fields[1].GetUInt32());
             record.typeId = BattlegroundTypeId(fields[2].GetUInt32());
-            int size = uint32(fields[3].GetUInt32());
             std::vector<uint8> data = fields[4].GetBinary();
             record.mapId = uint32(fields[5].GetUInt32());
             ByteBuffer buffer;
-            buffer.append(&data[0], data.size());
+            if (!data.empty())
+                buffer.append(data.data(), data.size());
 
             /** deserialize replay binary data **/
             uint32 packetSize;
             uint32 packetTimestamp;
             uint16 opcode;
-            while (buffer.rpos() <= buffer.size() - 1) {
+
+            if (buffer.size() >= sizeof(uint32))
+            {
+                uint32 magic = buffer.read<uint32>();
+                if (magic == REPLAY_FORMAT_MAGIC)
+                {
+                    uint32 version = buffer.read<uint32>();
+                    if (version == REPLAY_FORMAT_VERSION)
+                    {
+                        uint32 playerCount = buffer.read<uint32>();
+                        record.players.reserve(playerCount);
+                        for (uint32 i = 0; i < playerCount; ++i)
+                        {
+                            ReplayPlayerSnapshot replayPlayer;
+                            buffer >> replayPlayer.originalGuid;
+                            buffer >> replayPlayer.name;
+                            buffer >> replayPlayer.team;
+                            buffer >> replayPlayer.faction;
+                            buffer >> replayPlayer.x;
+                            buffer >> replayPlayer.y;
+                            buffer >> replayPlayer.z;
+                            buffer >> replayPlayer.o;
+                            record.players.push_back(replayPlayer);
+                        }
+                    }
+                }
+                else
+                    buffer.rpos(0);
+            }
+
+            while (buffer.rpos() + sizeof(uint32) + sizeof(uint32) + sizeof(uint16) <= buffer.size()) {
                 buffer >> packetSize;
                 buffer >> packetTimestamp;
                 buffer >> opcode;
+
+                if (buffer.rpos() + packetSize > buffer.size())
+                    break;
 
                 WorldPacket packet(opcode, packetSize);
 
                 if (packetSize > 0) {
                     std::vector<uint8> tmp(packetSize, 0);
-                    buffer.read(&tmp[0], packetSize);
-                    packet.append(&tmp[0], packetSize);
+                    buffer.read(tmp.data(), packetSize);
+                    packet.append(tmp.data(), packetSize);
                 }
 
                 record.packets.push_back({ packetTimestamp, packet });
