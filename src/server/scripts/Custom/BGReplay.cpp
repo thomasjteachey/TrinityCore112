@@ -533,6 +533,15 @@ public:
             sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), teamId);
             player->GetSession()->SendPacket(&data);
 
+            MatchRecord& loadedRecord = loadedReplays[player->GetGUID()];
+            if (!SpawnReplayCopies(bg, loadedRecord, handler))
+            {
+                loadedReplays.erase(player->GetGUID());
+                bg->EndNow();
+                bg->toggleReplay(0);
+                return false;
+            }
+
             handler.PSendSysMessage("Replay begins.");
             return true;
         }
