@@ -286,6 +286,12 @@ static Player* CreateReplayPlayerObject(ReplayPlayerSnapshot const& replayPlayer
         return nullptr;
     }
 
+    // Player::Create attaches new characters to their race/class starter map. Replay
+    // actors are transient server-owned players, so detach that initial map before
+    // SpawnReplayCopies attaches them to the replay battleground map. Calling SetMap
+    // directly while the starter map is still set aborts in WorldObject::SetMap.
+    player->ResetMap();
+
     ApplyReplayAppearance(player, replayPlayer);
     player->Relocate(position);
     player->SetEntryPoint();
