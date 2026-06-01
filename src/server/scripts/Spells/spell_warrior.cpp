@@ -202,6 +202,24 @@ void OnKnownSpellChanged(Player* player, uint32 spellId)
     if (IsMappedOuterSpell(spellId))
         Sync(player);
 }
+
+void ScheduleSync(Player* player, Milliseconds delay)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const playerGuid = player->GetGUID();
+    player->m_Events.AddEventAtOffset([playerGuid]()
+    {
+        if (Player* loadedPlayer = ObjectAccessor::FindConnectedPlayer(playerGuid))
+        {
+            TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::ScheduleSync delayed sync for player {} ({})", loadedPlayer->GetName(), loadedPlayer->GetGUID().ToString());
+            Sync(loadedPlayer);
+        }
+        else
+            TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::ScheduleSync delayed sync skipped because player {} is no longer connected", playerGuid.ToString());
+    }, delay);
+}
 }
 
 class spell_polearm_staff_outer_aura : public AuraScript
@@ -246,20 +264,24 @@ public:
 
     void OnLogin(Player* player, bool /*firstLogin*/) override
     {
-        if (!player)
-            return;
+        PolearmStaffInnerAuras::ScheduleSync(player, 1s);
+        PolearmStaffInnerAuras::ScheduleSync(player, 3s);
+    }
 
-        ObjectGuid const playerGuid = player->GetGUID();
-        player->m_Events.AddEventAtOffset([playerGuid]()
-        {
-            if (Player* loadedPlayer = ObjectAccessor::FindConnectedPlayer(playerGuid))
-            {
-                TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::OnLogin delayed sync for player {} ({})", loadedPlayer->GetName(), loadedPlayer->GetGUID().ToString());
-                PolearmStaffInnerAuras::Sync(loadedPlayer);
-            }
-            else
-                TC_LOG_DEBUG("scripts.spells", "PolearmStaffInnerAuras::OnLogin delayed sync skipped because player {} is no longer connected", playerGuid.ToString());
-        }, 1s);
+    void OnMapChanged(Player* player) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
+        PolearmStaffInnerAuras::ScheduleSync(player, 1s);
+    }
+
+    void OnUpdateZone(Player* player, uint32 /*newZone*/, uint32 /*newArea*/) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
+    }
+
+    void OnPlayerRepop(Player* player) override
+    {
+        PolearmStaffInnerAuras::Sync(player);
     }
 
     void OnPlayerResurrect(Player* player) override

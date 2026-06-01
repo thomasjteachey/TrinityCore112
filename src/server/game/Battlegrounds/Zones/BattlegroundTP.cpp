@@ -361,7 +361,8 @@ void BattlegroundTP::EventPlayerCapturedFlag(Player* player)
     UpdatePlayerScore(player, SCORE_FLAG_CAPTURES, 1);      // +1 flag captures
     _lastFlagCaptureTeam = player->GetTeamId();
 
-    RewardHonorToTeam(GetBonusHonorFromKill(2), player->GetTeamId());
+    uint32 flagHonor = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_HONOR_FLAG_CAP);
+    RewardHonorToTeam(flagHonor, player->GetTeam());
 
     if (GetTeamScore(TEAM_ALLIANCE) == BG_TP_MAX_TEAM_SCORE || GetTeamScore(TEAM_HORDE) == BG_TP_MAX_TEAM_SCORE)
     {

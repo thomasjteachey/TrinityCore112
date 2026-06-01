@@ -74,7 +74,9 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
 
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
+constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
+constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
@@ -2547,6 +2549,120 @@ void RepositionDruidAfterTravelFormRecovery(Player* player)
 }
 
 
+struct DruidShapeshiftMovementResumeState
+{
+    ObjectGuid targetGuid = ObjectGuid::Empty;
+    float desiredRange = 1.5f;
+    uint8 mode = 1; // 1=chase, 2=follow
+    MovementGeneratorType motionType = IDLE_MOTION_TYPE;
+    bool shouldResume = false;
+};
+
+DruidShapeshiftMovementResumeState CaptureDruidShapeshiftMovementResume(Player* player,
+    playerbot::PvpClassSpellContext const& context, SpellInfo const* spellInfo)
+{
+    DruidShapeshiftMovementResumeState state;
+    if (!player || !spellInfo || player->GetClass() != CLASS_DRUID ||
+        context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self ||
+        !spellInfo->HasAura(SPELL_AURA_MOD_SHAPESHIFT))
+        return state;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    state.motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    bool const targetRelativeMotion = state.motionType == CHASE_MOTION_TYPE || state.motionType == FOLLOW_MOTION_TYPE;
+    bool const hadMovementSignal = player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+        player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+        (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+    if (orderItr != g_TargetRelativeMoveOrderByGuid.end())
+    {
+        TargetRelativeMoveOrderState const& order = orderItr->second;
+        uint32 const orderAgeMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : 0;
+        if (!order.targetGuid.IsEmpty() && orderAgeMs <= 6000)
+        {
+            state.targetGuid = order.targetGuid;
+            state.desiredRange = order.issuedRange > 0.0f ? order.issuedRange : 1.5f;
+            state.mode = order.mode ? order.mode : 1;
+            state.shouldResume = targetRelativeMotion || hadMovementSignal || orderAgeMs <= 2500;
+            return state;
+        }
+    }
+
+    Unit* target = !context.targetGuid.IsEmpty() ? ObjectAccessor::GetUnit(*player, context.targetGuid) : nullptr;
+    if (!target || !target->IsAlive())
+        target = player->GetVictim();
+    if (!target || !target->IsAlive())
+        target = player->GetSelectedUnit();
+
+    if (!target || !target->IsAlive() || target == player)
+        return state;
+
+    state.targetGuid = target->GetGUID();
+    state.desiredRange = player->IsValidAttackTarget(target) ? 0.5f : 1.5f;
+    state.mode = player->IsValidAttackTarget(target) ? 1 : 2;
+    state.shouldResume = targetRelativeMotion;
+    return state;
+}
+
+void ResumeDruidShapeshiftMovement(Player* player, DruidShapeshiftMovementResumeState const& state, uint32 spellId)
+{
+    if (!player || !state.shouldResume || state.targetGuid.IsEmpty() || !CanIssueFollowCommands(player))
+        return;
+
+    Unit* target = ObjectAccessor::GetUnit(*player, state.targetGuid);
+    if (!target || !target->IsAlive() || target == player || player->GetMapId() != target->GetMapId())
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    bool const hostileTarget = player->IsValidAttackTarget(target);
+    if (hostileTarget)
+    {
+        player->SetSelection(target->GetGUID());
+        if (player->GetVictim() != target || !player->IsInCombat())
+            player->Attack(target, false);
+    }
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    bool const preparedMotionMaster = PrepareMotionMasterForExplicitBotMovement(player);
+    if (hostileTarget && state.mode != 2)
+    {
+        motionMaster->MoveChase(target);
+        RecordTargetRelativeMovementOrder(player, target, 0.5f, 1);
+    }
+    else
+    {
+        float const followRange = std::max(0.5f, state.desiredRange);
+        motionMaster->MoveFollow(target, followRange, player->GetFollowAngle());
+        RecordTargetRelativeMovementOrder(player, target, followRange, 2);
+    }
+
+    MotionPrimeResult primeResult = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
+    primeResult.addToWorldCalled = preparedMotionMaster;
+
+    std::ostringstream diag;
+    diag << "druid_shapeshift_movement_resumed"
+         << " spell=" << spellId
+         << " target=" << target->GetGUID().ToString()
+         << " hostile=" << (hostileTarget ? "yes" : "no")
+         << " previous_motion=" << uint32(state.motionType)
+         << " mode=" << uint32(state.mode)
+         << " desired_range=" << state.desiredRange
+         << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+         << " moving_after=" << (player->isMoving() ? "yes" : "no")
+         << " chase_move=" << (player->HasUnitState(UNIT_STATE_CHASE_MOVE) ? "yes" : "no")
+         << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no");
+    AppendMotionPrimeDiag(diag, primeResult);
+    SetLastMovementDebugStatus(player, diag.str());
+}
+
+
 bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget, SpellInfo const* spellInfo,
     playerbot::PvpClassSpellContext const& context, bool isFoodOrDrinkSpell, std::string* diagOut)
 {
@@ -2777,6 +2893,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "cooldown_or_casting";
         return false;
     }
+
+    DruidShapeshiftMovementResumeState const shapeshiftMovementResume = CaptureDruidShapeshiftMovementResume(player, context, spellInfo);
 
     bool const isTemporaryWeaponImbue = [&spellInfo]()
     {
@@ -3177,6 +3295,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel())
         StopPlayerbotForStationaryCast(player);
 
+    ResumeDruidShapeshiftMovement(player, shapeshiftMovementResume, resolvedSpellId);
+
     // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
     // threat, pause movement, clear explicit target selection for visual parity,
     // then cast Freezing Trap exactly 500ms later before resuming chase.
@@ -3329,6 +3449,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHandOfSacrificeCooldownToken, std::chrono::seconds(10));
     if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(32593))
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, 32593, std::chrono::seconds(12));
+    if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(kDruidCasterFaerieFireSpellId))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kDruidCasterFaerieFireSpellId, kDruidCasterFaerieFireCooldown);
 
     // Shared tactical cooldown for dispel/decurse effects. This keeps
     // playerbots from spam-casting into protected or undispellable auras while
