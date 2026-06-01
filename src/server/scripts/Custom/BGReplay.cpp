@@ -77,6 +77,10 @@ std::vector<Opcodes> watchList = {
 namespace
 {
     constexpr uint32 REPLAY_PLAYER_CREATURE_ENTRY = 900001;
+    // World Trigger is a stock creature template that is expected to exist even if the
+    // custom replay template SQL has not been applied yet. The creature is immediately
+    // overwritten with the recorded player's appearance after it is created.
+    constexpr uint32 REPLAY_PLAYER_FALLBACK_CREATURE_ENTRY = 22515;
     constexpr uint32 REPLAY_FORMAT_MAGIC = 0x52504742; // BGPR
     constexpr uint32 REPLAY_FORMAT_VERSION = 1;
 }
@@ -163,6 +167,26 @@ static void DespawnReplayCopies(Battleground* bg, MatchRecord& match)
 }
 
 
+static Position GetReplaySpawnPosition(Battleground* bg, ReplayPlayerSnapshot const& replayPlayer)
+{
+    Position position(replayPlayer.x, replayPlayer.y, replayPlayer.z, replayPlayer.o);
+    if (position.IsPositionValid() && (position.GetPositionX() != 0.0f || position.GetPositionY() != 0.0f || position.GetPositionZ() != 0.0f))
+        return position;
+
+    if (Position const* startPosition = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(replayPlayer.team)))
+        return *startPosition;
+
+    return position;
+}
+
+static TempSummon* SummonReplayCopy(BattlegroundMap* map, Position const& position)
+{
+    if (TempSummon* summon = map->SummonCreature(REPLAY_PLAYER_CREATURE_ENTRY, position))
+        return summon;
+
+    return map->SummonCreature(REPLAY_PLAYER_FALLBACK_CREATURE_ENTRY, position);
+}
+
 static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler& handler)
 {
     BattlegroundMap* map = bg ? bg->FindBgMap() : nullptr;
@@ -171,15 +195,13 @@ static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler&
 
     for (ReplayPlayerSnapshot& replayPlayer : match.players)
     {
-        Position position(replayPlayer.x, replayPlayer.y, replayPlayer.z, replayPlayer.o);
-        if (position.GetPositionX() == 0.0f && position.GetPositionY() == 0.0f && position.GetPositionZ() == 0.0f)
-            if (Position const* startPosition = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(replayPlayer.team)))
-                position = *startPosition;
+        Position position = GetReplaySpawnPosition(bg, replayPlayer);
 
-        TempSummon* summon = map->SummonCreature(REPLAY_PLAYER_CREATURE_ENTRY, position);
+        TempSummon* summon = SummonReplayCopy(map, position);
         if (!summon)
         {
-            handler.PSendSysMessage("Couldn't create replay player copy for %s.", replayPlayer.name.c_str());
+            handler.PSendSysMessage("Couldn't create replay player copy for %s at %.2f %.2f %.2f on map %u.",
+                replayPlayer.name.c_str(), position.GetPositionX(), position.GetPositionY(), position.GetPositionZ(), bg->GetMapId());
             handler.SetSentErrorMessage(true);
             DespawnReplayCopies(bg, match);
             return false;
@@ -189,6 +211,7 @@ static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler&
         creature->CopyAppearanceFromPlayerGuid(replayPlayer.originalGuid, true, true, false, false);
         creature->SetName(replayPlayer.name + " (Replay)");
         creature->SetFaction(replayPlayer.faction);
+        creature->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_NON_ATTACKABLE);
         creature->SetReactState(REACT_PASSIVE);
         replayPlayer.replayGuid = creature->GetGUID();
         match.replaySummons.push_back(creature->GetGUID());
