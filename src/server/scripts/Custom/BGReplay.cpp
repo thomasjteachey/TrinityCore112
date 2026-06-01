@@ -294,7 +294,6 @@ static Player* CreateReplayPlayerObject(ReplayPlayerSnapshot const& replayPlayer
 
     ApplyReplayAppearance(player, replayPlayer);
     player->Relocate(position);
-    player->SetEntryPoint();
     player->SetPvP(true);
     player->SetGameMaster(false);
     player->SetGMVisible(true);
