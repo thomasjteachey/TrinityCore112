@@ -409,6 +409,12 @@ namespace
         return battleground && battleground->GetMapId() == 489;
     }
 
+    bool IsScarletChapel(Player const* player)
+    {
+        Battleground const* battleground = player ? player->GetBattleground() : nullptr;
+        return battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM;
+    }
+
     TeamId ResolveTeamId(uint32 teamValue)
     {
         if (teamValue == TEAM_ALLIANCE || teamValue == ALLIANCE)
@@ -1020,7 +1026,11 @@ namespace
 
         if (generatePath && player->InBattleground())
         {
-            if (directDropState.pending &&
+            bool const allowDirectDrop = !IsScarletChapel(player);
+            if (!allowDirectDrop)
+                directDropState.pending = false;
+
+            if (allowDirectDrop && directDropState.pending &&
                 nowMs > directDropState.issueMs + 1200 &&
                 !player->isMoving())
             {
@@ -1046,7 +1056,7 @@ namespace
                 }
             }
 
-            if (nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
+            if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
             {
                 Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
                 motionMaster->MovePoint(0, shortcutDestination, false);
@@ -1070,6 +1080,18 @@ namespace
             PathType pathType = PathType(0);
             if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
             {
+                if (!allowDirectDrop)
+                {
+                    motionMaster->MovePoint(0, safeDestination, true);
+                    EmitBattlegroundGmDebug(player,
+                        "movepoint=blocked-no-nav fallback=full-path directDrop=disabled-scarlet-chapel destDist=" +
+                        std::to_string(int32(player->GetDistance(safeDestination))), 0);
+
+                    state.lastDestination = destination;
+                    state.lastIssueMs = nowMs;
+                    return true;
+                }
+
                 // Recovery path for segmented-nav failures (for example, after a
                 // partial drop where local nav probing can't find a legal segment):
                 // issue a direct movement order so the bot keeps progressing
