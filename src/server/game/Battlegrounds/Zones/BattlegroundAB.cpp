@@ -56,12 +56,10 @@ BattlegroundAB::BattlegroundAB()
     for (uint8 i = 0; i < PVP_TEAMS_COUNT; ++i)
     {
         m_lastTick[i] = 0;
-        m_HonorScoreTics[i] = 0;
         m_ReputationScoreTics[i] = 0;
         m_TeamScores500Disadvantage[i] = false;
     }
 
-    m_HonorTics = 0;
     m_ReputationTics = 0;
 }
 
@@ -138,19 +136,12 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
             {
                 m_lastTick[team] -= BG_AB_TickIntervals[points];
                 m_TeamScores[team] += BG_AB_TickPoints[points];
-                m_HonorScoreTics[team] += BG_AB_TickPoints[points];
                 m_ReputationScoreTics[team] += BG_AB_TickPoints[points];
 
                 if (m_ReputationScoreTics[team] >= m_ReputationTics)
                 {
                     (team == TEAM_ALLIANCE) ? RewardReputationToTeam(509, 10, ALLIANCE) : RewardReputationToTeam(510, 10, HORDE);
                     m_ReputationScoreTics[team] -= m_ReputationTics;
-                }
-
-                if (m_HonorScoreTics[team] >= m_HonorTics)
-                {
-                    RewardHonorToTeam(GetBonusHonorFromKill(1), (team == TEAM_ALLIANCE) ? ALLIANCE : HORDE);
-                    m_HonorScoreTics[team] -= m_HonorTics;
                 }
 
                 if (!m_IsInformedNearVictory && m_TeamScores[team] > BG_AB_WARNING_NEAR_VICTORY_SCORE)
@@ -610,13 +601,10 @@ void BattlegroundAB::Reset()
     m_TeamScores[TEAM_HORDE]             = 0;
     m_lastTick[TEAM_ALLIANCE]            = 0;
     m_lastTick[TEAM_HORDE]               = 0;
-    m_HonorScoreTics[TEAM_ALLIANCE]      = 0;
-    m_HonorScoreTics[TEAM_HORDE]         = 0;
     m_ReputationScoreTics[TEAM_ALLIANCE] = 0;
     m_ReputationScoreTics[TEAM_HORDE]    = 0;
     m_IsInformedNearVictory                 = false;
     bool isBGWeekend = sBattlegroundMgr->IsBGWeekend(GetTypeID());
-    m_HonorTics = (isBGWeekend) ? BG_AB_ABBGWeekendHonorTicks : BG_AB_NotABBGWeekendHonorTicks;
     m_ReputationTics = (isBGWeekend) ? BG_AB_ABBGWeekendReputationTicks : BG_AB_NotABBGWeekendReputationTicks;
     m_TeamScores500Disadvantage[TEAM_ALLIANCE] = false;
     m_TeamScores500Disadvantage[TEAM_HORDE]    = false;
