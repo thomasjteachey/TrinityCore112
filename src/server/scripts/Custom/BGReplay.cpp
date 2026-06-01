@@ -539,6 +539,15 @@ public:
             player->SetEntryPoint();
             sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bgTypeId);
 
+            MatchRecord& loadedRecord = loadedReplays[player->GetGUID()];
+            if (!SpawnReplayCopies(bg, loadedRecord, handler))
+            {
+                loadedReplays.erase(player->GetGUID());
+                bg->EndNow();
+                bg->toggleReplay(0);
+                return false;
+            }
+
             handler.PSendSysMessage("Replay begins.");
             return true;
         }
