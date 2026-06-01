@@ -6,6 +6,8 @@
 #include "Chat.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CharacterCache.h"
+#include "ObjectMgr.h"
 #include "ScriptMgr.h"
 #include "WorldSession.h"
 #include <unordered_map>
@@ -20,6 +22,8 @@
 #include "WorldSession.h"
 #include "TemporarySummon.h"
 #include <DBCStores.h>
+#include <array>
+#include <memory>
 
 
 std::vector<Opcodes> watchList = {
@@ -76,13 +80,9 @@ std::vector<Opcodes> watchList = {
 
 namespace
 {
-    constexpr uint32 REPLAY_PLAYER_CREATURE_ENTRY = 900001;
-    // World Trigger is a stock creature template that is expected to exist even if the
-    // custom replay template SQL has not been applied yet. The creature is immediately
-    // overwritten with the recorded player's appearance after it is created.
-    constexpr uint32 REPLAY_PLAYER_FALLBACK_CREATURE_ENTRY = 22515;
     constexpr uint32 REPLAY_FORMAT_MAGIC = 0x52504742; // BGPR
-    constexpr uint32 REPLAY_FORMAT_VERSION = 1;
+    constexpr uint32 REPLAY_FORMAT_VERSION = 2;
+    constexpr uint32 REPLAY_PLAYER_ACCOUNT_ID_BASE = 0xFFFFFF00;
 }
 
 struct PacketRecord { uint32 timestamp; WorldPacket packet; };
@@ -94,10 +94,27 @@ struct ReplayPlayerSnapshot
     std::string name;
     uint32 team = 0;
     uint32 faction = 0;
+    uint8 race = RACE_HUMAN;
+    uint8 playerClass = CLASS_WARRIOR;
+    uint8 gender = GENDER_MALE;
+    uint8 skin = 0;
+    uint8 face = 0;
+    uint8 hairStyle = 0;
+    uint8 hairColor = 0;
+    uint8 facialHair = 0;
+    uint8 level = 80;
+    std::array<uint32, EQUIPMENT_SLOT_END> visibleItems = { };
+    std::array<uint32, EQUIPMENT_SLOT_END> visibleItemEnchants = { };
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
     float o = 0.0f;
+};
+
+struct ReplayPlayerObject
+{
+    ObjectGuid guid;
+    std::shared_ptr<WorldSession> session;
 };
 
 struct MatchRecord
@@ -106,7 +123,7 @@ struct MatchRecord
     uint8 arenaTypeId;
     uint32 mapId;
     std::vector<ReplayPlayerSnapshot> players;
-    std::vector<ObjectGuid> replaySummons;
+    std::vector<ReplayPlayerObject> replayPlayers;
     std::deque<PacketRecord> packets;
 };
 
@@ -143,6 +160,20 @@ static void CaptureReplayPlayers(Battleground* bg, MatchRecord& record)
         snapshot->name = player->GetName();
         snapshot->team = itr.second.Team;
         snapshot->faction = player->GetFaction();
+        snapshot->race = player->GetRace();
+        snapshot->playerClass = player->GetClass();
+        snapshot->gender = player->GetNativeGender();
+        snapshot->skin = player->GetSkinId();
+        snapshot->face = player->GetFaceId();
+        snapshot->hairStyle = player->GetHairStyleId();
+        snapshot->hairColor = player->GetHairColorId();
+        snapshot->facialHair = player->GetFacialStyle();
+        snapshot->level = player->GetLevel();
+        for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+        {
+            snapshot->visibleItems[slot] = player->GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2));
+            snapshot->visibleItemEnchants[slot] = player->GetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2));
+        }
         snapshot->x = player->GetPositionX();
         snapshot->y = player->GetPositionY();
         snapshot->z = player->GetPositionZ();
@@ -153,17 +184,31 @@ static void CaptureReplayPlayers(Battleground* bg, MatchRecord& record)
 static void DespawnReplayCopies(Battleground* bg, MatchRecord& match)
 {
     BattlegroundMap* map = bg ? bg->FindBgMap() : nullptr;
-    if (!map)
+
+    for (ReplayPlayerObject& replayPlayer : match.replayPlayers)
     {
-        match.replaySummons.clear();
-        return;
+        Player* player = ObjectAccessor::FindPlayer(replayPlayer.guid);
+        if (!player)
+            continue;
+
+        if (replayPlayer.session)
+            replayPlayer.session->SetPlayer(nullptr);
+
+        if (sCharacterCache->HasCharacterCacheEntry(player->GetGUID()))
+            sCharacterCache->DeleteCharacterCacheEntry(player->GetGUID(), player->GetName());
+
+        if (map && player->FindMap() == map)
+            map->RemovePlayerFromMap(player, true);
+        else
+        {
+            ObjectAccessor::RemoveObject(player);
+            delete player;
+        }
     }
 
-    for (ObjectGuid const& guid : match.replaySummons)
-        if (Creature* creature = map->GetCreature(guid))
-            creature->DespawnOrUnsummon();
-
-    match.replaySummons.clear();
+    match.replayPlayers.clear();
+    for (ReplayPlayerSnapshot& replayPlayer : match.players)
+        replayPlayer.replayGuid.Clear();
 }
 
 
@@ -179,12 +224,76 @@ static Position GetReplaySpawnPosition(Battleground* bg, ReplayPlayerSnapshot co
     return position;
 }
 
-static TempSummon* SummonReplayCopy(BattlegroundMap* map, Position const& position)
+static void ApplyReplayAppearance(Player* player, ReplayPlayerSnapshot const& replayPlayer)
 {
-    if (TempSummon* summon = map->SummonCreature(REPLAY_PLAYER_CREATURE_ENTRY, position))
-        return summon;
+    player->SetRace(replayPlayer.race);
+    player->SetClass(replayPlayer.playerClass);
+    player->SetGender(Gender(replayPlayer.gender));
+    player->SetNativeGender(Gender(replayPlayer.gender));
+    player->SetSkinId(replayPlayer.skin);
+    player->SetFaceId(replayPlayer.face);
+    player->SetHairStyleId(replayPlayer.hairStyle);
+    player->SetHairColorId(replayPlayer.hairColor);
+    player->SetFacialStyle(replayPlayer.facialHair);
+    player->SetLevel(replayPlayer.level ? replayPlayer.level : 80);
+    player->SetFaction(replayPlayer.faction);
 
-    return map->SummonCreature(REPLAY_PLAYER_FALLBACK_CREATURE_ENTRY, position);
+    for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        player->SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENTRYID + (slot * 2), replayPlayer.visibleItems[slot]);
+        player->SetUInt32Value(PLAYER_VISIBLE_ITEM_1_ENCHANTMENT + (slot * 2), replayPlayer.visibleItemEnchants[slot]);
+    }
+}
+
+static Player* CreateReplayPlayerObject(ReplayPlayerSnapshot const& replayPlayer, Position const& position, std::shared_ptr<WorldSession>& session)
+{
+    std::string replayName = replayPlayer.name + " (Replay)";
+    session = std::make_shared<WorldSession>(REPLAY_PLAYER_ACCOUNT_ID_BASE, "arena_replay", std::shared_ptr<WorldSocket>(), SEC_PLAYER, EXPANSION_WRATH_OF_THE_LICH_KING,
+        0, Minutes(0), DEFAULT_LOCALE, 0, false);
+
+    Player* player = new Player(session.get());
+    player->GetMotionMaster()->Initialize();
+
+    CharacterCreateInfo createInfo;
+    createInfo.SetName(replayName)
+        .SetRace(replayPlayer.race)
+        .SetClass(replayPlayer.playerClass)
+        .SetGender(replayPlayer.gender)
+        .SetSkin(replayPlayer.skin)
+        .SetFace(replayPlayer.face)
+        .SetHairStyle(replayPlayer.hairStyle)
+        .SetHairColor(replayPlayer.hairColor)
+        .SetFacialHair(replayPlayer.facialHair)
+        .SetOutfitId(0);
+
+    if (!Player::ValidateAppearance(replayPlayer.race, replayPlayer.playerClass, replayPlayer.gender, replayPlayer.hairStyle, replayPlayer.hairColor, replayPlayer.face, replayPlayer.facialHair, replayPlayer.skin, true))
+    {
+        createInfo.SetRace(RACE_HUMAN)
+            .SetClass(CLASS_WARRIOR)
+            .SetGender(GENDER_MALE)
+            .SetSkin(0)
+            .SetFace(0)
+            .SetHairStyle(0)
+            .SetHairColor(0)
+            .SetFacialHair(0);
+    }
+
+    if (!player->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
+    {
+        delete player;
+        session.reset();
+        return nullptr;
+    }
+
+    ApplyReplayAppearance(player, replayPlayer);
+    player->Relocate(position);
+    player->SetEntryPoint();
+    player->SetPvP(true);
+    player->SetGameMaster(false);
+    player->SetGMVisible(true);
+    session->SetPlayer(player);
+
+    return player;
 }
 
 static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler& handler)
@@ -197,24 +306,35 @@ static bool SpawnReplayCopies(Battleground* bg, MatchRecord& match, ChatHandler&
     {
         Position position = GetReplaySpawnPosition(bg, replayPlayer);
 
-        TempSummon* summon = SummonReplayCopy(map, position);
-        if (!summon)
+        std::shared_ptr<WorldSession> session;
+        Player* player = CreateReplayPlayerObject(replayPlayer, position, session);
+        if (!player)
         {
-            handler.PSendSysMessage("Couldn't create replay player copy for %s at %.2f %.2f %.2f on map %u.",
+            handler.PSendSysMessage("Couldn't create replay player object for %s at %.2f %.2f %.2f on map %u.",
                 replayPlayer.name.c_str(), position.GetPositionX(), position.GetPositionY(), position.GetPositionZ(), bg->GetMapId());
             handler.SetSentErrorMessage(true);
             DespawnReplayCopies(bg, match);
             return false;
         }
 
-        Creature* creature = summon->ToCreature();
-        creature->CopyAppearanceFromPlayerGuid(replayPlayer.originalGuid, true, true, false, false);
-        creature->SetName(replayPlayer.name + " (Replay)");
-        creature->SetFaction(replayPlayer.faction);
-        creature->RemoveUnitFlag(UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_NON_ATTACKABLE);
-        creature->SetReactState(REACT_PASSIVE);
-        replayPlayer.replayGuid = creature->GetGUID();
-        match.replaySummons.push_back(creature->GetGUID());
+        player->SetMap(map);
+        if (!map->AddPlayerToMap(player))
+        {
+            session->SetPlayer(nullptr);
+            delete player;
+            handler.PSendSysMessage("Couldn't add replay player object for %s to map %u.", replayPlayer.name.c_str(), bg->GetMapId());
+            handler.SetSentErrorMessage(true);
+            DespawnReplayCopies(bg, match);
+            return false;
+        }
+
+        ObjectAccessor::AddObject(player);
+        if (!sCharacterCache->HasCharacterCacheEntry(player->GetGUID()))
+            sCharacterCache->AddCharacterCacheEntry(player->GetGUID(), session->GetAccountId(), player->GetName(),
+                player->GetNativeGender(), player->GetRace(), player->GetClass(), player->GetLevel());
+
+        replayPlayer.replayGuid = player->GetGUID();
+        match.replayPlayers.push_back({ player->GetGUID(), std::move(session) });
     }
 
     return true;
@@ -308,18 +428,110 @@ static void ApplyReplayMovementPacket(Battleground* bg, MatchRecord& match, Worl
     if (!map)
         return;
 
-    Creature* creature = map->GetCreature(replayPlayer->replayGuid);
-    if (!creature)
+    Player* player = ObjectAccessor::FindPlayer(replayPlayer->replayGuid);
+    if (!player || player->FindMap() != map)
         return;
 
     movementInfo.guid = replayPlayer->replayGuid;
-    creature->m_movementInfo = movementInfo;
-    creature->UpdatePosition(movementInfo.pos.GetPositionX(), movementInfo.pos.GetPositionY(), movementInfo.pos.GetPositionZ(), movementInfo.pos.GetOrientation(), false);
+    player->m_movementInfo = movementInfo;
+    player->UpdatePosition(movementInfo.pos.GetPositionX(), movementInfo.pos.GetPositionY(), movementInfo.pos.GetPositionZ(), movementInfo.pos.GetOrientation(), false);
 
     WorldPacket data(packet.GetOpcode(), packet.size());
-    WorldSession::WriteMovementInfo(&data, &creature->m_movementInfo);
-    creature->SendMessageToSet(&data, true);
+    WorldSession::WriteMovementInfo(&data, &player->m_movementInfo);
+    player->SendMessageToSet(&data, true);
 }
+
+static std::vector<uint8> GetRawGuidBytes(ObjectGuid guid)
+{
+    uint64 raw = guid.GetRawValue();
+    std::vector<uint8> bytes(sizeof(uint64));
+    for (uint8 i = 0; i < sizeof(uint64); ++i)
+        bytes[i] = uint8((raw >> (i * 8)) & 0xFF);
+
+    return bytes;
+}
+
+static std::vector<uint8> GetPackedGuidBytes(ObjectGuid guid)
+{
+    ByteBuffer buffer;
+    buffer << guid.WriteAsPacked();
+    return std::vector<uint8>(buffer.contents(), buffer.contents() + buffer.size());
+}
+
+static bool ReplaceAllGuidBytes(std::vector<uint8>& data, std::vector<uint8> const& from, std::vector<uint8> const& to)
+{
+    if (from.empty())
+        return false;
+
+    bool replaced = false;
+    auto position = data.begin();
+    while ((position = std::search(position, data.end(), from.begin(), from.end())) != data.end())
+    {
+        position = data.erase(position, position + from.size());
+        position = data.insert(position, to.begin(), to.end());
+        std::advance(position, to.size());
+        replaced = true;
+    }
+
+    return replaced;
+}
+
+static bool RemapReplayPacketGuids(MatchRecord& match, WorldPacket const& source, WorldPacket& remapped)
+{
+    remapped.Initialize(source.GetOpcode(), source.size());
+
+    if (source.empty())
+        return false;
+
+    std::vector<uint8> payload(source.contents(), source.contents() + source.size());
+    bool changed = false;
+
+    for (ReplayPlayerSnapshot const& replayPlayer : match.players)
+    {
+        if (!replayPlayer.replayGuid)
+            continue;
+
+        changed |= ReplaceAllGuidBytes(payload, GetRawGuidBytes(replayPlayer.originalGuid), GetRawGuidBytes(replayPlayer.replayGuid));
+        changed |= ReplaceAllGuidBytes(payload, GetPackedGuidBytes(replayPlayer.originalGuid), GetPackedGuidBytes(replayPlayer.replayGuid));
+    }
+
+    if (!changed)
+        return false;
+
+    remapped.append(payload.data(), payload.size());
+    return true;
+}
+
+static bool IsReplayForwardedOpcode(uint16 opcode)
+{
+    switch (opcode)
+    {
+        case SMSG_UPDATE_OBJECT:
+        case SMSG_COMPRESSED_UPDATE_OBJECT:
+        case SMSG_NAME_QUERY_RESPONSE:
+        case SMSG_DESTROY_OBJECT:
+        case SMSG_BATTLEGROUND_PLAYER_JOINED:
+        case SMSG_BATTLEGROUND_PLAYER_LEFT:
+        case SMSG_GAMEOBJECT_QUERY_RESPONSE:
+        case SMSG_GAMEOBJECT_DESPAWN_ANIM:
+            return false;
+        default:
+            return !IsReplayMovementOpcode(opcode);
+    }
+}
+
+static void ApplyReplayWorldPacket(MatchRecord& match, Player* spectator, WorldPacket& packet)
+{
+    if (!spectator || !spectator->GetSession() || !IsReplayForwardedOpcode(packet.GetOpcode()))
+        return;
+
+    WorldPacket remapped;
+    if (!RemapReplayPacketGuids(match, packet, remapped))
+        return;
+
+    spectator->GetSession()->SendPacket(&remapped);
+}
+
 
 class BGReplayServerScript : public ServerScript {
 public:
@@ -439,7 +651,7 @@ public:
             return;
         }
 
-        if (!match.players.empty() && match.replaySummons.empty())
+        if (!match.players.empty() && match.replayPlayers.empty())
         {
             // Battleground maps are created when the spectator transfer completes, so delay replay-copy spawning until then.
             if (!bg->FindBgMap())
@@ -459,6 +671,7 @@ public:
         //apply replay data to the server-spawned replay copies
         while (!match.packets.empty() && match.packets.front().timestamp <= bg->GetStartTime()) {
             ApplyReplayMovementPacket(bg, match, match.packets.front().packet);
+            ApplyReplayWorldPacket(match, player, match.packets.front().packet);
             match.packets.pop_front();
         }
     }
@@ -480,6 +693,20 @@ public:
             buffer << replayPlayer.name;
             buffer << replayPlayer.team;
             buffer << replayPlayer.faction;
+            buffer << replayPlayer.race;
+            buffer << replayPlayer.playerClass;
+            buffer << replayPlayer.gender;
+            buffer << replayPlayer.skin;
+            buffer << replayPlayer.face;
+            buffer << replayPlayer.hairStyle;
+            buffer << replayPlayer.hairColor;
+            buffer << replayPlayer.facialHair;
+            buffer << replayPlayer.level;
+            for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+            {
+                buffer << replayPlayer.visibleItems[slot];
+                buffer << replayPlayer.visibleItemEnchants[slot];
+            }
             buffer << replayPlayer.x;
             buffer << replayPlayer.y;
             buffer << replayPlayer.z;
@@ -623,7 +850,7 @@ public:
                 if (magic == REPLAY_FORMAT_MAGIC)
                 {
                     uint32 version = buffer.read<uint32>();
-                    if (version == REPLAY_FORMAT_VERSION)
+                    if (version >= 1 && version <= REPLAY_FORMAT_VERSION)
                     {
                         uint32 playerCount = buffer.read<uint32>();
                         record.players.reserve(playerCount);
@@ -634,6 +861,23 @@ public:
                             buffer >> replayPlayer.name;
                             buffer >> replayPlayer.team;
                             buffer >> replayPlayer.faction;
+                            if (version >= 2)
+                            {
+                                buffer >> replayPlayer.race;
+                                buffer >> replayPlayer.playerClass;
+                                buffer >> replayPlayer.gender;
+                                buffer >> replayPlayer.skin;
+                                buffer >> replayPlayer.face;
+                                buffer >> replayPlayer.hairStyle;
+                                buffer >> replayPlayer.hairColor;
+                                buffer >> replayPlayer.facialHair;
+                                buffer >> replayPlayer.level;
+                                for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+                                {
+                                    buffer >> replayPlayer.visibleItems[slot];
+                                    buffer >> replayPlayer.visibleItemEnchants[slot];
+                                }
+                            }
                             buffer >> replayPlayer.x;
                             buffer >> replayPlayer.y;
                             buffer >> replayPlayer.z;
