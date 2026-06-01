@@ -133,6 +133,17 @@ std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint64, MatchRecord> loadedReplays;
 
 
+
+static void NormalizeReplayPacketTimestamps(MatchRecord& match)
+{
+    if (match.packets.empty())
+        return;
+
+    uint32 const firstTimestamp = match.packets.front().timestamp;
+    for (PacketRecord& packet : match.packets)
+        packet.timestamp = packet.timestamp >= firstTimestamp ? packet.timestamp - firstTimestamp : 0;
+}
+
 static ReplayPlayerSnapshot* FindReplayPlayerSnapshot(MatchRecord& record, ObjectGuid const& guid)
 {
     auto itr = std::find_if(record.players.begin(), record.players.end(), [guid](ReplayPlayerSnapshot const& player)
@@ -692,8 +703,8 @@ public:
             // Replay viewers are spectators, not battleground participants. A normal arena only advances
             // from WAIT_JOIN after a participant joins, so force the replay arena to start once the
             // spectator transfer has created the map.
-            if (bg->FindBgMap())
-                bg->SkipStartDelay();
+            if (bg->FindBgMap() && bg->SkipStartDelay())
+                bg->SetStartTime(0);
 
             return;
         }
@@ -746,6 +757,8 @@ public:
         auto it = records.find(bg->GetInstanceID());
         if (it == records.end()) return;
         MatchRecord& match = it->second;
+
+        NormalizeReplayPacketTimestamps(match);
 
         //serialize arena replay data
         ByteBuffer buffer;
@@ -977,6 +990,8 @@ public:
 
                 record.packets.push_back({ packetTimestamp, packet });
             }
+
+            NormalizeReplayPacketTimestamps(record);
         }
     };
     CreatureAI* GetAI(Creature* creature) const override
