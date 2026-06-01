@@ -21,6 +21,7 @@
 #include "Player.h"
 #include "WorldSession.h"
 #include "TemporarySummon.h"
+#include "MotionMaster.h"
 #include <DBCStores.h>
 #include <array>
 #include <memory>
