@@ -135,14 +135,11 @@ namespace
             return false;
 
         MatchRecord& match = it->second;
-        if (match.packets.empty() || !bg || bg->GetPlayers().empty())
+        if (match.packets.empty() || !bg)
         {
             EndReplayForSpectator(spectatorLowGuid, bg);
             return true;
         }
-
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS)
-            return false;
 
         Player* player = ObjectAccessor::FindPlayerByLowGUID(spectatorLowGuid);
         if (!player)
@@ -154,10 +151,16 @@ namespace
         if (!IsSpectatorReadyForReplay(player, bg))
             return false;
 
-        if (!match.playbackStartMs)
-            match.playbackStartMs = getMSTime();
+        uint32 elapsed = 0;
+        if (bg->GetStatus() == BattlegroundStatus::STATUS_IN_PROGRESS)
+        {
+            if (!match.playbackStartMs)
+                match.playbackStartMs = getMSTime();
 
-        uint32 const elapsed = getMSTimeDiff(match.playbackStartMs, getMSTime());
+            elapsed = getMSTimeDiff(match.playbackStartMs, getMSTime());
+        }
+        else if (bg->GetStatus() != BattlegroundStatus::STATUS_WAIT_JOIN)
+            return false;
         while (!match.packets.empty() && match.packets.front().timestamp <= elapsed)
         {
             player->GetSession()->SendPacket(&match.packets.front().packet);
@@ -187,8 +190,10 @@ public:
         if (bg == nullptr || bg->IsReplay()) return;
         if (!bg->isArena())
             return;
-        //ignore packets until arena started
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
+        // Record setup packets during the join countdown as well as live arena packets.
+        // Initial object-create/update packets are sent before STATUS_IN_PROGRESS;
+        // without them replay viewers enter an empty arena when the gates open.
+        if (bg->GetStatus() != BattlegroundStatus::STATUS_WAIT_JOIN && bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS) return;
         //record packets from 1 player of each team
         //iterate just in case a player leaves and used as reference
         for (auto it : bg->GetPlayers()) {
@@ -205,10 +210,15 @@ public:
             records[bg->GetInstanceID()].packets.clear();
         MatchRecord& record = records[bg->GetInstanceID()];
 
-        if (!record.captureStartMs)
-            record.captureStartMs = getMSTime();
+        uint32 timestamp = 0;
+        if (bg->GetStatus() == BattlegroundStatus::STATUS_IN_PROGRESS)
+        {
+            if (!record.captureStartMs)
+                record.captureStartMs = getMSTime();
 
-        uint32 timestamp = getMSTimeDiff(record.captureStartMs, getMSTime());
+            timestamp = getMSTimeDiff(record.captureStartMs, getMSTime());
+        }
+
         record.typeId = bg->GetTypeID(false);
         if (record.typeId == BATTLEGROUND_AA)
         {
