@@ -1,9 +1,10 @@
 //
-// Arena Replay V3 replacement for the old BGReplay.cpp.
+// Arena Replay V4 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
 // - Prep/countdown time is skipped; pre-start visual packets play immediately at replay time 0.
+// - Playback no longer calls EndNow()/LeaveBattleground() at EOF; it leaves you in the replay instance so the final frame stays visible.
 // - Playback is driven by a WorldScript tick and a monotonic playback clock, not OnBattlegroundUpdate.
 // - Playback waits until the viewer is actually inside the replay battleground/map before sending frames.
 // - Playback sends all due frames each tick, with a safety cap.
@@ -155,6 +156,7 @@ namespace
         size_t Cursor = 0;
         bool PlaybackClockStarted = false;
         bool SentInitialNameResponses = false;
+        bool Finished = false;
     };
 
     // Real arena records by BG instance id.
@@ -549,26 +551,16 @@ namespace
         return false;
     }
 
-    void EndPlaybackForViewer(uint32 viewerLowGuid)
+    void FinishPlaybackForViewer(uint32 viewerLowGuid, PlaybackState& state)
     {
+        state.Finished = true;
+
         Player* viewer = ObjectAccessor::FindPlayerByLowGUID(viewerLowGuid);
-        if (viewer)
-        {
-            if (Battleground* bg = viewer->GetBattleground())
-            {
-                if (bg->IsReplay())
-                {
-                    bg->EndNow();
-                    bg->toggleReplay(0);
-                    viewer->LeaveBattleground(bg);
-                }
-            }
+        if (!viewer || !viewer->GetSession())
+            return;
 
-            if (viewer->GetSession())
-                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay ended.");
-        }
-
-        ActiveReplays.erase(viewerLowGuid);
+        ChatHandler(viewer->GetSession()).PSendSysMessage(
+            "Replay packet stream finished. Staying in the replay instance so the final frame remains visible; leave the battleground when you're done.");
     }
 
     void SerializeMatchData(MatchRecord const& match, ByteBuffer& buffer)
@@ -767,9 +759,10 @@ namespace
 
         AssignFakeGuids(record, player->GetGUID().GetCounter());
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded: packets=%u, actors=%u, firstTime=%u, firstOpcode=%u",
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded: packets=%u, actors=%u, firstTime=%u, lastTime=%u, firstOpcode=%u",
             uint32(record.Packets.size()), uint32(record.Actors.size()),
             record.Packets.empty() ? 0 : record.Packets.front().TimestampMs,
+            record.Packets.empty() ? 0 : record.Packets.back().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         return true;
     }
@@ -966,6 +959,19 @@ public:
                 continue;
             }
 
+            if (state.Finished)
+            {
+                Battleground* currentBg = viewer->GetBattleground();
+                if (!currentBg || !currentBg->IsReplay() || currentBg->GetInstanceID() != state.BgInstanceId)
+                {
+                    it = ActiveReplays.erase(it);
+                    continue;
+                }
+
+                ++it;
+                continue;
+            }
+
             if (!IsViewerReadyForReplay(viewer, state))
             {
                 if (nowMs - state.CreatedMs > ARENA_REPLAY_LOAD_GRACE_MS)
@@ -996,8 +1002,9 @@ public:
                     viewerLowGuid, state.BgInstanceId, state.Match.MapId,
                     uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS);
 
-                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, skipping prep countdown.",
-                    uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()));
+                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u, skipping prep countdown.",
+                    uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()),
+                    state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs);
             }
 
             if (!state.SentInitialNameResponses)
@@ -1037,8 +1044,8 @@ public:
 
             if (state.Cursor >= state.Match.Packets.size())
             {
+                FinishPlaybackForViewer(viewerLowGuid, state);
                 ++it;
-                EndPlaybackForViewer(viewerLowGuid);
                 continue;
             }
 
@@ -1068,6 +1075,10 @@ public:
         // while bg->GetPlayers() is temporarily empty, and erasing here makes the replay start with no packets visible.
         if (!bg || !bg->isArena() || !bg->IsReplay())
             return;
+
+        // Belt-and-suspenders: replay arenas should never make the viewer sit through prep.
+        if (bg->GetStatus() == STATUS_WAIT_JOIN)
+            bg->SkipStartDelay();
     }
 };
 
