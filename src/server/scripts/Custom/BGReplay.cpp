@@ -103,6 +103,18 @@ namespace
         return std::find(watchList.begin(), watchList.end(), opcode) != watchList.end();
     }
 
+    bool IsSpectatorReadyForReplay(Player const* player, Battleground const* bg)
+    {
+        return player
+            && bg
+            && player->IsInWorld()
+            && !player->IsBeingTeleported()
+            && player->GetBattlegroundId() == bg->GetInstanceID()
+            && player->GetMapId() == bg->GetMapId()
+            && player->FindMap()
+            && player->FindMap()->IsBattleArena();
+    }
+
     void EndReplayForSpectator(uint32 spectatorLowGuid, Battleground* bg)
     {
         if (!bg)
@@ -137,6 +149,9 @@ namespace
             EndReplayForSpectator(spectatorLowGuid, bg);
             return true;
         }
+
+        if (!IsSpectatorReadyForReplay(player, bg))
+            return false;
 
         if (!match.playbackStartMs)
             match.playbackStartMs = getMSTime();
