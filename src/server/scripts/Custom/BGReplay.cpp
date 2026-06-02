@@ -22,6 +22,7 @@
 #include <DBCStores.h>
 #include <algorithm>
 #include <deque>
+#include <sstream>
 #include <vector>
 
 
@@ -86,6 +87,7 @@ struct MatchRecord
     std::deque<PacketRecord> packets;
     uint32 captureStartMs = 0;
     uint32 playbackStartMs = 0;
+    uint32 lastDebugMs = 0;
 };
 std::unordered_map<uint32, MatchRecord> records;
 std::unordered_map<uint32, MatchRecord> loadedReplays;
@@ -102,6 +104,79 @@ namespace
     bool IsWatchedReplayPacket(uint16 opcode)
     {
         return std::find(watchList.begin(), watchList.end(), opcode) != watchList.end();
+    }
+
+
+    char const* ReplayStatusName(BattlegroundStatus status)
+    {
+        switch (status)
+        {
+            case STATUS_WAIT_QUEUE:
+                return "WAIT_QUEUE";
+            case STATUS_WAIT_JOIN:
+                return "WAIT_JOIN";
+            case STATUS_IN_PROGRESS:
+                return "IN_PROGRESS";
+            case STATUS_WAIT_LEAVE:
+                return "WAIT_LEAVE";
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    void WhisperReplayDebug(Player* player, std::string_view message)
+    {
+        if (!player)
+            return;
+
+        ObjectGuid replayGuid = ObjectGuid::Create<HighGuid::Player>(1);
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, replayGuid, player->GetGUID(), message, 0, "ReplayDebug");
+        player->SendDirectMessage(&data);
+    }
+
+    bool ShouldSendReplayDebug(MatchRecord& match, uint32 intervalMs = 5000)
+    {
+        uint32 const now = getMSTime();
+        if (match.lastDebugMs && getMSTimeDiff(match.lastDebugMs, now) < intervalMs)
+            return false;
+
+        match.lastDebugMs = now;
+        return true;
+    }
+
+    void WhisperReplayState(Player* player, MatchRecord& match, Battleground const* bg, char const* reason)
+    {
+        if (!ShouldSendReplayDebug(match))
+            return;
+
+        std::ostringstream ss;
+        ss << "[" << reason << "]";
+        ss << " status=" << (bg ? ReplayStatusName(bg->GetStatus()) : "NO_BG");
+        if (bg)
+        {
+            ss << " startDelay=" << bg->GetStartDelayTime();
+            ss << " startTime=" << bg->GetStartTime();
+            ss << " players=" << bg->GetPlayersSize();
+            ss << " replayId=" << bg->GetReplayId();
+        }
+
+        ss << " packets=" << match.packets.size();
+        if (!match.packets.empty())
+            ss << " nextTs=" << match.packets.front().timestamp;
+        ss << " playbackStart=" << match.playbackStartMs;
+
+        if (player)
+        {
+            ss << " pInWorld=" << player->IsInWorld();
+            ss << " pTeleport=" << player->IsBeingTeleported();
+            ss << " pBgId=" << player->GetBattlegroundId();
+            ss << " pMap=" << player->GetMapId();
+            ss << " pHasMap=" << (player->FindMap() ? 1 : 0);
+            ss << " pBattleArena=" << (player->FindMap() && player->FindMap()->IsBattleArena() ? 1 : 0);
+        }
+
+        WhisperReplayDebug(player, ss.str());
     }
 
     bool IsSpectatorReadyForReplay(Player const* player, Battleground const* bg)
@@ -137,6 +212,8 @@ namespace
         MatchRecord& match = it->second;
         if (match.packets.empty() || !bg)
         {
+            if (Player* player = ObjectAccessor::FindPlayerByLowGUID(spectatorLowGuid))
+                WhisperReplayState(player, match, bg, match.packets.empty() ? "ending-empty-packets" : "ending-no-bg");
             EndReplayForSpectator(spectatorLowGuid, bg);
             return true;
         }
@@ -149,7 +226,10 @@ namespace
         }
 
         if (!IsSpectatorReadyForReplay(player, bg))
+        {
+            WhisperReplayState(player, match, bg, "waiting-spectator-ready");
             return false;
+        }
 
         uint32 elapsed = 0;
         bool const replayGatesOpen = bg->GetStatus() == BattlegroundStatus::STATUS_IN_PROGRESS || bg->GetStartDelayTime() <= 0;
@@ -161,15 +241,33 @@ namespace
             elapsed = getMSTimeDiff(match.playbackStartMs, getMSTime());
         }
         else if (bg->GetStatus() != BattlegroundStatus::STATUS_WAIT_JOIN)
+        {
+            WhisperReplayState(player, match, bg, "waiting-status");
             return false;
+        }
+
+        WhisperReplayState(player, match, bg, replayGatesOpen ? "pumping" : "waiting-gates");
+
+        uint32 sentPackets = 0;
         while (!match.packets.empty() && match.packets.front().timestamp <= elapsed)
         {
             player->GetSession()->SendPacket(&match.packets.front().packet);
             match.packets.pop_front();
+            ++sentPackets;
+        }
+
+        if (sentPackets)
+        {
+            std::ostringstream ss;
+            ss << "[sent] count=" << sentPackets << " remaining=" << match.packets.size();
+            if (!match.packets.empty())
+                ss << " nextTs=" << match.packets.front().timestamp << " elapsed=" << elapsed;
+            WhisperReplayDebug(player, ss.str());
         }
 
         if (match.packets.empty())
         {
+            WhisperReplayDebug(player, "[finished] no replay packets remain; ending replay");
             EndReplayForSpectator(spectatorLowGuid, bg);
             return true;
         }
@@ -372,10 +470,18 @@ public:
         bool StartReplay(Player* player, uint32 replayId) {
             auto handler = ChatHandler(player->GetSession());
 
+            WhisperReplayDebug(player, "[start] loading replay " + std::to_string(replayId));
             if (!loadReplayDataForPlayer(player, replayId))
                 return false;
 
             MatchRecord record = loadedReplays[GetPlayerLowGuid(player)];
+            {
+                std::ostringstream ss;
+                ss << "[start] loaded packets=" << record.packets.size() << " type=" << uint32(record.typeId) << " arenaType=" << uint32(record.arenaTypeId) << " map=" << record.mapId;
+                if (!record.packets.empty())
+                    ss << " firstTs=" << record.packets.front().timestamp << " lastTs=" << record.packets.back().timestamp;
+                WhisperReplayDebug(player, ss.str());
+            }
             Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.typeId, GetBattlegroundBracketByLevel(record.mapId, 60), record.arenaTypeId, false);
             if (!bg) {
                 loadedReplays.erase(GetPlayerLowGuid(player));
@@ -387,6 +493,11 @@ public:
             bg->toggleReplay(GetPlayerLowGuid(player));
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
             bg->StartBattleground();
+            {
+                std::ostringstream ss;
+                ss << "[start] created bg instance=" << bg->GetInstanceID() << " type=" << uint32(bg->GetTypeID()) << " map=" << bg->GetMapId() << " status=" << ReplayStatusName(bg->GetStatus()) << " startDelay=" << bg->GetStartDelayTime();
+                WhisperReplayDebug(player, ss.str());
+            }
 
             BattlegroundTypeId bgTypeId = bg->GetTypeID();
 
@@ -400,6 +511,7 @@ public:
             player->GetSession()->SendPacket(&data);
 
             handler.PSendSysMessage("Replay begins.");
+            WhisperReplayDebug(player, "[start] teleport sent; diagnostics will continue every 5 seconds while waiting/pumping");
             return true;
         }
 
@@ -420,6 +532,13 @@ public:
             }
             MatchRecord record;
             deserializeMatchData(record, fields);
+            {
+                std::ostringstream ss;
+                ss << "[load] db replay=" << matchId << " packets=" << record.packets.size() << " contentSize=" << fields[3].GetUInt32() << " blobBytes=" << fields[4].GetBinary().size();
+                if (!record.packets.empty())
+                    ss << " firstTs=" << record.packets.front().timestamp << " lastTs=" << record.packets.back().timestamp;
+                WhisperReplayDebug(p, ss.str());
+            }
 
             loadedReplays[GetPlayerLowGuid(p)] = std::move(record);
             return true;
