@@ -152,7 +152,8 @@ namespace
             return false;
 
         uint32 elapsed = 0;
-        if (bg->GetStatus() == BattlegroundStatus::STATUS_IN_PROGRESS)
+        bool const replayGatesOpen = bg->GetStatus() == BattlegroundStatus::STATUS_IN_PROGRESS || bg->GetStartDelayTime() <= 0;
+        if (replayGatesOpen)
         {
             if (!match.playbackStartMs)
                 match.playbackStartMs = getMSTime();
@@ -473,6 +474,14 @@ public:
                 }
 
                 record.packets.push_back({ packetTimestamp, packet });
+            }
+
+            if (!record.packets.empty())
+            {
+                uint32 const replayStartTimestamp = record.packets.front().timestamp;
+                if (replayStartTimestamp)
+                    for (PacketRecord& packetRecord : record.packets)
+                        packetRecord.timestamp -= replayStartTimestamp;
             }
         }
     };
