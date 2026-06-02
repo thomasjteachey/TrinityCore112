@@ -18,6 +18,7 @@
 #include "Player.h"
 #include "Timer.h"
 #include "WorldSession.h"
+#include "Map.h"
 #include <DBCStores.h>
 #include <algorithm>
 #include <deque>
