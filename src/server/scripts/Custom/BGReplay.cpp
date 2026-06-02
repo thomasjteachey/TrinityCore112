@@ -46,6 +46,7 @@
 #include <utility>
 #include <vector>
 #include <zlib.h>
+#include <DBCStores.h>
 
 namespace
 {
