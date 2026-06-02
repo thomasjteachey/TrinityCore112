@@ -1,9 +1,10 @@
 //
-// Arena Replay V2 replacement for the old BGReplay.cpp.
+// Arena Replay V2.1 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording timestamps use getMSTime() relative to match record start, not bg->GetStartTime().
 // - Playback is driven by a WorldScript tick and a monotonic playback clock, not OnBattlegroundUpdate.
+// - Playback waits until the viewer is actually inside the replay battleground/map before sending frames.
 // - Playback sends all due frames each tick, with a safety cap.
 // - Replay blobs written by this file contain a V2 header with participants.
 // - During playback, original arena player GUIDs are rewritten to fake player GUIDs so the viewer can watch their own replays.
@@ -54,6 +55,8 @@ namespace
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
     constexpr uint32 ARENA_REPLAY_SEND_CAP_PER_UPDATE = 800;
+    constexpr uint32 ARENA_REPLAY_LOAD_GRACE_MS = 15000;
+    constexpr uint32 ARENA_REPLAY_START_DELAY_MS = 1500;
     constexpr uint32 ARENA_REPLAY_DEDUPE_WINDOW_MS = 20;
 
     std::vector<Opcodes> const WatchList =
@@ -143,8 +146,10 @@ namespace
         MatchRecord Match;
         uint32 ViewerLowGuid = 0;
         uint32 BgInstanceId = 0;
+        uint32 CreatedMs = 0;
         uint32 PlaybackStartMs = 0;
         size_t Cursor = 0;
+        bool PlaybackClockStarted = false;
         bool SentInitialNameResponses = false;
     };
 
@@ -437,6 +442,34 @@ namespace
         session->SendPacket(&data);
     }
 
+    bool IsViewerReadyForReplay(Player const* viewer, PlaybackState const& state)
+    {
+        if (!viewer)
+            return false;
+
+        Battleground const* bg = viewer->GetBattleground();
+        if (!bg)
+            return false;
+
+        if (bg->GetInstanceID() != state.BgInstanceId)
+            return false;
+
+        if (!bg->IsReplay())
+            return false;
+
+        if (!viewer->IsInWorld())
+            return false;
+
+        if (!viewer->GetMap())
+            return false;
+
+        if (viewer->GetMapId() != state.Match.MapId)
+            return false;
+
+        return true;
+    }
+
+
     void SendInitialReplayNameResponses(Player* viewer, PlaybackState& state)
     {
         if (!viewer || !viewer->GetSession())
@@ -727,7 +760,7 @@ namespace
         state.Match = std::move(record);
         state.ViewerLowGuid = viewerLowGuid;
         state.BgInstanceId = bg->GetInstanceID();
-        state.PlaybackStartMs = getMSTime();
+        state.CreatedMs = getMSTime();
 
         ActiveReplays[viewerLowGuid] = std::move(state);
 
@@ -858,8 +891,45 @@ public:
                 continue;
             }
 
+            if (!IsViewerReadyForReplay(viewer, state))
+            {
+                if (nowMs - state.CreatedMs > ARENA_REPLAY_LOAD_GRACE_MS)
+                {
+                    ChatHandler(viewer->GetSession()).PSendSysMessage("Replay failed to start: viewer never entered the replay map.");
+                    it = ActiveReplays.erase(it);
+                    continue;
+                }
+
+                TC_LOG_DEBUG("arena.replay", "PLAY waiting viewer={} bg={} map={} expectedMap={} inWorld={} elapsedLoad={}",
+                    viewerLowGuid,
+                    viewer->GetBattleground() ? viewer->GetBattleground()->GetInstanceID() : 0,
+                    viewer->GetMapId(),
+                    state.Match.MapId,
+                    viewer->IsInWorld() ? 1 : 0,
+                    nowMs - state.CreatedMs);
+
+                ++it;
+                continue;
+            }
+
+            if (!state.PlaybackClockStarted)
+            {
+                state.PlaybackStartMs = nowMs + ARENA_REPLAY_START_DELAY_MS;
+                state.PlaybackClockStarted = true;
+
+                TC_LOG_INFO("arena.replay", "Replay playback armed viewer={} bg={} map={} packets={} actors={} startDelay={}",
+                    viewerLowGuid, state.BgInstanceId, state.Match.MapId,
+                    uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS);
+            }
+
             if (!state.SentInitialNameResponses)
                 SendInitialReplayNameResponses(viewer, state);
+
+            if (nowMs < state.PlaybackStartMs)
+            {
+                ++it;
+                continue;
+            }
 
             uint32 elapsedMs = nowMs - state.PlaybackStartMs;
             uint32 sentThisUpdate = 0;
@@ -916,16 +986,10 @@ public:
     void OnBattlegroundUpdate(Battleground* bg, uint32 /*diff*/) override
     {
         // Playback is intentionally not done here anymore.
-        // This hook is kept only for replay BG cleanup if the viewer leaves early.
+        // Do not erase ActiveReplays from this hook. During replay creation the viewer can still be zoning/loading
+        // while bg->GetPlayers() is temporarily empty, and erasing here makes the replay start with no packets visible.
         if (!bg || !bg->isArena() || !bg->IsReplay())
             return;
-
-        if (bg->GetPlayers().empty())
-        {
-            uint64 replayId = bg->GetReplayId();
-            uint32 viewerLowGuid = ObjectGuid(replayId).GetCounter();
-            ActiveReplays.erase(viewerLowGuid);
-        }
     }
 };
 
