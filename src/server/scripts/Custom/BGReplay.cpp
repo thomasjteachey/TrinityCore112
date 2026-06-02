@@ -87,6 +87,7 @@ struct MatchRecord
     std::deque<PacketRecord> packets;
     uint32 captureStartMs = 0;
     uint32 playbackStartMs = 0;
+    uint32 replayInstanceId = 0;
     uint32 lastDebugMs = 0;
 };
 std::unordered_map<uint32, MatchRecord> records;
@@ -161,6 +162,7 @@ namespace
             ss << " replayId=" << bg->GetReplayId();
         }
 
+        ss << " replayInstance=" << match.replayInstanceId;
         ss << " packets=" << match.packets.size();
         if (!match.packets.empty())
             ss << " nextTs=" << match.packets.front().timestamp;
@@ -189,6 +191,18 @@ namespace
             && player->GetMapId() == bg->GetMapId()
             && player->FindMap()
             && player->FindMap()->IsBattleArena();
+    }
+
+    Battleground* FindReplayBattleground(Player* player, MatchRecord const& match)
+    {
+        if (player)
+            if (Battleground* bg = player->GetBattleground())
+                return bg;
+
+        if (match.replayInstanceId)
+            return sBattlegroundMgr->GetBattleground(match.replayInstanceId, match.typeId);
+
+        return nullptr;
     }
 
     void EndReplayForSpectator(uint32 spectatorLowGuid, Battleground* bg)
@@ -349,9 +363,10 @@ public:
                 continue;
             }
 
-            Battleground* bg = player->GetBattleground();
+            Battleground* bg = FindReplayBattleground(player, it->second);
             if (!bg)
             {
+                WhisperReplayState(player, it->second, nullptr, "world-no-bg");
                 ++it;
                 continue;
             }
@@ -367,6 +382,39 @@ public:
             else
                 ++it;
         }
+    }
+};
+
+class BGReplayPlayerScript : public PlayerScript
+{
+public:
+    BGReplayPlayerScript() : PlayerScript("BGReplayPlayerScript") { }
+
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        if (!player)
+            return;
+
+        uint32 const spectatorLowGuid = GetPlayerLowGuid(player);
+        auto it = loadedReplays.find(spectatorLowGuid);
+        if (it == loadedReplays.end())
+            return;
+
+        Battleground* bg = FindReplayBattleground(player, it->second);
+        if (!bg)
+        {
+            WhisperReplayState(player, it->second, nullptr, "player-no-bg");
+            return;
+        }
+
+        if (!bg->IsReplay() || bg->GetReplayId() != spectatorLowGuid)
+        {
+            WhisperReplayState(player, it->second, bg, "player-invalid-bg");
+            return;
+        }
+
+        if (PumpReplayPackets(spectatorLowGuid, bg))
+            loadedReplays.erase(spectatorLowGuid);
     }
 };
 
@@ -489,6 +537,7 @@ public:
                 handler.SetSentErrorMessage(true);
                 return false;
             }
+            loadedReplays[GetPlayerLowGuid(player)].replayInstanceId = bg->GetInstanceID();
             player->SetIsSpectator(true);
             bg->toggleReplay(GetPlayerLowGuid(player));
             player->SetPendingSpectatorForBG(bg->GetInstanceID());
@@ -613,6 +662,7 @@ public:
 void AddBGReplayScripts() {
     new BGReplayServerScript();
     new BGReplayWorldScript();
+    new BGReplayPlayerScript();
     new BGReplayBGScript();
     new ReplayGossip();
 }
