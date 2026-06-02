@@ -1,8 +1,9 @@
 //
-// Arena Replay V2.1 replacement for the old BGReplay.cpp.
+// Arena Replay V3 replacement for the old BGReplay.cpp.
 //
 // Main changes:
-// - Recording timestamps use getMSTime() relative to match record start, not bg->GetStartTime().
+// - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
+// - Prep/countdown time is skipped; pre-start visual packets play immediately at replay time 0.
 // - Playback is driven by a WorldScript tick and a monotonic playback clock, not OnBattlegroundUpdate.
 // - Playback waits until the viewer is actually inside the replay battleground/map before sending frames.
 // - Playback sends all due frames each tick, with a safety cap.
@@ -56,7 +57,8 @@ namespace
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
     constexpr uint32 ARENA_REPLAY_SEND_CAP_PER_UPDATE = 800;
     constexpr uint32 ARENA_REPLAY_LOAD_GRACE_MS = 15000;
-    constexpr uint32 ARENA_REPLAY_START_DELAY_MS = 1500;
+    constexpr uint32 ARENA_REPLAY_START_DELAY_MS = 500;
+    constexpr uint32 ARENA_REPLAY_PRELOAD_MS = 500;
     constexpr uint32 ARENA_REPLAY_DEDUPE_WINDOW_MS = 20;
 
     std::vector<Opcodes> const WatchList =
@@ -134,6 +136,8 @@ namespace
         uint8 ArenaTypeId = 0;
         uint32 MapId = 0;
         uint32 RecordStartMs = 0;
+        uint32 InProgressStartMs = 0;
+        uint32 PreStartPacketCount = 0;
         std::vector<ReplayActor> Actors;
         std::vector<PacketRecord> Packets;
 
@@ -163,6 +167,48 @@ namespace
     {
         return std::find(WatchList.begin(), WatchList.end(), opcode) != WatchList.end();
     }
+
+    bool IsPreStartVisualOpcode(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case SMSG_UPDATE_OBJECT:
+            case SMSG_COMPRESSED_UPDATE_OBJECT:
+            case SMSG_DESTROY_OBJECT:
+            case SMSG_NAME_QUERY_RESPONSE:
+            case SMSG_PET_NAME_QUERY_RESPONSE:
+            case SMSG_AURA_UPDATE:
+            case SMSG_AURA_UPDATE_ALL:
+            case SMSG_POWER_UPDATE:
+            case SMSG_FORCE_RUN_SPEED_CHANGE:
+            case SMSG_FORCE_FLIGHT_SPEED_CHANGE:
+            case SMSG_FORCE_SWIM_SPEED_CHANGE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool ShouldRecordPacket(Battleground const* bg, WorldPacket const& packet)
+    {
+        if (!bg)
+            return false;
+
+        BattlegroundStatus const status = bg->GetStatus();
+
+        // The old version only recorded STATUS_IN_PROGRESS. That misses the initial update-object
+        // create packets sent during arena prep/loading, so playback has movement/combat for GUIDs
+        // the client never created. Record only visual/object packets during WAIT_JOIN, then record
+        // the full watch list once the real match starts.
+        if (status == STATUS_WAIT_JOIN)
+            return IsPreStartVisualOpcode(packet.GetOpcode());
+
+        if (status == STATUS_IN_PROGRESS)
+            return IsWatchedOpcode(packet.GetOpcode());
+
+        return false;
+    }
+
 
     uint64 PacketHash(WorldPacket const& packet)
     {
@@ -716,7 +762,15 @@ namespace
             return false;
         }
 
+        if (record.Actors.empty())
+            ChatHandler(player->GetSession()).PSendSysMessage("Replay warning: no actor metadata found. Record a new arena after this patch for visible fake players.");
+
         AssignFakeGuids(record, player->GetGUID().GetCounter());
+
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded: packets=%u, actors=%u, firstTime=%u, firstOpcode=%u",
+            uint32(record.Packets.size()), uint32(record.Actors.size()),
+            record.Packets.empty() ? 0 : record.Packets.front().TimestampMs,
+            record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         return true;
     }
 
@@ -745,6 +799,11 @@ namespace
         bg->toggleReplay(player->GetGUID());
         player->SetPendingSpectatorForBG(bg->GetInstanceID());
         bg->StartBattleground();
+
+        // Replays should not make the viewer sit through the real arena prep countdown.
+        // This also prevents countdown broadcasts from racing playback startup.
+        if (!bg->SkipStartDelay())
+            handler.PSendSysMessage("Replay warning: could not skip the arena start countdown.");
 
         BattlegroundTypeId bgTypeId = bg->GetTypeID();
         uint32 queueSlot = 0;
@@ -797,8 +856,8 @@ namespace
         stmt->setUInt32(4, bg->GetMapId());
         CharacterDatabase.Execute(stmt);
 
-        TC_LOG_INFO("arena.replay", "Saved arena replay instance={} map={} arenaType={} packets={} actors={} bytes={}",
-            bg->GetInstanceID(), bg->GetMapId(), uint32(match.ArenaTypeId), uint32(match.Packets.size()), uint32(match.Actors.size()), uint32(buffer.size()));
+        TC_LOG_INFO("arena.replay", "Saved arena replay instance={} map={} arenaType={} packets={} actors={} preStartPackets={} bytes={}",
+            bg->GetInstanceID(), bg->GetMapId(), uint32(match.ArenaTypeId), uint32(match.Packets.size()), uint32(match.Actors.size()), match.PreStartPacketCount, uint32(buffer.size()));
 
         Records.erase(recordItr);
     }
@@ -823,10 +882,7 @@ public:
         if (!bg->isArena())
             return;
 
-        if (bg->GetStatus() != BattlegroundStatus::STATUS_IN_PROGRESS)
-            return;
-
-        if (!IsWatchedOpcode(packet.GetOpcode()))
+        if (!ShouldRecordPacket(bg, packet))
             return;
 
         if (!IsTeamRecorder(bg, player))
@@ -838,13 +894,32 @@ public:
         if (IsDuplicateRecentPacket(record, packet, nowMs))
             return;
 
-        uint32 timestamp = nowMs - record.RecordStartMs;
+        uint32 timestamp = 0;
+        if (bg->GetStatus() == STATUS_WAIT_JOIN)
+        {
+            // Pre-start visual packets are needed to create players client-side, but the viewer
+            // should not wait through arena prep. Send these immediately at replay start.
+            timestamp = 0;
+            ++record.PreStartPacketCount;
+        }
+        else
+        {
+            if (!record.InProgressStartMs)
+            {
+                record.InProgressStartMs = nowMs;
+                TC_LOG_INFO("arena.replay", "Arena replay combat clock started instance={} packetsBeforeStart={}",
+                    bg->GetInstanceID(), record.PreStartPacketCount);
+            }
+
+            timestamp = ARENA_REPLAY_PRELOAD_MS + (nowMs - record.InProgressStartMs);
+        }
+
         record.Packets.push_back({ timestamp, WorldPacket(packet) });
 
-        TC_LOG_DEBUG("arena.replay", "REC instance={} opcode={} t={} delta={} size={} packets={}",
-            bg->GetInstanceID(), packet.GetOpcode(), timestamp,
+        TC_LOG_DEBUG("arena.replay", "REC instance={} status={} opcode={} t={} delta={} size={} packets={} preStart={}",
+            bg->GetInstanceID(), uint32(bg->GetStatus()), packet.GetOpcode(), timestamp,
             record.Packets.size() > 1 ? timestamp - record.Packets[record.Packets.size() - 2].TimestampMs : 0,
-            uint32(packet.size()), uint32(record.Packets.size()));
+            uint32(packet.size()), uint32(record.Packets.size()), record.PreStartPacketCount);
     }
 
     void OnPacketReceive(WorldSession* session, WorldPacket& packet) override
@@ -920,6 +995,9 @@ public:
                 TC_LOG_INFO("arena.replay", "Replay playback armed viewer={} bg={} map={} packets={} actors={} startDelay={}",
                     viewerLowGuid, state.BgInstanceId, state.Match.MapId,
                     uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS);
+
+                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, skipping prep countdown.",
+                    uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()));
             }
 
             if (!state.SentInitialNameResponses)
