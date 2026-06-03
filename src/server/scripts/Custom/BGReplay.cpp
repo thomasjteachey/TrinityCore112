@@ -1565,6 +1565,9 @@ namespace
     {
         uint32 UpdatePackets = 0;
         uint32 CompressedUpdatePackets = 0;
+        uint32 AuraPackets = 0;
+        uint32 AuraUpdatePackets = 0;
+        uint32 AuraUpdateAllPackets = 0;
         uint32 ZeroTimeUpdatePackets = 0;
         uint32 ActorGuidHits = 0;
         uint32 ZeroTimeActorGuidHits = 0;
@@ -1576,6 +1579,17 @@ namespace
 
         for (PacketRecord const& frame : match.Packets)
         {
+            if (frame.Packet.GetOpcode() == SMSG_AURA_UPDATE)
+            {
+                ++audit.AuraPackets;
+                ++audit.AuraUpdatePackets;
+            }
+            else if (frame.Packet.GetOpcode() == SMSG_AURA_UPDATE_ALL)
+            {
+                ++audit.AuraPackets;
+                ++audit.AuraUpdateAllPackets;
+            }
+
             if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
             {
                 ++audit.UpdatePackets;
@@ -2001,10 +2015,6 @@ namespace
             else
                 SendReplayASCommand(viewer, uiGuid, "TRG", 0u);
         }
-
-        uint32 displayId = 0;
-        if (ReplayASGetField(values, UNIT_FIELD_DISPLAYID, displayId) && displayId > 0)
-            SendReplayASCommand(viewer, uiGuid, "DSP", displayId);
     }
 
     void SendReplayASPetStatusFromValues(Player* viewer, MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
@@ -2220,11 +2230,167 @@ namespace
         return attacker.IsPlayer();
     }
 
+
+    struct ReplayASAuraSlotState
+    {
+        uint32 SpellId = 0;
+        uint8 IsDebuff = 0;
+        uint8 Stack = 0;
+        std::string Caster = "0";
+    };
+
+    std::unordered_map<uint64, ReplayASAuraSlotState> ReplayASAuraSlotCache;
+
+    uint64 ReplayASAuraCacheKey(Player* viewer, ObjectGuid targetGuid, uint8 slot)
+    {
+        uint64 viewerPart = viewer ? uint64(viewer->GetGUID().GetCounter()) : 0;
+        return (viewerPart << 40) ^ (targetGuid.GetRawValue() << 8) ^ uint64(slot);
+    }
+
+    void SendReplayASAuraCommand(Player* viewer, ObjectGuid targetGuid, uint8 remove, uint8 stack, uint32 remainingMs,
+        uint32 maxDurationMs, uint32 spellId, uint8 dispelType, uint8 isDebuff, std::string const& caster)
+    {
+        std::ostringstream ss;
+        ss << uint32(remove) << ","
+           << uint32(stack) << ","
+           << remainingMs << ","
+           << maxDurationMs << ","
+           << spellId << ","
+           << uint32(dispelType) << ","
+           << uint32(isDebuff) << ","
+           << caster;
+
+        SendReplayASCommand(viewer, targetGuid, "AUR", ss.str());
+    }
+
+    bool SendReplayASAurasFromPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
+    {
+        // Aura packet layout in this branch:
+        //   SMSG_AURA_UPDATE_ALL: packed target guid, then repeated AuraApplication::BuildUpdatePacket()
+        //   SMSG_AURA_UPDATE:     packed target guid, then one AuraApplication::BuildUpdatePacket()
+        //
+        // BuildUpdatePacket:
+        //   uint8 slot
+        //   uint32 spellId
+        //   if spellId == 0: remove
+        //   uint8 flags
+        //   uint8 casterLevel
+        //   uint8 stackOrCharges
+        //   if !(flags & AFLAG_CASTER): packed caster guid
+        //   if flags & AFLAG_DURATION: uint32 maxDuration, uint32 durationRemaining
+        if (packet.GetOpcode() != SMSG_AURA_UPDATE && packet.GetOpcode() != SMSG_AURA_UPDATE_ALL)
+            return false;
+
+        constexpr uint8 REPLAY_AFLAG_CASTER   = 0x08;
+        constexpr uint8 REPLAY_AFLAG_POSITIVE = 0x10;
+        constexpr uint8 REPLAY_AFLAG_DURATION = 0x20;
+        constexpr uint8 REPLAY_AFLAG_NEGATIVE = 0x80;
+
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        size_t pos = 0;
+        ObjectGuid targetGuid;
+        if (!ReadPackedGuid(payload, pos, targetGuid))
+            return false;
+
+        ReplayActor const* targetActor = FindReplayActorByGuid(match, targetGuid);
+        if (!targetActor)
+            return false;
+
+        ObjectGuid uiGuid = targetActor->FakeGuid;
+
+        bool sentAny = false;
+        while (pos < payload.size())
+        {
+            uint8 slot = 0;
+            if (!ReadUInt8(payload, pos, slot))
+                return sentAny;
+
+            uint32 spellId = 0;
+            if (!ReadUInt32(payload, pos, spellId))
+                return sentAny;
+
+            uint64 cacheKey = ReplayASAuraCacheKey(viewer, uiGuid, slot);
+
+            if (spellId == 0)
+            {
+                auto itr = ReplayASAuraSlotCache.find(cacheKey);
+                if (itr != ReplayASAuraSlotCache.end() && itr->second.SpellId)
+                {
+                    SendReplayASAuraCommand(viewer, uiGuid, 1, itr->second.Stack, 0, 0, itr->second.SpellId, 0,
+                        itr->second.IsDebuff, itr->second.Caster);
+                    ReplayASAuraSlotCache.erase(itr);
+                    sentAny = true;
+                }
+
+                continue;
+            }
+
+            uint8 flags = 0;
+            uint8 casterLevel = 0;
+            uint8 stackOrCharges = 0;
+
+            if (!ReadUInt8(payload, pos, flags) || !ReadUInt8(payload, pos, casterLevel) || !ReadUInt8(payload, pos, stackOrCharges))
+                return sentAny;
+
+            ObjectGuid casterGuid;
+            std::string casterString = "0";
+
+            if (!(flags & REPLAY_AFLAG_CASTER))
+            {
+                if (!ReadPackedGuid(payload, pos, casterGuid))
+                    return sentAny;
+
+                if (ReplayActor const* casterActor = FindReplayActorByGuid(match, casterGuid))
+                    casterString = ReplayASGuidString(casterActor->FakeGuid);
+                else if (casterGuid)
+                    casterString = ReplayASGuidString(casterGuid);
+            }
+            else
+            {
+                casterString = ReplayASGuidString(uiGuid);
+            }
+
+            uint32 maxDurationMs = 0;
+            uint32 remainingMs = 0;
+
+            if (flags & REPLAY_AFLAG_DURATION)
+            {
+                if (!ReadUInt32(payload, pos, maxDurationMs) || !ReadUInt32(payload, pos, remainingMs))
+                    return sentAny;
+            }
+
+            uint8 isDebuff = (flags & REPLAY_AFLAG_NEGATIVE) ? 1 : 0;
+            // The aura packet does not include the dispel type in this branch. The addon still shows a normal icon border.
+            uint8 dispelType = 0;
+
+            ReplayASAuraSlotState state;
+            state.SpellId = spellId;
+            state.IsDebuff = isDebuff;
+            state.Stack = stackOrCharges;
+            state.Caster = casterString;
+            ReplayASAuraSlotCache[cacheKey] = state;
+
+            SendReplayASAuraCommand(viewer, uiGuid, 0, stackOrCharges, remainingMs, maxDurationMs, spellId, dispelType, isDebuff, casterString);
+            sentAny = true;
+
+            (void)casterLevel;
+            (void)REPLAY_AFLAG_POSITIVE;
+        }
+
+        return sentAny;
+    }
+
     void SendReplayASForPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
     {
         // Feed real HP / max HP / power / max power / pet HP to the replay addon from the same
         // update-object packets that make replay actors move/render.
         SendReplayASStatusFromPlaybackPacket(viewer, packet, match);
+
+        // Feed replay aura packets into WoW-style buff/debuff rows.
+        SendReplayASAurasFromPlaybackPacket(viewer, packet, match);
 
         ObjectGuid caster;
         uint32 spellId = 0;
@@ -2658,9 +2824,14 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.back().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
-            audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V14: AC-style storage only; legacy replay table references removed.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u auraPackets=%u auraUpdate=%u auraUpdateAll=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
+            audit.UpdatePackets, audit.CompressedUpdatePackets, audit.AuraPackets, audit.AuraUpdatePackets, audit.AuraUpdateAllPackets,
+            audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
+
+        if (!audit.AuraPackets)
+            ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
+
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V37: aura rows + explicit aura packet diagnostics.");
         return true;
     }
 
