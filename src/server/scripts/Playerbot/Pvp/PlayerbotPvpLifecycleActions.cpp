@@ -409,6 +409,12 @@ namespace
         return battleground && battleground->GetMapId() == 489;
     }
 
+    bool IsScarletChapel(Player const* player)
+    {
+        Battleground const* battleground = player ? player->GetBattleground() : nullptr;
+        return battleground && battleground->GetTypeID(true) == BATTLEGROUND_SCM;
+    }
+
     TeamId ResolveTeamId(uint32 teamValue)
     {
         if (teamValue == TEAM_ALLIANCE || teamValue == ALLIANCE)
@@ -688,51 +694,6 @@ namespace
 
         adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
         return adjustedDestination;
-    }
-
-    bool RecoverBattlegroundBotBelowSurface(Player* player)
-    {
-        if (!player || !player->InBattleground() || !player->IsAlive())
-            return false;
-
-        Map* map = player->FindMap();
-        if (!map)
-            return false;
-
-        float const x = player->GetPositionX();
-        float const y = player->GetPositionY();
-        float const currentZ = player->GetPositionZ();
-
-        // Prefer a tight local probe first so valid lower floors, tunnels and
-        // small drops are not mistaken for an under-terrain fall.
-        float surfaceZ = map->GetHeight(player->GetPhaseMask(), x, y, currentZ + 2.0f, true, 5.0f);
-        if (surfaceZ > INVALID_HEIGHT && currentZ + 3.0f >= surfaceZ)
-            return false;
-
-        // When the bot has already fallen below a map tile, asking for height at
-        // its current Z can legitimately return no terrain because Map::GetHeight
-        // only considers raw map ground that is below the search origin.  Fall
-        // back to a raised origin to find the walkable surface the bot should be
-        // standing on without adding battleground-specific coordinates.
-        if (surfaceZ <= INVALID_HEIGHT)
-            surfaceZ = map->GetHeight(player->GetPhaseMask(), x, y, currentZ + 50.0f, true, 80.0f);
-
-        if (surfaceZ <= INVALID_HEIGHT || currentZ + 3.0f >= surfaceZ)
-            return false;
-
-        if (player->isMoving())
-            player->StopMoving();
-
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
-            motionMaster->Clear();
-
-        float safeZ = surfaceZ;
-        player->UpdateAllowedPositionZ(x, y, safeZ);
-        player->NearTeleportTo(x, y, safeZ, player->GetOrientation());
-        EmitBattlegroundGmDebug(player,
-            "surface-recovery currentZ=" + std::to_string(int32(currentZ)) +
-            " surfaceZ=" + std::to_string(int32(surfaceZ)), 0);
-        return true;
     }
 
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
@@ -1065,7 +1026,11 @@ namespace
 
         if (generatePath && player->InBattleground())
         {
-            if (directDropState.pending &&
+            bool const allowDirectDrop = !IsScarletChapel(player);
+            if (!allowDirectDrop)
+                directDropState.pending = false;
+
+            if (allowDirectDrop && directDropState.pending &&
                 nowMs > directDropState.issueMs + 1200 &&
                 !player->isMoving())
             {
@@ -1091,7 +1056,7 @@ namespace
                 }
             }
 
-            if (nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
+            if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
             {
                 Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
                 motionMaster->MovePoint(0, shortcutDestination, false);
@@ -1115,6 +1080,18 @@ namespace
             PathType pathType = PathType(0);
             if (!TryBuildBattlegroundSegmentDestination(player, safeDestination, segmentDestination, &pathType))
             {
+                if (!allowDirectDrop)
+                {
+                    motionMaster->MovePoint(0, safeDestination, true);
+                    EmitBattlegroundGmDebug(player,
+                        "movepoint=blocked-no-nav fallback=full-path directDrop=disabled-scarlet-chapel destDist=" +
+                        std::to_string(int32(player->GetDistance(safeDestination))), 0);
+
+                    state.lastDestination = destination;
+                    state.lastIssueMs = nowMs;
+                    return true;
+                }
+
                 // Recovery path for segmented-nav failures (for example, after a
                 // partial drop where local nav probing can't find a legal segment):
                 // issue a direct movement order so the bot keeps progressing
@@ -2982,9 +2959,6 @@ namespace playerbot
             return false;
 
         ClearStaleWaitingForResurrectAura(player);
-
-        if (RecoverBattlegroundBotBelowSurface(player))
-            return true;
 
         if (IsRecoveringByEatingOrDrinking(player))
         {

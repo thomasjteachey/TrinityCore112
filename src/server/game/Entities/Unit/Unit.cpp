@@ -3490,6 +3490,27 @@ void Unit::ProcessPositionDataChanged(PositionFullTerrainStatus const& data)
     ProcessTerrainStatusUpdate(oldLiquidStatus, data.liquidInfo);
 }
 
+namespace
+{
+
+bool ShouldPreserveMountInWaterForBattleground(Player const* player)
+{
+    Battleground const* battleground = player ? player->GetBattleground() : nullptr;
+    if (!battleground)
+        return false;
+
+    switch (battleground->GetTypeID(true))
+    {
+        case BATTLEGROUND_SCM:
+        case BATTLEGROUND_RL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+}
+
 void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optional<LiquidData> const& newLiquidData)
 {
     if (!IsControlledByPlayer())
@@ -3503,13 +3524,13 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
     if (IsInWater())
     {
         Player* player = ToPlayer();
-        Battleground const* battleground = player ? player->GetBattleground() : nullptr;
 
         // Scarlet Chapel and Ruins of Lordaeron's shallow water are part of
         // intended PvP pathing and should not force players out of mounts or
         // Travel Form when they cross it.
         if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_RL))
             RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+        }
     }
     else
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
@@ -3689,6 +3710,13 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
     ASSERT(aura->HasEffect(effIndex));
     AuraApplication * aurApp = aura->GetApplicationOfTarget(GetGUID());
     ASSERT(aurApp);
+
+    // Aura application can be re-entered by scripts/procs/target-map updates while
+    // another effect from the same aura is being applied. If that already applied
+    // this effect, do not try to handle it a second time.
+    if (aurApp->HasEffect(effIndex))
+        return;
+
     if (!aurApp->GetEffectMask())
         _ApplyAura(aurApp, 1 << effIndex);
     else

@@ -207,8 +207,6 @@ enum BG_AB_Objectives
     AB_OBJECTIVE_DEFEND_BASE            = 123
 };
 
-#define BG_AB_NotABBGWeekendHonorTicks      260
-#define BG_AB_ABBGWeekendHonorTicks         160
 #define BG_AB_NotABBGWeekendReputationTicks 160
 #define BG_AB_ABBGWeekendReputationTicks    120
 
@@ -349,10 +347,8 @@ class BattlegroundAB : public Battleground
         BG_AB_BannerTimer   m_BannerTimers[BG_AB_DYNAMIC_NODES_COUNT];
         uint32              m_NodeTimers[BG_AB_DYNAMIC_NODES_COUNT];
         uint32              m_lastTick[PVP_TEAMS_COUNT];
-        uint32              m_HonorScoreTics[PVP_TEAMS_COUNT];
         uint32              m_ReputationScoreTics[PVP_TEAMS_COUNT];
         bool                m_IsInformedNearVictory;
-        uint32              m_HonorTics;
         uint32              m_ReputationTics;
         // need for achievements
         bool                m_TeamScores500Disadvantage[PVP_TEAMS_COUNT];
