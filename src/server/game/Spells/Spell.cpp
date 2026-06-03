@@ -75,6 +75,7 @@ namespace
 {
     constexpr uint32 SPELL_DRUID_BEEFS_TENACITY = 89766;
     constexpr uint32 SPELL_DRUID_UNSTOPPABLE = 89765;
+    constexpr uint32 SPELL_ROGUE_VANISH_AURA = 89783;
 
     bool IsTrapGameObject(GameObject const* caster)
     {
@@ -146,6 +147,25 @@ namespace
             message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << ".";
 
         sWorld->SendServerMessage(SERVER_MSG_STRING, message.str(), ownerPlayer);
+    }
+
+    bool IsVanishProtectedInFlightSpell(Spell const* spell, Unit const* target)
+    {
+        if (!spell || !target)
+            return false;
+
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (!spellInfo || spellInfo->Speed <= 0.0f)
+            return false;
+
+        WorldObject* caster = spell->GetCaster();
+        if (!caster || caster == target)
+            return false;
+
+        if (!target->HasAura(SPELL_ROGUE_VANISH_AURA))
+            return false;
+
+        return caster->IsValidAttackTarget(target, spellInfo);
     }
 
     char const* GetNaturesGraspMissReason(SpellMissInfo missInfo)
@@ -2508,6 +2528,8 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
                 reportedNaturesGraspFailure = true;
             }
 
+            MissCondition = missInfo;
+            spell->targetMissInfo = missInfo;
             if (missInfo != SPELL_MISS_MISS)
                 spell->m_caster->SendSpellMiss(unit, spell->m_spellInfo->Id, missInfo);
             spell->m_damage = 0;
@@ -2879,8 +2901,8 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
     if (m_spellInfo->Speed && unit->IsImmunedToSpell(m_spellInfo, m_caster))
         return SPELL_MISS_IMMUNE;
 
-    // Vanish aura protects against hostile projectiles that were already in flight before stealth was gained
-    if (m_spellInfo->Speed > 0.0f && unit->HasAura(89783) && m_caster && m_caster != unit && m_caster->IsValidAttackTarget(unit, m_spellInfo))
+    // Vanish aura protects against hostile projectiles that are resolved after stealth was gained.
+    if (IsVanishProtectedInFlightSpell(this, unit))
         return SPELL_MISS_IMMUNE;
 
     if (Player* player = unit->ToPlayer())
