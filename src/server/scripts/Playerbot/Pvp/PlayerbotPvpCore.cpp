@@ -3015,8 +3015,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
             { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "mana gem missing", IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
-            { "create mana ruby", "create mana ruby", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mana gem missing", !player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
+            { "create mana ruby", "create mana ruby outside combat", 10054, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "defensive reset", !isFireMage && !IsSpellReady(player, 11958) && IsSpellReady(player, 12472), 7.0f,
             { "mage cold snap", "reset frost defenses when ice block unavailable", 12472, playerbot::PvpClassSpellContext::TargetMode::Self } }
     });
