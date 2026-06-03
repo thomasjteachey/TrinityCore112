@@ -2871,7 +2871,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V71: viewer replay team set to Alliance for hostile Horde/67 overhead names.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V72: soft spectator PvP client context for replay overhead name colors.");
         return true;
     }
 
@@ -2913,6 +2913,18 @@ std::vector<uint8> payload(packet.size());
             replayReturnPos.GetOrientation());
 
         player->SetIsSpectator(true);
+
+        // Native 3D overhead-name color appears to be dominated by the viewer's spectator/client PvP context.
+        // SetIsSpectator(true) makes the viewer isolated, non-attackable, and removes FFA PvP. That likely causes
+        // the client to render all fake replay players as neutral/yellow no matter what we do to their fields.
+        //
+        // Keep the server-side spectator bookkeeping, but undo the client-visible neutral/non-attackable parts
+        // for this replay viewer. This is a test branch for overhead name coloring.
+        player->ClearUnitState(UNIT_STATE_ISOLATED);
+        player->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+        player->SetPvP(true);
+        player->SetPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
+
         bg->toggleReplay(player->GetGUID());
         player->SetPendingSpectatorForBG(bg->GetInstanceID());
         bg->StartBattleground();
@@ -2925,13 +2937,8 @@ std::vector<uint8> payload(packet.size());
         BattlegroundTypeId bgTypeId = bg->GetTypeID();
         uint32 queueSlot = 0;
 
-        // Native 3D overhead player-name color is strongly tied to the viewer's own battleground/team
-        // relationship state. TEAM_NEUTRAL makes the client treat replay actors as neutral/yellow.
-        //
-        // For replay viewing, force the viewer's client-side BG team to Alliance so replay actors on
-        // HORDE / team 67 are considered enemy/hostile by the client and have a chance to render red.
-        //
-        // This does not change the recorded replay actor data. It only changes the viewer's BG team context.
+        // Give the viewer a non-neutral BG team context. Since your old "green team" actors are HORDE/team 67,
+        // an Alliance viewer context gives the client the best chance to classify them as enemy/red.
         TeamId teamId = TEAM_ALLIANCE;
         WorldPacket status;
 
@@ -2940,8 +2947,9 @@ std::vector<uint8> payload(packet.size());
         sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, bg, queueSlot, STATUS_IN_PROGRESS, 0, 0, bg->GetArenaType(), teamId);
         player->GetSession()->SendPacket(&status);
 
-        TC_LOG_INFO("arena.replay", "Replay viewer={} client BG team forced to Alliance for overhead-name reaction test", viewerLowGuid);
-        handler.PSendSysMessage("Replay viewer team context: Alliance. Horde/team 67 replay actors should be treated as hostile/red if client uses BG team relation.");
+        TC_LOG_INFO("arena.replay", "Replay viewer={} soft spectator PvP context enabled: team=Alliance pvp={} ffa={}",
+            viewerLowGuid, player->IsPvP() ? 1u : 0u, player->IsFFAPvP() ? 1u : 0u);
+        handler.PSendSysMessage("Replay soft spectator PvP context enabled: viewer team=Alliance, PvP/FFA on.");
 
         PlaybackState state;
         state.Match = std::move(record);
