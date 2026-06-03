@@ -67,6 +67,7 @@ constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
+constexpr uint32 kWarlockFelDominationSpellId = 18708;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -3360,10 +3361,10 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
         { "warlock devour magic enemy", "felhunter dispels enemy magic buffs", 19736, playerbot::PvpClassSpellContext::TargetMode::Enemy, devourEnemyTarget ? devourEnemyTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, fearTarget, 53.0f,
         { "warlock fear", "prioritize fear control on paladin/priest targets in range", 6215, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget ? fearTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !isAfflictionWarlock && player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708), 52.0f,
-        { "warlock fel domination", "prepare instant pet recovery before voidwalker summon", 18708, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, needsPetSummon && IsSpellReady(player, summonPetSpell), 51.0f,
-        { isAfflictionWarlock ? "warlock summon felhunter" : "warlock summon voidwalker", isAfflictionWarlock ? "recover felhunter in combat when absent" : "recover voidwalker in combat when absent", summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, !isAfflictionWarlock && player->IsInCombat() && needsPetSummon && !player->HasAura(kWarlockFelDominationSpellId) && IsSpellReady(player, kWarlockFelDominationSpellId), 52.0f,
+        { "warlock fel domination", "prepare instant pet recovery before voidwalker summon", kWarlockFelDominationSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, needsPetSummon && (!player->IsInCombat() || player->HasAura(kWarlockFelDominationSpellId)) && IsSpellReady(player, summonPetSpell), 51.0f,
+        { isAfflictionWarlock ? "warlock summon felhunter" : "warlock summon voidwalker", isAfflictionWarlock ? "recover felhunter when absent and safe to summon" : "recover voidwalker when absent and safe to summon", summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && !player->HasAura(25228) && IsSpellReady(player, 19028), 45.0f,
         { "warlock soul link", "maintain soul link when pet is available", 19028, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, target->GetPowerType() == POWER_MANA && ShouldUseCurseOfTongues(target) && !HasAuraFromSpellChain(target, 11719) &&
