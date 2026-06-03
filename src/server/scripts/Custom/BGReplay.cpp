@@ -1302,12 +1302,11 @@ namespace
         }
         else if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
         {
-            ClearReplaySelfFlagsInUpdateObjectPayload(payload, match);
-            RewritePayloadGuids(payload, match);
+            RewriteUpdateObjectPayload(payload, match);
         }
         else
         {
-            RewritePayloadGuids(payload, match);
+            RewriteNonUpdatePacketGuids(frame.Packet.GetOpcode(), payload, match);
         }
 
         WorldPacket out(frame.Packet.GetOpcode(), payload.size());
@@ -1659,7 +1658,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V11: structured update-object GUID rewrite; unsafe global byte replacement disabled.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V11.1: structured update-object GUID rewrite; unsafe global byte replacement disabled.");
         return true;
     }
 
