@@ -48,6 +48,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstring>
 #include <deque>
@@ -1760,8 +1761,8 @@ namespace
         {
             ObjectGuid guid = actor.FakeGuid;
             uint32 powerType = ReplayASPowerTypeForClass(actor.Class);
-            uint32 maxPower = powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? 100 : 10000;
-            uint32 currentPower = powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? 0 : maxPower;
+            uint32 maxPower = powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? 100u : (powerType == POWER_ENERGY ? 100u : 1u);
+            uint32 currentPower = powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? 0u : maxPower;
             uint32 team = actor.Team ? actor.Team : ALLIANCE;
 
             SendReplayASCommand(viewer, guid, "NME", actor.Name.empty() ? "Replay" : actor.Name);
@@ -1781,6 +1782,280 @@ namespace
         }
 
         state.SentReplayASInitial = true;
+    }
+
+    constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
+    constexpr uint32 REPLAY_OBJECT_FIELD_GUID_HIGH      = 0x0001;
+    constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_LOW   = 0x000E;
+    constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH  = 0x000F;
+    constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_LOW    = 0x0010;
+    constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_HIGH   = 0x0011;
+    constexpr uint32 REPLAY_UNIT_FIELD_HEALTH           = 0x0018;
+    constexpr uint32 REPLAY_UNIT_FIELD_POWER1           = 0x0019;
+    constexpr uint32 REPLAY_UNIT_FIELD_MAXHEALTH        = 0x0020;
+    constexpr uint32 REPLAY_UNIT_FIELD_MAXPOWER1        = 0x0021;
+
+    uint32 ReplayASPowerFieldForType(uint32 powerType)
+    {
+        return REPLAY_UNIT_FIELD_POWER1 + powerType;
+    }
+
+    uint32 ReplayASMaxPowerFieldForType(uint32 powerType)
+    {
+        return REPLAY_UNIT_FIELD_MAXPOWER1 + powerType;
+    }
+
+    bool ReplayASReadFieldMap(std::vector<uint8> const& payload, size_t& pos, std::unordered_map<uint32, uint32>& values)
+    {
+        uint8 maskBlockCount = 0;
+        if (!ReadUInt8(payload, pos, maskBlockCount))
+            return false;
+
+        std::vector<uint32> masks;
+        masks.reserve(maskBlockCount);
+
+        for (uint8 i = 0; i < maskBlockCount; ++i)
+        {
+            uint32 mask = 0;
+            if (!ReadUInt32(payload, pos, mask))
+                return false;
+
+            masks.push_back(mask);
+        }
+
+        for (uint32 block = 0; block < masks.size(); ++block)
+        {
+            uint32 mask = masks[block];
+
+            for (uint8 bit = 0; bit < 32; ++bit)
+            {
+                if (!(mask & (uint32(1) << bit)))
+                    continue;
+
+                uint32 value = 0;
+                if (!ReadUInt32(payload, pos, value))
+                    return false;
+
+                values[block * 32 + bit] = value;
+            }
+        }
+
+        return true;
+    }
+
+    bool ReplayASGetField(std::unordered_map<uint32, uint32> const& values, uint32 field, uint32& value)
+    {
+        auto itr = values.find(field);
+        if (itr == values.end())
+            return false;
+
+        value = itr->second;
+        return true;
+    }
+
+    ObjectGuid ReplayASGuidFromFields(std::unordered_map<uint32, uint32> const& values, uint32 lowField, uint32 highField)
+    {
+        uint32 low = 0;
+        uint32 high = 0;
+
+        if (!ReplayASGetField(values, lowField, low) || !ReplayASGetField(values, highField, high))
+            return ObjectGuid::Empty;
+
+        uint64 raw = uint64(low) | (uint64(high) << 32);
+        return ObjectGuid(raw);
+    }
+
+    void SendReplayASPlayerStatusFromValues(Player* viewer, MatchRecord const& match, ObjectGuid objectGuid, std::unordered_map<uint32, uint32> const& values)
+    {
+        ReplayActor const* actor = FindReplayActorByGuid(match, objectGuid);
+        if (!actor)
+            return;
+
+        ObjectGuid uiGuid = actor->FakeGuid;
+
+        uint32 health = 0;
+        uint32 maxHealth = 0;
+        if (ReplayASGetField(values, REPLAY_UNIT_FIELD_MAXHEALTH, maxHealth) && maxHealth > 0)
+            SendReplayASCommand(viewer, uiGuid, "MHP", maxHealth);
+
+        if (ReplayASGetField(values, REPLAY_UNIT_FIELD_HEALTH, health))
+        {
+            SendReplayASCommand(viewer, uiGuid, "CHP", health);
+            SendReplayASCommand(viewer, uiGuid, "STA", health > 0 ? 1u : 0u);
+        }
+
+        uint32 powerType = ReplayASPowerTypeForClass(actor->Class);
+        SendReplayASCommand(viewer, uiGuid, "PWT", powerType);
+
+        uint32 maxPower = 0;
+        if (ReplayASGetField(values, ReplayASMaxPowerFieldForType(powerType), maxPower) && maxPower > 0)
+            SendReplayASCommand(viewer, uiGuid, "MPW", maxPower);
+
+        uint32 currentPower = 0;
+        if (ReplayASGetField(values, ReplayASPowerFieldForType(powerType), currentPower))
+            SendReplayASCommand(viewer, uiGuid, "CPW", currentPower);
+    }
+
+    void SendReplayASPetStatusFromValues(Player* viewer, MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
+    {
+        ObjectGuid ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_SUMMONEDBY_LOW, REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH);
+        if (!ownerGuid)
+            ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_CREATEDBY_LOW, REPLAY_UNIT_FIELD_CREATEDBY_HIGH);
+
+        ReplayActor const* owner = FindReplayActorByGuid(match, ownerGuid);
+        if (!owner)
+            return;
+
+        uint32 health = 0;
+        uint32 maxHealth = 0;
+
+        if (!ReplayASGetField(values, REPLAY_UNIT_FIELD_HEALTH, health))
+            return;
+
+        uint32 pct = 0;
+        if (ReplayASGetField(values, REPLAY_UNIT_FIELD_MAXHEALTH, maxHealth) && maxHealth > 0)
+            pct = std::min<uint32>(100u, uint32(std::ceil(double(health) * 100.0 / double(maxHealth))));
+        else
+            pct = health > 0 ? 100u : 0u;
+
+        SendReplayASCommand(viewer, owner->FakeGuid, "PHP", pct);
+        if (pct > 0)
+        {
+            // 0 is a safe generic icon in the addon; future improvement can map pet family/entry to the addon icon table.
+            SendReplayASCommand(viewer, owner->FakeGuid, "PET", 0u);
+        }
+    }
+
+    bool SendReplayASStatusFromUpdatePayload(Player* viewer, MatchRecord const& match, std::vector<uint8>& payload)
+    {
+        constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
+        constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
+        constexpr uint8 REPLAY_UPDATETYPE_CREATE_OBJECT = 2;
+        constexpr uint8 REPLAY_UPDATETYPE_CREATE_OBJECT2 = 3;
+        constexpr uint8 REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS = 4;
+        constexpr uint8 REPLAY_UPDATETYPE_NEAR_OBJECTS = 5;
+
+        size_t pos = 0;
+        uint32 blockCount = 0;
+
+        if (!ReadUInt32(payload, pos, blockCount))
+            return false;
+
+        for (uint32 block = 0; block < blockCount; ++block)
+        {
+            uint8 updateType = 0;
+            if (!ReadUInt8(payload, pos, updateType))
+                return false;
+
+            if (updateType == REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS || updateType == REPLAY_UPDATETYPE_NEAR_OBJECTS)
+            {
+                uint32 guidCount = 0;
+                if (!ReadUInt32(payload, pos, guidCount))
+                    return false;
+
+                for (uint32 i = 0; i < guidCount; ++i)
+                {
+                    if (!SkipPackedGuid(payload, pos))
+                        return false;
+                }
+
+                continue;
+            }
+
+            ObjectGuid blockGuid;
+            if (!ReadPackedGuid(payload, pos, blockGuid))
+                return false;
+
+            switch (updateType)
+            {
+                case REPLAY_UPDATETYPE_VALUES:
+                {
+                    std::unordered_map<uint32, uint32> values;
+                    if (!ReplayASReadFieldMap(payload, pos, values))
+                        return false;
+
+                    if (FindReplayActorByGuid(match, blockGuid))
+                        SendReplayASPlayerStatusFromValues(viewer, match, blockGuid, values);
+                    else
+                        SendReplayASPetStatusFromValues(viewer, match, values);
+
+                    break;
+                }
+                case REPLAY_UPDATETYPE_MOVEMENT:
+                {
+                    if (!SkipMovementCreateData(payload, pos, match, blockGuid))
+                        return false;
+
+                    break;
+                }
+                case REPLAY_UPDATETYPE_CREATE_OBJECT:
+                case REPLAY_UPDATETYPE_CREATE_OBJECT2:
+                {
+                    uint8 objectTypeId = 0;
+                    if (!ReadUInt8(payload, pos, objectTypeId))
+                        return false;
+
+                    if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
+                        return false;
+
+                    std::unordered_map<uint32, uint32> values;
+                    if (!ReplayASReadFieldMap(payload, pos, values))
+                        return false;
+
+                    if (FindReplayActorByGuid(match, blockGuid))
+                        SendReplayASPlayerStatusFromValues(viewer, match, blockGuid, values);
+                    else
+                        SendReplayASPetStatusFromValues(viewer, match, values);
+
+                    break;
+                }
+                default:
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool SendReplayASStatusFromPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
+    {
+        if (packet.GetOpcode() == SMSG_UPDATE_OBJECT)
+        {
+            std::vector<uint8> payload(packet.size());
+            if (!payload.empty())
+                std::memcpy(payload.data(), packet.contents(), payload.size());
+
+            return SendReplayASStatusFromUpdatePayload(viewer, match, payload);
+        }
+
+        if (packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
+        {
+            if (packet.size() < 4)
+                return false;
+
+            std::vector<uint8> payload(packet.size());
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+            uint32 uncompressedSize =
+                uint32(payload[0]) |
+                (uint32(payload[1]) << 8) |
+                (uint32(payload[2]) << 16) |
+                (uint32(payload[3]) << 24);
+
+            if (!uncompressedSize || uncompressedSize > 16 * 1024 * 1024)
+                return false;
+
+            std::vector<uint8> decompressed(uncompressedSize);
+            uLongf actualSize = uncompressedSize;
+
+            int zResult = uncompress(decompressed.data(), &actualSize, payload.data() + 4, uLong(payload.size() - 4));
+            if (zResult != Z_OK || actualSize != uncompressedSize)
+                return false;
+
+            return SendReplayASStatusFromUpdatePayload(viewer, match, decompressed);
+        }
+
+        return false;
     }
 
     bool ExtractReplayASSpell(WorldPacket const& packet, ObjectGuid& caster, uint32& spellId, int32& castTime)
@@ -1837,6 +2112,10 @@ namespace
 
     void SendReplayASForPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
     {
+        // Feed real HP / max HP / power / max power / pet HP to the replay addon from the same
+        // update-object packets that make replay actors move/render.
+        SendReplayASStatusFromPlaybackPacket(viewer, packet, match);
+
         ObjectGuid caster;
         uint32 spellId = 0;
         int32 castTime = 0;
