@@ -1,5 +1,5 @@
 //
-// Arena Replay V7 replacement for the old BGReplay.cpp.
+// Arena Replay V10 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
@@ -13,7 +13,7 @@
 // - Replay startup force-opens arena doors and sets replay BG to IN_PROGRESS instead of waiting through prep.
 // - Replay blobs written by this file contain a V2 header with participants.
 // - During playback, original arena player GUIDs are rewritten to fake player GUIDs so the viewer can watch their own replays.
-// - Playback clears UPDATEFLAG_SELF from recorded player create packets so replay ghosts are not treated as the local player.
+// - Playback clears UPDATEFLAG_SELF from recorded player create packets and rewrites the player LOWGUID payload from self=0x2F to non-self=0x08.
 // - Fake player name-query responses are sent before playback starts.
 //
 // Install:
@@ -566,6 +566,17 @@ namespace
         payload[pos + 1] = uint8((value >> 8) & 0xFF);
     }
 
+    void WriteUInt32(std::vector<uint8>& payload, size_t pos, uint32 value)
+    {
+        if (!HasRemaining(payload, pos, 4))
+            return;
+
+        payload[pos] = uint8(value & 0xFF);
+        payload[pos + 1] = uint8((value >> 8) & 0xFF);
+        payload[pos + 2] = uint8((value >> 16) & 0xFF);
+        payload[pos + 3] = uint8((value >> 24) & 0xFF);
+    }
+
     uint32 CountSetBits(uint32 value)
     {
         uint32 count = 0;
@@ -633,11 +644,13 @@ namespace
         return true;
     }
 
-    bool SkipMovementCreateData(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
+    bool SkipMovementCreateData(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid, uint8 objectTypeId = 0xFF)
     {
         // Mirrored from Object::BuildMovementUpdate().
         // This is intentionally conservative: if the layout looks unsafe, return false and leave the packet alone
         // rather than shifting bytes or making the client parse garbage.
+        constexpr uint8 REPLAY_TYPEID_PLAYER = 4;
+
         constexpr uint16 REPLAY_UPDATEFLAG_SELF = 0x0001;
         constexpr uint16 REPLAY_UPDATEFLAG_TRANSPORT = 0x0002;
         constexpr uint16 REPLAY_UPDATEFLAG_HAS_TARGET = 0x0004;
@@ -663,14 +676,24 @@ namespace
         if (!ReadUInt16(payload, pos, flags))
             return false;
 
-        // This was the client-crasher in V7/V8:
-        // packets recorded from a player's own session can have UPDATEFLAG_SELF on that player's create block.
+        bool clearedSelfFromPlayerCreate = false;
+
+        // Packets recorded from a player's own session can have UPDATEFLAG_SELF on that player's create block.
         // During replay that actor is NOT the active client player, so leaving SELF set can make WoW treat a
         // replay ghost as the local player object and explode while parsing the create block.
-        if ((flags & REPLAY_UPDATEFLAG_SELF) && IsReplayActorGuid(match, blockGuid))
+        //
+        // Important player-specific detail from Object::BuildMovementUpdate():
+        // if TYPEID_PLAYER and UPDATEFLAG_LOWGUID are present, the payload is:
+        //   self player create:     0x0000002F
+        //   non-self player create: 0x00000008
+        //
+        // V9 cleared the SELF bit but left the lowguid payload as 0x2F. That can make player ghosts invalid
+        // while normal units/pets still render. V10 also patches that LOWGUID payload to 0x08 below.
+        if ((flags & REPLAY_UPDATEFLAG_SELF) && objectTypeId == REPLAY_TYPEID_PLAYER && IsReplayActorGuid(match, blockGuid))
         {
             flags &= ~REPLAY_UPDATEFLAG_SELF;
             WriteUInt16(payload, flagsPos, flags);
+            clearedSelfFromPlayerCreate = true;
         }
 
         if (flags & REPLAY_UPDATEFLAG_LIVING)
@@ -793,6 +816,13 @@ namespace
             if (!HasRemaining(payload, pos, 4))
                 return false;
 
+            if (clearedSelfFromPlayerCreate)
+            {
+                // Object::BuildMovementUpdate() writes 0x2F for self player creates and 0x08 for non-self
+                // player creates. Since this replay actor is now a non-self ghost, patch the payload too.
+                WriteUInt32(payload, pos, 0x00000008);
+            }
+
             pos += 4;
         }
 
@@ -892,7 +922,7 @@ namespace
                     if (!ReadUInt8(payload, pos, objectTypeId))
                         return false;
 
-                    if (!SkipMovementCreateData(payload, pos, match, blockGuid))
+                    if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
                     if (!SkipUpdateValuesBlock(payload, pos))
@@ -1464,7 +1494,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V9: using mask-stable fake GUIDs and clearing UPDATEFLAG_SELF from replay actor create packets.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V10: mask-stable fake GUIDs; player SELF creates are converted to non-self LOWGUID payloads.");
         return true;
     }
 
