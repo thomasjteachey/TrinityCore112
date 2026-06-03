@@ -278,18 +278,108 @@ namespace
         return true;
     }
 
-    uint32 MakeFakePlayerCounter(uint32 viewerLowGuid, uint32 index)
+    uint8 PackedGuidMask(uint64 raw)
     {
-        // Player high guid is 0x0000 on this branch, so fake player GUIDs are just high low counters.
-        // Use high low-guid values that should never collide with real character IDs.
-        uint32 base = ARENA_REPLAY_FAKE_GUID_BASE - ((viewerLowGuid & 0x0FFFu) << 4);
-        return base - index - 1;
+        uint8 mask = 0;
+        for (uint8 i = 0; i < 8; ++i)
+        {
+            if (uint8((raw >> (i * 8)) & 0xFF))
+                mask |= uint8(1 << i);
+        }
+
+        return mask;
+    }
+
+    uint32 MakeMaskStableFakePlayerCounter(uint32 originalCounter, uint32 salt)
+    {
+        // This is intentionally NOT a huge fake counter like 0xF0000000.
+        //
+        // V7 could crash the client because rewriting a packed player GUID could change the packed GUID length
+        // inside SMSG_COMPRESSED_UPDATE_OBJECT create blocks. That shifts the update-object byte stream and the
+        // 3.3.5 client can explode while parsing it.
+        //
+        // So the fake player low-guid must preserve the exact nonzero-byte mask of the original low-guid.
+        // Example:
+        //   original low 0x0000004D -> fake low must be 0x000000XX
+        //   original low 0x0000124D -> fake low must be 0x0000XXYY
+        //
+        // Player high-guid is zero on this branch, so preserving the low-guid byte mask preserves the full packed
+        // GUID mask/length for player GUIDs.
+        uint32 counter = 0;
+
+        for (uint8 i = 0; i < 4; ++i)
+        {
+            uint8 originalByte = uint8((originalCounter >> (i * 8)) & 0xFF);
+            if (!originalByte)
+                continue;
+
+            uint8 candidate = uint8((uint32(originalByte) + 37u + salt * 53u + i * 29u) & 0xFFu);
+            if (!candidate)
+                candidate = uint8(1u + ((salt + i * 17u) % 255u));
+
+            counter |= uint32(candidate) << (i * 8);
+        }
+
+        return counter;
     }
 
     void AssignFakeGuids(MatchRecord& match, uint32 viewerLowGuid)
     {
+        std::unordered_set<uint32> usedCounters;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.OriginalGuid.IsPlayer())
+                usedCounters.insert(actor.OriginalGuid.GetCounter());
+        }
+
         for (size_t i = 0; i < match.Actors.size(); ++i)
-            match.Actors[i].FakeGuid = ObjectGuid::Create<HighGuid::Player>(MakeFakePlayerCounter(viewerLowGuid, uint32(i)));
+        {
+            ReplayActor& actor = match.Actors[i];
+
+            uint32 originalCounter = actor.OriginalGuid.GetCounter();
+            uint8 originalMask = PackedGuidMask(actor.OriginalGuid.GetRawValue());
+
+            uint32 chosenCounter = 0;
+            for (uint32 attempt = 0; attempt < 2048; ++attempt)
+            {
+                uint32 salt = uint32(i + 1) * 97u + attempt + (viewerLowGuid & 0xFFu);
+                uint32 candidate = MakeMaskStableFakePlayerCounter(originalCounter, salt);
+
+                if (!candidate)
+                    continue;
+
+                if (usedCounters.find(candidate) != usedCounters.end())
+                    continue;
+
+                ObjectGuid fake = ObjectGuid::Create<HighGuid::Player>(candidate);
+                if (fake == actor.OriginalGuid)
+                    continue;
+
+                if (PackedGuidMask(fake.GetRawValue()) != originalMask)
+                    continue;
+
+                chosenCounter = candidate;
+                break;
+            }
+
+            if (!chosenCounter)
+            {
+                // Last resort: keep the original GUID rather than creating a packet with a different packed size.
+                // This can make self-replay imperfect, but it is safer than crashing the client.
+                actor.FakeGuid = actor.OriginalGuid;
+                TC_LOG_ERROR("arena.replay", "Replay fake GUID fallback used for original={} mask={}",
+                    actor.OriginalGuid.GetRawValue(), uint32(originalMask));
+                continue;
+            }
+
+            usedCounters.insert(chosenCounter);
+            actor.FakeGuid = ObjectGuid::Create<HighGuid::Player>(chosenCounter);
+
+            TC_LOG_INFO("arena.replay", "Replay fake GUID map original={} fake={} originalMask={} fakeMask={}",
+                actor.OriginalGuid.GetRawValue(), actor.FakeGuid.GetRawValue(),
+                uint32(originalMask), uint32(PackedGuidMask(actor.FakeGuid.GetRawValue())));
+        }
     }
 
     void RefreshActorsFromBattleground(Battleground* bg, MatchRecord& match)
@@ -378,6 +468,16 @@ namespace
         if (from.empty())
             return;
 
+        // Never do length-changing replacements inside replay packets.
+        // SMSG_UPDATE_OBJECT and movement payloads are structured binary streams; shifting bytes corrupts the
+        // remainder of the packet and can crash the 3.3.5 client.
+        if (from.size() != to.size())
+        {
+            TC_LOG_ERROR("arena.replay", "Skipped unsafe replay GUID rewrite: fromSize={} toSize={}",
+                uint32(from.size()), uint32(to.size()));
+            return;
+        }
+
         auto it = payload.begin();
         while (it != payload.end())
         {
@@ -385,10 +485,8 @@ namespace
             if (it == payload.end())
                 break;
 
-            size_t pos = size_t(std::distance(payload.begin(), it));
-            payload.erase(payload.begin() + pos, payload.begin() + pos + from.size());
-            payload.insert(payload.begin() + pos, to.begin(), to.end());
-            it = payload.begin() + pos + to.size();
+            std::copy(to.begin(), to.end(), it);
+            it += to.size();
         }
     }
 
@@ -434,9 +532,16 @@ namespace
 
         RewritePayloadGuids(decompressed, match);
 
-        // GUID rewriting can change packed GUID length. The compressed update-object header must
-        // therefore use the post-rewrite uncompressed size, not the original size from the DB row.
+        // V8 fake GUIDs preserve the packed GUID byte mask, and ReplaceAllBytes refuses length-changing rewrites.
+        // Therefore the uncompressed update-object size must stay stable. Keep this explicit so any future bad
+        // rewrite is visible in logs instead of silently crashing the client.
         uint32 const rewrittenUncompressedSize = uint32(decompressed.size());
+        if (rewrittenUncompressedSize != uncompressedSize)
+        {
+            TC_LOG_ERROR("arena.replay", "Replay compressed update changed uncompressed size old={} new={}; refusing rewrite",
+                uncompressedSize, rewrittenUncompressedSize);
+            return false;
+        }
 
         uLongf compressedBound = compressBound(uLong(decompressed.size()));
         std::vector<uint8> compressed(compressedBound);
@@ -936,6 +1041,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V8: using mask-stable fake GUIDs to avoid corrupting compressed update-object packets.");
         return true;
     }
 
