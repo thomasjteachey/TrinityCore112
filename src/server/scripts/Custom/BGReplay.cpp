@@ -68,7 +68,7 @@
 
 namespace
 {
-    // Replay V84: quiet messages plus replay restart button support.
+    // Replay V85: replay restart button with ChatCommand namespace compile fix.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
@@ -3721,14 +3721,14 @@ class BGReplayCommandScript : public CommandScript
 public:
     BGReplayCommandScript() : CommandScript("BGReplayCommandScript") { }
 
-    ChatCommandTable GetCommands() const override
+    Trinity::ChatCommands::ChatCommandTable GetCommands() const override
     {
-        static ChatCommandTable replayCommandTable =
+        static Trinity::ChatCommands::ChatCommandTable replayCommandTable =
         {
-            { "restart", HandleReplayRestart, rbac::RBAC_PERM_COMMAND_GM, Console::No }
+            { "restart", HandleReplayRestart, rbac::RBAC_PERM_COMMAND_GM, Trinity::ChatCommands::Console::No }
         };
 
-        static ChatCommandTable rootTable =
+        static Trinity::ChatCommands::ChatCommandTable rootTable =
         {
             { "replay", replayCommandTable }
         };
