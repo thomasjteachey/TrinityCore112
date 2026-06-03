@@ -2279,14 +2279,14 @@ namespace
         //   if !(flags & AFLAG_CASTER): packed caster guid
         //   if flags & AFLAG_DURATION: uint32 maxDuration, uint32 durationRemaining
         if (packet.GetOpcode() != SMSG_AURA_UPDATE && packet.GetOpcode() != SMSG_AURA_UPDATE_ALL)
-            return false;
-
+            return false;        constexpr uint8 REPLAY_AFLAG_EFFECT1  = 0x01;
+        constexpr uint8 REPLAY_AFLAG_EFFECT2  = 0x02;
+        constexpr uint8 REPLAY_AFLAG_EFFECT3  = 0x04;
         constexpr uint8 REPLAY_AFLAG_CASTER   = 0x08;
         constexpr uint8 REPLAY_AFLAG_POSITIVE = 0x10;
         constexpr uint8 REPLAY_AFLAG_DURATION = 0x20;
         constexpr uint8 REPLAY_AFLAG_NEGATIVE = 0x80;
-
-        std::vector<uint8> payload(packet.size());
+std::vector<uint8> payload(packet.size());
         if (!payload.empty())
             std::memcpy(payload.data(), packet.contents(), payload.size());
 
@@ -2360,6 +2360,19 @@ namespace
             {
                 if (!ReadUInt32(payload, pos, maxDurationMs) || !ReadUInt32(payload, pos, remainingMs))
                     return sentAny;
+            }            bool hasEffect = (flags & (REPLAY_AFLAG_EFFECT1 | REPLAY_AFLAG_EFFECT2 | REPLAY_AFLAG_EFFECT3)) != 0;
+            bool hasDefaultFramePolarity = (flags & (REPLAY_AFLAG_POSITIVE | REPLAY_AFLAG_NEGATIVE)) != 0;
+
+            // Mimic the normal Blizzard unit-frame aura list more closely:
+            // only show client-visible positive/negative auras with real aura effects.
+            // This filters out neutral/internal/passive-looking aura entries that the raw aura packet can contain.
+            if (!hasEffect || !hasDefaultFramePolarity)
+            {
+                auto itr = ReplayASAuraSlotCache.find(cacheKey);
+                if (itr != ReplayASAuraSlotCache.end())
+                    ReplayASAuraSlotCache.erase(itr);
+
+                continue;
             }
 
             uint8 isDebuff = (flags & REPLAY_AFLAG_NEGATIVE) ? 1 : 0;
@@ -2831,7 +2844,7 @@ namespace
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V37: aura rows + explicit aura packet diagnostics.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V38: aura tooltips + default-frame aura filtering.");
         return true;
     }
 
