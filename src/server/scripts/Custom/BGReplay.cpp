@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V86: Replay button restarts through ASSUN addon packet, no chat command bridge.
+    // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
@@ -3274,6 +3274,42 @@ std::vector<uint8> payload(packet.size());
     }
 }
 
+
+    bool RestartReplayForViewer(Player* viewer);
+
+    bool TryHandleReplayRestartAddonMessage(WorldSession* session, WorldPacket const& packet)
+    {
+        if (!session || !session->GetPlayer())
+            return false;
+
+        if (packet.GetOpcode() != CMSG_MESSAGECHAT)
+            return false;
+
+        WorldPacket copy(packet);
+        copy.rpos(0);
+
+        uint32 type = 0;
+        uint32 lang = 0;
+
+        copy >> type;
+        copy >> lang;
+
+        if (type != CHAT_MSG_WHISPER || lang != LANG_ADDON)
+            return false;
+
+        std::string to;
+        copy >> to;
+
+        std::string msg = copy.ReadCString(false);
+
+        if (msg != "ASSUN\tRESTART")
+            return false;
+
+        RestartReplayForViewer(session->GetPlayer());
+        return true;
+    }
+
+
 class BGReplayServerScript : public ServerScript
 {
 public:
@@ -3337,6 +3373,12 @@ public:
     {
         if (!session || !session->GetPlayer())
             return;
+
+        if (packet.GetOpcode() == CMSG_MESSAGECHAT)
+        {
+            TryHandleReplayRestartAddonMessage(session, packet);
+            return;
+        }
 
         if (packet.GetOpcode() != CMSG_NAME_QUERY)
             return;
@@ -3529,17 +3571,6 @@ class BGReplayPlayerScript : public PlayerScript
 {
 public:
     BGReplayPlayerScript() : PlayerScript("BGReplayPlayerScript") { }
-
-    void OnAddonMessage(Player* player, std::string prefix, std::string message, Player* /*receiver*/) override
-    {
-        if (prefix != "ASSUN")
-            return;
-
-        if (message != "RESTART")
-            return;
-
-        RestartReplayForViewer(player);
-    }
 
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
