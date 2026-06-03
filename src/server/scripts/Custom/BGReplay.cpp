@@ -1027,66 +1027,7 @@ namespace
         }
     }
 
-    constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
-    constexpr uint32 REPLAY_OBJECT_FIELD_GUID_HIGH      = 0x0001;
-    constexpr uint32 REPLAY_UNIT_FIELD_CHARMEDBY_LOW    = 0x000C;
-    constexpr uint32 REPLAY_UNIT_FIELD_CHARMEDBY_HIGH   = 0x000D;
-    constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_LOW   = 0x000E;
-    constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH  = 0x000F;
-    constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_LOW    = 0x0010;
-    constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_HIGH   = 0x0011;
-    constexpr uint32 REPLAY_UNIT_FIELD_TARGET_LOW       = 0x0012;
-    constexpr uint32 REPLAY_UNIT_FIELD_TARGET_HIGH      = 0x0013;
-    constexpr uint32 REPLAY_UNIT_FIELD_CHANNEL_OBJECT_LOW  = 0x0014;
-    constexpr uint32 REPLAY_UNIT_FIELD_CHANNEL_OBJECT_HIGH = 0x0015;
-    constexpr uint32 REPLAY_UNIT_FIELD_HEALTH           = 0x0018;
-    constexpr uint32 REPLAY_UNIT_FIELD_POWER1           = 0x0019;
-    constexpr uint32 REPLAY_UNIT_FIELD_MAXHEALTH        = 0x0020;
-    constexpr uint32 REPLAY_UNIT_FIELD_MAXPOWER1        = 0x0021;
-
-    struct ReplayUpdateFieldValue
-    {
-        uint32 Index = 0;
-        size_t Pos = 0;
-        uint32 Value = 0;
-    };
-
-    ReplayUpdateFieldValue* FindReplayUpdateField(std::vector<ReplayUpdateFieldValue>& fields, uint32 index)
-    {
-        for (ReplayUpdateFieldValue& field : fields)
-        {
-            if (field.Index == index)
-                return &field;
-        }
-
-        return nullptr;
-    }
-
-    void PatchReplayGuidFieldPair(std::vector<uint8>& payload, std::vector<ReplayUpdateFieldValue>& fields, MatchRecord const& match, uint32 lowField, uint32 highField)
-    {
-        ReplayUpdateFieldValue* low = FindReplayUpdateField(fields, lowField);
-        ReplayUpdateFieldValue* high = FindReplayUpdateField(fields, highField);
-
-        if (!low || !high)
-            return;
-
-        ObjectGuid original(uint64(low->Value) | (uint64(high->Value) << 32));
-        ReplayActor const* actor = FindReplayActorByOriginalGuid(match, original);
-        if (!actor)
-            return;
-
-        uint64 fakeRaw = actor->FakeGuid.GetRawValue();
-        uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
-        uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
-
-        WriteUInt32(payload, low->Pos, fakeLow);
-        WriteUInt32(payload, high->Pos, fakeHigh);
-
-        low->Value = fakeLow;
-        high->Value = fakeHigh;
-    }
-
-    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid /*blockGuid*/)
+    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
         uint8 blockCount = 0;
         if (!ReadUInt8(payload, pos, blockCount))
@@ -1104,7 +1045,10 @@ namespace
             masks.push_back(mask);
         }
 
-        std::vector<ReplayUpdateFieldValue> fields;
+        ReplayActor const* actor = FindReplayActorByOriginalGuid(match, blockGuid);
+        uint64 fakeRaw = actor ? actor->FakeGuid.GetRawValue() : 0;
+        uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
+        uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
 
         for (uint32 block = 0; block < masks.size(); ++block)
         {
@@ -1118,28 +1062,22 @@ namespace
                 if (!HasRemaining(payload, pos, 4))
                     return false;
 
-                uint32 value = 0;
-                size_t valuePos = pos;
-                if (!ReadUInt32(payload, pos, value))
-                    return false;
+                uint32 fieldIndex = block * 32 + bit;
 
-                ReplayUpdateFieldValue field;
-                field.Index = block * 32 + bit;
-                field.Pos = valuePos;
-                field.Value = value;
-                fields.push_back(field);
+                // Only patch the object's own OBJECT_FIELD_GUID values.
+                // Do NOT do global raw GUID replacement in the values stream; low player GUIDs are too small
+                // and can appear as ordinary integers.
+                if (actor)
+                {
+                    if (fieldIndex == 0)
+                        WriteUInt32(payload, pos, fakeLow);
+                    else if (fieldIndex == 1)
+                        WriteUInt32(payload, pos, fakeHigh);
+                }
+
+                pos += 4;
             }
         }
-
-        // Only patch known GUID update fields. Do NOT do global raw GUID replacement in the values stream;
-        // low player GUIDs are too small and can appear as normal integers.
-        // Keep only OBJECT_FIELD_GUID packet rewrite. This is required for fake replay actors to exist.
-        //
-        // V20 also rewrote UNIT_FIELD_TARGET / CHANNEL_OBJECT / ownership pairs here, but that can crash
-        // the 3.3.5 client if any field index is off for this branch or if a field pair is not actually
-        // present as a full GUID in the update mask. The addon target feed below is still safe because it
-        // only sends ASSUN UI metadata and does not mutate client object packets.
-        PatchReplayGuidFieldPair(payload, fields, match, REPLAY_OBJECT_FIELD_GUID_LOW, REPLAY_OBJECT_FIELD_GUID_HIGH);
 
         return true;
     }
@@ -1846,6 +1784,19 @@ namespace
         state.SentReplayASInitial = true;
     }
 
+    constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
+    constexpr uint32 REPLAY_OBJECT_FIELD_GUID_HIGH      = 0x0001;
+    constexpr uint32 REPLAY_UNIT_FIELD_CHARMEDBY_LOW    = 0x000C;
+    constexpr uint32 REPLAY_UNIT_FIELD_CHARMEDBY_HIGH   = 0x000D;
+    constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_LOW   = 0x000E;
+    constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH  = 0x000F;
+    constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_LOW    = 0x0010;
+    constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_HIGH   = 0x0011;
+    constexpr uint32 REPLAY_UNIT_FIELD_HEALTH           = 0x0018;
+    constexpr uint32 REPLAY_UNIT_FIELD_POWER1           = 0x0019;
+    constexpr uint32 REPLAY_UNIT_FIELD_MAXHEALTH        = 0x0020;
+    constexpr uint32 REPLAY_UNIT_FIELD_MAXPOWER1        = 0x0021;
+
     uint32 ReplayASPowerFieldForType(uint32 powerType)
     {
         return REPLAY_UNIT_FIELD_POWER1 + powerType;
@@ -1997,17 +1948,6 @@ namespace
         uint32 currentPower = 0;
         if (ReplayASGetField(values, ReplayASPowerFieldForType(powerType), currentPower))
             SendReplayASCommand(viewer, uiGuid, "CPW", currentPower);
-
-        // UI-only target feed. This does not mutate the client update-object packet.
-        // If these indexes are wrong, the worst case is no addon target frame, not a WoW.exe crash.
-        ObjectGuid targetGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_TARGET_LOW, REPLAY_UNIT_FIELD_TARGET_HIGH);
-        if (targetGuid)
-        {
-            if (ReplayActor const* targetActor = FindReplayActorByGuid(match, targetGuid))
-                SendReplayASCommand(viewer, uiGuid, "TRG", ReplayASGuidString(targetActor->FakeGuid));
-            else
-                SendReplayASCommand(viewer, uiGuid, "TRG", 0u);
-        }
     }
 
     void SendReplayASPetStatusFromValues(Player* viewer, MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
@@ -2238,12 +2178,7 @@ namespace
         if (ExtractReplayASAttackStart(packet, attacker, victim) && IsReplayActorGuid(match, attacker))
         {
             if (victim.IsPlayer())
-            {
-                if (ReplayActor const* victimActor = FindReplayActorByGuid(match, victim))
-                    SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victimActor->FakeGuid));
-                else
-                    SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victim));
-            }
+                SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victim));
 
             // 6603 = Attack. This gives the replay UI an icon/history tick for melee starts.
             SendReplayASCommand(viewer, attacker, "SPE", "6603,0");
