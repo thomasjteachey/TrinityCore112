@@ -1133,12 +1133,13 @@ namespace
 
         // Only patch known GUID update fields. Do NOT do global raw GUID replacement in the values stream;
         // low player GUIDs are too small and can appear as normal integers.
+        // Keep only OBJECT_FIELD_GUID packet rewrite. This is required for fake replay actors to exist.
+        //
+        // V20 also rewrote UNIT_FIELD_TARGET / CHANNEL_OBJECT / ownership pairs here, but that can crash
+        // the 3.3.5 client if any field index is off for this branch or if a field pair is not actually
+        // present as a full GUID in the update mask. The addon target feed below is still safe because it
+        // only sends ASSUN UI metadata and does not mutate client object packets.
         PatchReplayGuidFieldPair(payload, fields, match, REPLAY_OBJECT_FIELD_GUID_LOW, REPLAY_OBJECT_FIELD_GUID_HIGH);
-        PatchReplayGuidFieldPair(payload, fields, match, REPLAY_UNIT_FIELD_CHARMEDBY_LOW, REPLAY_UNIT_FIELD_CHARMEDBY_HIGH);
-        PatchReplayGuidFieldPair(payload, fields, match, REPLAY_UNIT_FIELD_SUMMONEDBY_LOW, REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH);
-        PatchReplayGuidFieldPair(payload, fields, match, REPLAY_UNIT_FIELD_CREATEDBY_LOW, REPLAY_UNIT_FIELD_CREATEDBY_HIGH);
-        PatchReplayGuidFieldPair(payload, fields, match, REPLAY_UNIT_FIELD_TARGET_LOW, REPLAY_UNIT_FIELD_TARGET_HIGH);
-        PatchReplayGuidFieldPair(payload, fields, match, REPLAY_UNIT_FIELD_CHANNEL_OBJECT_LOW, REPLAY_UNIT_FIELD_CHANNEL_OBJECT_HIGH);
 
         return true;
     }
@@ -1997,6 +1998,8 @@ namespace
         if (ReplayASGetField(values, ReplayASPowerFieldForType(powerType), currentPower))
             SendReplayASCommand(viewer, uiGuid, "CPW", currentPower);
 
+        // UI-only target feed. This does not mutate the client update-object packet.
+        // If these indexes are wrong, the worst case is no addon target frame, not a WoW.exe crash.
         ObjectGuid targetGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_TARGET_LOW, REPLAY_UNIT_FIELD_TARGET_HIGH);
         if (targetGuid)
         {
