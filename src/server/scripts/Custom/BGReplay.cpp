@@ -1071,7 +1071,7 @@ namespace
         // Make sure the actor is not explicitly non-attackable/passive in the client value fields.
         uint32 flags = originalFlags;
         flags &= ~UNIT_FLAG_NON_ATTACKABLE;
-        flags &= ~UNIT_FLAG_NOT_SELECTABLE;
+        flags &= ~UNIT_FLAG_UNINTERACTIBLE;
         flags &= ~UNIT_FLAG_PACIFIED;
         flags &= ~UNIT_FLAG_IMMUNE_TO_PC;
         return flags;
@@ -1158,13 +1158,11 @@ namespace
                     }
                     else if (fieldIndex == UNIT_FIELD_FLAGS)
                     {
-                        uint32 originalFlags = ReadUInt32(payload, pos);
-                        WriteUInt32(payload, pos, ReplayRedNameUnitFlagsForActor(*actor, originalFlags));
+                        WriteUInt32(payload, pos, ReplayRedNameUnitFlagsForActor(*actor, value));
                     }
                     else if (fieldIndex == PLAYER_FLAGS)
                     {
-                        uint32 originalFlags = ReadUInt32(payload, pos);
-                        WriteUInt32(payload, pos, ReplayRedNamePlayerFlagsForActor(*actor, originalFlags));
+                        WriteUInt32(payload, pos, ReplayRedNamePlayerFlagsForActor(*actor, value));
                     }
 
                     // Record target pair positions, but don't write until both low/high halves are known.
