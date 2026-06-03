@@ -2273,11 +2273,6 @@ namespace
         if (spellInfo->Attributes & (REPLAY_SPELL_ATTR0_PASSIVE | REPLAY_SPELL_ATTR0_HIDDEN_CLIENTSIDE))
             return false;
 
-        // Avoid raw permanent/internal aura entries in the arena replay UI.
-        // If a true permanent aura needs to show later, whitelist it explicitly.
-        if (!maxDurationMs && !remainingMs)
-            return false;
-
         return true;
     }
 
