@@ -516,11 +516,19 @@ inline void Battleground::_ProcessJoin(uint32 diff)
 
         // Arena replays are not real matches. As soon as the replay viewer has caused the map to be
         // created and SetupBattleground() has succeeded, immediately advance to IN_PROGRESS so the
-        // client does not sit through the arena prep countdown. Calling SkipStartDelay() is safe here
-        // because FindBgMap() and SetupBattleground() have both already succeeded in this branch.
+        // client does not sit through the arena prep countdown.
+        // Do this directly instead of calling SkipStartDelay(); SkipStartDelay() is normal match start
+        // machinery and can still run extra arena logic that is not useful for replay-only instances.
         if (IsReplay())
         {
-            SkipStartDelay();
+            m_Events |= BG_STARTING_EVENT_2;
+            m_Events |= BG_STARTING_EVENT_3;
+            m_Events |= BG_STARTING_EVENT_4;
+            SetStartDelayTime(0);
+            StartingEventOpenDoors();
+            if (StartMessageIds[BG_STARTING_EVENT_FOURTH])
+                SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FOURTH], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+            SetStatus(STATUS_IN_PROGRESS);
             return;
         }
 

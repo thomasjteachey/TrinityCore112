@@ -1,5 +1,5 @@
 //
-// Arena Replay V6 replacement for the old BGReplay.cpp.
+// Arena Replay V7 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
@@ -9,6 +9,8 @@
 // - Playback is driven by PlayerScript::OnUpdate and a monotonic playback clock, not OnBattlegroundUpdate.
 // - Playback waits until the viewer is actually inside the replay battleground/map before sending frames, but it no longer blocks playback if countdown skipping fails.
 // - Playback sends all due frames each tick, with a safety cap.
+// - Compressed update-object replay now rewrites the uncompressed-size header after GUID replacement.
+// - Replay startup force-opens arena doors and sets replay BG to IN_PROGRESS instead of waiting through prep.
 // - Replay blobs written by this file contain a V2 header with participants.
 // - During playback, original arena player GUIDs are rewritten to fake player GUIDs so the viewer can watch their own replays.
 // - Fake player name-query responses are sent before playback starts.
@@ -432,6 +434,10 @@ namespace
 
         RewritePayloadGuids(decompressed, match);
 
+        // GUID rewriting can change packed GUID length. The compressed update-object header must
+        // therefore use the post-rewrite uncompressed size, not the original size from the DB row.
+        uint32 const rewrittenUncompressedSize = uint32(decompressed.size());
+
         uLongf compressedBound = compressBound(uLong(decompressed.size()));
         std::vector<uint8> compressed(compressedBound);
 
@@ -446,12 +452,126 @@ namespace
 
         payload.clear();
         payload.reserve(4 + compressed.size());
-        payload.push_back(uint8(uncompressedSize & 0xFF));
-        payload.push_back(uint8((uncompressedSize >> 8) & 0xFF));
-        payload.push_back(uint8((uncompressedSize >> 16) & 0xFF));
-        payload.push_back(uint8((uncompressedSize >> 24) & 0xFF));
+        payload.push_back(uint8(rewrittenUncompressedSize & 0xFF));
+        payload.push_back(uint8((rewrittenUncompressedSize >> 8) & 0xFF));
+        payload.push_back(uint8((rewrittenUncompressedSize >> 16) & 0xFF));
+        payload.push_back(uint8((rewrittenUncompressedSize >> 24) & 0xFF));
         payload.insert(payload.end(), compressed.begin(), compressed.end());
         return true;
+    }
+
+
+    size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& needle)
+    {
+        if (needle.empty())
+            return 0;
+
+        size_t count = 0;
+        auto it = payload.begin();
+        while (it != payload.end())
+        {
+            it = std::search(it, payload.end(), needle.begin(), needle.end());
+            if (it == payload.end())
+                break;
+
+            ++count;
+            ++it;
+        }
+
+        return count;
+    }
+
+    size_t CountActorGuidHitsInPayload(std::vector<uint8> const& payload, MatchRecord const& match)
+    {
+        size_t hits = 0;
+        for (ReplayActor const& actor : match.Actors)
+        {
+            uint64 original = actor.OriginalGuid.GetRawValue();
+            if (!original)
+                continue;
+
+            hits += CountBytes(payload, ToRawGuidBytes(original));
+            hits += CountBytes(payload, ToPackedGuidBytes(original));
+        }
+
+        return hits;
+    }
+
+    bool ExtractCompressedUpdatePayloadForAudit(WorldPacket const& packet, std::vector<uint8>& decompressed)
+    {
+        if (packet.size() < 4)
+            return false;
+
+        uint8 const* payload = packet.contents();
+        uint32 uncompressedSize =
+            uint32(payload[0]) |
+            (uint32(payload[1]) << 8) |
+            (uint32(payload[2]) << 16) |
+            (uint32(payload[3]) << 24);
+
+        if (!uncompressedSize || uncompressedSize > 16 * 1024 * 1024)
+            return false;
+
+        decompressed.assign(uncompressedSize, 0);
+        uLongf actualSize = uncompressedSize;
+        int zResult = uncompress(decompressed.data(), &actualSize, payload + 4, uLong(packet.size() - 4));
+        if (zResult != Z_OK || actualSize != uncompressedSize)
+        {
+            decompressed.clear();
+            return false;
+        }
+
+        return true;
+    }
+
+    struct ReplayAudit
+    {
+        uint32 UpdatePackets = 0;
+        uint32 CompressedUpdatePackets = 0;
+        uint32 ZeroTimeUpdatePackets = 0;
+        uint32 ActorGuidHits = 0;
+        uint32 ZeroTimeActorGuidHits = 0;
+    };
+
+    ReplayAudit BuildReplayAudit(MatchRecord const& match)
+    {
+        ReplayAudit audit;
+
+        for (PacketRecord const& frame : match.Packets)
+        {
+            if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
+            {
+                ++audit.UpdatePackets;
+                if (frame.TimestampMs == 0)
+                    ++audit.ZeroTimeUpdatePackets;
+
+                std::vector<uint8> payload(frame.Packet.size());
+                if (!payload.empty())
+                    std::memcpy(payload.data(), frame.Packet.contents(), payload.size());
+
+                size_t hits = CountActorGuidHitsInPayload(payload, match);
+                audit.ActorGuidHits += uint32(hits);
+                if (frame.TimestampMs == 0)
+                    audit.ZeroTimeActorGuidHits += uint32(hits);
+            }
+            else if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
+            {
+                ++audit.CompressedUpdatePackets;
+                if (frame.TimestampMs == 0)
+                    ++audit.ZeroTimeUpdatePackets;
+
+                std::vector<uint8> payload;
+                if (ExtractCompressedUpdatePayloadForAudit(frame.Packet, payload))
+                {
+                    size_t hits = CountActorGuidHitsInPayload(payload, match);
+                    audit.ActorGuidHits += uint32(hits);
+                    if (frame.TimestampMs == 0)
+                        audit.ZeroTimeActorGuidHits += uint32(hits);
+                }
+            }
+        }
+
+        return audit;
     }
 
     WorldPacket BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match)
@@ -527,33 +647,40 @@ namespace
         if (!bg || !bg->IsReplay() || bg->GetInstanceID() != state.BgInstanceId)
             return false;
 
-        if (bg->GetStatus() == STATUS_IN_PROGRESS)
-            return true;
-
-        if (bg->GetStatus() != STATUS_WAIT_JOIN)
-        {
-            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay warning: replay battleground is in unexpected status=%u before playback.", uint32(bg->GetStatus()));
-            return false;
-        }
-
         if (!bg->FindBgMap())
         {
-            // Important: do not call SkipStartDelay() before this is true.
-            // This core's SkipStartDelay() calls EndNow() when FindBgMap() is null.
+            // Important: do not force-start before the replay map exists.
             return false;
         }
 
         if (!bg->GetPlayersSize())
             return false;
 
-        bool skipped = bg->SkipStartDelay();
-        if (!skipped && bg->GetStatus() != STATUS_IN_PROGRESS)
+        if (bg->GetStatus() == STATUS_IN_PROGRESS)
         {
-            ChatHandler(viewer->GetSession()).PSendSysMessage(
-                "Replay warning: could not skip countdown after map load. status=%u players=%u mapReady=%u",
-                uint32(bg->GetStatus()), bg->GetPlayersSize(), bg->FindBgMap() ? 1u : 0u);
+            bg->StartingEventOpenDoors();
+            return true;
+        }
+
+        if (bg->GetStatus() != STATUS_WAIT_JOIN)
+        {
+            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay warning: replay battleground is in unexpected status=%u before playback. Forcing doors open anyway.", uint32(bg->GetStatus()));
+            bg->StartingEventOpenDoors();
             return false;
         }
+
+        // Do not call SkipStartDelay() from the replay script. It performs normal arena start work and
+        // can still race with setup on local branches. Replays are visual-only, so force the BG lifecycle
+        // into IN_PROGRESS and open the doors.
+        bg->StartingEventOpenDoors();
+        bg->SetStartDelayTime(0);
+        bg->SetStatus(STATUS_IN_PROGRESS);
+
+        WorldPacket status;
+        BattlegroundQueueTypeId bgQueueTypeId = sBattlegroundMgr->BGQueueTypeId(bg->GetTypeID(), bg->GetArenaType());
+        uint32 queueSlot = viewer->GetBattlegroundQueueIndex(bgQueueTypeId);
+        sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, bg, queueSlot, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), viewer->GetBGTeam());
+        viewer->SendDirectMessage(&status);
 
         return true;
     }
@@ -800,11 +927,15 @@ namespace
 
         AssignFakeGuids(record, player->GetGUID().GetCounter());
 
+        ReplayAudit const audit = BuildReplayAudit(record);
+
         ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded: packets=%u, actors=%u, firstTime=%u, lastTime=%u, firstOpcode=%u",
             uint32(record.Packets.size()), uint32(record.Actors.size()),
             record.Packets.empty() ? 0 : record.Packets.front().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.back().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
+            audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
         return true;
     }
 
@@ -857,7 +988,7 @@ namespace
 
         ActiveReplays[viewerLowGuid] = std::move(state);
 
-        handler.PSendSysMessage("Replay begins. Waiting for map load before skipping countdown.");
+        handler.PSendSysMessage("Replay begins. Waiting for map load before force-opening doors and starting playback.");
         return true;
     }
 
@@ -1023,7 +1154,7 @@ public:
                 viewerLowGuid, state.BgInstanceId, state.Match.MapId,
                 uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS, skippedCountdown ? 1u : 0u);
 
-            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u, skippedCountdown=%u. Playback starts in %u ms.",
+            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u, forcedStart=%u. Playback starts in %u ms.",
                 uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()),
                 state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs,
                 skippedCountdown ? 1u : 0u, ARENA_REPLAY_START_DELAY_MS);
