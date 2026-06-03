@@ -1,5 +1,5 @@
 //
-// Arena Replay V11 replacement for the old BGReplay.cpp.
+// Arena Replay V12 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
@@ -719,6 +719,237 @@ namespace
         }
     }
 
+    bool RewritePackedGuidAt(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match)
+    {
+        size_t guidStart = pos;
+
+        ObjectGuid guid;
+        if (!ReadPackedGuid(payload, pos, guid))
+            return false;
+
+        size_t guidEnd = pos;
+        if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, guid))
+            WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid);
+
+        return true;
+    }
+
+    bool RewriteRawGuidAt(std::vector<uint8>& payload, size_t pos, MatchRecord const& match)
+    {
+        uint64 raw = 0;
+        if (!ReadUInt64At(payload, pos, raw))
+            return false;
+
+        ObjectGuid guid(raw);
+        if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, guid))
+            WriteUInt64(payload, pos, actor->FakeGuid.GetRawValue());
+
+        return true;
+    }
+
+    bool RewriteRawGuidAndAdvance(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match)
+    {
+        if (!HasRemaining(payload, pos, 8))
+            return false;
+
+        RewriteRawGuidAt(payload, pos, match);
+        pos += 8;
+        return true;
+    }
+
+    bool SkipReplayCString(std::vector<uint8> const& payload, size_t& pos)
+    {
+        while (pos < payload.size())
+        {
+            uint8 ch = payload[pos++];
+            if (!ch)
+                return true;
+        }
+
+        return false;
+    }
+
+    bool RewriteSpellTargetDataGuids(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match)
+    {
+        constexpr uint32 REPLAY_TARGET_FLAG_UNIT            = 0x00000002;
+        constexpr uint32 REPLAY_TARGET_FLAG_ITEM            = 0x00000010;
+        constexpr uint32 REPLAY_TARGET_FLAG_SOURCE_LOCATION = 0x00000020;
+        constexpr uint32 REPLAY_TARGET_FLAG_DEST_LOCATION   = 0x00000040;
+        constexpr uint32 REPLAY_TARGET_FLAG_CORPSE_ENEMY    = 0x00000200;
+        constexpr uint32 REPLAY_TARGET_FLAG_GAMEOBJECT      = 0x00000800;
+        constexpr uint32 REPLAY_TARGET_FLAG_TRADE_ITEM      = 0x00001000;
+        constexpr uint32 REPLAY_TARGET_FLAG_STRING          = 0x00002000;
+        constexpr uint32 REPLAY_TARGET_FLAG_CORPSE_ALLY     = 0x00008000;
+        constexpr uint32 REPLAY_TARGET_FLAG_UNIT_MINIPET    = 0x00010000;
+        constexpr uint32 REPLAY_TARGET_FLAG_DEST_TARGET     = 0x00040000;
+
+        uint32 targetFlags = 0;
+        if (!ReadUInt32(payload, pos, targetFlags))
+            return false;
+
+        // Matches SpellCastTargets::Write() / SpellTargetData serialization in this source.
+        if (targetFlags & (REPLAY_TARGET_FLAG_UNIT | REPLAY_TARGET_FLAG_CORPSE_ALLY | REPLAY_TARGET_FLAG_GAMEOBJECT |
+                           REPLAY_TARGET_FLAG_CORPSE_ENEMY | REPLAY_TARGET_FLAG_UNIT_MINIPET))
+        {
+            if (!RewritePackedGuidAt(payload, pos, match))
+                return false;
+        }
+
+        if (targetFlags & (REPLAY_TARGET_FLAG_ITEM | REPLAY_TARGET_FLAG_TRADE_ITEM))
+        {
+            if (!RewritePackedGuidAt(payload, pos, match))
+                return false;
+        }
+
+        if (targetFlags & REPLAY_TARGET_FLAG_SOURCE_LOCATION)
+        {
+            if (!RewritePackedGuidAt(payload, pos, match))
+                return false;
+
+            if (!HasRemaining(payload, pos, 3 * 4))
+                return false;
+
+            pos += 3 * 4;
+        }
+
+        if (targetFlags & REPLAY_TARGET_FLAG_DEST_LOCATION)
+        {
+            if (!RewritePackedGuidAt(payload, pos, match))
+                return false;
+
+            if (!HasRemaining(payload, pos, 3 * 4))
+                return false;
+
+            pos += 3 * 4;
+        }
+
+        if (targetFlags & REPLAY_TARGET_FLAG_STRING)
+        {
+            if (!SkipReplayCString(payload, pos))
+                return false;
+        }
+
+        // This flag is followed by one uint8 at the very end of SpellCastData in this source.
+        // No GUID lives there, so do not consume it here; SpellCastData appends it after cast-flag optional data.
+        (void)REPLAY_TARGET_FLAG_DEST_TARGET;
+
+        return true;
+    }
+
+    bool RewriteSpellCastDataGuids(std::vector<uint8>& payload, MatchRecord const& match, bool hasGoTargets)
+    {
+        constexpr uint8 REPLAY_SPELL_MISS_REFLECT = 11;
+
+        std::vector<uint8> original = payload;
+        size_t pos = 0;
+
+        if (!RewritePackedGuidAt(payload, pos, match)) // CasterGUID; can be item guid
+        {
+            payload.swap(original);
+            return false;
+        }
+
+        if (!RewritePackedGuidAt(payload, pos, match)) // CasterUnit; this is the actor guid
+        {
+            payload.swap(original);
+            return false;
+        }
+
+        // CastID + SpellID + CastFlags + CastTime
+        if (!HasRemaining(payload, pos, 1 + 4 + 4 + 4))
+        {
+            payload.swap(original);
+            return false;
+        }
+
+        pos += 1 + 4 + 4 + 4;
+
+        if (hasGoTargets)
+        {
+            uint8 hitCount = 0;
+            if (!ReadUInt8(payload, pos, hitCount))
+            {
+                payload.swap(original);
+                return false;
+            }
+
+            for (uint8 i = 0; i < hitCount; ++i)
+            {
+                if (!RewriteRawGuidAndAdvance(payload, pos, match))
+                {
+                    payload.swap(original);
+                    return false;
+                }
+            }
+
+            uint8 missCount = 0;
+            if (!ReadUInt8(payload, pos, missCount))
+            {
+                payload.swap(original);
+                return false;
+            }
+
+            for (uint8 i = 0; i < missCount; ++i)
+            {
+                if (!RewriteRawGuidAndAdvance(payload, pos, match))
+                {
+                    payload.swap(original);
+                    return false;
+                }
+
+                uint8 missReason = 0;
+                if (!ReadUInt8(payload, pos, missReason))
+                {
+                    payload.swap(original);
+                    return false;
+                }
+
+                if (missReason == REPLAY_SPELL_MISS_REFLECT)
+                {
+                    if (!HasRemaining(payload, pos, 1))
+                    {
+                        payload.swap(original);
+                        return false;
+                    }
+
+                    pos += 1;
+                }
+            }
+        }
+
+        if (!RewriteSpellTargetDataGuids(payload, pos, match))
+        {
+            payload.swap(original);
+            return false;
+        }
+
+        return true;
+    }
+
+    void RewriteTwoPackedGuids(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        std::vector<uint8> original = payload;
+        size_t pos = 0;
+
+        if (!RewritePackedGuidAt(payload, pos, match) || !RewritePackedGuidAt(payload, pos, match))
+            payload.swap(original);
+    }
+
+    void RewritePacketPackedGuidAfterUInt32(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        std::vector<uint8> original = payload;
+        size_t pos = 4;
+
+        if (!RewritePackedGuidAt(payload, pos, match))
+            payload.swap(original);
+    }
+
+    void RewriteRawGuidPair(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        RewriteRawGuidAt(payload, 0, match);
+        RewriteRawGuidAt(payload, 8, match);
+    }
+
     void RewriteNonUpdatePacketGuids(uint16 opcode, std::vector<uint8>& payload, MatchRecord const& match)
     {
         // V10 and earlier used global byte replacement for both raw and packed player GUIDs.
@@ -726,7 +957,7 @@ namespace
         //   4D 00 00 00 00 00 00 00
         // which can appear in update masks, field values, timestamps, or padding.
         //
-        // V11 only rewrites GUIDs in places we actually understand.
+        // V12 still avoids global replacement, but now rewrites the understood spell/combat packet layouts too.
         if (IsMovementLikeOpcode(opcode))
         {
             RewriteFirstPackedGuidIfReplayActor(payload, match);
@@ -735,6 +966,50 @@ namespace
 
         switch (opcode)
         {
+            case SMSG_SPELL_START:
+                RewriteSpellCastDataGuids(payload, match, false);
+                return;
+            case SMSG_SPELL_GO:
+                RewriteSpellCastDataGuids(payload, match, true);
+                return;
+            case SMSG_ATTACK_START:
+                RewriteRawGuidPair(payload, match);
+                return;
+            case SMSG_ATTACK_STOP:
+                RewriteTwoPackedGuids(payload, match);
+                return;
+            case SMSG_ATTACKERSTATEUPDATE:
+                RewritePacketPackedGuidAfterUInt32(payload, match); // attacker
+                {
+                    std::vector<uint8> original = payload;
+                    size_t pos = 4;
+                    if (RewritePackedGuidAt(payload, pos, match) && RewritePackedGuidAt(payload, pos, match))
+                        return;
+
+                    payload.swap(original);
+                }
+                return;
+            case SMSG_SPELLNONMELEEDAMAGELOG:
+            case SMSG_PERIODICAURALOG:
+            case SMSG_SPELLHEALLOG:
+            case SMSG_SPELLENERGIZELOG:
+                RewriteTwoPackedGuids(payload, match);
+                return;
+            case SMSG_SPELLDAMAGESHIELD:
+                RewriteRawGuidPair(payload, match);
+                return;
+            case SMSG_SPELLLOGEXECUTE:
+            case SMSG_SPELL_DELAYED:
+            case SMSG_POWER_UPDATE:
+            case SMSG_CANCEL_AUTO_REPEAT:
+            case SMSG_AURA_UPDATE:
+            case SMSG_AURA_UPDATE_ALL:
+                RewriteFirstPackedGuidIfReplayActor(payload, match);
+                return;
+            case SMSG_EMOTE:
+                RewriteRawGuidAt(payload, 4, match);
+                return;
+            case SMSG_AI_REACTION:
             case SMSG_DESTROY_OBJECT:
             case SMSG_ARENA_UNIT_DESTROYED:
                 RewriteFirstRawGuidIfReplayActor(payload, match);
@@ -1658,7 +1933,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V11.1: structured update-object GUID rewrite; unsafe global byte replacement disabled.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V12: structured update/spell/combat GUID rewrite; unsafe global byte replacement disabled.");
         return true;
     }
 
