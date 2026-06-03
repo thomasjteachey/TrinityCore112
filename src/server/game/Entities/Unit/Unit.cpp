@@ -3505,9 +3505,10 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
         Player* player = ToPlayer();
         Battleground const* battleground = player ? player->GetBattleground() : nullptr;
 
-        // Scarlet Chapel's shallow water is part of the intended battleground pathing and
-        // should not force players out of mounts or Travel Form when they cross it.
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT))
+        // Scarlet Chapel and Ruins of Lordaeron's shallow water are part of
+        // intended PvP pathing and should not force players out of mounts or
+        // Travel Form when they cross it.
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_RL))
             RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
     }
     else

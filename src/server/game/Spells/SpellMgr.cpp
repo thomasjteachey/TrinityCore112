@@ -5073,6 +5073,11 @@ void SpellMgr::LoadSpellInfoCorrections()
         if (!spellInfo)
             continue;
 
+        // Mounts should end when the caster enters water; battleground
+        // exceptions are handled where the not-above-water interrupt fires.
+        if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
+            spellInfo->AuraInterruptFlags |= AURA_INTERRUPT_FLAG_NOT_ABOVEWATER;
+
         // Fix range for trajectory triggered spell
         for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
         {
