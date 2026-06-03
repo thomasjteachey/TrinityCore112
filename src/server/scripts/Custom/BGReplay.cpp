@@ -1072,7 +1072,6 @@ public:
 
         return true;
     }
-}
 
 class BGReplayPlayerScript : public PlayerScript
 {
