@@ -23,8 +23,11 @@ TEST_CASE("Scarlet Chapel forced queue side is preserved during active battlegro
     CHECK(queueSource.find("ginfo->IsForcedTeam = true") != std::string::npos);
     CHECK(queueSource.find("if ((*Ali_itr)->IsForcedTeam)") != std::string::npos);
     CHECK(queueSource.find("if ((*Horde_itr)->IsForcedTeam)") != std::string::npos);
-    CHECK(npcSource.find("ACTION_QUEUE_ALLIANCE") != std::string::npos);
-    CHECK(npcSource.find("ACTION_QUEUE_HORDE") != std::string::npos);
+    CHECK(npcSource.find("ACTION_QUEUE_SCARLET_ALLIANCE") != std::string::npos);
+    CHECK(npcSource.find("ACTION_QUEUE_SCARLET_HORDE") != std::string::npos);
+    CHECK(npcSource.find("ACTION_QUEUE_BLACKROCK_ALLIANCE") != std::string::npos);
+    CHECK(npcSource.find("ACTION_QUEUE_BLACKROCK_HORDE") != std::string::npos);
+    CHECK(npcSource.find("BATTLEGROUND_BRT") != std::string::npos);
 }
 
 TEST_CASE("Playerbot direct drop movement is disabled in Scarlet Chapel", "[scarlet][playerbot][movement]")
