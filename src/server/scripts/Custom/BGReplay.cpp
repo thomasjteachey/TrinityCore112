@@ -1846,7 +1846,7 @@ namespace
         data << uint8(REPLAY_TEAM_AURA_SLOT);
         data << uint32(spellId);
         data << uint8(REPLAY_AFLAG_EFF_INDEX_0 | REPLAY_AFLAG_CASTER | REPLAY_AFLAG_POSITIVE);
-        data << uint8(viewer->getLevel());
+        data << uint8(viewer->GetLevel());
         data << uint8(0); // charges / stack
 
         viewer->GetSession()->SendPacket(&data);
@@ -2982,7 +2982,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V68: replay overhead name colors via arena team auras and name-query race spoof.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V69: v68 arena team aura/name-query colors with GetLevel compile fix.");
         return true;
     }
 
