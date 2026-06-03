@@ -173,7 +173,7 @@ namespace
         bool SentReplayASInitial = false;
         bool Finished = false;
         uint32 LastNameColorUpdateMs = 0;
-        uint8 NameColorUpdateBursts = 0;
+        uint32 NameColorUpdateBursts = 0;
     };
 
     // Real arena records by BG instance id.
@@ -1032,63 +1032,59 @@ namespace
         }
     }
 
-    bool ReplayActorShouldUseHostileRedName(ReplayActor const& actor)
+    bool ReplayActorShouldUseFriendlyGreenName(ReplayActor const& actor)
     {
         // Existing replay/addon convention uses team 67 as the green team.
-        // User now wants that side to show as hostile/red in native 3D overhead names.
+        // We want that side to render as friendly/green native 3D overhead names.
         return actor.Team == HORDE || actor.Team == 67;
     }
 
-    uint32 ReplayHostileFactionTemplateForViewer(Player const* viewer)
+    uint32 ReplayFriendlyFactionTemplateForViewer(Player const* viewer)
     {
-        // Native 3D overhead names are client reaction/faction driven.
-        // Use the opposite default player faction template from the viewer where possible.
-        //
-        // 1 = Human/Alliance player faction template
-        // 2 = Orc/Horde player faction template
-        //
-        // This is intentionally a red/hostile attempt, not a friendly/green attempt.
-        if (viewer && viewer->GetTeamId() == TEAM_ALLIANCE)
-            return 2;
+        // Use the viewer's own faction template. Previous green attempts did not persist after replay packet overwrites.
+        if (viewer && viewer->GetFaction())
+            return viewer->GetFaction();
 
-        return 1;
+        return 35;
     }
 
-    uint32 ReplayRedNameFactionTemplateForActor(ReplayActor const& actor, Player const* viewer)
+    uint32 ReplayGreenNameUnitBytes2ForActor(ReplayActor const& actor, uint32 originalBytes2)
     {
-        if (ReplayActorShouldUseHostileRedName(actor))
-            return ReplayHostileFactionTemplateForViewer(viewer);
+        if (!ReplayActorShouldUseFriendlyGreenName(actor))
+            return originalBytes2;
 
-        // Leave the other team alone so it stays current neutral/yellow.
-        return 0;
+        // Red worked by forcing PvP/FFA bits ON in UNIT_FIELD_BYTES_2.
+        // Friendly/green should clear that PvP byte.
+        uint32 shift = uint32(UNIT_BYTES_2_OFFSET_PVP_FLAG) * 8u;
+        uint32 clearMask = ~(0xFFu << shift);
+
+        return originalBytes2 & clearMask;
     }
 
-    uint32 ReplayRedNameUnitFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
+    uint32 ReplayGreenNameUnitFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
     {
-        if (!ReplayActorShouldUseHostileRedName(actor))
+        if (!ReplayActorShouldUseFriendlyGreenName(actor))
             return originalFlags;
 
-        // Make sure the actor is not explicitly non-attackable/passive in the client value fields.
         uint32 flags = originalFlags;
         flags &= ~UNIT_FLAG_NON_ATTACKABLE;
-        flags &= ~UNIT_FLAG_NOT_SELECTABLE;
         flags &= ~UNIT_FLAG_PACIFIED;
         flags &= ~UNIT_FLAG_IMMUNE_TO_PC;
         return flags;
     }
 
-    uint32 ReplayRedNamePlayerFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
+    uint32 ReplayGreenNamePlayerFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
     {
-        if (!ReplayActorShouldUseHostileRedName(actor))
+        if (!ReplayActorShouldUseFriendlyGreenName(actor))
             return originalFlags;
 
-        // PLAYER_FLAGS_FFA_PVP is understood by the 3.3.5 client and often pushes player names
-        // into the hostile/red PvP display path when faction alone is not enough.
-        constexpr uint32 REPLAY_PLAYER_FLAGS_FFA_PVP = 0x00000080;
-        return originalFlags | REPLAY_PLAYER_FLAGS_FFA_PVP;
+        uint32 flags = originalFlags;
+        flags &= ~PLAYER_FLAGS_IN_PVP;
+        flags &= ~PLAYER_FLAGS_CONTESTED_PVP;
+        return flags;
     }
 
-    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid, Player const* viewer)
+    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
         uint8 blockCount = 0;
         if (!ReadUInt8(payload, pos, blockCount))
@@ -1147,24 +1143,23 @@ namespace
                         WriteUInt32(payload, pos, fakeLow);
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
                         WriteUInt32(payload, pos, fakeHigh);
-                    else if (fieldIndex == UNIT_FIELD_FACTIONTEMPLATE)
+                    else if (fieldIndex == UNIT_FIELD_BYTES_2)
                     {
-                        if (uint32 factionTemplate = ReplayRedNameFactionTemplateForActor(*actor, viewer))
-                        {
-                            WriteUInt32(payload, pos, factionTemplate);
-                            TC_LOG_DEBUG("arena.replay", "Replay red-name faction rewrite fake={} team={} viewerTeam={} value={}",
-                                actor->FakeGuid.ToString(), actor->Team, viewer ? uint32(viewer->GetTeamId()) : 0u, factionTemplate);
-                        }
+                        uint32 patched = ReplayGreenNameUnitBytes2ForActor(*actor, value);
+                        WriteUInt32(payload, pos, patched);
+                        if (patched != value)
+                            TC_LOG_DEBUG("arena.replay", "Replay green-name UNIT_FIELD_BYTES_2 rewrite fake={} team={} old={} new={}",
+                                actor->FakeGuid.ToString(), actor->Team, value, patched);
                     }
                     else if (fieldIndex == UNIT_FIELD_FLAGS)
                     {
-                        uint32 originalFlags = ReadUInt32(payload, pos);
-                        WriteUInt32(payload, pos, ReplayRedNameUnitFlagsForActor(*actor, originalFlags));
+                        uint32 patched = ReplayGreenNameUnitFlagsForActor(*actor, value);
+                        WriteUInt32(payload, pos, patched);
                     }
                     else if (fieldIndex == PLAYER_FLAGS)
                     {
-                        uint32 originalFlags = ReadUInt32(payload, pos);
-                        WriteUInt32(payload, pos, ReplayRedNamePlayerFlagsForActor(*actor, originalFlags));
+                        uint32 patched = ReplayGreenNamePlayerFlagsForActor(*actor, value);
+                        WriteUInt32(payload, pos, patched);
                     }
 
                     // Record target pair positions, but don't write until both low/high halves are known.
@@ -1416,7 +1411,7 @@ namespace
         return true;
     }
 
-    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match, Player const* viewer)
+    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
         constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
@@ -1471,7 +1466,7 @@ namespace
             {
                 case REPLAY_UPDATETYPE_VALUES:
                 {
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, viewer))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
                         return false;
 
                     break;
@@ -1493,7 +1488,7 @@ namespace
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, viewer))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
                         return false;
 
                     break;
@@ -1511,7 +1506,7 @@ namespace
         return true;
     }
 
-    bool RewriteCompressedUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match, Player const* viewer)
+    bool RewriteCompressedUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
         if (payload.size() < 4)
             return false;
@@ -1536,7 +1531,7 @@ namespace
             return false;
         }
 
-        if (!RewriteUpdateObjectPayload(decompressed, match, viewer))
+        if (!RewriteUpdateObjectPayload(decompressed, match))
         {
             TC_LOG_ERROR("arena.replay", "Replay compressed update parser failed; sending original packet without GUID rewrite");
             return false;
@@ -1704,7 +1699,7 @@ namespace
         return audit;
     }
 
-    WorldPacket BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, Player const* viewer)
+    WorldPacket BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match)
     {
         std::vector<uint8> payload;
         payload.resize(frame.Packet.size());
@@ -1714,11 +1709,11 @@ namespace
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
         {
-            RewriteCompressedUpdateObjectPayload(payload, match, viewer);
+            RewriteCompressedUpdateObjectPayload(payload, match);
         }
         else if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
         {
-            RewriteUpdateObjectPayload(payload, match, viewer);
+            RewriteUpdateObjectPayload(payload, match);
         }
         else
         {
@@ -1860,26 +1855,21 @@ namespace
         SendReplayASRaw(viewer, ReplayASGuidString(targetGuid) + ";" + prefix + "=" + value + ";");
     }
 
-    void SendReplayRedNameValueUpdate(Player* viewer, ReplayActor const& actor)
+    void SendReplayGreenNameValueUpdate(Player* viewer, ReplayActor const& actor)
     {
-        if (!viewer || !viewer->GetSession() || !ReplayActorShouldUseHostileRedName(actor))
+        if (!viewer || !viewer->GetSession() || !ReplayActorShouldUseFriendlyGreenName(actor))
             return;
-
-        uint32 factionTemplate = ReplayHostileFactionTemplateForViewer(viewer);
 
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
 
-        std::array<uint32, 3> fields =
-        {
-            UNIT_FIELD_FACTIONTEMPLATE,
-            UNIT_FIELD_FLAGS,
-            PLAYER_FLAGS
-        };
-
+        uint32 const field0 = UNIT_FIELD_FACTIONTEMPLATE;
+        uint32 const field1 = UNIT_FIELD_FLAGS;
+        uint32 const field2 = UNIT_FIELD_BYTES_2;
+        uint32 const field3 = PLAYER_FLAGS;
         uint32 const maxField = PLAYER_FLAGS;
         uint8 const blockCount = uint8(maxField / 32 + 1);
 
-        WorldPacket data(SMSG_UPDATE_OBJECT, 96);
+        WorldPacket data(SMSG_UPDATE_OBJECT, 128);
         data << uint32(1);
         data << uint8(REPLAY_UPDATETYPE_VALUES);
         data << actor.FakeGuid.WriteAsPacked();
@@ -1888,22 +1878,30 @@ namespace
         for (uint8 block = 0; block < blockCount; ++block)
         {
             uint32 mask = 0;
-            for (uint32 field : fields)
-                if (field / 32 == block)
-                    mask |= uint32(1) << (field % 32);
+
+            if (field0 / 32 == block)
+                mask |= uint32(1) << (field0 % 32);
+            if (field1 / 32 == block)
+                mask |= uint32(1) << (field1 % 32);
+            if (field2 / 32 == block)
+                mask |= uint32(1) << (field2 % 32);
+            if (field3 / 32 == block)
+                mask |= uint32(1) << (field3 % 32);
 
             data << uint32(mask);
         }
 
-        // Values are written in ascending field order.
-        data << uint32(factionTemplate);
-        data << uint32(ReplayRedNameUnitFlagsForActor(actor, 0));
-        data << uint32(ReplayRedNamePlayerFlagsForActor(actor, 0));
+        // Values must be written in ascending field order:
+        // UNIT_FIELD_FACTIONTEMPLATE < UNIT_FIELD_FLAGS < UNIT_FIELD_BYTES_2 < PLAYER_FLAGS
+        data << uint32(ReplayFriendlyFactionTemplateForViewer(viewer));
+        data << uint32(ReplayGreenNameUnitFlagsForActor(actor, 0));
+        data << uint32(ReplayGreenNameUnitBytes2ForActor(actor, 0));
+        data << uint32(ReplayGreenNamePlayerFlagsForActor(actor, 0));
 
         viewer->GetSession()->SendPacket(&data);
     }
 
-    void SendReplayRedNameUpdates(Player* viewer, PlaybackState& state, char const* reason)
+    void SendReplayGreenNameUpdates(Player* viewer, PlaybackState& state, char const* reason)
     {
         if (!viewer || !viewer->GetSession())
             return;
@@ -1911,32 +1909,30 @@ namespace
         uint32 sent = 0;
         for (ReplayActor const& actor : state.Match.Actors)
         {
-            if (!ReplayActorShouldUseHostileRedName(actor))
+            if (!ReplayActorShouldUseFriendlyGreenName(actor))
                 continue;
 
-            SendReplayRedNameValueUpdate(viewer, actor);
+            SendReplayGreenNameValueUpdate(viewer, actor);
             ++sent;
         }
 
-        TC_LOG_DEBUG("arena.replay", "Replay red-name value update viewer={} sent={} reason={}",
-            viewer->GetGUID().GetCounter(), sent, reason ? reason : "");
+        TC_LOG_DEBUG("arena.replay", "Replay persistent green-name update viewer={} sent={} burst={} faction={} reason={}",
+            viewer->GetGUID().GetCounter(), sent, uint32(state.NameColorUpdateBursts), viewer->GetFaction(), reason ? reason : "");
     }
 
-    void MaybeSendReplayRedNameUpdates(Player* viewer, PlaybackState& state, uint32 nowMs)
+    void MaybeSendReplayGreenNameUpdates(Player* viewer, PlaybackState& state, uint32 nowMs)
     {
-        constexpr uint8 MAX_NAME_COLOR_BURSTS = 20;
-        constexpr uint32 NAME_COLOR_BURST_INTERVAL_MS = 250;
+        // Keep doing this for the entire replay. Red briefly working proved later replay packets overwrite
+        // the actor display fields, so green also needs to win last after replay packets.
+        constexpr uint32 NAME_COLOR_UPDATE_INTERVAL_MS = 250;
 
-        if (state.NameColorUpdateBursts >= MAX_NAME_COLOR_BURSTS)
-            return;
-
-        if (state.LastNameColorUpdateMs && nowMs - state.LastNameColorUpdateMs < NAME_COLOR_BURST_INTERVAL_MS)
+        if (state.LastNameColorUpdateMs && nowMs - state.LastNameColorUpdateMs < NAME_COLOR_UPDATE_INTERVAL_MS)
             return;
 
         state.LastNameColorUpdateMs = nowMs;
         ++state.NameColorUpdateBursts;
 
-        SendReplayRedNameUpdates(viewer, state, "periodic hostile/red update");
+        SendReplayGreenNameUpdates(viewer, state, "persistent actor friendly/green update");
     }
 
     void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, uint32 value)
@@ -1994,7 +1990,7 @@ namespace
         }
 
         state.SentReplayASInitial = true;
-        SendReplayRedNameUpdates(viewer, state, "initial replay addon setup");
+        SendReplayGreenNameUpdates(viewer, state, "initial replay addon setup");
     }
 
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
@@ -3028,7 +3024,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V70: make replay green-team actors hostile/red overhead names.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V76: persistent actor friendly/green overhead-name updates.");
         return true;
     }
 
@@ -3349,7 +3345,7 @@ public:
             && sentThisUpdate < ARENA_REPLAY_SEND_CAP_PER_UPDATE)
         {
             PacketRecord const& frame = state.Match.Packets[state.Cursor];
-            WorldPacket out = BuildPlaybackPacket(frame, state.Match, viewer);
+            WorldPacket out = BuildPlaybackPacket(frame, state.Match);
             viewer->GetSession()->SendPacket(&out);
             SendReplayASForPlaybackPacket(viewer, out, state.Match);
 
@@ -3363,7 +3359,7 @@ public:
         }
 
         if (state.Cursor > 0)
-            MaybeSendReplayRedNameUpdates(viewer, state, nowMs);
+            MaybeSendReplayGreenNameUpdates(viewer, state, nowMs);
 
         if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
         {
