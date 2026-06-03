@@ -1033,40 +1033,54 @@ namespace
         }
     }
 
-    bool ReplayActorShouldUseFriendlyGreenName(ReplayActor const& actor)
+    bool ReplayActorIsGreenSide(ReplayActor const& actor)
     {
-        // Existing replay/addon convention uses team 67 as the green team.
-        // User prefers this side to render friendly/green if the client allows it.
+        // Existing replay/addon convention uses team 67 / Horde as the green side.
         return actor.Team == HORDE || actor.Team == 67;
     }
 
-    uint32 ReplayFriendlyFactionTemplateForViewer(Player const* viewer)
+    uint32 ReplayViewerFactionTemplate(Player const* viewer)
     {
-        // Use the viewer's own faction template for the friendly/green attempt.
         if (viewer && viewer->GetFaction())
             return viewer->GetFaction();
 
         return 35;
     }
 
-    uint32 ReplayGreenNameUnitBytes2ForActor(ReplayActor const& actor, uint32 originalBytes2)
+    uint32 ReplayOppositePlayerFactionTemplateForViewer(Player const* viewer)
     {
-        if (!ReplayActorShouldUseFriendlyGreenName(actor))
-            return originalBytes2;
+        // Player faction templates in this branch:
+        //   1 = Human/Alliance
+        //   2 = Orc/Horde
+        //
+        // Opposite faction + non-PvP should render as neutral/yellow, not friendly/green.
+        if (viewer && viewer->GetTeamId() == TEAM_ALLIANCE)
+            return 2;
 
-        // Clear PvP/FFA display bits from UNIT_FIELD_BYTES_2.
-        // Red worked by forcing these bits on; green is the friendly/non-hostile counterpart.
+        return 1;
+    }
+
+    uint32 ReplayFactionTemplateForOverheadSide(ReplayActor const& actor, Player const* viewer)
+    {
+        if (ReplayActorIsGreenSide(actor))
+            return ReplayViewerFactionTemplate(viewer);
+
+        return ReplayOppositePlayerFactionTemplateForViewer(viewer);
+    }
+
+    uint32 ReplayNonPvpUnitBytes2ForActor(ReplayActor const& /*actor*/, uint32 originalBytes2)
+    {
+        // Clear PvP/FFA display bits from UNIT_FIELD_BYTES_2 for BOTH replay sides.
+        // Red worked by forcing these bits on. For green/yellow separation, both sides should be non-PvP,
+        // and faction decides friendly green vs enemy neutral yellow.
         uint32 shift = uint32(UNIT_BYTES_2_OFFSET_PVP_FLAG) * 8u;
         uint32 clearMask = ~(0xFFu << shift);
 
         return originalBytes2 & clearMask;
     }
 
-    uint32 ReplayGreenNameUnitFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
+    uint32 ReplayNonHostileUnitFlagsForActor(ReplayActor const& /*actor*/, uint32 originalFlags)
     {
-        if (!ReplayActorShouldUseFriendlyGreenName(actor))
-            return originalFlags;
-
         uint32 flags = originalFlags;
         flags &= ~UNIT_FLAG_NON_ATTACKABLE;
         flags &= ~UNIT_FLAG_PACIFIED;
@@ -1074,11 +1088,8 @@ namespace
         return flags;
     }
 
-    uint32 ReplayGreenNamePlayerFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
+    uint32 ReplayNonPvpPlayerFlagsForActor(ReplayActor const& /*actor*/, uint32 originalFlags)
     {
-        if (!ReplayActorShouldUseFriendlyGreenName(actor))
-            return originalFlags;
-
         uint32 flags = originalFlags;
         flags &= ~PLAYER_FLAGS_IN_PVP;
         flags &= ~PLAYER_FLAGS_CONTESTED_PVP;
@@ -1146,20 +1157,20 @@ namespace
                         WriteUInt32(payload, pos, fakeHigh);
                     else if (fieldIndex == UNIT_FIELD_BYTES_2)
                     {
-                        uint32 patched = ReplayGreenNameUnitBytes2ForActor(*actor, value);
+                        uint32 patched = ReplayNonPvpUnitBytes2ForActor(*actor, value);
                         WriteUInt32(payload, pos, patched);
                         if (patched != value)
-                            TC_LOG_DEBUG("arena.replay", "Replay green-name UNIT_FIELD_BYTES_2 rewrite fake={} team={} old={} new={}",
+                            TC_LOG_DEBUG("arena.replay", "Replay non-PvP UNIT_FIELD_BYTES_2 rewrite fake={} team={} old={} new={}",
                                 actor->FakeGuid.ToString(), actor->Team, value, patched);
                     }
                     else if (fieldIndex == UNIT_FIELD_FLAGS)
                     {
-                        uint32 patched = ReplayGreenNameUnitFlagsForActor(*actor, value);
+                        uint32 patched = ReplayNonHostileUnitFlagsForActor(*actor, value);
                         WriteUInt32(payload, pos, patched);
                     }
                     else if (fieldIndex == PLAYER_FLAGS)
                     {
-                        uint32 patched = ReplayGreenNamePlayerFlagsForActor(*actor, value);
+                        uint32 patched = ReplayNonPvpPlayerFlagsForActor(*actor, value);
                         WriteUInt32(payload, pos, patched);
                     }
 
@@ -1935,9 +1946,9 @@ namespace
         SendReplayASRaw(viewer, ReplayASGuidString(targetGuid) + ";" + prefix + "=" + value + ";");
     }
 
-    void SendReplayGreenNameValueUpdate(Player* viewer, ReplayActor const& actor)
+    void SendReplaySideNameValueUpdate(Player* viewer, ReplayActor const& actor)
     {
-        if (!viewer || !viewer->GetSession() || !ReplayActorShouldUseFriendlyGreenName(actor))
+        if (!viewer || !viewer->GetSession())
             return;
 
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
@@ -1973,37 +1984,40 @@ namespace
 
         // Values must be written in ascending field order:
         // UNIT_FIELD_FACTIONTEMPLATE < UNIT_FIELD_FLAGS < UNIT_FIELD_BYTES_2 < PLAYER_FLAGS
-        data << uint32(ReplayFriendlyFactionTemplateForViewer(viewer));
-        data << uint32(ReplayGreenNameUnitFlagsForActor(actor, 0));
-        data << uint32(ReplayGreenNameUnitBytes2ForActor(actor, 0));
-        data << uint32(ReplayGreenNamePlayerFlagsForActor(actor, 0));
+        data << uint32(ReplayFactionTemplateForOverheadSide(actor, viewer));
+        data << uint32(ReplayNonHostileUnitFlagsForActor(actor, 0));
+        data << uint32(ReplayNonPvpUnitBytes2ForActor(actor, 0));
+        data << uint32(ReplayNonPvpPlayerFlagsForActor(actor, 0));
 
         viewer->GetSession()->SendPacket(&data);
     }
 
-    void SendReplayGreenNameUpdates(Player* viewer, PlaybackState& state, char const* reason)
+    void SendReplaySideNameUpdates(Player* viewer, PlaybackState& state, char const* reason)
     {
         if (!viewer || !viewer->GetSession())
             return;
 
-        uint32 sent = 0;
+        uint32 sentGreen = 0;
+        uint32 sentYellow = 0;
+
         for (ReplayActor const& actor : state.Match.Actors)
         {
-            if (!ReplayActorShouldUseFriendlyGreenName(actor))
-                continue;
+            SendReplaySideNameValueUpdate(viewer, actor);
 
-            SendReplayGreenNameValueUpdate(viewer, actor);
-            ++sent;
+            if (ReplayActorIsGreenSide(actor))
+                ++sentGreen;
+            else
+                ++sentYellow;
         }
 
-        TC_LOG_DEBUG("arena.replay", "Replay persistent green-name update viewer={} sent={} burst={} faction={} reason={}",
-            viewer->GetGUID().GetCounter(), sent, uint32(state.NameColorUpdateBursts), viewer->GetFaction(), reason ? reason : "");
+        TC_LOG_DEBUG("arena.replay", "Replay side-name update viewer={} green={} yellow={} burst={} viewerFaction={} reason={}",
+            viewer->GetGUID().GetCounter(), sentGreen, sentYellow, uint32(state.NameColorUpdateBursts), viewer->GetFaction(), reason ? reason : "");
     }
 
-    void MaybeSendReplayGreenNameUpdates(Player* viewer, PlaybackState& state, uint32 nowMs)
+    void MaybeSendReplaySideNameUpdates(Player* viewer, PlaybackState& state, uint32 nowMs)
     {
         // Keep doing this for the entire replay. Later replay packets can overwrite actor display fields,
-        // so these forced friendly/green updates run after replay packets and win last.
+        // so these side-name updates run after replay packets and win last.
         constexpr uint32 NAME_COLOR_UPDATE_INTERVAL_MS = 250;
 
         if (state.LastNameColorUpdateMs && nowMs - state.LastNameColorUpdateMs < NAME_COLOR_UPDATE_INTERVAL_MS)
@@ -2012,7 +2026,7 @@ namespace
         state.LastNameColorUpdateMs = nowMs;
         ++state.NameColorUpdateBursts;
 
-        SendReplayGreenNameUpdates(viewer, state, "persistent actor friendly/green update");
+        SendReplaySideNameUpdates(viewer, state, "persistent green/yellow side update");
     }
 
     void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, uint32 value)
@@ -2070,7 +2084,7 @@ namespace
         }
 
         state.SentReplayASInitial = true;
-        SendReplayGreenNameUpdates(viewer, state, "initial replay addon setup");
+        SendReplaySideNameUpdates(viewer, state, "initial replay addon setup");
     }
 
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
@@ -3104,7 +3118,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V79: duplicate original actor cleanup plus persistent green overhead-name updates.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V80: force green and yellow replay overhead-name sides.");
         return true;
     }
 
@@ -3455,7 +3469,7 @@ public:
             SendDestroyOriginalActorObjects(viewer, state, "post-playback-batch duplicate cleanup");
 
         if (state.Cursor > 0)
-            MaybeSendReplayGreenNameUpdates(viewer, state, nowMs);
+            MaybeSendReplaySideNameUpdates(viewer, state, nowMs);
 
         if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
         {
