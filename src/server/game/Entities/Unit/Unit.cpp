@@ -3525,16 +3525,10 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
     {
         Player* player = ToPlayer();
 
-        // Scarlet Chapel and Ruins of Lordaeron use shallow water as part of
-        // intended PvP pathing, so preserve mounts/Travel Form there only.
-        // Everywhere else, explicitly drop every mounted aura in water instead
-        // of relying solely on spell interrupt flags.
-        if (!ShouldPreserveMountInWaterForBattleground(player))
-        {
-            if (IsMounted())
-                Dismount();
-
-            RemoveAurasByType(SPELL_AURA_MOUNTED);
+        // Scarlet Chapel and Ruins of Lordaeron's shallow water are part of
+        // intended PvP pathing and should not force players out of mounts or
+        // Travel Form when they cross it.
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_RL))
             RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
         }
     }
