@@ -3528,9 +3528,8 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
         // Scarlet Chapel and Ruins of Lordaeron's shallow water are part of
         // intended PvP pathing and should not force players out of mounts or
         // Travel Form when they cross it.
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_RL))
+        if (!ShouldPreserveMountInWaterForBattleground(player))
             RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
-        }
     }
     else
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
