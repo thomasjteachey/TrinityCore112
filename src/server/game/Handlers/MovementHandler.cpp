@@ -254,8 +254,9 @@ void WorldSession::HandleMoveWorldportAck()
         if (!player->CheckInstanceValidity(false))
             player->m_InstanceValid = false;
 
-        // instance mounting is handled in InstanceTemplate
-        allowMount = mInstance->AllowMount;
+        // instance mounting is handled in InstanceTemplate, except arenas are governed by arena/battleground rules
+        if (!mEntry->IsBattleArena())
+            allowMount = mInstance->AllowMount;
     }
 
     // mount allow check
