@@ -173,7 +173,7 @@ namespace
         bool SentReplayASInitial = false;
         bool Finished = false;
         uint32 LastNameColorUpdateMs = 0;
-        uint8 NameColorUpdateBursts = 0;
+        uint32 NameColorUpdateBursts = 0;
     };
 
     // Real arena records by BG instance id.
@@ -1903,25 +1903,25 @@ namespace
             ++sent;
         }
 
-        TC_LOG_DEBUG("arena.replay", "Replay red-name bytes2 update viewer={} sent={} reason={}",
-            viewer->GetGUID().GetCounter(), sent, reason ? reason : "");
+        TC_LOG_DEBUG("arena.replay", "Replay persistent red-name bytes2 update viewer={} sent={} burst={} reason={}",
+            viewer->GetGUID().GetCounter(), sent, uint32(state.NameColorUpdateBursts), reason ? reason : "");
     }
 
     void MaybeSendReplayRedNameBytes2Updates(Player* viewer, PlaybackState& state, uint32 nowMs)
     {
-        constexpr uint8 MAX_NAME_COLOR_BURSTS = 20;
-        constexpr uint32 NAME_COLOR_BURST_INTERVAL_MS = 250;
+        // Keep doing this for the entire replay. We saw the name start red and then revert to yellow,
+        // which means a later replayed SMSG_UPDATE_OBJECT overwrote UNIT_FIELD_BYTES_2 / PvP flags.
+        //
+        // These forced updates are intentionally sent after replay packets, so our PvP/FFA bytes win last.
+        constexpr uint32 NAME_COLOR_UPDATE_INTERVAL_MS = 250;
 
-        if (state.NameColorUpdateBursts >= MAX_NAME_COLOR_BURSTS)
-            return;
-
-        if (state.LastNameColorUpdateMs && nowMs - state.LastNameColorUpdateMs < NAME_COLOR_BURST_INTERVAL_MS)
+        if (state.LastNameColorUpdateMs && nowMs - state.LastNameColorUpdateMs < NAME_COLOR_UPDATE_INTERVAL_MS)
             return;
 
         state.LastNameColorUpdateMs = nowMs;
         ++state.NameColorUpdateBursts;
 
-        SendReplayRedNameBytes2Updates(viewer, state, "periodic actor UNIT_FIELD_BYTES_2 PvP/FFA update");
+        SendReplayRedNameBytes2Updates(viewer, state, "persistent actor UNIT_FIELD_BYTES_2 PvP/FFA update");
     }
 
     void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, uint32 value)
@@ -3013,7 +3013,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V74: v73 PvP/FFA bytes2 red-name test with unit-flag compile fix.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V75: persistent actor PvP/FFA bytes2 red-name updates.");
         return true;
     }
 
