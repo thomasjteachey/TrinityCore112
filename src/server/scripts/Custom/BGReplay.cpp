@@ -44,6 +44,8 @@
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "Timer.h"
 #include "UpdateFields.h"
 #include "WorldSession.h"
@@ -2247,6 +2249,38 @@ namespace
         return (viewerPart << 40) ^ (targetGuid.GetRawValue() << 8) ^ uint64(slot);
     }
 
+    bool ReplayASShouldShowAuraInDefaultFrame(uint32 spellId, uint8 flags, uint32 maxDurationMs, uint32 remainingMs)
+    {
+        constexpr uint8 REPLAY_AFLAG_EFFECT1  = 0x01;
+        constexpr uint8 REPLAY_AFLAG_EFFECT2  = 0x02;
+        constexpr uint8 REPLAY_AFLAG_EFFECT3  = 0x04;
+        constexpr uint8 REPLAY_AFLAG_POSITIVE = 0x10;
+        constexpr uint8 REPLAY_AFLAG_NEGATIVE = 0x80;
+
+        bool hasEffect = (flags & (REPLAY_AFLAG_EFFECT1 | REPLAY_AFLAG_EFFECT2 | REPLAY_AFLAG_EFFECT3)) != 0;
+        bool hasDefaultFramePolarity = (flags & (REPLAY_AFLAG_POSITIVE | REPLAY_AFLAG_NEGATIVE)) != 0;
+
+        if (!hasEffect || !hasDefaultFramePolarity)
+            return false;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+            return false;
+
+        constexpr uint32 REPLAY_SPELL_ATTR0_PASSIVE = 0x00000040;
+        constexpr uint32 REPLAY_SPELL_ATTR0_HIDDEN_CLIENTSIDE = 0x00000080;
+
+        if (spellInfo->Attributes & (REPLAY_SPELL_ATTR0_PASSIVE | REPLAY_SPELL_ATTR0_HIDDEN_CLIENTSIDE))
+            return false;
+
+        // Avoid raw permanent/internal aura entries in the arena replay UI.
+        // If a true permanent aura needs to show later, whitelist it explicitly.
+        if (!maxDurationMs && !remainingMs)
+            return false;
+
+        return true;
+    }
+
     void SendReplayASAuraCommand(Player* viewer, ObjectGuid targetGuid, uint8 remove, uint8 stack, uint32 remainingMs,
         uint32 maxDurationMs, uint32 spellId, uint8 dispelType, uint8 isDebuff, std::string const& caster)
     {
@@ -2360,17 +2394,15 @@ std::vector<uint8> payload(packet.size());
             {
                 if (!ReadUInt32(payload, pos, maxDurationMs) || !ReadUInt32(payload, pos, remainingMs))
                     return sentAny;
-            }            bool hasEffect = (flags & (REPLAY_AFLAG_EFFECT1 | REPLAY_AFLAG_EFFECT2 | REPLAY_AFLAG_EFFECT3)) != 0;
-            bool hasDefaultFramePolarity = (flags & (REPLAY_AFLAG_POSITIVE | REPLAY_AFLAG_NEGATIVE)) != 0;
-
-            // Mimic the normal Blizzard unit-frame aura list more closely:
-            // only show client-visible positive/negative auras with real aura effects.
-            // This filters out neutral/internal/passive-looking aura entries that the raw aura packet can contain.
-            if (!hasEffect || !hasDefaultFramePolarity)
+            }            if (!ReplayASShouldShowAuraInDefaultFrame(spellId, flags, maxDurationMs, remainingMs))
             {
                 auto itr = ReplayASAuraSlotCache.find(cacheKey);
                 if (itr != ReplayASAuraSlotCache.end())
+                {
+                    SendReplayASAuraCommand(viewer, uiGuid, 1, itr->second.Stack, 0, 0, itr->second.SpellId, 0,
+                        itr->second.IsDebuff, itr->second.Caster);
                     ReplayASAuraSlotCache.erase(itr);
+                }
 
                 continue;
             }
@@ -2844,7 +2876,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V38: aura tooltips + default-frame aura filtering.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V39: aura hover cleanup + hidden/passive aura filtering.");
         return true;
     }
 
