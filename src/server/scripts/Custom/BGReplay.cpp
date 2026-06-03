@@ -41,6 +41,7 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "RBAC.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
@@ -67,7 +68,7 @@
 
 namespace
 {
-    // Replay V83: quiet chat messages; keep load/save/finish only.
+    // Replay V84: quiet messages plus replay restart button support.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
@@ -3467,6 +3468,64 @@ public:
         return true;
     }
 
+
+    void SendDestroyFakeReplayActorObjects(Player* viewer, PlaybackState& state, char const* reason)
+    {
+        if (!viewer || !viewer->GetSession())
+            return;
+
+        uint32 sent = 0;
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            SendDestroyObjectToReplayViewer(viewer, actor.FakeGuid, reason);
+            ++sent;
+        }
+
+        if (sent)
+            TC_LOG_DEBUG("arena.replay", "Replay restart destroyed fake actors viewer={} sent={} reason={}",
+                viewer->GetGUID().GetCounter(), sent, reason ? reason : "");
+    }
+
+    bool RestartReplayForViewer(Player* viewer)
+    {
+        if (!viewer || !viewer->GetSession())
+            return false;
+
+        uint32 viewerLowGuid = viewer->GetGUID().GetCounter();
+        auto activeItr = ActiveReplays.find(viewerLowGuid);
+        if (activeItr == ActiveReplays.end())
+            return false;
+
+        PlaybackState& state = activeItr->second;
+
+        Battleground* bg = viewer->GetBattleground();
+        if (!bg || !bg->IsReplay() || bg->GetInstanceID() != state.BgInstanceId)
+            return false;
+
+        // Hide/reset the addon first, then destroy fake replay actors so the replayed CREATE_OBJECT packets
+        // at the beginning can recreate clean objects from frame zero.
+        SendReplayASRaw(viewer, "DISABLE");
+        SendDestroyFakeReplayActorObjects(viewer, state, "replay restart");
+        SendDestroyOriginalActorObjects(viewer, state, "replay restart duplicate cleanup", true);
+
+        state.Cursor = 0;
+        state.CreatedMs = getMSTime();
+        state.PlaybackStartMs = 0;
+        state.PlaybackClockStarted = false;
+        state.SentInitialNameResponses = false;
+        state.SentReplayASInitial = false;
+        state.Finished = false;
+        state.LastOriginalActorDestroyMs = 0;
+        state.LastNameColorUpdateMs = 0;
+        state.NameColorUpdateBursts = 0;
+
+        TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
+            viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
+
+        return true;
+    }
+
+
 class BGReplayPlayerScript : public PlayerScript
 {
 public:
@@ -3656,6 +3715,44 @@ public:
     }
 };
 
+
+class BGReplayCommandScript : public CommandScript
+{
+public:
+    BGReplayCommandScript() : CommandScript("BGReplayCommandScript") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable replayCommandTable =
+        {
+            { "restart", HandleReplayRestart, rbac::RBAC_PERM_COMMAND_GM, Console::No }
+        };
+
+        static ChatCommandTable rootTable =
+        {
+            { "replay", replayCommandTable }
+        };
+
+        return rootTable;
+    }
+
+    static bool HandleReplayRestart(ChatHandler* handler)
+    {
+        if (!handler || !handler->GetSession())
+            return false;
+
+        Player* player = handler->GetSession()->GetPlayer();
+        if (!RestartReplayForViewer(player))
+        {
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        return true;
+    }
+};
+
+
 void AddBGReplayScripts()
 {
     new BGReplayServerScript();
@@ -3663,4 +3760,5 @@ void AddBGReplayScripts()
     new BGReplayPlayerScript();
     new BGReplayBGScript();
     new ReplayGossip();
+    new BGReplayCommandScript();
 }
