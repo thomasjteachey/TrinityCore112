@@ -1032,30 +1032,7 @@ namespace
         }
     }
 
-    bool ReplayActorShouldUseFriendlyOverheadName(ReplayActor const& actor)
-    {
-        // Existing replay/addon convention uses team 67 as green.
-        return actor.Team == HORDE || actor.Team == 67;
-    }
-
-    uint32 ReplayFriendlyFactionTemplateForViewer(Player const* viewer)
-    {
-        // Native 3D overhead name color is reaction/faction driven. Use the viewer's own faction template.
-        if (viewer && viewer->GetFaction())
-            return viewer->GetFaction();
-
-        return 35;
-    }
-
-    uint32 ReplayFactionTemplateForOverheadName(ReplayActor const& actor, Player const* viewer)
-    {
-        if (ReplayActorShouldUseFriendlyOverheadName(actor))
-            return ReplayFriendlyFactionTemplateForViewer(viewer);
-
-        return 0;
-    }
-
-    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid, Player const* viewer)
+    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
         uint8 blockCount = 0;
         if (!ReadUInt8(payload, pos, blockCount))
@@ -1114,15 +1091,6 @@ namespace
                         WriteUInt32(payload, pos, fakeLow);
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
                         WriteUInt32(payload, pos, fakeHigh);
-                    else if (fieldIndex == UNIT_FIELD_FACTIONTEMPLATE)
-                    {
-                        if (uint32 replayFactionTemplate = ReplayFactionTemplateForOverheadName(*actor, viewer))
-                        {
-                            WriteUInt32(payload, pos, replayFactionTemplate);
-                            TC_LOG_DEBUG("arena.replay", "Replay create/update faction rewrite fake={} team={} viewerFaction={} value={}",
-                                actor->FakeGuid.ToString(), actor->Team, viewer ? viewer->GetFaction() : 0, replayFactionTemplate);
-                        }
-                    }
 
                     // Record target pair positions, but don't write until both low/high halves are known.
                     // This avoids accidentally rewriting a half-present GUID field.
@@ -1373,7 +1341,7 @@ namespace
         return true;
     }
 
-    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match, Player const* viewer)
+    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
         constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
@@ -1428,7 +1396,7 @@ namespace
             {
                 case REPLAY_UPDATETYPE_VALUES:
                 {
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, viewer))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
                         return false;
 
                     break;
@@ -1450,7 +1418,7 @@ namespace
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, viewer))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
                         return false;
 
                     break;
@@ -1468,7 +1436,7 @@ namespace
         return true;
     }
 
-    bool RewriteCompressedUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match, Player const* viewer)
+    bool RewriteCompressedUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
         if (payload.size() < 4)
             return false;
@@ -1493,7 +1461,7 @@ namespace
             return false;
         }
 
-        if (!RewriteUpdateObjectPayload(decompressed, match, viewer))
+        if (!RewriteUpdateObjectPayload(decompressed, match))
         {
             TC_LOG_ERROR("arena.replay", "Replay compressed update parser failed; sending original packet without GUID rewrite");
             return false;
@@ -1661,7 +1629,7 @@ namespace
         return audit;
     }
 
-    WorldPacket BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, Player const* viewer)
+    WorldPacket BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match)
     {
         std::vector<uint8> payload;
         payload.resize(frame.Packet.size());
@@ -1671,11 +1639,11 @@ namespace
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
         {
-            RewriteCompressedUpdateObjectPayload(payload, match, viewer);
+            RewriteCompressedUpdateObjectPayload(payload, match);
         }
         else if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
         {
-            RewriteUpdateObjectPayload(payload, match, viewer);
+            RewriteUpdateObjectPayload(payload, match);
         }
         else
         {
@@ -1689,21 +1657,61 @@ namespace
         return out;
     }
 
+    bool ReplayActorShouldUseFriendlyOverheadName(ReplayActor const& actor)
+    {
+        // Existing replay/addon convention uses team 67 as the green/allied side.
+        return actor.Team == HORDE || actor.Team == 67;
+    }
+
+    uint8 ReplayNameQueryRaceForViewer(ReplayActor const& actor, Player const* viewer)
+    {
+        // Player overhead reaction can be influenced by the client's player-name cache.
+        // For the green/allied replay side, report the viewer's own race in the fake name-query response,
+        // while leaving the world model/update fields untouched.
+        if (ReplayActorShouldUseFriendlyOverheadName(actor) && viewer && viewer->GetRace())
+            return uint8(viewer->GetRace());
+
+        return actor.Race;
+    }
+
+    uint32 ReplayArenaTeamAuraForActor(ReplayActor const& actor)
+    {
+        bool green = ReplayActorShouldUseFriendlyOverheadName(actor);
+        bool horde = actor.Team == HORDE || actor.Team == 67;
+
+        // 3.3.5 arena team visual/team-marker spells:
+        //   32724 Gold Team (Alliance)
+        //   32725 Green Team (Alliance)
+        //   35774 Gold Team (Horde)
+        //   35775 Green Team (Horde)
+        if (green)
+            return horde ? 35775u : 32725u;
+
+        return horde ? 35774u : 32724u;
+    }
+
     void SendReplayNameResponse(WorldSession* session, ReplayActor const& actor)
     {
         if (!session)
             return;
+
+        Player const* viewer = session->GetPlayer();
+        uint8 replayRace = ReplayNameQueryRaceForViewer(actor, viewer);
 
         WorldPacket data(SMSG_NAME_QUERY_RESPONSE, 8 + 1 + actor.Name.size() + 1 + 1 + 1 + 1 + 1);
         data << actor.FakeGuid.WriteAsPacked();
         data << uint8(0);              // name known
         data << actor.Name;            // player name
         data << uint8(0);              // realm name
-        data << uint8(actor.Race);
+        data << uint8(replayRace);
         data << uint8(actor.Gender);
         data << uint8(actor.Class);
         data << uint8(0);              // declined names disabled
         session->SendPacket(&data);
+
+        TC_LOG_DEBUG("arena.replay", "Replay name-query response fake={} name={} team={} actorRace={} replayRace={} viewerRace={}",
+            actor.FakeGuid.ToString(), actor.Name, actor.Team, uint32(actor.Race), uint32(replayRace),
+            viewer ? uint32(viewer->GetRace()) : 0u);
     }
 
     bool IsViewerReadyForReplay(Player const* viewer, PlaybackState const& state)
@@ -1817,39 +1825,37 @@ namespace
         SendReplayASRaw(viewer, ReplayASGuidString(targetGuid) + ";" + prefix + "=" + value + ";");
     }
 
-    void SendReplayFactionTemplateValueUpdate(Player* viewer, ReplayActor const& actor)
+    void SendReplayArenaTeamAura(Player* viewer, ReplayActor const& actor)
     {
-        if (!viewer || !viewer->GetSession() || !ReplayActorShouldUseFriendlyOverheadName(actor))
+        if (!viewer || !viewer->GetSession())
             return;
 
-        uint32 factionTemplate = ReplayFriendlyFactionTemplateForViewer(viewer);
-        if (!factionTemplate)
+        uint32 spellId = ReplayArenaTeamAuraForActor(actor);
+        if (!spellId)
             return;
 
-        constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
+        // Build a simple visible-aura update for the fake replay player.
+        // This targets the client-side arena Gold/Green Team marker spells rather than faction template reaction.
+        constexpr uint8 REPLAY_TEAM_AURA_SLOT = 63;
+        constexpr uint8 REPLAY_AFLAG_EFF_INDEX_0 = 0x01;
+        constexpr uint8 REPLAY_AFLAG_CASTER = 0x08;
+        constexpr uint8 REPLAY_AFLAG_POSITIVE = 0x10;
 
-        uint32 const fieldIndex = UNIT_FIELD_FACTIONTEMPLATE;
-        uint8 const blockCount = uint8(fieldIndex / 32 + 1);
-        uint32 const maskBlock = fieldIndex / 32;
-        uint32 const maskBit = fieldIndex % 32;
-
-        WorldPacket data(SMSG_UPDATE_OBJECT, 64);
-        data << uint32(1);
-        data << uint8(REPLAY_UPDATETYPE_VALUES);
+        WorldPacket data(SMSG_AURA_UPDATE, 32);
         data << actor.FakeGuid.WriteAsPacked();
+        data << uint8(REPLAY_TEAM_AURA_SLOT);
+        data << uint32(spellId);
+        data << uint8(REPLAY_AFLAG_EFF_INDEX_0 | REPLAY_AFLAG_CASTER | REPLAY_AFLAG_POSITIVE);
+        data << uint8(viewer->getLevel());
+        data << uint8(0); // charges / stack
 
-        data << uint8(blockCount);
-        for (uint8 block = 0; block < blockCount; ++block)
-        {
-            uint32 mask = (block == maskBlock) ? (uint32(1) << maskBit) : 0;
-            data << uint32(mask);
-        }
-
-        data << uint32(factionTemplate);
         viewer->GetSession()->SendPacket(&data);
+
+        TC_LOG_DEBUG("arena.replay", "Replay arena team aura fake={} name={} team={} spell={}",
+            actor.FakeGuid.ToString(), actor.Name, actor.Team, spellId);
     }
 
-    void SendReplayOverheadNameColorUpdates(Player* viewer, PlaybackState& state, char const* reason)
+    void SendReplayOverheadNameColorPackets(Player* viewer, PlaybackState& state, char const* reason)
     {
         if (!viewer || !viewer->GetSession())
             return;
@@ -1857,20 +1863,22 @@ namespace
         uint32 sent = 0;
         for (ReplayActor const& actor : state.Match.Actors)
         {
-            if (!ReplayActorShouldUseFriendlyOverheadName(actor))
-                continue;
+            // Re-send the fake name query response too; the client name cache can affect player overhead reaction.
+            SendReplayNameResponse(viewer->GetSession(), actor);
 
-            SendReplayFactionTemplateValueUpdate(viewer, actor);
+            // Send Gold/Green team marker aura.
+            SendReplayArenaTeamAura(viewer, actor);
             ++sent;
         }
 
-        TC_LOG_DEBUG("arena.replay", "Replay forced faction values update viewer={} sent={} viewerFaction={} burst={} reason={}",
-            viewer->GetGUID().GetCounter(), sent, viewer->GetFaction(), uint32(state.NameColorUpdateBursts), reason ? reason : "");
+        TC_LOG_DEBUG("arena.replay", "Replay overhead name color packets viewer={} sent={} reason={}",
+            viewer->GetGUID().GetCounter(), sent, reason ? reason : "");
     }
 
-    void MaybeSendReplayOverheadNameColorUpdates(Player* viewer, PlaybackState& state, uint32 nowMs)
+    void MaybeSendReplayOverheadNameColorPackets(Player* viewer, PlaybackState& state, uint32 nowMs)
     {
-        constexpr uint8 MAX_NAME_COLOR_BURSTS = 16;
+        // Repeat briefly after playback starts because fake player objects/name cache can be created in phases.
+        constexpr uint8 MAX_NAME_COLOR_BURSTS = 20;
         constexpr uint32 NAME_COLOR_BURST_INTERVAL_MS = 250;
 
         if (state.NameColorUpdateBursts >= MAX_NAME_COLOR_BURSTS)
@@ -1882,7 +1890,7 @@ namespace
         state.LastNameColorUpdateMs = nowMs;
         ++state.NameColorUpdateBursts;
 
-        SendReplayOverheadNameColorUpdates(viewer, state, "periodic forced faction update");
+        SendReplayOverheadNameColorPackets(viewer, state, "periodic arena team aura/name-query update");
     }
 
     void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, uint32 value)
@@ -1940,7 +1948,7 @@ namespace
         }
 
         state.SentReplayASInitial = true;
-        SendReplayOverheadNameColorUpdates(viewer, state, "initial replay addon setup");
+        SendReplayOverheadNameColorPackets(viewer, state, "initial replay addon setup");
     }
 
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
@@ -2974,7 +2982,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V67: rewrite replay actor faction during create-object for overhead name colors.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V68: replay overhead name colors via arena team auras and name-query race spoof.");
         return true;
     }
 
@@ -3295,7 +3303,7 @@ public:
             && sentThisUpdate < ARENA_REPLAY_SEND_CAP_PER_UPDATE)
         {
             PacketRecord const& frame = state.Match.Packets[state.Cursor];
-            WorldPacket out = BuildPlaybackPacket(frame, state.Match, viewer);
+            WorldPacket out = BuildPlaybackPacket(frame, state.Match);
             viewer->GetSession()->SendPacket(&out);
             SendReplayASForPlaybackPacket(viewer, out, state.Match);
 
@@ -3309,7 +3317,7 @@ public:
         }
 
         if (state.Cursor > 0)
-            MaybeSendReplayOverheadNameColorUpdates(viewer, state, nowMs);
+            MaybeSendReplayOverheadNameColorPackets(viewer, state, nowMs);
 
         if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
         {
