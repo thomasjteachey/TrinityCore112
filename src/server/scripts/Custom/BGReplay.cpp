@@ -1,9 +1,10 @@
 //
-// Arena Replay V4 replacement for the old BGReplay.cpp.
+// Arena Replay V5 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
-// - Prep/countdown time is skipped; pre-start visual packets play immediately at replay time 0.
+// - Prep/countdown time is skipped only after the viewer has finished zoning into the replay map; pre-start visual packets play immediately at replay time 0.
+// - Playback never calls SkipStartDelay() before the replay map exists, avoiding the EndNow()/scoreboard/zone-out race.
 // - Playback no longer calls EndNow()/LeaveBattleground() at EOF; it leaves you in the replay instance so the final frame stays visible.
 // - Playback is driven by a WorldScript tick and a monotonic playback clock, not OnBattlegroundUpdate.
 // - Playback waits until the viewer is actually inside the replay battleground/map before sending frames.
@@ -517,6 +518,46 @@ namespace
         return true;
     }
 
+    bool TrySkipReplayCountdown(Player* viewer, PlaybackState const& state)
+    {
+        if (!viewer || !viewer->GetSession())
+            return false;
+
+        Battleground* bg = viewer->GetBattleground();
+        if (!bg || !bg->IsReplay() || bg->GetInstanceID() != state.BgInstanceId)
+            return false;
+
+        if (bg->GetStatus() == STATUS_IN_PROGRESS)
+            return true;
+
+        if (bg->GetStatus() != STATUS_WAIT_JOIN)
+        {
+            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay warning: replay battleground is in unexpected status=%u before playback.", uint32(bg->GetStatus()));
+            return false;
+        }
+
+        if (!bg->FindBgMap())
+        {
+            // Important: do not call SkipStartDelay() before this is true.
+            // This core's SkipStartDelay() calls EndNow() when FindBgMap() is null.
+            return false;
+        }
+
+        if (!bg->GetPlayersSize())
+            return false;
+
+        bool skipped = bg->SkipStartDelay();
+        if (!skipped && bg->GetStatus() != STATUS_IN_PROGRESS)
+        {
+            ChatHandler(viewer->GetSession()).PSendSysMessage(
+                "Replay warning: could not skip countdown after map load. status=%u players=%u mapReady=%u",
+                uint32(bg->GetStatus()), bg->GetPlayersSize(), bg->FindBgMap() ? 1u : 0u);
+            return false;
+        }
+
+        return true;
+    }
+
 
     void SendInitialReplayNameResponses(Player* viewer, PlaybackState& state)
     {
@@ -793,10 +834,10 @@ namespace
         player->SetPendingSpectatorForBG(bg->GetInstanceID());
         bg->StartBattleground();
 
-        // Replays should not make the viewer sit through the real arena prep countdown.
-        // This also prevents countdown broadcasts from racing playback startup.
-        if (!bg->SkipStartDelay())
-            handler.PSendSysMessage("Replay warning: could not skip the arena start countdown.");
+        // Do NOT call SkipStartDelay() here.
+        // On this core, SkipStartDelay() calls EndNow() if the battleground map is not created yet.
+        // At this point the viewer has not zoned in, so FindBgMap() can still be null.
+        // The WorldScript below skips the countdown only after the viewer is actually inside the replay map.
 
         BattlegroundTypeId bgTypeId = bg->GetTypeID();
         uint32 queueSlot = 0;
@@ -816,7 +857,7 @@ namespace
 
         ActiveReplays[viewerLowGuid] = std::move(state);
 
-        handler.PSendSysMessage("Replay begins.");
+        handler.PSendSysMessage("Replay begins. Waiting for map load before skipping countdown.");
         return true;
     }
 
@@ -995,6 +1036,21 @@ public:
 
             if (!state.PlaybackClockStarted)
             {
+                if (!TrySkipReplayCountdown(viewer, state))
+                {
+                    TC_LOG_DEBUG("arena.replay", "PLAY waiting for safe countdown skip viewer={} bg={} map={} expectedMap={} status={} players={} mapReady={}",
+                        viewerLowGuid,
+                        viewer->GetBattleground() ? viewer->GetBattleground()->GetInstanceID() : 0,
+                        viewer->GetMapId(),
+                        state.Match.MapId,
+                        viewer->GetBattleground() ? uint32(viewer->GetBattleground()->GetStatus()) : 999u,
+                        viewer->GetBattleground() ? viewer->GetBattleground()->GetPlayersSize() : 0u,
+                        viewer->GetBattleground() && viewer->GetBattleground()->FindBgMap() ? 1u : 0u);
+
+                    ++it;
+                    continue;
+                }
+
                 state.PlaybackStartMs = nowMs + ARENA_REPLAY_START_DELAY_MS;
                 state.PlaybackClockStarted = true;
 
@@ -1002,9 +1058,9 @@ public:
                     viewerLowGuid, state.BgInstanceId, state.Match.MapId,
                     uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS);
 
-                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u, skipping prep countdown.",
+                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u. Countdown skipped after map load; playback starts in %u ms.",
                     uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()),
-                    state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs);
+                    state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs, ARENA_REPLAY_START_DELAY_MS);
             }
 
             if (!state.SentInitialNameResponses)
@@ -1076,9 +1132,8 @@ public:
         if (!bg || !bg->isArena() || !bg->IsReplay())
             return;
 
-        // Belt-and-suspenders: replay arenas should never make the viewer sit through prep.
-        if (bg->GetStatus() == STATUS_WAIT_JOIN)
-            bg->SkipStartDelay();
+        // Do not call SkipStartDelay() here. On replay creation this hook can run before the viewer has
+        // finished zoning into the map; calling SkipStartDelay() that early can call EndNow() and kick the viewer.
     }
 };
 
