@@ -1062,7 +1062,6 @@ namespace
 
         uint32 flags = originalFlags;
         flags &= ~UNIT_FLAG_NON_ATTACKABLE;
-        flags &= ~UNIT_FLAG_NOT_SELECTABLE;
         flags &= ~UNIT_FLAG_PACIFIED;
         flags &= ~UNIT_FLAG_IMMUNE_TO_PC;
         return flags;
@@ -3014,7 +3013,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V73: force green-team fake actors PvP/FFA bytes2 for red names.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V74: v73 PvP/FFA bytes2 red-name test with unit-flag compile fix.");
         return true;
     }
 
