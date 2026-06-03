@@ -1,5 +1,5 @@
 //
-// Arena Replay V12 replacement for the old BGReplay.cpp.
+// Arena Replay V15 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
@@ -57,6 +57,7 @@
 #include <utility>
 #include <vector>
 #include <sstream>
+#include <iomanip>
 #include <zlib.h>
 #include <DBCStores.h>
 
@@ -165,6 +166,7 @@ namespace
         size_t Cursor = 0;
         bool PlaybackClockStarted = false;
         bool SentInitialNameResponses = false;
+        bool SentReplayASInitial = false;
         bool Finished = false;
     };
 
@@ -1699,6 +1701,164 @@ namespace
         state.SentInitialNameResponses = true;
     }
 
+    std::string ReplayASGuidString(ObjectGuid guid)
+    {
+        std::ostringstream ss;
+        ss << "0x" << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << guid.GetRawValue();
+        return ss.str();
+    }
+
+    void SendReplayASRaw(Player* viewer, std::string const& payload)
+    {
+        if (!viewer || !viewer->GetSession())
+            return;
+
+        WorldPacket data;
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, std::string("ASSUN\t") + payload, 0);
+        viewer->GetSession()->SendPacket(&data);
+    }
+
+    void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, std::string const& value)
+    {
+        if (!targetGuid.IsPlayer())
+            return;
+
+        SendReplayASRaw(viewer, ReplayASGuidString(targetGuid) + ";" + prefix + "=" + value + ";");
+    }
+
+    void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, uint32 value)
+    {
+        SendReplayASCommand(viewer, targetGuid, prefix, std::to_string(value));
+    }
+
+    uint32 ReplayASPowerTypeForClass(uint8 playerClass)
+    {
+        switch (playerClass)
+        {
+            case CLASS_WARRIOR:
+                return POWER_RAGE;
+            case CLASS_ROGUE:
+                return POWER_ENERGY;
+            case CLASS_DEATH_KNIGHT:
+                return POWER_RUNIC_POWER;
+            default:
+                return POWER_MANA;
+        }
+    }
+
+    void SendReplayASInitial(Player* viewer, PlaybackState& state)
+    {
+        if (!viewer || !viewer->GetSession())
+            return;
+
+        SendReplayASRaw(viewer, "ENABLE");
+        SendReplayASRaw(viewer, "REQUESTRESET");
+
+        uint32 durationSeconds = state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs / IN_MILLISECONDS;
+
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            ObjectGuid guid = actor.FakeGuid;
+            uint32 powerType = ReplayASPowerTypeForClass(actor.Class);
+            uint32 maxPower = powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? 100 : 10000;
+            uint32 currentPower = powerType == POWER_RAGE || powerType == POWER_RUNIC_POWER ? 0 : maxPower;
+            uint32 team = actor.Team ? actor.Team : ALLIANCE;
+
+            SendReplayASCommand(viewer, guid, "NME", actor.Name.empty() ? "Replay" : actor.Name);
+            SendReplayASCommand(viewer, guid, "TEM", team);
+            SendReplayASCommand(viewer, guid, "CLA", uint32(actor.Class));
+            SendReplayASCommand(viewer, guid, "MHP", 100u);
+            SendReplayASCommand(viewer, guid, "CHP", 100u);
+            SendReplayASCommand(viewer, guid, "STA", 1u);
+            SendReplayASCommand(viewer, guid, "PWT", powerType);
+            SendReplayASCommand(viewer, guid, "MPW", maxPower);
+            SendReplayASCommand(viewer, guid, "CPW", currentPower);
+            SendReplayASCommand(viewer, guid, "PHP", 0u);
+            SendReplayASCommand(viewer, guid, "PET", 0u);
+            SendReplayASCommand(viewer, guid, "RES", 1u);
+            SendReplayASCommand(viewer, guid, "CDC", 1u);
+            SendReplayASCommand(viewer, guid, "TIM", durationSeconds);
+        }
+
+        state.SentReplayASInitial = true;
+    }
+
+    bool ExtractReplayASSpell(WorldPacket const& packet, ObjectGuid& caster, uint32& spellId, int32& castTime)
+    {
+        if (packet.GetOpcode() != SMSG_SPELL_START && packet.GetOpcode() != SMSG_SPELL_GO)
+            return false;
+
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        size_t pos = 0;
+        ObjectGuid casterGuid;
+        ObjectGuid casterUnit;
+        if (!ReadPackedGuid(payload, pos, casterGuid))
+            return false;
+        if (!ReadPackedGuid(payload, pos, casterUnit))
+            return false;
+
+        uint8 castId = 0;
+        uint32 castFlags = 0;
+        uint32 castTimeRaw = 0;
+        if (!ReadUInt8(payload, pos, castId))
+            return false;
+        if (!ReadUInt32(payload, pos, spellId))
+            return false;
+        if (!ReadUInt32(payload, pos, castFlags))
+            return false;
+        if (!ReadUInt32(payload, pos, castTimeRaw))
+            return false;
+
+        caster = casterUnit.IsPlayer() ? casterUnit : casterGuid;
+        castTime = packet.GetOpcode() == SMSG_SPELL_START ? int32(castTimeRaw) : 0;
+        return caster.IsPlayer() && spellId != 0;
+    }
+
+    bool ExtractReplayASAttackStart(WorldPacket const& packet, ObjectGuid& attacker, ObjectGuid& victim)
+    {
+        if (packet.GetOpcode() != SMSG_ATTACK_START || packet.size() < 16)
+            return false;
+
+        std::vector<uint8> payload(packet.size());
+        std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        uint64 a = 0;
+        uint64 v = 0;
+        if (!ReadUInt64At(payload, 0, a) || !ReadUInt64At(payload, 8, v))
+            return false;
+
+        attacker = ObjectGuid(a);
+        victim = ObjectGuid(v);
+        return attacker.IsPlayer();
+    }
+
+    void SendReplayASForPlaybackPacket(Player* viewer, WorldPacket const& packet, MatchRecord const& match)
+    {
+        ObjectGuid caster;
+        uint32 spellId = 0;
+        int32 castTime = 0;
+        if (ExtractReplayASSpell(packet, caster, spellId, castTime) && IsReplayActorGuid(match, caster))
+        {
+            SendReplayASCommand(viewer, caster, "SPE", std::to_string(spellId) + "," + std::to_string(castTime));
+            return;
+        }
+
+        ObjectGuid attacker;
+        ObjectGuid victim;
+        if (ExtractReplayASAttackStart(packet, attacker, victim) && IsReplayActorGuid(match, attacker))
+        {
+            if (victim.IsPlayer())
+                SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victim));
+
+            // 6603 = Attack. This gives the replay UI an icon/history tick for melee starts.
+            SendReplayASCommand(viewer, attacker, "SPE", "6603,0");
+            return;
+        }
+    }
+
     bool TrySendFakeNameQueryResponse(WorldSession* session, ObjectGuid guid)
     {
         if (!session || !session->GetPlayer())
@@ -2047,85 +2207,44 @@ namespace
         return DeserializeMatchDataFromBytes(record, fields[1].GetUInt32(), fields[2].GetUInt32(), fields[5].GetUInt32(), *decoded);
     }
 
-    bool DeserializeMatchDataFromLegacyBinary(MatchRecord& record, Field* fields)
-    {
-        std::vector<uint8> data = fields[4].GetBinary();
-        return DeserializeMatchDataFromBytes(record, fields[1].GetUInt32(), fields[2].GetUInt32(), fields[5].GetUInt32(), data);
-    }
-
     std::vector<uint32> LoadLast10Replays()
     {
         std::vector<uint32> replayIds;
 
         QueryResult result = CharacterDatabase.Query("SELECT `id` FROM `character_arena_replays` ORDER BY `id` DESC LIMIT 10");
-        if (result)
-        {
-            do
-            {
-                replayIds.push_back((*result)[0].GetUInt32());
-            }
-            while (result->NextRow());
-
-            return replayIds;
-        }
-
-        // Legacy fallback so old character_bg_replays rows remain viewable before/while migrating.
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_LAST_10_ARENA_REPLAYS);
-        PreparedQueryResult legacyResult = CharacterDatabase.Query(stmt);
-        if (!legacyResult)
+        if (!result)
             return replayIds;
 
         do
         {
-            Field* fields = legacyResult->Fetch();
-            if (!fields)
-                break;
-
-            replayIds.push_back(fields[0].GetUInt32());
+            replayIds.push_back((*result)[0].GetUInt32());
         }
-        while (legacyResult->NextRow());
+        while (result->NextRow());
 
         return replayIds;
     }
 
     bool LoadReplayDataForPlayer(Player* player, uint32 matchId, MatchRecord& record)
     {
-        // AC-style table: contents is LONGTEXT Base32, not a raw blob.
+        // AC-style table only.
         QueryResult result = CharacterDatabase.PQuery(
             "SELECT `id`, `arenaTypeId`, `typeId`, `contentSize`, `contents`, `mapId`, `timesWatched` "
             "FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", matchId);
 
-        bool loadedFromAcTable = false;
-        if (result)
+        if (!result)
         {
-            Field* fields = result->Fetch();
-            loadedFromAcTable = DeserializeMatchDataFromAcBase32(record, fields);
-            if (loadedFromAcTable)
-                CharacterDatabase.Execute("UPDATE `character_arena_replays` SET `timesWatched` = `timesWatched` + 1 WHERE `id` = {}", matchId);
+            ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found in character_arena_replays.");
+            return false;
         }
 
-        if (!loadedFromAcTable)
+        Field* fields = result->Fetch();
+        if (!fields || !DeserializeMatchDataFromAcBase32(record, fields))
         {
-            // Legacy binary table fallback for rows recorded by the older local implementation.
-            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ARENA_REPLAYS);
-            stmt->setUInt32(0, matchId);
-
-            PreparedQueryResult legacyResult = CharacterDatabase.Query(stmt);
-            if (!legacyResult)
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found.");
-                return false;
-            }
-
-            Field* fields = legacyResult->Fetch();
-            if (!fields || !DeserializeMatchDataFromLegacyBinary(record, fields))
-            {
-                ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found or could not be decoded.");
-                return false;
-            }
-
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded from legacy character_bg_replays row. New saves use AC-style Base32 storage.");
+            ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found or could not be decoded from character_arena_replays.");
+            return false;
         }
+
+        CharacterDatabase.Execute("UPDATE `character_arena_replays` SET `timesWatched` = `timesWatched` + 1 WHERE `id` = {}", matchId);
 
         if (record.Packets.empty())
         {
@@ -2147,7 +2266,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V13.1: AC-style Base32 replay storage/load + Trinity config/query API fixes.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V14: AC-style storage only; legacy replay table references removed.");
         return true;
     }
 
@@ -2438,6 +2557,9 @@ public:
         if (!state.SentInitialNameResponses)
             SendInitialReplayNameResponses(viewer, state);
 
+        if (!state.SentReplayASInitial)
+            SendReplayASInitial(viewer, state);
+
         if (nowMs < state.PlaybackStartMs)
             return true;
 
@@ -2451,6 +2573,7 @@ public:
             PacketRecord const& frame = state.Match.Packets[state.Cursor];
             WorldPacket out = BuildPlaybackPacket(frame, state.Match);
             viewer->GetSession()->SendPacket(&out);
+            SendReplayASForPlaybackPacket(viewer, out, state.Match);
 
             TC_LOG_DEBUG("arena.replay", "PLAY viewer={} opcode={} due={} now={} late={} cursor={}/{} size={}",
                 viewerLowGuid, out.GetOpcode(), frame.TimestampMs, elapsedMs,
