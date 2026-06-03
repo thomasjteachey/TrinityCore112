@@ -1030,6 +1030,30 @@ namespace
         }
     }
 
+    uint32 ReplayFactionTemplateForOverheadName(ReplayActor const& actor)
+    {
+        // Native 3D overhead name color is client reaction/faction driven, not addon RGB driven.
+        //
+        // For replay actors, make the configured "green team" look friendly to the viewer by rewriting
+        // UNIT_FIELD_FACTIONTEMPLATE in the replayed update-object payload.
+        //
+        // Team values in this branch are the normal Trinity BG team ids:
+        //   HORDE    = 67
+        //   ALLIANCE = 469
+        //
+        // Existing behavior already makes the other replay team look neutral/yellow, so leave that side's
+        // original faction template untouched.
+        //
+        // Faction template 35 is the standard friendly-to-players template used for green overhead names.
+        constexpr uint32 REPLAY_GREEN_NAME_TEAM = HORDE;
+        constexpr uint32 REPLAY_FRIENDLY_FACTION_TEMPLATE = 35;
+
+        if (actor.Team == REPLAY_GREEN_NAME_TEAM)
+            return REPLAY_FRIENDLY_FACTION_TEMPLATE;
+
+        return 0;
+    }
+
     bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
         uint8 blockCount = 0;
@@ -1089,6 +1113,11 @@ namespace
                         WriteUInt32(payload, pos, fakeLow);
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
                         WriteUInt32(payload, pos, fakeHigh);
+                    else if (fieldIndex == UNIT_FIELD_FACTIONTEMPLATE)
+                    {
+                        if (uint32 replayFactionTemplate = ReplayFactionTemplateForOverheadName(*actor))
+                            WriteUInt32(payload, pos, replayFactionTemplate);
+                    }
 
                     // Record target pair positions, but don't write until both low/high halves are known.
                     // This avoids accidentally rewriting a half-present GUID field.
@@ -2871,7 +2900,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V39: aura hover cleanup + hidden/passive aura filtering.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V64: server-side replay overhead name reaction colors.");
         return true;
     }
 
