@@ -6418,10 +6418,14 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                     return SPELL_FAILED_ONLY_ABOVEWATER;
 
                 // Ignore map check if spell have AreaId. AreaId already checked and this prevent special mount spells
-                bool allowMount = !unitCaster->GetMap()->IsDungeon() || unitCaster->GetMap()->IsBattlegroundOrArena();
-                InstanceTemplate const* it = sObjectMgr->GetInstanceTemplate(unitCaster->GetMapId());
-                if (it)
-                    allowMount = it->AllowMount;
+                Map const* map = unitCaster->GetMap();
+                bool allowMount = !map->IsDungeon() || map->IsBattlegroundOrArena();
+                if (!map->IsBattleArena())
+                {
+                    if (InstanceTemplate const* it = sObjectMgr->GetInstanceTemplate(unitCaster->GetMapId()))
+                        allowMount = it->AllowMount;
+                }
+
                 if (unitCaster->GetTypeId() == TYPEID_PLAYER && !allowMount && !m_spellInfo->AreaGroupId)
                     return SPELL_FAILED_NO_MOUNTS_ALLOWED;
 
