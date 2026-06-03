@@ -131,6 +131,8 @@ public:
 private:
     WorldSafeLocsEntry const* GetCurrentTeamGraveyard(TeamId teamId) const;
     void UpdateTeamScoreWorldStates();
+    void AwardPointToTeam(uint32 team);
+    void AwardLeavePointIfNeeded(Player const* player, uint32 team);
     uint32 GetHonorRewardForTeam() const;
     void ModifyEndOfMatchHonorRewards(uint32 winner, uint32 team, uint32& winnerHonor, uint32& loserHonor) const override;
     void TrackHumanParticipantAdded(Player const* player, bool isInBattleground);
