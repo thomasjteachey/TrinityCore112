@@ -1,5 +1,5 @@
 //
-// Arena Replay V10 replacement for the old BGReplay.cpp.
+// Arena Replay V11 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
@@ -13,7 +13,7 @@
 // - Replay startup force-opens arena doors and sets replay BG to IN_PROGRESS instead of waiting through prep.
 // - Replay blobs written by this file contain a V2 header with participants.
 // - During playback, original arena player GUIDs are rewritten to fake player GUIDs so the viewer can watch their own replays.
-// - Playback clears UPDATEFLAG_SELF from recorded player create packets and rewrites the player LOWGUID payload from self=0x2F to non-self=0x08.
+// - Playback rewrites update-object packets structurally instead of doing unsafe global byte replacement.
 // - Fake player name-query responses are sent before playback starts.
 //
 // Install:
@@ -491,33 +491,37 @@ namespace
         }
     }
 
-    void RewritePayloadGuids(std::vector<uint8>& payload, MatchRecord const& match)
-    {
-        for (ReplayActor const& actor : match.Actors)
-        {
-            uint64 original = actor.OriginalGuid.GetRawValue();
-            uint64 fake = actor.FakeGuid.GetRawValue();
-
-            if (!original || !fake || original == fake)
-                continue;
-
-            ReplaceAllBytes(payload, ToRawGuidBytes(original), ToRawGuidBytes(fake));
-            ReplaceAllBytes(payload, ToPackedGuidBytes(original), ToPackedGuidBytes(fake));
-        }
-    }
-
-    bool IsReplayActorGuid(MatchRecord const& match, ObjectGuid guid)
+    ReplayActor const* FindReplayActorByGuid(MatchRecord const& match, ObjectGuid guid)
     {
         if (!guid)
-            return false;
+            return nullptr;
 
         for (ReplayActor const& actor : match.Actors)
         {
             if (actor.OriginalGuid == guid || actor.FakeGuid == guid)
-                return true;
+                return &actor;
         }
 
-        return false;
+        return nullptr;
+    }
+
+    ReplayActor const* FindReplayActorByOriginalGuid(MatchRecord const& match, ObjectGuid guid)
+    {
+        if (!guid)
+            return nullptr;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.OriginalGuid == guid)
+                return &actor;
+        }
+
+        return nullptr;
+    }
+
+    bool IsReplayActorGuid(MatchRecord const& match, ObjectGuid guid)
+    {
+        return FindReplayActorByGuid(match, guid) != nullptr;
     }
 
     bool HasRemaining(std::vector<uint8> const& payload, size_t pos, size_t count)
@@ -577,6 +581,27 @@ namespace
         payload[pos + 3] = uint8((value >> 24) & 0xFF);
     }
 
+    bool ReadUInt64At(std::vector<uint8> const& payload, size_t pos, uint64& value)
+    {
+        if (!HasRemaining(payload, pos, 8))
+            return false;
+
+        value = 0;
+        for (uint8 i = 0; i < 8; ++i)
+            value |= uint64(payload[pos + i]) << (i * 8);
+
+        return true;
+    }
+
+    void WriteUInt64(std::vector<uint8>& payload, size_t pos, uint64 value)
+    {
+        if (!HasRemaining(payload, pos, 8))
+            return;
+
+        for (uint8 i = 0; i < 8; ++i)
+            payload[pos + i] = uint8((value >> (i * 8)) & 0xFF);
+    }
+
     uint32 CountSetBits(uint32 value)
     {
         uint32 count = 0;
@@ -618,29 +643,159 @@ namespace
         return ReadPackedGuid(payload, pos, ignored);
     }
 
-    bool SkipUpdateValuesBlock(std::vector<uint8> const& payload, size_t& pos)
+    bool WritePackedGuidInPlace(std::vector<uint8>& payload, size_t start, size_t end, ObjectGuid guid)
+    {
+        std::vector<uint8> packed = ToPackedGuidBytes(guid.GetRawValue());
+        if (packed.size() != end - start)
+        {
+            TC_LOG_ERROR("arena.replay", "Replay packed GUID rewrite refused: oldSize={} newSize={} guid={}",
+                uint32(end - start), uint32(packed.size()), guid.GetRawValue());
+            return false;
+        }
+
+        if (!HasRemaining(payload, start, packed.size()))
+            return false;
+
+        std::copy(packed.begin(), packed.end(), payload.begin() + start);
+        return true;
+    }
+
+    bool RewriteFirstPackedGuidIfReplayActor(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        size_t pos = 0;
+        size_t guidStart = pos;
+
+        ObjectGuid guid;
+        if (!ReadPackedGuid(payload, pos, guid))
+            return false;
+
+        size_t guidEnd = pos;
+        if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, guid))
+            return WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid);
+
+        return false;
+    }
+
+    bool RewriteFirstRawGuidIfReplayActor(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        uint64 raw = 0;
+        if (!ReadUInt64At(payload, 0, raw))
+            return false;
+
+        ObjectGuid guid(raw);
+        if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, guid))
+        {
+            WriteUInt64(payload, 0, actor->FakeGuid.GetRawValue());
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IsMovementLikeOpcode(uint16 opcode)
+    {
+        switch (opcode)
+        {
+            case MSG_MOVE_START_FORWARD:
+            case MSG_MOVE_SET_FACING:
+            case MSG_MOVE_HEARTBEAT:
+            case MSG_MOVE_JUMP:
+            case MSG_MOVE_FALL_LAND:
+            case MSG_MOVE_START_STRAFE_RIGHT:
+            case MSG_MOVE_STOP_STRAFE:
+            case MSG_MOVE_START_STRAFE_LEFT:
+            case MSG_MOVE_STOP:
+            case MSG_MOVE_START_BACKWARD:
+            case MSG_MOVE_START_TURN_LEFT:
+            case MSG_MOVE_STOP_TURN:
+            case MSG_MOVE_START_TURN_RIGHT:
+            case SMSG_FORCE_RUN_SPEED_CHANGE:
+            case SMSG_FORCE_FLIGHT_SPEED_CHANGE:
+            case SMSG_FORCE_SWIM_SPEED_CHANGE:
+            case SMSG_MONSTER_MOVE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    void RewriteNonUpdatePacketGuids(uint16 opcode, std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        // V10 and earlier used global byte replacement for both raw and packed player GUIDs.
+        // That is unsafe for low player GUIDs, for example raw 0x4D is:
+        //   4D 00 00 00 00 00 00 00
+        // which can appear in update masks, field values, timestamps, or padding.
+        //
+        // V11 only rewrites GUIDs in places we actually understand.
+        if (IsMovementLikeOpcode(opcode))
+        {
+            RewriteFirstPackedGuidIfReplayActor(payload, match);
+            return;
+        }
+
+        switch (opcode)
+        {
+            case SMSG_DESTROY_OBJECT:
+            case SMSG_ARENA_UNIT_DESTROYED:
+                RewriteFirstRawGuidIfReplayActor(payload, match);
+                return;
+            default:
+                return;
+        }
+    }
+
+    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
         uint8 blockCount = 0;
         if (!ReadUInt8(payload, pos, blockCount))
             return false;
 
-        if (!HasRemaining(payload, pos, size_t(blockCount) * 4))
-            return false;
+        std::vector<uint32> masks;
+        masks.reserve(blockCount);
 
-        uint32 valueCount = 0;
         for (uint8 i = 0; i < blockCount; ++i)
         {
             uint32 mask = 0;
             if (!ReadUInt32(payload, pos, mask))
                 return false;
 
-            valueCount += CountSetBits(mask);
+            masks.push_back(mask);
         }
 
-        if (!HasRemaining(payload, pos, size_t(valueCount) * 4))
-            return false;
+        ReplayActor const* actor = FindReplayActorByOriginalGuid(match, blockGuid);
+        uint64 fakeRaw = actor ? actor->FakeGuid.GetRawValue() : 0;
+        uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
+        uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
 
-        pos += size_t(valueCount) * 4;
+        for (uint32 block = 0; block < masks.size(); ++block)
+        {
+            uint32 mask = masks[block];
+
+            for (uint8 bit = 0; bit < 32; ++bit)
+            {
+                if (!(mask & (uint32(1) << bit)))
+                    continue;
+
+                if (!HasRemaining(payload, pos, 4))
+                    return false;
+
+                uint32 fieldIndex = block * 32 + bit;
+
+                // Only patch the object's own OBJECT_FIELD_GUID values.
+                // Do NOT do global raw GUID replacement in the values stream; low player GUIDs are too small
+                // and can appear as ordinary integers.
+                if (actor)
+                {
+                    if (fieldIndex == 0)
+                        WriteUInt32(payload, pos, fakeLow);
+                    else if (fieldIndex == 1)
+                        WriteUInt32(payload, pos, fakeHigh);
+                }
+
+                pos += 4;
+            }
+        }
+
         return true;
     }
 
@@ -859,7 +1014,7 @@ namespace
         return true;
     }
 
-    bool ClearReplaySelfFlagsInUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
+    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
         constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
@@ -888,22 +1043,33 @@ namespace
 
                 for (uint32 i = 0; i < guidCount; ++i)
                 {
-                    if (!SkipPackedGuid(payload, pos))
+                    size_t guidStart = pos;
+                    ObjectGuid guid;
+                    if (!ReadPackedGuid(payload, pos, guid))
                         return false;
+
+                    size_t guidEnd = pos;
+                    if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, guid))
+                        WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid);
                 }
 
                 continue;
             }
 
+            size_t guidStart = pos;
             ObjectGuid blockGuid;
             if (!ReadPackedGuid(payload, pos, blockGuid))
                 return false;
+
+            size_t guidEnd = pos;
+            if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, blockGuid))
+                WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid);
 
             switch (updateType)
             {
                 case REPLAY_UPDATETYPE_VALUES:
                 {
-                    if (!SkipUpdateValuesBlock(payload, pos))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
                         return false;
 
                     break;
@@ -925,7 +1091,7 @@ namespace
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
-                    if (!SkipUpdateValuesBlock(payload, pos))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
                         return false;
 
                     break;
@@ -968,15 +1134,14 @@ namespace
             return false;
         }
 
-        if (!ClearReplaySelfFlagsInUpdateObjectPayload(decompressed, match))
+        if (!RewriteUpdateObjectPayload(decompressed, match))
         {
             TC_LOG_ERROR("arena.replay", "Replay compressed update parser failed; sending original packet without GUID rewrite");
             return false;
         }
 
-        RewritePayloadGuids(decompressed, match);
 
-        // V9 first clears UPDATEFLAG_SELF from recorded player create blocks. V8 fake GUIDs preserve the packed GUID byte mask, and ReplaceAllBytes refuses length-changing rewrites.
+        // V11 rewrites update-object packets structurally. It does not do global raw/packed GUID replacement.
         // Therefore the uncompressed update-object size must stay stable. Keep this explicit so any future bad
         // rewrite is visible in logs instead of silently crashing the client.
         uint32 const rewrittenUncompressedSize = uint32(decompressed.size());
@@ -1494,7 +1659,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V10: mask-stable fake GUIDs; player SELF creates are converted to non-self LOWGUID payloads.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V11: structured update-object GUID rewrite; unsafe global byte replacement disabled.");
         return true;
     }
 
