@@ -783,8 +783,14 @@ void Aura::_ApplyEffectForTargets(uint8 effIndex)
     // apply effect to targets
     for (UnitList::iterator itr = targetList.begin(); itr != targetList.end(); ++itr)
     {
-        if (GetApplicationOfTarget((*itr)->GetGUID()))
+        if (AuraApplication* aurApp = GetApplicationOfTarget((*itr)->GetGUID()))
         {
+            // Side effects while applying an aura to an earlier target can update this
+            // application too. Re-check the effect state before asking Unit to apply it
+            // so a re-entrant target update cannot apply the same effect twice.
+            if (aurApp->HasEffect(effIndex))
+                continue;
+
             // owner has to be in world, or effect has to be applied to self
             ASSERT((!GetOwner()->IsInWorld() && GetOwner() == *itr) || GetOwner()->IsInMap(*itr));
             (*itr)->_ApplyAuraEffect(this, effIndex);

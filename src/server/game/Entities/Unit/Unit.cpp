@@ -3716,6 +3716,13 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
     ASSERT(aura->HasEffect(effIndex));
     AuraApplication * aurApp = aura->GetApplicationOfTarget(GetGUID());
     ASSERT(aurApp);
+
+    // Aura application can be re-entered by scripts/procs/target-map updates while
+    // another effect from the same aura is being applied. If that already applied
+    // this effect, do not try to handle it a second time.
+    if (aurApp->HasEffect(effIndex))
+        return;
+
     if (!aurApp->GetEffectMask())
         _ApplyAura(aurApp, 1 << effIndex);
     else
