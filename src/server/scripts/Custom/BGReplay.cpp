@@ -45,6 +45,7 @@
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
 #include "Timer.h"
+#include "UpdateFields.h"
 #include "WorldSession.h"
 
 #include <algorithm>
@@ -1050,6 +1051,16 @@ namespace
         uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
         uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
 
+        // This is the only new client-packet target rewrite in V23.
+        //
+        // The previous v20 attempt rewrote multiple owner/channel fields and crashed the client.
+        // V23 only rewrites UNIT_FIELD_TARGET, using the generated UpdateFields.h value from this branch.
+        // In src(85), UNIT_FIELD_TARGET is OBJECT_END + 0x000C = 0x0012, size 2 LONG fields.
+        size_t targetLowPos = std::numeric_limits<size_t>::max();
+        size_t targetHighPos = std::numeric_limits<size_t>::max();
+        uint32 targetLow = 0;
+        uint32 targetHigh = 0;
+
         for (uint32 block = 0; block < masks.size(); ++block)
         {
             uint32 mask = masks[block];
@@ -1063,19 +1074,48 @@ namespace
                     return false;
 
                 uint32 fieldIndex = block * 32 + bit;
+                uint32 value =
+                    uint32(payload[pos]) |
+                    (uint32(payload[pos + 1]) << 8) |
+                    (uint32(payload[pos + 2]) << 16) |
+                    (uint32(payload[pos + 3]) << 24);
 
-                // Only patch the object's own OBJECT_FIELD_GUID values.
-                // Do NOT do global raw GUID replacement in the values stream; low player GUIDs are too small
-                // and can appear as ordinary integers.
+                // Patch the replay actor's own OBJECT_FIELD_GUID, same as the last known-good versions.
                 if (actor)
                 {
-                    if (fieldIndex == 0)
+                    if (fieldIndex == OBJECT_FIELD_GUID)
                         WriteUInt32(payload, pos, fakeLow);
-                    else if (fieldIndex == 1)
+                    else if (fieldIndex == OBJECT_FIELD_GUID + 1)
                         WriteUInt32(payload, pos, fakeHigh);
+
+                    // Record target pair positions, but don't write until both low/high halves are known.
+                    // This avoids accidentally rewriting a half-present GUID field.
+                    if (fieldIndex == UNIT_FIELD_TARGET)
+                    {
+                        targetLowPos = pos;
+                        targetLow = value;
+                    }
+                    else if (fieldIndex == UNIT_FIELD_TARGET + 1)
+                    {
+                        targetHighPos = pos;
+                        targetHigh = value;
+                    }
                 }
 
                 pos += 4;
+            }
+        }
+
+        if (actor
+            && targetLowPos != std::numeric_limits<size_t>::max()
+            && targetHighPos != std::numeric_limits<size_t>::max())
+        {
+            ObjectGuid originalTarget(uint64(targetLow) | (uint64(targetHigh) << 32));
+            if (ReplayActor const* targetActor = FindReplayActorByOriginalGuid(match, originalTarget))
+            {
+                uint64 targetFakeRaw = targetActor->FakeGuid.GetRawValue();
+                WriteUInt32(payload, targetLowPos, uint32(targetFakeRaw & 0xFFFFFFFFu));
+                WriteUInt32(payload, targetHighPos, uint32((targetFakeRaw >> 32) & 0xFFFFFFFFu));
             }
         }
 
