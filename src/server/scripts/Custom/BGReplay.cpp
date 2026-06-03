@@ -172,6 +172,8 @@ namespace
         bool SentInitialNameResponses = false;
         bool SentReplayASInitial = false;
         bool Finished = false;
+        uint32 LastNameColorUpdateMs = 0;
+        uint8 NameColorUpdateBursts = 0;
     };
 
     // Real arena records by BG instance id.
@@ -1030,6 +1032,50 @@ namespace
         }
     }
 
+    bool ReplayActorShouldUseHostileRedName(ReplayActor const& actor)
+    {
+        // Existing replay/addon convention uses team 67 as the green team.
+        // We are trying to make that side render hostile/red.
+        return actor.Team == HORDE || actor.Team == 67;
+    }
+
+    uint32 ReplayRedNameUnitBytes2ForActor(ReplayActor const& actor, uint32 originalBytes2)
+    {
+        if (!ReplayActorShouldUseHostileRedName(actor))
+            return originalBytes2;
+
+        // In this branch, SetPvpFlag() modifies UNIT_FIELD_BYTES_2, byte offset 1:
+        //   Unit.h: SetPvpFlag(flags) -> SetByteFlag(UNIT_FIELD_BYTES_2, UNIT_BYTES_2_OFFSET_PVP_FLAG, flags)
+        //
+        // Native player overhead hostility should care about this field more than PLAYER_FLAGS.
+        uint32 shift = uint32(UNIT_BYTES_2_OFFSET_PVP_FLAG) * 8u;
+        uint32 clearMask = ~(0xFFu << shift);
+        uint32 pvpFlags = uint32(UNIT_BYTE2_FLAG_PVP | UNIT_BYTE2_FLAG_FFA_PVP);
+
+        return (originalBytes2 & clearMask) | (pvpFlags << shift);
+    }
+
+    uint32 ReplayRedNameUnitFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
+    {
+        if (!ReplayActorShouldUseHostileRedName(actor))
+            return originalFlags;
+
+        uint32 flags = originalFlags;
+        flags &= ~UNIT_FLAG_NON_ATTACKABLE;
+        flags &= ~UNIT_FLAG_NOT_SELECTABLE;
+        flags &= ~UNIT_FLAG_PACIFIED;
+        flags &= ~UNIT_FLAG_IMMUNE_TO_PC;
+        return flags;
+    }
+
+    uint32 ReplayRedNamePlayerFlagsForActor(ReplayActor const& actor, uint32 originalFlags)
+    {
+        if (!ReplayActorShouldUseHostileRedName(actor))
+            return originalFlags;
+
+        return originalFlags | PLAYER_FLAGS_IN_PVP | PLAYER_FLAGS_CONTESTED_PVP;
+    }
+
     bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
         uint8 blockCount = 0;
@@ -1089,6 +1135,24 @@ namespace
                         WriteUInt32(payload, pos, fakeLow);
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
                         WriteUInt32(payload, pos, fakeHigh);
+                    else if (fieldIndex == UNIT_FIELD_BYTES_2)
+                    {
+                        uint32 patched = ReplayRedNameUnitBytes2ForActor(*actor, value);
+                        WriteUInt32(payload, pos, patched);
+                        if (patched != value)
+                            TC_LOG_DEBUG("arena.replay", "Replay red-name UNIT_FIELD_BYTES_2 rewrite fake={} team={} old={} new={}",
+                                actor->FakeGuid.ToString(), actor->Team, value, patched);
+                    }
+                    else if (fieldIndex == UNIT_FIELD_FLAGS)
+                    {
+                        uint32 patched = ReplayRedNameUnitFlagsForActor(*actor, value);
+                        WriteUInt32(payload, pos, patched);
+                    }
+                    else if (fieldIndex == PLAYER_FLAGS)
+                    {
+                        uint32 patched = ReplayRedNamePlayerFlagsForActor(*actor, value);
+                        WriteUInt32(payload, pos, patched);
+                    }
 
                     // Record target pair positions, but don't write until both low/high halves are known.
                     // This avoids accidentally rewriting a half-present GUID field.
@@ -1783,6 +1847,84 @@ namespace
         SendReplayASRaw(viewer, ReplayASGuidString(targetGuid) + ";" + prefix + "=" + value + ";");
     }
 
+    void SendReplayRedNameBytes2ValueUpdate(Player* viewer, ReplayActor const& actor)
+    {
+        if (!viewer || !viewer->GetSession() || !ReplayActorShouldUseHostileRedName(actor))
+            return;
+
+        constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
+
+        uint32 const field0 = UNIT_FIELD_FLAGS;
+        uint32 const field1 = UNIT_FIELD_BYTES_2;
+        uint32 const field2 = PLAYER_FLAGS;
+        uint32 const maxField = PLAYER_FLAGS;
+        uint8 const blockCount = uint8(maxField / 32 + 1);
+
+        WorldPacket data(SMSG_UPDATE_OBJECT, 96);
+        data << uint32(1);
+        data << uint8(REPLAY_UPDATETYPE_VALUES);
+        data << actor.FakeGuid.WriteAsPacked();
+
+        data << uint8(blockCount);
+        for (uint8 block = 0; block < blockCount; ++block)
+        {
+            uint32 mask = 0;
+
+            if (field0 / 32 == block)
+                mask |= uint32(1) << (field0 % 32);
+            if (field1 / 32 == block)
+                mask |= uint32(1) << (field1 % 32);
+            if (field2 / 32 == block)
+                mask |= uint32(1) << (field2 % 32);
+
+            data << uint32(mask);
+        }
+
+        // Values must be written in ascending field order:
+        // UNIT_FIELD_FLAGS < UNIT_FIELD_BYTES_2 < PLAYER_FLAGS
+        data << uint32(ReplayRedNameUnitFlagsForActor(actor, 0));
+        data << uint32(ReplayRedNameUnitBytes2ForActor(actor, 0));
+        data << uint32(ReplayRedNamePlayerFlagsForActor(actor, 0));
+
+        viewer->GetSession()->SendPacket(&data);
+    }
+
+    void SendReplayRedNameBytes2Updates(Player* viewer, PlaybackState& state, char const* reason)
+    {
+        if (!viewer || !viewer->GetSession())
+            return;
+
+        uint32 sent = 0;
+        for (ReplayActor const& actor : state.Match.Actors)
+        {
+            if (!ReplayActorShouldUseHostileRedName(actor))
+                continue;
+
+            SendReplayRedNameBytes2ValueUpdate(viewer, actor);
+            ++sent;
+        }
+
+        TC_LOG_DEBUG("arena.replay", "Replay red-name bytes2 update viewer={} sent={} reason={}",
+            viewer->GetGUID().GetCounter(), sent, reason ? reason : "");
+    }
+
+    void MaybeSendReplayRedNameBytes2Updates(Player* viewer, PlaybackState& state, uint32 nowMs)
+    {
+        constexpr uint8 MAX_NAME_COLOR_BURSTS = 20;
+        constexpr uint32 NAME_COLOR_BURST_INTERVAL_MS = 250;
+
+        if (state.NameColorUpdateBursts >= MAX_NAME_COLOR_BURSTS)
+            return;
+
+        if (state.LastNameColorUpdateMs && nowMs - state.LastNameColorUpdateMs < NAME_COLOR_BURST_INTERVAL_MS)
+            return;
+
+        state.LastNameColorUpdateMs = nowMs;
+        ++state.NameColorUpdateBursts;
+
+        SendReplayRedNameBytes2Updates(viewer, state, "periodic actor UNIT_FIELD_BYTES_2 PvP/FFA update");
+    }
+
     void SendReplayASCommand(Player* viewer, ObjectGuid targetGuid, char const* prefix, uint32 value)
     {
         SendReplayASCommand(viewer, targetGuid, prefix, std::to_string(value));
@@ -1838,6 +1980,7 @@ namespace
         }
 
         state.SentReplayASInitial = true;
+        SendReplayRedNameBytes2Updates(viewer, state, "initial replay addon setup");
     }
 
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
@@ -2871,7 +3014,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V72: soft spectator PvP client context for replay overhead name colors.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V73: force green-team fake actors PvP/FFA bytes2 for red names.");
         return true;
     }
 
@@ -2913,18 +3056,6 @@ std::vector<uint8> payload(packet.size());
             replayReturnPos.GetOrientation());
 
         player->SetIsSpectator(true);
-
-        // Native 3D overhead-name color appears to be dominated by the viewer's spectator/client PvP context.
-        // SetIsSpectator(true) makes the viewer isolated, non-attackable, and removes FFA PvP. That likely causes
-        // the client to render all fake replay players as neutral/yellow no matter what we do to their fields.
-        //
-        // Keep the server-side spectator bookkeeping, but undo the client-visible neutral/non-attackable parts
-        // for this replay viewer. This is a test branch for overhead name coloring.
-        player->ClearUnitState(UNIT_STATE_ISOLATED);
-        player->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
-        player->SetPvP(true);
-        player->SetPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
-
         bg->toggleReplay(player->GetGUID());
         player->SetPendingSpectatorForBG(bg->GetInstanceID());
         bg->StartBattleground();
@@ -2936,20 +3067,13 @@ std::vector<uint8> payload(packet.size());
 
         BattlegroundTypeId bgTypeId = bg->GetTypeID();
         uint32 queueSlot = 0;
-
-        // Give the viewer a non-neutral BG team context. Since your old "green team" actors are HORDE/team 67,
-        // an Alliance viewer context gives the client the best chance to classify them as enemy/red.
-        TeamId teamId = TEAM_ALLIANCE;
+        TeamId teamId = TEAM_NEUTRAL;
         WorldPacket status;
 
-        player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, queueSlot, true, false, teamId);
+        player->SetBattlegroundId(bg->GetInstanceID(), bgTypeId, queueSlot, true, false, TEAM_NEUTRAL);
         sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bgTypeId);
         sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, bg, queueSlot, STATUS_IN_PROGRESS, 0, 0, bg->GetArenaType(), teamId);
         player->GetSession()->SendPacket(&status);
-
-        TC_LOG_INFO("arena.replay", "Replay viewer={} soft spectator PvP context enabled: team=Alliance pvp={} ffa={}",
-            viewerLowGuid, player->IsPvP() ? 1u : 0u, player->IsFFAPvP() ? 1u : 0u);
-        handler.PSendSysMessage("Replay soft spectator PvP context enabled: viewer team=Alliance, PvP/FFA on.");
 
         PlaybackState state;
         state.Match = std::move(record);
@@ -3223,6 +3347,9 @@ public:
             ++state.Cursor;
             ++sentThisUpdate;
         }
+
+        if (state.Cursor > 0)
+            MaybeSendReplayRedNameBytes2Updates(viewer, state, nowMs);
 
         if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
         {
