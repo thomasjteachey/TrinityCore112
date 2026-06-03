@@ -13,6 +13,7 @@
 // - Replay startup force-opens arena doors and sets replay BG to IN_PROGRESS instead of waiting through prep.
 // - Replay blobs written by this file contain a V2 header with participants.
 // - During playback, original arena player GUIDs are rewritten to fake player GUIDs so the viewer can watch their own replays.
+// - Playback clears UPDATEFLAG_SELF from recorded player create packets so replay ghosts are not treated as the local player.
 // - Fake player name-query responses are sent before playback starts.
 //
 // Install:
@@ -505,6 +506,413 @@ namespace
         }
     }
 
+    bool IsReplayActorGuid(MatchRecord const& match, ObjectGuid guid)
+    {
+        if (!guid)
+            return false;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.OriginalGuid == guid || actor.FakeGuid == guid)
+                return true;
+        }
+
+        return false;
+    }
+
+    bool HasRemaining(std::vector<uint8> const& payload, size_t pos, size_t count)
+    {
+        return pos <= payload.size() && count <= payload.size() - pos;
+    }
+
+    bool ReadUInt8(std::vector<uint8> const& payload, size_t& pos, uint8& value)
+    {
+        if (!HasRemaining(payload, pos, 1))
+            return false;
+
+        value = payload[pos++];
+        return true;
+    }
+
+    bool ReadUInt16(std::vector<uint8> const& payload, size_t& pos, uint16& value)
+    {
+        if (!HasRemaining(payload, pos, 2))
+            return false;
+
+        value = uint16(payload[pos]) | (uint16(payload[pos + 1]) << 8);
+        pos += 2;
+        return true;
+    }
+
+    bool ReadUInt32(std::vector<uint8> const& payload, size_t& pos, uint32& value)
+    {
+        if (!HasRemaining(payload, pos, 4))
+            return false;
+
+        value = uint32(payload[pos]) |
+            (uint32(payload[pos + 1]) << 8) |
+            (uint32(payload[pos + 2]) << 16) |
+            (uint32(payload[pos + 3]) << 24);
+        pos += 4;
+        return true;
+    }
+
+    void WriteUInt16(std::vector<uint8>& payload, size_t pos, uint16 value)
+    {
+        if (!HasRemaining(payload, pos, 2))
+            return;
+
+        payload[pos] = uint8(value & 0xFF);
+        payload[pos + 1] = uint8((value >> 8) & 0xFF);
+    }
+
+    uint32 CountSetBits(uint32 value)
+    {
+        uint32 count = 0;
+        while (value)
+        {
+            value &= value - 1;
+            ++count;
+        }
+
+        return count;
+    }
+
+    bool ReadPackedGuid(std::vector<uint8> const& payload, size_t& pos, ObjectGuid& guid)
+    {
+        uint8 mask = 0;
+        if (!ReadUInt8(payload, pos, mask))
+            return false;
+
+        uint64 raw = 0;
+        for (uint8 i = 0; i < 8; ++i)
+        {
+            if (!(mask & (1 << i)))
+                continue;
+
+            uint8 byte = 0;
+            if (!ReadUInt8(payload, pos, byte))
+                return false;
+
+            raw |= uint64(byte) << (i * 8);
+        }
+
+        guid = ObjectGuid(raw);
+        return true;
+    }
+
+    bool SkipPackedGuid(std::vector<uint8> const& payload, size_t& pos)
+    {
+        ObjectGuid ignored;
+        return ReadPackedGuid(payload, pos, ignored);
+    }
+
+    bool SkipUpdateValuesBlock(std::vector<uint8> const& payload, size_t& pos)
+    {
+        uint8 blockCount = 0;
+        if (!ReadUInt8(payload, pos, blockCount))
+            return false;
+
+        if (!HasRemaining(payload, pos, size_t(blockCount) * 4))
+            return false;
+
+        uint32 valueCount = 0;
+        for (uint8 i = 0; i < blockCount; ++i)
+        {
+            uint32 mask = 0;
+            if (!ReadUInt32(payload, pos, mask))
+                return false;
+
+            valueCount += CountSetBits(mask);
+        }
+
+        if (!HasRemaining(payload, pos, size_t(valueCount) * 4))
+            return false;
+
+        pos += size_t(valueCount) * 4;
+        return true;
+    }
+
+    bool SkipMovementCreateData(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
+    {
+        // Mirrored from Object::BuildMovementUpdate().
+        // This is intentionally conservative: if the layout looks unsafe, return false and leave the packet alone
+        // rather than shifting bytes or making the client parse garbage.
+        constexpr uint16 REPLAY_UPDATEFLAG_SELF = 0x0001;
+        constexpr uint16 REPLAY_UPDATEFLAG_TRANSPORT = 0x0002;
+        constexpr uint16 REPLAY_UPDATEFLAG_HAS_TARGET = 0x0004;
+        constexpr uint16 REPLAY_UPDATEFLAG_UNKNOWN = 0x0008;
+        constexpr uint16 REPLAY_UPDATEFLAG_LOWGUID = 0x0010;
+        constexpr uint16 REPLAY_UPDATEFLAG_LIVING = 0x0020;
+        constexpr uint16 REPLAY_UPDATEFLAG_STATIONARY_POSITION = 0x0040;
+        constexpr uint16 REPLAY_UPDATEFLAG_VEHICLE = 0x0080;
+        constexpr uint16 REPLAY_UPDATEFLAG_POSITION = 0x0100;
+        constexpr uint16 REPLAY_UPDATEFLAG_ROTATION = 0x0200;
+
+        constexpr uint32 REPLAY_MOVEMENTFLAG_ONTRANSPORT = 0x00000200;
+        constexpr uint32 REPLAY_MOVEMENTFLAG_FALLING = 0x00001000;
+        constexpr uint32 REPLAY_MOVEMENTFLAG_SWIMMING = 0x00200000;
+        constexpr uint32 REPLAY_MOVEMENTFLAG_FLYING = 0x02000000;
+        constexpr uint32 REPLAY_MOVEMENTFLAG_SPLINE_ELEVATION = 0x04000000;
+        constexpr uint32 REPLAY_MOVEMENTFLAG_SPLINE_ENABLED = 0x08000000;
+        constexpr uint16 REPLAY_MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING = 0x0020;
+        constexpr uint16 REPLAY_MOVEMENTFLAG2_INTERPOLATED_MOVEMENT = 0x0400;
+
+        size_t flagsPos = pos;
+        uint16 flags = 0;
+        if (!ReadUInt16(payload, pos, flags))
+            return false;
+
+        // This was the client-crasher in V7/V8:
+        // packets recorded from a player's own session can have UPDATEFLAG_SELF on that player's create block.
+        // During replay that actor is NOT the active client player, so leaving SELF set can make WoW treat a
+        // replay ghost as the local player object and explode while parsing the create block.
+        if ((flags & REPLAY_UPDATEFLAG_SELF) && IsReplayActorGuid(match, blockGuid))
+        {
+            flags &= ~REPLAY_UPDATEFLAG_SELF;
+            WriteUInt16(payload, flagsPos, flags);
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_LIVING)
+        {
+            size_t movementStart = pos;
+
+            uint32 movementFlags = 0;
+            uint16 extraMovementFlags = 0;
+
+            if (!ReadUInt32(payload, pos, movementFlags))
+                return false;
+
+            if (!ReadUInt16(payload, pos, extraMovementFlags))
+                return false;
+
+            // time + x/y/z/o
+            if (!HasRemaining(payload, pos, 4 + 16))
+                return false;
+
+            pos += 4 + 16;
+
+            if (movementFlags & REPLAY_MOVEMENTFLAG_ONTRANSPORT)
+            {
+                if (!SkipPackedGuid(payload, pos))
+                    return false;
+
+                // transport x/y/z/o + transport time + transport seat
+                if (!HasRemaining(payload, pos, 16 + 4 + 1))
+                    return false;
+
+                pos += 16 + 4 + 1;
+
+                if (extraMovementFlags & REPLAY_MOVEMENTFLAG2_INTERPOLATED_MOVEMENT)
+                {
+                    if (!HasRemaining(payload, pos, 4))
+                        return false;
+
+                    pos += 4;
+                }
+            }
+
+            if ((movementFlags & (REPLAY_MOVEMENTFLAG_SWIMMING | REPLAY_MOVEMENTFLAG_FLYING)) ||
+                (extraMovementFlags & REPLAY_MOVEMENTFLAG2_ALWAYS_ALLOW_PITCHING))
+            {
+                if (!HasRemaining(payload, pos, 4))
+                    return false;
+
+                pos += 4;
+            }
+
+            // fall time
+            if (!HasRemaining(payload, pos, 4))
+                return false;
+
+            pos += 4;
+
+            if (movementFlags & REPLAY_MOVEMENTFLAG_FALLING)
+            {
+                if (!HasRemaining(payload, pos, 16))
+                    return false;
+
+                pos += 16;
+            }
+
+            if (movementFlags & REPLAY_MOVEMENTFLAG_SPLINE_ELEVATION)
+            {
+                if (!HasRemaining(payload, pos, 4))
+                    return false;
+
+                pos += 4;
+            }
+
+            // walk/run/runback/swim/swimback/flight/flightback/turn/pitch
+            if (!HasRemaining(payload, pos, 9 * 4))
+                return false;
+
+            pos += 9 * 4;
+
+            // Arena player create packets should not have a server-side spline create block. If they do,
+            // parsing it here without a full MoveSpline parser is unsafe, so stop and leave the packet unchanged.
+            if (movementFlags & REPLAY_MOVEMENTFLAG_SPLINE_ENABLED)
+            {
+                TC_LOG_ERROR("arena.replay", "Replay update-object parser refused spline-enabled movement block guid={} movementStart={}",
+                    blockGuid.GetRawValue(), uint32(movementStart));
+                return false;
+            }
+        }
+        else
+        {
+            if (flags & REPLAY_UPDATEFLAG_POSITION)
+            {
+                if (!SkipPackedGuid(payload, pos))
+                    return false;
+
+                // position x/y/z + transport-or-absolute x/y/z + orientation + corpse orientation/zero
+                if (!HasRemaining(payload, pos, 3 * 4 + 3 * 4 + 4 + 4))
+                    return false;
+
+                pos += 3 * 4 + 3 * 4 + 4 + 4;
+            }
+            else if (flags & REPLAY_UPDATEFLAG_STATIONARY_POSITION)
+            {
+                if (!HasRemaining(payload, pos, 4 * 4))
+                    return false;
+
+                pos += 4 * 4;
+            }
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_UNKNOWN)
+        {
+            if (!HasRemaining(payload, pos, 4))
+                return false;
+
+            pos += 4;
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_LOWGUID)
+        {
+            if (!HasRemaining(payload, pos, 4))
+                return false;
+
+            pos += 4;
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_HAS_TARGET)
+        {
+            if (!SkipPackedGuid(payload, pos))
+                return false;
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_TRANSPORT)
+        {
+            if (!HasRemaining(payload, pos, 4))
+                return false;
+
+            pos += 4;
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_VEHICLE)
+        {
+            if (!HasRemaining(payload, pos, 8))
+                return false;
+
+            pos += 8;
+        }
+
+        if (flags & REPLAY_UPDATEFLAG_ROTATION)
+        {
+            if (!HasRemaining(payload, pos, 8))
+                return false;
+
+            pos += 8;
+        }
+
+        return true;
+    }
+
+    bool ClearReplaySelfFlagsInUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
+        constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
+        constexpr uint8 REPLAY_UPDATETYPE_CREATE_OBJECT = 2;
+        constexpr uint8 REPLAY_UPDATETYPE_CREATE_OBJECT2 = 3;
+        constexpr uint8 REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS = 4;
+        constexpr uint8 REPLAY_UPDATETYPE_NEAR_OBJECTS = 5;
+
+        size_t pos = 0;
+        uint32 blockCount = 0;
+
+        if (!ReadUInt32(payload, pos, blockCount))
+            return false;
+
+        for (uint32 block = 0; block < blockCount; ++block)
+        {
+            uint8 updateType = 0;
+            if (!ReadUInt8(payload, pos, updateType))
+                return false;
+
+            if (updateType == REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS || updateType == REPLAY_UPDATETYPE_NEAR_OBJECTS)
+            {
+                uint32 guidCount = 0;
+                if (!ReadUInt32(payload, pos, guidCount))
+                    return false;
+
+                for (uint32 i = 0; i < guidCount; ++i)
+                {
+                    if (!SkipPackedGuid(payload, pos))
+                        return false;
+                }
+
+                continue;
+            }
+
+            ObjectGuid blockGuid;
+            if (!ReadPackedGuid(payload, pos, blockGuid))
+                return false;
+
+            switch (updateType)
+            {
+                case REPLAY_UPDATETYPE_VALUES:
+                {
+                    if (!SkipUpdateValuesBlock(payload, pos))
+                        return false;
+
+                    break;
+                }
+                case REPLAY_UPDATETYPE_MOVEMENT:
+                {
+                    if (!SkipMovementCreateData(payload, pos, match, blockGuid))
+                        return false;
+
+                    break;
+                }
+                case REPLAY_UPDATETYPE_CREATE_OBJECT:
+                case REPLAY_UPDATETYPE_CREATE_OBJECT2:
+                {
+                    uint8 objectTypeId = 0;
+                    if (!ReadUInt8(payload, pos, objectTypeId))
+                        return false;
+
+                    if (!SkipMovementCreateData(payload, pos, match, blockGuid))
+                        return false;
+
+                    if (!SkipUpdateValuesBlock(payload, pos))
+                        return false;
+
+                    break;
+                }
+                default:
+                    TC_LOG_ERROR("arena.replay", "Replay update-object parser saw unknown updateType={} block={}/{} pos={}",
+                        uint32(updateType), block, blockCount, uint32(pos));
+                    return false;
+            }
+        }
+
+        if (pos > payload.size())
+            return false;
+
+        return true;
+    }
+
     bool RewriteCompressedUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
         if (payload.size() < 4)
@@ -530,9 +938,15 @@ namespace
             return false;
         }
 
+        if (!ClearReplaySelfFlagsInUpdateObjectPayload(decompressed, match))
+        {
+            TC_LOG_ERROR("arena.replay", "Replay compressed update parser failed; sending original packet without GUID rewrite");
+            return false;
+        }
+
         RewritePayloadGuids(decompressed, match);
 
-        // V8 fake GUIDs preserve the packed GUID byte mask, and ReplaceAllBytes refuses length-changing rewrites.
+        // V9 first clears UPDATEFLAG_SELF from recorded player create blocks. V8 fake GUIDs preserve the packed GUID byte mask, and ReplaceAllBytes refuses length-changing rewrites.
         // Therefore the uncompressed update-object size must stay stable. Keep this explicit so any future bad
         // rewrite is visible in logs instead of silently crashing the client.
         uint32 const rewrittenUncompressedSize = uint32(decompressed.size());
@@ -688,9 +1102,18 @@ namespace
             std::memcpy(payload.data(), frame.Packet.contents(), payload.size());
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
+        {
             RewriteCompressedUpdateObjectPayload(payload, match);
-        else
+        }
+        else if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
+        {
+            ClearReplaySelfFlagsInUpdateObjectPayload(payload, match);
             RewritePayloadGuids(payload, match);
+        }
+        else
+        {
+            RewritePayloadGuids(payload, match);
+        }
 
         WorldPacket out(frame.Packet.GetOpcode(), payload.size());
         if (!payload.empty())
@@ -1041,7 +1464,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V8: using mask-stable fake GUIDs to avoid corrupting compressed update-object packets.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V9: using mask-stable fake GUIDs and clearing UPDATEFLAG_SELF from replay actor create packets.");
         return true;
     }
 
