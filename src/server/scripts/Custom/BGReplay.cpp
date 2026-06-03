@@ -41,7 +41,6 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
-#include "RBAC.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
@@ -68,7 +67,7 @@
 
 namespace
 {
-    // Replay V85: replay restart button with ChatCommand namespace compile fix.
+    // Replay V86: Replay button restarts through ASSUN addon packet, no chat command bridge.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
@@ -3531,6 +3530,17 @@ class BGReplayPlayerScript : public PlayerScript
 public:
     BGReplayPlayerScript() : PlayerScript("BGReplayPlayerScript") { }
 
+    void OnAddonMessage(Player* player, std::string prefix, std::string message, Player* /*receiver*/) override
+    {
+        if (prefix != "ASSUN")
+            return;
+
+        if (message != "RESTART")
+            return;
+
+        RestartReplayForViewer(player);
+    }
+
     void OnUpdate(Player* player, uint32 /*diff*/) override
     {
         UpdatePlaybackForViewer(player);
@@ -3716,42 +3726,6 @@ public:
 };
 
 
-class BGReplayCommandScript : public CommandScript
-{
-public:
-    BGReplayCommandScript() : CommandScript("BGReplayCommandScript") { }
-
-    Trinity::ChatCommands::ChatCommandTable GetCommands() const override
-    {
-        static Trinity::ChatCommands::ChatCommandTable replayCommandTable =
-        {
-            { "restart", HandleReplayRestart, rbac::RBAC_PERM_COMMAND_GM, Trinity::ChatCommands::Console::No }
-        };
-
-        static Trinity::ChatCommands::ChatCommandTable rootTable =
-        {
-            { "replay", replayCommandTable }
-        };
-
-        return rootTable;
-    }
-
-    static bool HandleReplayRestart(ChatHandler* handler)
-    {
-        if (!handler || !handler->GetSession())
-            return false;
-
-        Player* player = handler->GetSession()->GetPlayer();
-        if (!RestartReplayForViewer(player))
-        {
-            handler->SetSentErrorMessage(true);
-            return false;
-        }
-
-        return true;
-    }
-};
-
 
 void AddBGReplayScripts()
 {
@@ -3760,5 +3734,4 @@ void AddBGReplayScripts()
     new BGReplayPlayerScript();
     new BGReplayBGScript();
     new ReplayGossip();
-    new BGReplayCommandScript();
 }
