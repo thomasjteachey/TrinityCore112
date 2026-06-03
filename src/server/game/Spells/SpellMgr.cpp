@@ -5075,7 +5075,8 @@ void SpellMgr::LoadSpellInfoCorrections()
 
         // Mounts dismount on full submersion in Unit::ProcessTerrainStatusUpdate.
         // Do not tag them with AURA_INTERRUPT_FLAG_NOT_ABOVEWATER here, because
-        // that interrupt fires as soon as a player touches shallow water.
+        // that interrupt fires as soon as a player touches shallow water. Mount
+        // auras that already carry the flag are skipped until submersion there.
 
         // Fix range for trajectory triggered spell
         for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())

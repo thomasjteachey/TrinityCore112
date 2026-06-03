@@ -3532,10 +3532,11 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
         // transition from walking to swimming.
         if (!ShouldPreserveMountInWaterForBattleground(player))
         {
-            if (IsUnderWater())
+            bool const underwater = IsUnderWater();
+            if (underwater)
                 RemoveAurasByType(SPELL_AURA_MOUNTED);
 
-            RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+            RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER, 0, !underwater);
         }
     }
     else
@@ -4389,7 +4390,7 @@ void Unit::RemoveNotOwnSingleTargetAuras(uint32 newPhase)
     }
 }
 
-void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
+void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except, bool skipMountedAuras)
 {
     if (!(m_interruptMask & flag))
         return;
@@ -4401,6 +4402,9 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except)
         ++iter;
         if ((aura->GetSpellInfo()->AuraInterruptFlags & flag) && (!except || aura->GetId() != except))
         {
+            if (skipMountedAuras && aura->HasEffectType(SPELL_AURA_MOUNTED))
+                continue;
+
             if ((HasAura(81439) || HasAura(89783)) && aura->HasEffectType(SPELL_AURA_MOD_STEALTH))
             {
                 uint32 const protectedFlags = AURA_INTERRUPT_FLAG_HITBYSPELL | AURA_INTERRUPT_FLAG_TAKE_DAMAGE |
