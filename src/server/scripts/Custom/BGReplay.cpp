@@ -2896,6 +2896,22 @@ std::vector<uint8> payload(packet.size());
 
         uint32 viewerLowGuid = player->GetGUID().GetCounter();
 
+        // Replay entry bypasses the normal battleground queue/join path.
+        // Normal BG exit uses Player::GetBattlegroundEntryPoint(), so save the viewer's
+        // current world location before teleporting them into the replay instance.
+        // Without this, LeaveBattlefield() can return the player to a stale entry point
+        // such as Orgrimmar from a previous queue/homebind path.
+        player->SetBattlegroundEntryPoint();
+
+        WorldLocation const& replayReturnPos = player->GetBattlegroundEntryPoint();
+        TC_LOG_INFO("arena.replay", "Replay saved BG entry point viewer={} map={} x={} y={} z={} o={}",
+            viewerLowGuid,
+            replayReturnPos.GetMapId(),
+            replayReturnPos.GetPositionX(),
+            replayReturnPos.GetPositionY(),
+            replayReturnPos.GetPositionZ(),
+            replayReturnPos.GetOrientation());
+
         player->SetIsSpectator(true);
         bg->toggleReplay(player->GetGUID());
         player->SetPendingSpectatorForBG(bg->GetInstanceID());
