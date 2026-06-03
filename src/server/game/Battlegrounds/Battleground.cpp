@@ -513,6 +513,17 @@ inline void Battleground::_ProcessJoin(uint32 diff)
         }
 
         StartingEventCloseDoors();
+
+        // Arena replays are not real matches. As soon as the replay viewer has caused the map to be
+        // created and SetupBattleground() has succeeded, immediately advance to IN_PROGRESS so the
+        // client does not sit through the arena prep countdown. Calling SkipStartDelay() is safe here
+        // because FindBgMap() and SetupBattleground() have both already succeeded in this branch.
+        if (IsReplay())
+        {
+            SkipStartDelay();
+            return;
+        }
+
         SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
         // First start warning - 2 or 1 minute
         if (StartMessageIds[BG_STARTING_EVENT_FIRST])

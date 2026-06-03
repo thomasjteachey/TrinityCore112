@@ -1,13 +1,13 @@
 //
-// Arena Replay V5 replacement for the old BGReplay.cpp.
+// Arena Replay V6 replacement for the old BGReplay.cpp.
 //
 // Main changes:
 // - Recording captures initial WAIT_JOIN visual packets so players actually exist in playback.
-// - Prep/countdown time is skipped only after the viewer has finished zoning into the replay map; pre-start visual packets play immediately at replay time 0.
+// - Replay playback is driven from PlayerScript::OnUpdate so it follows the actual viewer object after zoning; pre-start visual packets play immediately at replay time 0.
 // - Playback never calls SkipStartDelay() before the replay map exists, avoiding the EndNow()/scoreboard/zone-out race.
 // - Playback no longer calls EndNow()/LeaveBattleground() at EOF; it leaves you in the replay instance so the final frame stays visible.
-// - Playback is driven by a WorldScript tick and a monotonic playback clock, not OnBattlegroundUpdate.
-// - Playback waits until the viewer is actually inside the replay battleground/map before sending frames.
+// - Playback is driven by PlayerScript::OnUpdate and a monotonic playback clock, not OnBattlegroundUpdate.
+// - Playback waits until the viewer is actually inside the replay battleground/map before sending frames, but it no longer blocks playback if countdown skipping fails.
 // - Playback sends all due frames each tick, with a safety cap.
 // - Replay blobs written by this file contain a V2 header with participants.
 // - During playback, original arena player GUIDs are rewritten to fake player GUIDs so the viewer can watch their own replays.
@@ -976,6 +976,130 @@ public:
     }
 };
 
+    bool UpdatePlaybackForViewer(Player* viewer)
+    {
+        if (!viewer || !viewer->GetSession())
+            return false;
+
+        uint32 viewerLowGuid = viewer->GetGUID().GetCounter();
+        auto activeItr = ActiveReplays.find(viewerLowGuid);
+        if (activeItr == ActiveReplays.end())
+            return false;
+
+        PlaybackState& state = activeItr->second;
+        uint32 nowMs = getMSTime();
+
+        if (state.Finished)
+        {
+            Battleground* currentBg = viewer->GetBattleground();
+            if (!currentBg || !currentBg->IsReplay() || currentBg->GetInstanceID() != state.BgInstanceId)
+                ActiveReplays.erase(activeItr);
+
+            return true;
+        }
+
+        if (!IsViewerReadyForReplay(viewer, state))
+        {
+            if (nowMs - state.CreatedMs > ARENA_REPLAY_LOAD_GRACE_MS)
+            {
+                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay failed to start: viewer never entered the replay map. bg=%u map=%u expectedMap=%u inWorld=%u",
+                    viewer->GetBattleground() ? viewer->GetBattleground()->GetInstanceID() : 0,
+                    viewer->GetMapId(), state.Match.MapId, viewer->IsInWorld() ? 1u : 0u);
+                ActiveReplays.erase(activeItr);
+                return true;
+            }
+
+            return true;
+        }
+
+        if (!state.PlaybackClockStarted)
+        {
+            bool skippedCountdown = TrySkipReplayCountdown(viewer, state);
+
+            state.PlaybackStartMs = nowMs + ARENA_REPLAY_START_DELAY_MS;
+            state.PlaybackClockStarted = true;
+
+            TC_LOG_INFO("arena.replay", "Replay playback armed viewer={} bg={} map={} packets={} actors={} startDelay={} skippedCountdown={}",
+                viewerLowGuid, state.BgInstanceId, state.Match.MapId,
+                uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS, skippedCountdown ? 1u : 0u);
+
+            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u, skippedCountdown=%u. Playback starts in %u ms.",
+                uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()),
+                state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs,
+                skippedCountdown ? 1u : 0u, ARENA_REPLAY_START_DELAY_MS);
+        }
+
+        if (!state.SentInitialNameResponses)
+            SendInitialReplayNameResponses(viewer, state);
+
+        if (nowMs < state.PlaybackStartMs)
+            return true;
+
+        uint32 elapsedMs = nowMs - state.PlaybackStartMs;
+        uint32 sentThisUpdate = 0;
+
+        while (state.Cursor < state.Match.Packets.size()
+            && state.Match.Packets[state.Cursor].TimestampMs <= elapsedMs
+            && sentThisUpdate < ARENA_REPLAY_SEND_CAP_PER_UPDATE)
+        {
+            PacketRecord const& frame = state.Match.Packets[state.Cursor];
+            WorldPacket out = BuildPlaybackPacket(frame, state.Match);
+            viewer->GetSession()->SendPacket(&out);
+
+            TC_LOG_DEBUG("arena.replay", "PLAY viewer={} opcode={} due={} now={} late={} cursor={}/{} size={}",
+                viewerLowGuid, out.GetOpcode(), frame.TimestampMs, elapsedMs,
+                elapsedMs >= frame.TimestampMs ? elapsedMs - frame.TimestampMs : 0,
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), uint32(out.size()));
+
+            ++state.Cursor;
+            ++sentThisUpdate;
+        }
+
+        if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
+        {
+            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay sent packets: cursor=%u/%u elapsedMs=%u",
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), elapsedMs);
+        }
+
+        if (sentThisUpdate >= ARENA_REPLAY_SEND_CAP_PER_UPDATE)
+        {
+            TC_LOG_DEBUG("arena.replay", "PLAY throttle viewer={} elapsed={} cursor={}/{}",
+                viewerLowGuid, elapsedMs, uint32(state.Cursor), uint32(state.Match.Packets.size()));
+        }
+
+        if (state.Cursor >= state.Match.Packets.size())
+            FinishPlaybackForViewer(viewerLowGuid, state);
+
+        return true;
+    }
+}
+
+class BGReplayPlayerScript : public PlayerScript
+{
+public:
+    BGReplayPlayerScript() : PlayerScript("BGReplayPlayerScript") { }
+
+    void OnUpdate(Player* player, uint32 /*diff*/) override
+    {
+        UpdatePlaybackForViewer(player);
+    }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (UpdatePlaybackForViewer(player))
+            if (player && player->GetSession())
+                ChatHandler(player->GetSession()).PSendSysMessage("Replay map-change detected; arming playback when the arena map is ready.");
+    }
+
+    void OnLogout(Player* player) override
+    {
+        if (!player)
+            return;
+
+        ActiveReplays.erase(player->GetGUID().GetCounter());
+    }
+};
+
 class BGReplayWorldScript : public WorldScript
 {
 public:
@@ -983,130 +1107,8 @@ public:
 
     void OnUpdate(uint32 /*diff*/) override
     {
-        if (ActiveReplays.empty())
-            return;
-
-        uint32 nowMs = getMSTime();
-
-        for (auto it = ActiveReplays.begin(); it != ActiveReplays.end();)
-        {
-            uint32 viewerLowGuid = it->first;
-            PlaybackState& state = it->second;
-
-            Player* viewer = ObjectAccessor::FindPlayerByLowGUID(viewerLowGuid);
-            if (!viewer || !viewer->GetSession())
-            {
-                it = ActiveReplays.erase(it);
-                continue;
-            }
-
-            if (state.Finished)
-            {
-                Battleground* currentBg = viewer->GetBattleground();
-                if (!currentBg || !currentBg->IsReplay() || currentBg->GetInstanceID() != state.BgInstanceId)
-                {
-                    it = ActiveReplays.erase(it);
-                    continue;
-                }
-
-                ++it;
-                continue;
-            }
-
-            if (!IsViewerReadyForReplay(viewer, state))
-            {
-                if (nowMs - state.CreatedMs > ARENA_REPLAY_LOAD_GRACE_MS)
-                {
-                    ChatHandler(viewer->GetSession()).PSendSysMessage("Replay failed to start: viewer never entered the replay map.");
-                    it = ActiveReplays.erase(it);
-                    continue;
-                }
-
-                TC_LOG_DEBUG("arena.replay", "PLAY waiting viewer={} bg={} map={} expectedMap={} inWorld={} elapsedLoad={}",
-                    viewerLowGuid,
-                    viewer->GetBattleground() ? viewer->GetBattleground()->GetInstanceID() : 0,
-                    viewer->GetMapId(),
-                    state.Match.MapId,
-                    viewer->IsInWorld() ? 1 : 0,
-                    nowMs - state.CreatedMs);
-
-                ++it;
-                continue;
-            }
-
-            if (!state.PlaybackClockStarted)
-            {
-                if (!TrySkipReplayCountdown(viewer, state))
-                {
-                    TC_LOG_DEBUG("arena.replay", "PLAY waiting for safe countdown skip viewer={} bg={} map={} expectedMap={} status={} players={} mapReady={}",
-                        viewerLowGuid,
-                        viewer->GetBattleground() ? viewer->GetBattleground()->GetInstanceID() : 0,
-                        viewer->GetMapId(),
-                        state.Match.MapId,
-                        viewer->GetBattleground() ? uint32(viewer->GetBattleground()->GetStatus()) : 999u,
-                        viewer->GetBattleground() ? viewer->GetBattleground()->GetPlayersSize() : 0u,
-                        viewer->GetBattleground() && viewer->GetBattleground()->FindBgMap() ? 1u : 0u);
-
-                    ++it;
-                    continue;
-                }
-
-                state.PlaybackStartMs = nowMs + ARENA_REPLAY_START_DELAY_MS;
-                state.PlaybackClockStarted = true;
-
-                TC_LOG_INFO("arena.replay", "Replay playback armed viewer={} bg={} map={} packets={} actors={} startDelay={}",
-                    viewerLowGuid, state.BgInstanceId, state.Match.MapId,
-                    uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS);
-
-                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u. Countdown skipped after map load; playback starts in %u ms.",
-                    uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()),
-                    state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs, ARENA_REPLAY_START_DELAY_MS);
-            }
-
-            if (!state.SentInitialNameResponses)
-                SendInitialReplayNameResponses(viewer, state);
-
-            if (nowMs < state.PlaybackStartMs)
-            {
-                ++it;
-                continue;
-            }
-
-            uint32 elapsedMs = nowMs - state.PlaybackStartMs;
-            uint32 sentThisUpdate = 0;
-
-            while (state.Cursor < state.Match.Packets.size()
-                && state.Match.Packets[state.Cursor].TimestampMs <= elapsedMs
-                && sentThisUpdate < ARENA_REPLAY_SEND_CAP_PER_UPDATE)
-            {
-                PacketRecord const& frame = state.Match.Packets[state.Cursor];
-                WorldPacket out = BuildPlaybackPacket(frame, state.Match);
-                viewer->GetSession()->SendPacket(&out);
-
-                TC_LOG_DEBUG("arena.replay", "PLAY viewer={} opcode={} due={} now={} late={} cursor={}/{} size={}",
-                    viewerLowGuid, out.GetOpcode(), frame.TimestampMs, elapsedMs,
-                    elapsedMs >= frame.TimestampMs ? elapsedMs - frame.TimestampMs : 0,
-                    uint32(state.Cursor), uint32(state.Match.Packets.size()), uint32(out.size()));
-
-                ++state.Cursor;
-                ++sentThisUpdate;
-            }
-
-            if (sentThisUpdate >= ARENA_REPLAY_SEND_CAP_PER_UPDATE)
-            {
-                TC_LOG_DEBUG("arena.replay", "PLAY throttle viewer={} elapsed={} cursor={}/{}",
-                    viewerLowGuid, elapsedMs, uint32(state.Cursor), uint32(state.Match.Packets.size()));
-            }
-
-            if (state.Cursor >= state.Match.Packets.size())
-            {
-                FinishPlaybackForViewer(viewerLowGuid, state);
-                ++it;
-                continue;
-            }
-
-            ++it;
-        }
+        // V6 intentionally uses PlayerScript::OnUpdate for playback. WorldScript is left registered only
+        // so existing script registration stays harmless if another local patch expects this script name.
     }
 };
 
@@ -1178,6 +1180,7 @@ void AddBGReplayScripts()
 {
     new BGReplayServerScript();
     new BGReplayWorldScript();
+    new BGReplayPlayerScript();
     new BGReplayBGScript();
     new ReplayGossip();
 }
