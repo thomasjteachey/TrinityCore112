@@ -28,9 +28,13 @@
 //   If you find an opcode that still references an original GUID, add a targeted parser later.
 //
 
+#include "ArenaTeamMgr.h"
+#include "Base32.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CharacterCache.h"
 #include "Chat.h"
+#include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameEventMgr.h"
 #include "Log.h"
@@ -52,6 +56,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <sstream>
 #include <zlib.h>
 #include <DBCStores.h>
 
@@ -1728,6 +1733,160 @@ namespace
             "Replay packet stream finished. Staying in the replay instance so the final frame remains visible; leave the battleground when you're done.");
     }
 
+    std::string EscapeReplaySqlString(std::string value)
+    {
+        CharacterDatabase.EscapeString(value);
+        return value;
+    }
+
+    std::string JoinActorGuidList(MatchRecord const& match, uint32 team)
+    {
+        std::string out;
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.Team != team)
+                continue;
+
+            if (!out.empty())
+                out += ", ";
+
+            out += std::to_string(actor.OriginalGuid.GetRawValue());
+        }
+
+        return out;
+    }
+
+    std::string JoinActorNameList(MatchRecord const& match, uint32 team)
+    {
+        std::string out;
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.Team != team)
+                continue;
+
+            if (!out.empty())
+                out += " ";
+
+            out += actor.Name;
+        }
+
+        return out.empty() ? "Unknown" : out;
+    }
+
+    uint32 NormalizeReplayWinnerTeam(MatchRecord const& match, uint32 winner)
+    {
+        if (winner == ALLIANCE || winner == HORDE)
+            return winner;
+
+        for (ReplayActor const& actor : match.Actors)
+            if (actor.Team == ALLIANCE)
+                return ALLIANCE;
+
+        for (ReplayActor const& actor : match.Actors)
+            if (actor.Team == HORDE)
+                return HORDE;
+
+        return ALLIANCE;
+    }
+
+    void GetReplayTeamInfo(Battleground* bg, MatchRecord const& match, uint32 team, std::string& teamName, uint32& rating, uint32& mmr)
+    {
+        teamName.clear();
+        rating = 0;
+        mmr = 0;
+
+        if (bg && bg->isArena() && bg->isRated())
+        {
+            if (ArenaTeam* arenaTeam = sArenaTeamMgr->GetArenaTeamById(bg->GetArenaTeamIdForTeam(team)))
+            {
+                teamName = arenaTeam->GetName();
+                rating = arenaTeam->GetRating();
+            }
+
+            mmr = bg->GetArenaMatchmakerRating(team);
+        }
+
+        if (teamName.empty())
+            teamName = JoinActorNameList(match, team);
+    }
+
+    uint32 GetNextArenaReplayIdForMessage()
+    {
+        QueryResult result = CharacterDatabase.Query("SELECT COALESCE(MAX(`id`), 0) FROM `character_arena_replays`");
+        if (!result)
+            return 0;
+
+        return (*result)[0].GetUInt32() + 1;
+    }
+
+    bool ReplayExistsInAcTable(uint32 replayId)
+    {
+        QueryResult result = CharacterDatabase.Query("SELECT `id` FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", replayId);
+        return bool(result);
+    }
+
+    std::vector<uint32> LoadSavedReplayIds(uint32 characterId)
+    {
+        std::vector<uint32> replayIds;
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `replay_id` FROM `character_saved_replays` WHERE `character_id` = {} ORDER BY `id` DESC LIMIT 20", characterId);
+
+        if (!result)
+            return replayIds;
+
+        do
+        {
+            replayIds.push_back((*result)[0].GetUInt32());
+        }
+        while (result->NextRow());
+
+        return replayIds;
+    }
+
+    void FavoriteReplayForPlayer(Player* player, uint32 replayId)
+    {
+        if (!player || !player->GetSession())
+            return;
+
+        ChatHandler handler(player->GetSession());
+
+        if (!ReplayExistsInAcTable(replayId))
+        {
+            handler.PSendSysMessage("Replay match ID %u does not exist in the new AC-style replay table.", replayId);
+            return;
+        }
+
+        CharacterDatabase.Execute(
+            "INSERT IGNORE INTO `character_saved_replays` (`character_id`, `replay_id`) VALUES ({}, {})",
+            player->GetGUID().GetCounter(), replayId);
+
+        handler.PSendSysMessage("Replay match ID %u saved to your favorites.", replayId);
+    }
+
+    void DeleteOldArenaReplaysFromConfig()
+    {
+        uint32 days = sConfigMgr->GetOption<uint32>("ArenaReplay.DeleteReplaysAfterDays", 30);
+        if (!days)
+            return;
+
+        bool deleteSaved = sConfigMgr->GetOption<bool>("ArenaReplay.DeleteSavedReplays", false);
+
+        if (deleteSaved)
+        {
+            CharacterDatabase.Execute(
+                "DELETE FROM `character_arena_replays` WHERE `timestamp` < (NOW() - INTERVAL {} DAY)", days);
+            CharacterDatabase.Execute(
+                "DELETE FROM `character_saved_replays` WHERE `replay_id` NOT IN (SELECT `id` FROM `character_arena_replays`)");
+        }
+        else
+        {
+            CharacterDatabase.Execute(
+                "DELETE FROM `character_arena_replays` "
+                "WHERE `timestamp` < (NOW() - INTERVAL {} DAY) "
+                "AND `id` NOT IN (SELECT `replay_id` FROM `character_saved_replays`)", days);
+        }
+    }
+
     void SerializeMatchData(MatchRecord const& match, ByteBuffer& buffer)
     {
         buffer << uint32(ARENA_REPLAY_V2_MAGIC);
@@ -1786,21 +1945,20 @@ namespace
         }
     }
 
-    void DeserializeMatchData(MatchRecord& record, Field* fields)
+    bool DeserializeMatchDataFromBytes(MatchRecord& record, uint32 arenaTypeId, uint32 typeId, uint32 mapId, std::vector<uint8> const& data)
     {
-        record.ArenaTypeId = uint8(fields[1].GetUInt32());
-        record.TypeId = BattlegroundTypeId(fields[2].GetUInt32());
-        record.MapId = uint32(fields[5].GetUInt32());
+        record.ArenaTypeId = uint8(arenaTypeId);
+        record.TypeId = BattlegroundTypeId(typeId);
+        record.MapId = mapId;
 
-        std::vector<uint8> data = fields[4].GetBinary();
         if (data.empty())
-            return;
+            return false;
 
         ByteBuffer buffer;
         buffer.append(data.data(), data.size());
 
         if (buffer.size() < 4)
-            return;
+            return false;
 
         uint32 magic = 0;
         buffer >> magic;
@@ -1809,7 +1967,7 @@ namespace
         {
             buffer.rpos(0);
             DeserializeV1Frames(record, buffer);
-            return;
+            return !record.Packets.empty();
         }
 
         uint32 version = 0;
@@ -1818,7 +1976,7 @@ namespace
         if (version != ARENA_REPLAY_V2_VERSION)
         {
             TC_LOG_ERROR("arena.replay", "Unsupported arena replay version {}", version);
-            return;
+            return false;
         }
 
         uint32 actorCount = 0;
@@ -1869,50 +2027,105 @@ namespace
 
             record.Packets.push_back({ packetTimestamp, packet });
         }
+
+        return !record.Packets.empty();
+    }
+
+    bool DeserializeMatchDataFromAcBase32(MatchRecord& record, Field* fields)
+    {
+        std::string encoded = fields[4].GetString();
+        Optional<std::vector<uint8>> decoded = Trinity::Encoding::Base32::Decode(encoded);
+        if (!decoded)
+            return false;
+
+        uint32 contentSize = fields[3].GetUInt32();
+        if (contentSize && decoded->size() != contentSize)
+            TC_LOG_ERROR("arena.replay", "Replay contentSize mismatch id={} contentSize={} decodedSize={}",
+                fields[0].GetUInt32(), contentSize, uint32(decoded->size()));
+
+        return DeserializeMatchDataFromBytes(record, fields[1].GetUInt32(), fields[2].GetUInt32(), fields[5].GetUInt32(), *decoded);
+    }
+
+    bool DeserializeMatchDataFromLegacyBinary(MatchRecord& record, Field* fields)
+    {
+        std::vector<uint8> data = fields[4].GetBinary();
+        return DeserializeMatchDataFromBytes(record, fields[1].GetUInt32(), fields[2].GetUInt32(), fields[5].GetUInt32(), data);
     }
 
     std::vector<uint32> LoadLast10Replays()
     {
         std::vector<uint32> replayIds;
 
+        QueryResult result = CharacterDatabase.Query("SELECT `id` FROM `character_arena_replays` ORDER BY `id` DESC LIMIT 10");
+        if (result)
+        {
+            do
+            {
+                replayIds.push_back((*result)[0].GetUInt32());
+            }
+            while (result->NextRow());
+
+            return replayIds;
+        }
+
+        // Legacy fallback so old character_bg_replays rows remain viewable before/while migrating.
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_LAST_10_ARENA_REPLAYS);
-        PreparedQueryResult result = CharacterDatabase.Query(stmt);
-        if (!result)
+        PreparedQueryResult legacyResult = CharacterDatabase.Query(stmt);
+        if (!legacyResult)
             return replayIds;
 
         do
         {
-            Field* fields = result->Fetch();
+            Field* fields = legacyResult->Fetch();
             if (!fields)
                 break;
 
             replayIds.push_back(fields[0].GetUInt32());
         }
-        while (result->NextRow());
+        while (legacyResult->NextRow());
 
         return replayIds;
     }
 
     bool LoadReplayDataForPlayer(Player* player, uint32 matchId, MatchRecord& record)
     {
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ARENA_REPLAYS);
-        stmt->setUInt32(0, matchId);
+        // AC-style table: contents is LONGTEXT Base32, not a raw blob.
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `id`, `arenaTypeId`, `typeId`, `contentSize`, `contents`, `mapId`, `timesWatched` "
+            "FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", matchId);
 
-        PreparedQueryResult result = CharacterDatabase.Query(stmt);
-        if (!result)
+        bool loadedFromAcTable = false;
+        if (result)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found.");
-            return false;
+            Field* fields = result->Fetch();
+            loadedFromAcTable = DeserializeMatchDataFromAcBase32(record, fields);
+            if (loadedFromAcTable)
+                CharacterDatabase.Execute("UPDATE `character_arena_replays` SET `timesWatched` = `timesWatched` + 1 WHERE `id` = {}", matchId);
         }
 
-        Field* fields = result->Fetch();
-        if (!fields)
+        if (!loadedFromAcTable)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found.");
-            return false;
+            // Legacy binary table fallback for rows recorded by the older local implementation.
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_ARENA_REPLAYS);
+            stmt->setUInt32(0, matchId);
+
+            PreparedQueryResult legacyResult = CharacterDatabase.Query(stmt);
+            if (!legacyResult)
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found.");
+                return false;
+            }
+
+            Field* fields = legacyResult->Fetch();
+            if (!fields || !DeserializeMatchDataFromLegacyBinary(record, fields))
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found or could not be decoded.");
+                return false;
+            }
+
+            ChatHandler(player->GetSession()).PSendSysMessage("Replay loaded from legacy character_bg_replays row. New saves use AC-style Base32 storage.");
         }
 
-        DeserializeMatchData(record, fields);
         if (record.Packets.empty())
         {
             ChatHandler(player->GetSession()).PSendSysMessage("Replay has no packets.");
@@ -1933,7 +2146,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V12: structured update/spell/combat GUID rewrite; unsafe global byte replacement disabled.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V13: AC-style Base32 replay storage/load + structured playback GUID rewrite.");
         return true;
     }
 
@@ -1990,9 +2203,15 @@ namespace
         return true;
     }
 
-    void SaveReplay(Battleground* bg)
+    void SaveReplay(Battleground* bg, uint32 winner)
     {
         if (!bg)
+            return;
+
+        if (!sConfigMgr->GetOption<bool>("ArenaReplay.Enable", true))
+            return;
+
+        if (!bg->isRated() && !sConfigMgr->GetOption<bool>("ArenaReplay.SaveUnratedArenas", true))
             return;
 
         auto recordItr = Records.find(bg->GetInstanceID());
@@ -2008,19 +2227,75 @@ namespace
             return;
         }
 
+        uint32 durationMs = match.Packets.empty() ? 0 : match.Packets.back().TimestampMs;
+        uint32 validArenaSeconds = sConfigMgr->GetOption<uint32>("ArenaReplay.ValidArenaDuration", 0);
+        if (validArenaSeconds && durationMs < validArenaSeconds * IN_MILLISECONDS)
+        {
+            TC_LOG_INFO("arena.replay", "Skipped short arena replay instance={} durationMs={} minMs={}",
+                bg->GetInstanceID(), durationMs, validArenaSeconds * IN_MILLISECONDS);
+            Records.erase(recordItr);
+            return;
+        }
+
         ByteBuffer buffer;
         SerializeMatchData(match, buffer);
+        std::vector<uint8> rawReplay = buffer.contentsAsVector();
+        std::string encodedReplay = Trinity::Encoding::Base32::Encode(rawReplay);
 
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_INS_ARENA_REPLAYS);
-        stmt->setUInt32(0, uint32(match.ArenaTypeId));
-        stmt->setUInt32(1, uint32(match.TypeId));
-        stmt->setUInt32(2, buffer.size());
-        stmt->setBinary(3, buffer.contentsAsVector());
-        stmt->setUInt32(4, bg->GetMapId());
-        CharacterDatabase.Execute(stmt);
+        uint32 winnerTeam = NormalizeReplayWinnerTeam(match, winner);
+        uint32 loserTeam = bg->GetOtherTeam(winnerTeam);
 
-        TC_LOG_INFO("arena.replay", "Saved arena replay instance={} map={} arenaType={} packets={} actors={} preStartPackets={} bytes={}",
-            bg->GetInstanceID(), bg->GetMapId(), uint32(match.ArenaTypeId), uint32(match.Packets.size()), uint32(match.Actors.size()), match.PreStartPacketCount, uint32(buffer.size()));
+        std::string winnerPlayerGuids = JoinActorGuidList(match, winnerTeam);
+        std::string loserPlayerGuids = JoinActorGuidList(match, loserTeam);
+
+        std::string winnerTeamName;
+        std::string loserTeamName;
+        uint32 winnerTeamRating = 0;
+        uint32 loserTeamRating = 0;
+        uint32 winnerTeamMMR = 0;
+        uint32 loserTeamMMR = 0;
+
+        GetReplayTeamInfo(bg, match, winnerTeam, winnerTeamName, winnerTeamRating, winnerTeamMMR);
+        GetReplayTeamInfo(bg, match, loserTeam, loserTeamName, loserTeamRating, loserTeamMMR);
+
+        uint32 predictedReplayId = GetNextArenaReplayIdForMessage();
+
+        CharacterDatabase.Execute(
+            "INSERT INTO `character_arena_replays` "
+            "(`arenaTypeId`, `typeId`, `contentSize`, `contents`, `mapId`, "
+            "`winnerTeamName`, `winnerTeamRating`, `winnerTeamMMR`, "
+            "`loserTeamName`, `loserTeamRating`, `loserTeamMMR`, "
+            "`winnerPlayerGuids`, `loserPlayerGuids`) "
+            "VALUES ({}, {}, {}, '{}', {}, '{}', {}, {}, '{}', {}, {}, '{}', '{}')",
+            uint32(match.ArenaTypeId),
+            uint32(match.TypeId),
+            uint32(rawReplay.size()),
+            encodedReplay,
+            bg->GetMapId(),
+            EscapeReplaySqlString(winnerTeamName),
+            winnerTeamRating,
+            winnerTeamMMR,
+            EscapeReplaySqlString(loserTeamName),
+            loserTeamRating,
+            loserTeamMMR,
+            EscapeReplaySqlString(winnerPlayerGuids),
+            EscapeReplaySqlString(loserPlayerGuids));
+
+        for (auto const& bgPlayer : bg->GetPlayers())
+        {
+            Player* player = bg->_GetPlayer(bgPlayer.first, bgPlayer.second.OfflineRemoveTime != 0, "arena replay save message");
+            if (player && player->GetSession())
+            {
+                if (predictedReplayId)
+                    ChatHandler(player->GetSession()).PSendSysMessage("Replay saved. Match ID: %u", predictedReplayId);
+                else
+                    ChatHandler(player->GetSession()).PSendSysMessage("Replay saved.");
+            }
+        }
+
+        TC_LOG_INFO("arena.replay", "Saved arena replay AC-style instance={} predictedId={} map={} arenaType={} packets={} actors={} preStartPackets={} rawBytes={} base32Bytes={} winner='{}' loser='{}'",
+            bg->GetInstanceID(), predictedReplayId, bg->GetMapId(), uint32(match.ArenaTypeId), uint32(match.Packets.size()),
+            uint32(match.Actors.size()), match.PreStartPacketCount, uint32(rawReplay.size()), uint32(encodedReplay.size()), winnerTeamName, loserTeamName);
 
         Records.erase(recordItr);
     }
@@ -2233,10 +2508,15 @@ class BGReplayWorldScript : public WorldScript
 public:
     BGReplayWorldScript() : WorldScript("BGReplayWorldScript") { }
 
+    void OnConfigLoad(bool /*reload*/) override
+    {
+        DeleteOldArenaReplaysFromConfig();
+    }
+
     void OnUpdate(uint32 /*diff*/) override
     {
-        // V6 intentionally uses PlayerScript::OnUpdate for playback. WorldScript is left registered only
-        // so existing script registration stays harmless if another local patch expects this script name.
+        // V6+ intentionally uses PlayerScript::OnUpdate for playback. WorldScript is left registered for
+        // cleanup-on-config-load and so existing script registration stays harmless if another patch expects this name.
     }
 };
 
@@ -2245,13 +2525,13 @@ class BGReplayBGScript : public BattlegroundScript
 public:
     BGReplayBGScript() : BattlegroundScript("BGReplayBGScript") { }
 
-    void OnBattlegroundEnd(Battleground* bg, uint32 /*winner*/) override
+    void OnBattlegroundEnd(Battleground* bg, uint32 winner) override
     {
         if (!bg || !bg->isArena())
             return;
 
         if (!bg->IsReplay())
-            SaveReplay(bg);
+            SaveReplay(bg, winner);
     }
 
     void OnBattlegroundUpdate(Battleground* bg, uint32 /*diff*/) override
@@ -2267,6 +2547,14 @@ public:
     }
 };
 
+enum ReplayGossipActions : uint32
+{
+    REPLAY_GOSSIP_MATCH_ID = 900000001,
+    REPLAY_GOSSIP_FAVORITE_MATCH_ID = 900000002,
+    REPLAY_GOSSIP_MY_FAVORITES = 900000003,
+    REPLAY_GOSSIP_BACK = 900000004
+};
+
 class ReplayGossip : public CreatureScript
 {
 public:
@@ -2276,25 +2564,99 @@ public:
     {
         replayAI(Creature* creature) : ScriptedAI(creature) { }
 
-        bool OnGossipHello(Player* player) override
+        void ShowMainMenu(Player* player)
         {
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Replay a Match ID", GOSSIP_SENDER_MAIN, REPLAY_GOSSIP_MATCH_ID, "Enter replay match ID", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Favorite a Match ID", GOSSIP_SENDER_MAIN, REPLAY_GOSSIP_FAVORITE_MATCH_ID, "Enter replay match ID to favorite", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_TAXI, "My favorite matches", GOSSIP_SENDER_MAIN, REPLAY_GOSSIP_MY_FAVORITES);
+
             std::vector<uint32> matchIds = LoadLast10Replays();
-            for (uint32 matchId : matchIds)
-                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, matchId);
+            if (matchIds.empty())
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No replays found.", GOSSIP_SENDER_MAIN, REPLAY_GOSSIP_BACK);
+            else
+            {
+                for (uint32 matchId : matchIds)
+                    AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, matchId);
+            }
 
             SendGossipMenuFor(player, 1775757, me->GetGUID());
+        }
+
+        bool OnGossipHello(Player* player) override
+        {
+            ShowMainMenu(player);
             return true;
         }
 
         bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
         {
-            uint32 replayId = GetGossipActionFor(player, gossipListId);
+            uint32 action = GetGossipActionFor(player, gossipListId);
             player->PlayerTalkClass->ClearMenus();
 
-            StartReplay(player, replayId);
+            if (action == REPLAY_GOSSIP_MY_FAVORITES)
+            {
+                std::vector<uint32> matchIds = LoadSavedReplayIds(player->GetGUID().GetCounter());
+                if (matchIds.empty())
+                    AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No favorite replays found.", GOSSIP_SENDER_MAIN, REPLAY_GOSSIP_BACK);
+                else
+                    for (uint32 matchId : matchIds)
+                        AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Replay favorite match " + std::to_string(matchId), GOSSIP_SENDER_MAIN, matchId);
 
+                AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Back", GOSSIP_SENDER_MAIN, REPLAY_GOSSIP_BACK);
+                SendGossipMenuFor(player, 1775757, me->GetGUID());
+                return true;
+            }
+
+            if (action == REPLAY_GOSSIP_BACK)
+            {
+                ShowMainMenu(player);
+                return true;
+            }
+
+            StartReplay(player, action);
             CloseGossipMenuFor(player);
             return true;
+        }
+
+        bool OnGossipSelectCode(Player* player, uint32 /*menuId*/, uint32 gossipListId, char const* code) override
+        {
+            uint32 action = GetGossipActionFor(player, gossipListId);
+            player->PlayerTalkClass->ClearMenus();
+
+            if (!code || !*code)
+            {
+                CloseGossipMenuFor(player);
+                return false;
+            }
+
+            uint32 replayId = 0;
+            try
+            {
+                replayId = uint32(std::stoul(code));
+            }
+            catch (...)
+            {
+                ChatHandler(player->GetSession()).PSendSysMessage("Invalid replay match ID.");
+                CloseGossipMenuFor(player);
+                return false;
+            }
+
+            if (action == REPLAY_GOSSIP_MATCH_ID)
+            {
+                StartReplay(player, replayId);
+                CloseGossipMenuFor(player);
+                return true;
+            }
+
+            if (action == REPLAY_GOSSIP_FAVORITE_MATCH_ID)
+            {
+                FavoriteReplayForPlayer(player, replayId);
+                CloseGossipMenuFor(player);
+                return true;
+            }
+
+            CloseGossipMenuFor(player);
+            return false;
         }
     };
 
