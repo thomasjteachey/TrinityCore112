@@ -3520,16 +3520,23 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
             SetSwim(CanSwim() && IsInWater());
 
-    // remove appropriate auras if we are swimming/not swimming respectively
+    // Remove appropriate auras if we are swimming/not swimming respectively.
     if (IsInWater())
     {
         Player* player = ToPlayer();
 
-        // Scarlet Chapel and Ruins of Lordaeron's shallow water are part of
-        // intended PvP pathing and should not force players out of mounts or
-        // Travel Form when they cross it.
+        // Scarlet Chapel and Ruins of Lordaeron's water are part of intended
+        // PvP pathing and should never force players out of mounts or Travel
+        // Form. Everywhere else, mounts are handled explicitly on full
+        // submersion so shallow water does not dismount players before they
+        // transition from walking to swimming.
         if (!ShouldPreserveMountInWaterForBattleground(player))
+        {
+            if (IsUnderWater())
+                RemoveAurasByType(SPELL_AURA_MOUNTED);
+
             RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER);
+        }
     }
     else
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
