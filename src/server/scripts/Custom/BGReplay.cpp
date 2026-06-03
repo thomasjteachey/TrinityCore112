@@ -1988,6 +1988,19 @@ namespace
         uint32 currentPower = 0;
         if (ReplayASGetField(values, ReplayASPowerFieldForType(powerType), currentPower))
             SendReplayASCommand(viewer, uiGuid, "CPW", currentPower);
+
+        // UI-only target feed for the addon.
+        // This uses the same verified UNIT_FIELD_TARGET pair that v23 rewrites for the default Blizzard UI.
+        // Because SendReplayASForPlaybackPacket receives the already-rewritten playback packet, this target
+        // may already be the fake GUID; FindReplayActorByGuid accepts original or fake.
+        ObjectGuid targetGuid = ReplayASGuidFromFields(values, UNIT_FIELD_TARGET, UNIT_FIELD_TARGET + 1);
+        if (targetGuid)
+        {
+            if (ReplayActor const* targetActor = FindReplayActorByGuid(match, targetGuid))
+                SendReplayASCommand(viewer, uiGuid, "TRG", ReplayASGuidString(targetActor->FakeGuid));
+            else
+                SendReplayASCommand(viewer, uiGuid, "TRG", 0u);
+        }
     }
 
     void SendReplayASPetStatusFromValues(Player* viewer, MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
@@ -2148,7 +2161,12 @@ namespace
 
     bool ExtractReplayASSpell(WorldPacket const& packet, ObjectGuid& caster, uint32& spellId, int32& castTime)
     {
-        if (packet.GetOpcode() != SMSG_SPELL_START && packet.GetOpcode() != SMSG_SPELL_GO)
+        // For the replay addon history, only emit the cast once.
+        // SMSG_SPELL_START and SMSG_SPELL_GO both exist for the same cast, and some instant spells
+        // can produce multiple GO-like packets. Sending both makes the addon history show duplicates.
+        //
+        // The actual replay client still receives SMSG_SPELL_GO normally; this only controls ASSUN UI feed.
+        if (packet.GetOpcode() != SMSG_SPELL_START)
             return false;
 
         std::vector<uint8> payload(packet.size());
@@ -2218,7 +2236,12 @@ namespace
         if (ExtractReplayASAttackStart(packet, attacker, victim) && IsReplayActorGuid(match, attacker))
         {
             if (victim.IsPlayer())
-                SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victim));
+            {
+                if (ReplayActor const* victimActor = FindReplayActorByGuid(match, victim))
+                    SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victimActor->FakeGuid));
+                else
+                    SendReplayASCommand(viewer, attacker, "TRG", ReplayASGuidString(victim));
+            }
 
             // 6603 = Attack. This gives the replay UI an icon/history tick for melee starts.
             SendReplayASCommand(viewer, attacker, "SPE", "6603,0");
