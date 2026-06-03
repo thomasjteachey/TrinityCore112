@@ -1821,14 +1821,14 @@ namespace
 
     bool ReplayExistsInAcTable(uint32 replayId)
     {
-        QueryResult result = CharacterDatabase.Query("SELECT `id` FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", replayId);
+        QueryResult result = CharacterDatabase.PQuery("SELECT `id` FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", replayId);
         return bool(result);
     }
 
     std::vector<uint32> LoadSavedReplayIds(uint32 characterId)
     {
         std::vector<uint32> replayIds;
-        QueryResult result = CharacterDatabase.Query(
+        QueryResult result = CharacterDatabase.PQuery(
             "SELECT `replay_id` FROM `character_saved_replays` WHERE `character_id` = {} ORDER BY `id` DESC LIMIT 20", characterId);
 
         if (!result)
@@ -1865,11 +1865,12 @@ namespace
 
     void DeleteOldArenaReplaysFromConfig()
     {
-        uint32 days = sConfigMgr->GetOption<uint32>("ArenaReplay.DeleteReplaysAfterDays", 30);
+        int32 daysConfig = sConfigMgr->GetIntDefault("ArenaReplay.DeleteReplaysAfterDays", 30);
+        uint32 days = daysConfig > 0 ? uint32(daysConfig) : 0;
         if (!days)
             return;
 
-        bool deleteSaved = sConfigMgr->GetOption<bool>("ArenaReplay.DeleteSavedReplays", false);
+        bool deleteSaved = sConfigMgr->GetBoolDefault("ArenaReplay.DeleteSavedReplays", false);
 
         if (deleteSaved)
         {
@@ -2090,7 +2091,7 @@ namespace
     bool LoadReplayDataForPlayer(Player* player, uint32 matchId, MatchRecord& record)
     {
         // AC-style table: contents is LONGTEXT Base32, not a raw blob.
-        QueryResult result = CharacterDatabase.Query(
+        QueryResult result = CharacterDatabase.PQuery(
             "SELECT `id`, `arenaTypeId`, `typeId`, `contentSize`, `contents`, `mapId`, `timesWatched` "
             "FROM `character_arena_replays` WHERE `id` = {} LIMIT 1", matchId);
 
@@ -2146,7 +2147,7 @@ namespace
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
         ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
             audit.UpdatePackets, audit.CompressedUpdatePackets, audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V13: AC-style Base32 replay storage/load + structured playback GUID rewrite.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V13.1: AC-style Base32 replay storage/load + Trinity config/query API fixes.");
         return true;
     }
 
@@ -2208,10 +2209,10 @@ namespace
         if (!bg)
             return;
 
-        if (!sConfigMgr->GetOption<bool>("ArenaReplay.Enable", true))
+        if (!sConfigMgr->GetBoolDefault("ArenaReplay.Enable", true))
             return;
 
-        if (!bg->isRated() && !sConfigMgr->GetOption<bool>("ArenaReplay.SaveUnratedArenas", true))
+        if (!bg->isRated() && !sConfigMgr->GetBoolDefault("ArenaReplay.SaveUnratedArenas", true))
             return;
 
         auto recordItr = Records.find(bg->GetInstanceID());
@@ -2228,7 +2229,8 @@ namespace
         }
 
         uint32 durationMs = match.Packets.empty() ? 0 : match.Packets.back().TimestampMs;
-        uint32 validArenaSeconds = sConfigMgr->GetOption<uint32>("ArenaReplay.ValidArenaDuration", 0);
+        int32 validArenaSecondsConfig = sConfigMgr->GetIntDefault("ArenaReplay.ValidArenaDuration", 0);
+        uint32 validArenaSeconds = validArenaSecondsConfig > 0 ? uint32(validArenaSecondsConfig) : 0;
         if (validArenaSeconds && durationMs < validArenaSeconds * IN_MILLISECONDS)
         {
             TC_LOG_INFO("arena.replay", "Skipped short arena replay instance={} durationMs={} minMs={}",
