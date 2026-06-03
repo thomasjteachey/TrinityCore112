@@ -45,6 +45,7 @@ void BattlegroundBRT::AddPlayer(Player* player)
 
 void BattlegroundBRT::RemovePlayer(Player* player, ObjectGuid /*guid*/, uint32 team)
 {
+    AwardLeavePointIfNeeded(player, team);
     TrackHumanParticipantRemoved(player, team);
 }
 
@@ -360,6 +361,55 @@ void BattlegroundBRT::UpdateTeamScoreWorldStates()
     UpdateWorldState(BG_BRT_WORLDSTATE_MAX_KILLS_UI, BG_BRT_KILL_LIMIT);
 }
 
+void BattlegroundBRT::AwardPointToTeam(uint32 team)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    if (team == ALLIANCE)
+    {
+        ++_allianceKills;
+        m_TeamScores[TEAM_ALLIANCE] = _allianceKills;
+
+        if ((_allianceKills % 10) == 0)
+            RewardHonorToTeam(GetHonorRewardForTeam(), ALLIANCE);
+    }
+    else if (team == HORDE)
+    {
+        ++_hordeKills;
+        m_TeamScores[TEAM_HORDE] = _hordeKills;
+
+        if ((_hordeKills % 10) == 0)
+            RewardHonorToTeam(GetHonorRewardForTeam(), HORDE);
+    }
+    else
+        return;
+
+    UpdateTeamScoreWorldStates();
+
+    if (_allianceKills >= BG_BRT_KILL_LIMIT)
+        EndBattleground(ALLIANCE);
+    else if (_hordeKills >= BG_BRT_KILL_LIMIT)
+        EndBattleground(HORDE);
+}
+
+void BattlegroundBRT::AwardLeavePointIfNeeded(Player const* player, uint32 team)
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || !player || (team != ALLIANCE && team != HORDE))
+        return;
+
+    WorldSession const* session = player->GetSession();
+    if (!session)
+        return;
+
+    bool const isHumanLeave = !session->IsVirtualSession();
+    bool const isReportedBotLeave = session->IsVirtualSession() && (player->HasAura(43680) || player->HasAura(SPELL_AURA_PLAYER_INACTIVE));
+    if (!isHumanLeave && !isReportedBotLeave)
+        return;
+
+    AwardPointToTeam(team == ALLIANCE ? HORDE : ALLIANCE);
+}
+
 void BattlegroundBRT::HandleKillPlayer(Player* victim, Player* killer)
 {
     Battleground::HandleKillPlayer(victim, killer);
@@ -373,29 +423,7 @@ void BattlegroundBRT::HandleKillPlayer(Player* victim, Player* killer)
     if (!killerTeam || !victimTeam || killerTeam == victimTeam)
         return;
 
-    if (killerTeam == ALLIANCE)
-    {
-        ++_allianceKills;
-        m_TeamScores[TEAM_ALLIANCE] = _allianceKills;
-
-        if ((_allianceKills % 10) == 0)
-            RewardHonorToTeam(GetHonorRewardForTeam(), ALLIANCE);
-    }
-    else if (killerTeam == HORDE)
-    {
-        ++_hordeKills;
-        m_TeamScores[TEAM_HORDE] = _hordeKills;
-
-        if ((_hordeKills % 10) == 0)
-            RewardHonorToTeam(GetHonorRewardForTeam(), HORDE);
-    }
-
-    UpdateTeamScoreWorldStates();
-
-    if (_allianceKills >= BG_BRT_KILL_LIMIT)
-        EndBattleground(ALLIANCE);
-    else if (_hordeKills >= BG_BRT_KILL_LIMIT)
-        EndBattleground(HORDE);
+    AwardPointToTeam(killerTeam);
 }
 
 void BattlegroundBRT::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)

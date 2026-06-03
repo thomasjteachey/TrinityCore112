@@ -28,6 +28,7 @@
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "BattlegroundQueue.h"
 #include "BattlegroundScore.h"
 #include "CellImpl.h"
 #include "Channel.h"
@@ -23132,23 +23133,110 @@ bool Player::CanReportAfkDueToLimit()
     return true;
 }
 
+namespace
+{
+    constexpr uint32 SPELL_BATTLEGROUND_IDLE = 43680;
+    constexpr uint32 SPELL_BATTLEGROUND_INACTIVE = 43681;
+    constexpr uint32 SPELL_BATTLEGROUND_DESERTER = 26013;
+
+    bool QueueAfkReportedPlayerbot(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
+    {
+        if (!player || player->InBattleground())
+            return false;
+
+        player->RemoveAurasDueToSpell(SPELL_BATTLEGROUND_DESERTER);
+        player->RemoveAurasDueToSpell(SPELL_BATTLEGROUND_IDLE);
+        player->RemoveAurasDueToSpell(SPELL_BATTLEGROUND_INACTIVE);
+
+        if (!player->IsAlive())
+            player->ResurrectPlayer(1.0f);
+
+        Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (!bgTemplate || !player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
+            return false;
+
+        BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            return false;
+
+        if (player->GetBattlegroundQueueIndex(bgQueueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+            return false;
+
+        PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
+        if (!bracketEntry)
+            return false;
+
+        if (bgTypeId == BATTLEGROUND_SCM)
+            player->SetBGTeam(0);
+
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+        GroupQueueInfo* groupInfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, arenaType, false, false, 0, 0);
+        if (!groupInfo)
+            return false;
+
+        player->AddBattlegroundQueueId(bgQueueTypeId);
+        sBattlegroundMgr->ScheduleQueueUpdate(groupInfo->ArenaMatchmakerRating, groupInfo->ArenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
+        return true;
+    }
+
+    void LeaveAndRequeueAfkReportedPlayerbot(Player* player, Battleground* bg)
+    {
+        if (!player || !bg)
+            return;
+
+        BattlegroundTypeId const bgTypeId = bg->GetTypeID();
+        uint8 const arenaType = bg->GetArenaType();
+        ObjectGuid const playerGuid = player->GetGUID();
+
+        player->CastSpell(player, SPELL_BATTLEGROUND_IDLE, true);
+        player->LeaveBattleground();
+        player->RemoveAurasDueToSpell(SPELL_BATTLEGROUND_DESERTER);
+
+        player->m_Events.AddEventAtOffset([playerGuid, bgTypeId, arenaType]()
+        {
+            Player* queuedPlayer = ObjectAccessor::FindPlayer(playerGuid);
+            if (!queuedPlayer)
+                return;
+
+            QueueAfkReportedPlayerbot(queuedPlayer, bgTypeId, arenaType);
+        }, 10s);
+    }
+}
+
 ///This player has been blamed to be inactive in a battleground
 void Player::ReportedAfkBy(Player* reporter)
 {
-    Battleground* bg = GetBattleground();
-    // Battleground also must be in progress!
-    if (!bg || bg != reporter->GetBattleground() || GetTeam() != reporter->GetTeam() || bg->GetStatus() != STATUS_IN_PROGRESS)
+    if (!reporter)
         return;
 
+    Battleground* bg = GetBattleground();
+    // Battleground also must be in progress!
+    if (!bg || bg != reporter->GetBattleground() || bg->GetStatus() != STATUS_IN_PROGRESS)
+        return;
+
+    uint32 const reportedBgTeam = bg->GetPlayerTeam(GetGUID());
+    uint32 const reporterBgTeam = bg->GetPlayerTeam(reporter->GetGUID());
+    if (!reportedBgTeam || reportedBgTeam != reporterBgTeam)
+        return;
+
+    WorldSession const* session = GetSession();
+    if (session && session->IsVirtualSession())
+    {
+        if (!HasAura(SPELL_BATTLEGROUND_IDLE) && !HasAura(SPELL_BATTLEGROUND_INACTIVE))
+            LeaveAndRequeueAfkReportedPlayerbot(this, bg);
+
+        return;
+    }
+
     // check if player has 'Idle' or 'Inactive' debuff
-    if (m_bgData.bgAfkReporter.find(reporter->GetGUID().GetCounter()) == m_bgData.bgAfkReporter.end() && !HasAura(43680) && !HasAura(43681) && reporter->CanReportAfkDueToLimit())
+    if (m_bgData.bgAfkReporter.find(reporter->GetGUID().GetCounter()) == m_bgData.bgAfkReporter.end() && !HasAura(SPELL_BATTLEGROUND_IDLE) && !HasAura(SPELL_BATTLEGROUND_INACTIVE) && reporter->CanReportAfkDueToLimit())
     {
         m_bgData.bgAfkReporter.insert(reporter->GetGUID().GetCounter());
         // by default 3 players have to complain to apply debuff
         if (m_bgData.bgAfkReporter.size() >= sWorld->getIntConfig(CONFIG_BATTLEGROUND_REPORT_AFK))
         {
             // cast 'Idle' spell
-            CastSpell(this, 43680, true);
+            CastSpell(this, SPELL_BATTLEGROUND_IDLE, true);
             m_bgData.bgAfkReporter.clear();
         }
     }

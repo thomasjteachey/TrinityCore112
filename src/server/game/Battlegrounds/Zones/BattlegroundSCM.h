@@ -133,6 +133,8 @@ public:
 private:
     WorldSafeLocsEntry const* GetCurrentTeamGraveyard(TeamId teamId) const;
     void UpdateTeamScoreWorldStates();
+    void AwardPointToTeam(uint32 team);
+    void AwardLeavePointIfNeeded(Player const* player, uint32 team);
     void ApplyNonInteractableObjectFlags();
     void SpawnRandomBuffSet(uint32 speedTypeIndex);
     uint32 GetHonorRewardForTeam() const;
