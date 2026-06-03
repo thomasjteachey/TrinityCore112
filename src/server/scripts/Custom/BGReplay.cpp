@@ -1047,17 +1047,12 @@ namespace
         return 35;
     }
 
-    uint32 ReplayOppositePlayerFactionTemplateForViewer(Player const* viewer)
+    uint32 ReplayNeutralYellowFactionTemplate()
     {
-        // Player faction templates in this branch:
-        //   1 = Human/Alliance
-        //   2 = Orc/Horde
-        //
-        // Opposite faction + non-PvP should render as neutral/yellow, not friendly/green.
-        if (viewer && viewer->GetTeamId() == TEAM_ALLIANCE)
-            return 2;
-
-        return 1;
+        // Opposite player faction made the yellow side hostile/red in v80.
+        // Faction template 35 previously rendered as neutral/yellow in the fake replay-player path.
+        // Use it for the yellow side instead of opposite player faction.
+        return 35;
     }
 
     uint32 ReplayFactionTemplateForOverheadSide(ReplayActor const& actor, Player const* viewer)
@@ -1065,7 +1060,7 @@ namespace
         if (ReplayActorIsGreenSide(actor))
             return ReplayViewerFactionTemplate(viewer);
 
-        return ReplayOppositePlayerFactionTemplateForViewer(viewer);
+        return ReplayNeutralYellowFactionTemplate();
     }
 
     uint32 ReplayNonPvpUnitBytes2ForActor(ReplayActor const& /*actor*/, uint32 originalBytes2)
@@ -3118,7 +3113,7 @@ std::vector<uint8> payload(packet.size());
         if (!audit.AuraPackets)
             ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V80: force green and yellow replay overhead-name sides.");
+        ChatHandler(player->GetSession()).PSendSysMessage("Replay V81: force green side friendly and yellow side neutral.");
         return true;
     }
 
