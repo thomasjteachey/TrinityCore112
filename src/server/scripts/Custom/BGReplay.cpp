@@ -2001,6 +2001,10 @@ namespace
             else
                 SendReplayASCommand(viewer, uiGuid, "TRG", 0u);
         }
+
+        uint32 displayId = 0;
+        if (ReplayASGetField(values, UNIT_FIELD_DISPLAYID, displayId) && displayId > 0)
+            SendReplayASCommand(viewer, uiGuid, "DSP", displayId);
     }
 
     void SendReplayASPetStatusFromValues(Player* viewer, MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
