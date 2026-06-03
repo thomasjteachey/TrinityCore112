@@ -2723,7 +2723,7 @@ std::vector<uint8> payload(packet.size());
         if (!viewer || !viewer->GetSession())
             return;
 
-        ChatHandler(viewer->GetSession()).PSendSysMessage("Replay finished. Staying in the replay instance so the final frame remainss visible; teleport back to Gurubashi when you're done.");
+        ChatHandler(viewer->GetSession()).PSendSysMessage("Replay finished. Staying in the replay instance so the final frame remains visible; teleport back to Gurubashi when you're done.");
     }
 
     std::string EscapeReplaySqlString(std::string value)
