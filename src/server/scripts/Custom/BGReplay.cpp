@@ -67,6 +67,7 @@
 
 namespace
 {
+    // Replay V83: quiet chat messages; keep load/save/finish only.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
     constexpr uint32 ARENA_REPLAY_FAKE_GUID_BASE = 0xF0000000u;
@@ -1877,7 +1878,7 @@ namespace
 
         if (bg->GetStatus() != STATUS_WAIT_JOIN)
         {
-            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay warning: replay battleground is in unexpected status=%u before playback. Forcing doors open anyway.", uint32(bg->GetStatus()));
+            (void)0; // replay system message removed
             bg->StartingEventOpenDoors();
             return false;
         }
@@ -2722,8 +2723,7 @@ std::vector<uint8> payload(packet.size());
         if (!viewer || !viewer->GetSession())
             return;
 
-        ChatHandler(viewer->GetSession()).PSendSysMessage(
-            "Replay packet stream finished. Staying in the replay instance so the final frame remains visible; leave the battleground when you're done.");
+        ChatHandler(viewer->GetSession()).PSendSysMessage("Replay finished. Staying in the replay instance so the final frame remainss visible; teleport back to Gurubashi when you're done.");
     }
 
     std::string EscapeReplaySqlString(std::string value)
@@ -2845,7 +2845,7 @@ std::vector<uint8> payload(packet.size());
 
         if (!ReplayExistsInAcTable(replayId))
         {
-            handler.PSendSysMessage("Replay match ID %u does not exist in the new AC-style replay table.", replayId);
+            (void)0; // replay system message removed
             return;
         }
 
@@ -2853,7 +2853,7 @@ std::vector<uint8> payload(packet.size());
             "INSERT IGNORE INTO `character_saved_replays` (`character_id`, `replay_id`) VALUES ({}, {})",
             player->GetGUID().GetCounter(), replayId);
 
-        handler.PSendSysMessage("Replay match ID %u saved to your favorites.", replayId);
+        (void)0; // replay system message removed
     }
 
     void DeleteOldArenaReplaysFromConfig()
@@ -3066,14 +3066,14 @@ std::vector<uint8> payload(packet.size());
 
         if (!result)
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found in character_arena_replays.");
+            (void)0; // replay system message removed
             return false;
         }
 
         Field* fields = result->Fetch();
         if (!fields || !DeserializeMatchDataFromAcBase32(record, fields))
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay data not found or could not be decoded from character_arena_replays.");
+            (void)0; // replay system message removed
             return false;
         }
 
@@ -3081,12 +3081,12 @@ std::vector<uint8> payload(packet.size());
 
         if (record.Packets.empty())
         {
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay has no packets.");
+            (void)0; // replay system message removed
             return false;
         }
 
         if (record.Actors.empty())
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay warning: no actor metadata found. Record a new arena after this patch for visible fake players.");
+            (void)0; // replay system message removed
 
         AssignFakeGuids(record, player->GetGUID().GetCounter());
 
@@ -3097,14 +3097,12 @@ std::vector<uint8> payload(packet.size());
             record.Packets.empty() ? 0 : record.Packets.front().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.back().TimestampMs,
             record.Packets.empty() ? 0 : record.Packets.front().Packet.GetOpcode());
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay audit: update=%u compressedUpdate=%u auraPackets=%u auraUpdate=%u auraUpdateAll=%u zeroTimeUpdate=%u actorGuidHits=%u zeroTimeActorGuidHits=%u",
-            audit.UpdatePackets, audit.CompressedUpdatePackets, audit.AuraPackets, audit.AuraUpdatePackets, audit.AuraUpdateAllPackets,
-            audit.ZeroTimeUpdatePackets, audit.ActorGuidHits, audit.ZeroTimeActorGuidHits);
+        (void)0; // replay system message removed
 
         if (!audit.AuraPackets)
-            ChatHandler(player->GetSession()).PSendSysMessage("Replay aura warning: this replay row has 0 aura packets, so buff/debuff rows cannot show anything. Record a fresh arena after this patch to test aura rows.");
+            (void)0; // replay system message removed
 
-        ChatHandler(player->GetSession()).PSendSysMessage("Replay V79: duplicate original actor cleanup plus persistent green overhead-name updates.");
+        (void)0; // replay system message removed
         return true;
     }
 
@@ -3122,7 +3120,7 @@ std::vector<uint8> payload(packet.size());
         Battleground* bg = sBattlegroundMgr->CreateNewBattleground(record.TypeId, GetBattlegroundBracketByLevel(record.MapId, 60), record.ArenaTypeId, false);
         if (!bg)
         {
-            handler.PSendSysMessage("Couldn't create arena map!");
+            (void)0; // replay system message removed
             handler.SetSentErrorMessage(true);
             return false;
         }
@@ -3173,7 +3171,7 @@ std::vector<uint8> payload(packet.size());
 
         ActiveReplays[viewerLowGuid] = std::move(state);
 
-        handler.PSendSysMessage("Replay begins. Waiting for map load before force-opening doors and starting playback.");
+        (void)0; // replay system message removed
         return true;
     }
 
@@ -3381,9 +3379,7 @@ public:
         {
             if (nowMs - state.CreatedMs > ARENA_REPLAY_LOAD_GRACE_MS)
             {
-                ChatHandler(viewer->GetSession()).PSendSysMessage("Replay failed to start: viewer never entered the replay map. bg=%u map=%u expectedMap=%u inWorld=%u",
-                    viewer->GetBattleground() ? viewer->GetBattleground()->GetInstanceID() : 0,
-                    viewer->GetMapId(), state.Match.MapId, viewer->IsInWorld() ? 1u : 0u);
+                (void)0; // replay system message removed
                 ActiveReplays.erase(activeItr);
                 return true;
             }
@@ -3402,10 +3398,7 @@ public:
                 viewerLowGuid, state.BgInstanceId, state.Match.MapId,
                 uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()), ARENA_REPLAY_START_DELAY_MS, skippedCountdown ? 1u : 0u);
 
-            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay playback armed: packets=%u, actors=%u, durationMs=%u, forcedStart=%u. Playback starts in %u ms.",
-                uint32(state.Match.Packets.size()), uint32(state.Match.Actors.size()),
-                state.Match.Packets.empty() ? 0 : state.Match.Packets.back().TimestampMs,
-                skippedCountdown ? 1u : 0u, ARENA_REPLAY_START_DELAY_MS);
+            (void)0; // replay system message removed
 
             SendDestroyOriginalActorObjects(viewer, state, "playback armed duplicate cleanup", true);
         }
@@ -3459,8 +3452,7 @@ public:
 
         if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
         {
-            ChatHandler(viewer->GetSession()).PSendSysMessage("Replay sent packets: cursor=%u/%u elapsedMs=%u",
-                uint32(state.Cursor), uint32(state.Match.Packets.size()), elapsedMs);
+            (void)0; // replay system message removed
         }
 
         if (sentThisUpdate >= ARENA_REPLAY_SEND_CAP_PER_UPDATE)
@@ -3489,7 +3481,7 @@ public:
     {
         if (UpdatePlaybackForViewer(player))
             if (player && player->GetSession())
-                ChatHandler(player->GetSession()).PSendSysMessage("Replay map-change detected; arming playback when the arena map is ready.");
+                (void)0; // replay system message removed
     }
 
     void OnLogout(Player* player) override
@@ -3634,7 +3626,7 @@ public:
             }
             catch (...)
             {
-                ChatHandler(player->GetSession()).PSendSysMessage("Invalid replay match ID.");
+                (void)0; // replay system message removed
                 CloseGossipMenuFor(player);
                 return false;
             }
