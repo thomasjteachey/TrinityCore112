@@ -1786,6 +1786,8 @@ namespace
 
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_LOW       = 0x0000;
     constexpr uint32 REPLAY_OBJECT_FIELD_GUID_HIGH      = 0x0001;
+    constexpr uint32 REPLAY_UNIT_FIELD_CHARMEDBY_LOW    = 0x000C;
+    constexpr uint32 REPLAY_UNIT_FIELD_CHARMEDBY_HIGH   = 0x000D;
     constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_LOW   = 0x000E;
     constexpr uint32 REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH  = 0x000F;
     constexpr uint32 REPLAY_UNIT_FIELD_CREATEDBY_LOW    = 0x0010;
@@ -1865,6 +1867,58 @@ namespace
         return ObjectGuid(raw);
     }
 
+    ReplayActor const* FindReplayASPetCapableFallbackOwner(MatchRecord const& match)
+    {
+        ReplayActor const* fallback = nullptr;
+        uint32 count = 0;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            // Hunter, Warlock, Death Knight, Mage. Hunter/Warlock are the important 3.3.5 pet classes;
+            // DK/Mage are included for ghoul/water elemental edge cases.
+            if (actor.Class != CLASS_HUNTER && actor.Class != CLASS_WARLOCK && actor.Class != CLASS_DEATH_KNIGHT && actor.Class != CLASS_MAGE)
+                continue;
+
+            fallback = &actor;
+            ++count;
+        }
+
+        return count == 1 ? fallback : nullptr;
+    }
+
+    ReplayActor const* FindReplayASOwnerFromAnyGuidPair(MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
+    {
+        // First try the known owner-style unit fields.
+        ObjectGuid ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_CHARMEDBY_LOW, REPLAY_UNIT_FIELD_CHARMEDBY_HIGH);
+        if (ReplayActor const* owner = FindReplayActorByGuid(match, ownerGuid))
+            return owner;
+
+        ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_SUMMONEDBY_LOW, REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH);
+        if (ReplayActor const* owner = FindReplayActorByGuid(match, ownerGuid))
+            return owner;
+
+        ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_CREATEDBY_LOW, REPLAY_UNIT_FIELD_CREATEDBY_HIGH);
+        if (ReplayActor const* owner = FindReplayActorByGuid(match, ownerGuid))
+            return owner;
+
+        // Some pet-like units do not reliably carry the exact owner field in every replay update.
+        // Scan adjacent update-field pairs for any replay actor GUID. This is intentionally only used
+        // on non-player unit update packets after the object has already failed actor matching.
+        for (auto const& lowItr : values)
+        {
+            auto highItr = values.find(lowItr.first + 1);
+            if (highItr == values.end())
+                continue;
+
+            ObjectGuid candidate(uint64(lowItr.second) | (uint64(highItr->second) << 32));
+            if (ReplayActor const* owner = FindReplayActorByGuid(match, candidate))
+                return owner;
+        }
+
+        // Last fallback: if this replay has exactly one pet-capable player, attach the pet frame there.
+        return FindReplayASPetCapableFallbackOwner(match);
+    }
+
     void SendReplayASPlayerStatusFromValues(Player* viewer, MatchRecord const& match, ObjectGuid objectGuid, std::unordered_map<uint32, uint32> const& values)
     {
         ReplayActor const* actor = FindReplayActorByGuid(match, objectGuid);
@@ -1898,11 +1952,7 @@ namespace
 
     void SendReplayASPetStatusFromValues(Player* viewer, MatchRecord const& match, std::unordered_map<uint32, uint32> const& values)
     {
-        ObjectGuid ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_SUMMONEDBY_LOW, REPLAY_UNIT_FIELD_SUMMONEDBY_HIGH);
-        if (!ownerGuid)
-            ownerGuid = ReplayASGuidFromFields(values, REPLAY_UNIT_FIELD_CREATEDBY_LOW, REPLAY_UNIT_FIELD_CREATEDBY_HIGH);
-
-        ReplayActor const* owner = FindReplayActorByGuid(match, ownerGuid);
+        ReplayActor const* owner = FindReplayASOwnerFromAnyGuidPair(match, values);
         if (!owner)
             return;
 
@@ -1918,12 +1968,10 @@ namespace
         else
             pct = health > 0 ? 100u : 0u;
 
+        // Send PET before PHP so the icon texture is ready before UpdatePet shows the frame.
+        // 0 is the addon's generic question-mark icon; PHP is what controls visibility.
+        SendReplayASCommand(viewer, owner->FakeGuid, "PET", 0u);
         SendReplayASCommand(viewer, owner->FakeGuid, "PHP", pct);
-        if (pct > 0)
-        {
-            // 0 is a safe generic icon in the addon; future improvement can map pet family/entry to the addon icon table.
-            SendReplayASCommand(viewer, owner->FakeGuid, "PET", 0u);
-        }
     }
 
     bool SendReplayASStatusFromUpdatePayload(Player* viewer, MatchRecord const& match, std::vector<uint8>& payload)
