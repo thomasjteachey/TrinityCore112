@@ -5073,10 +5073,10 @@ void SpellMgr::LoadSpellInfoCorrections()
         if (!spellInfo)
             continue;
 
-        // Mounts should end when the caster enters water; battleground
-        // exceptions are handled where the not-above-water interrupt fires.
-        if (spellInfo->HasAura(SPELL_AURA_MOUNTED))
-            spellInfo->AuraInterruptFlags |= AURA_INTERRUPT_FLAG_NOT_ABOVEWATER;
+        // Mounts dismount on full submersion in Unit::ProcessTerrainStatusUpdate.
+        // Do not tag them with AURA_INTERRUPT_FLAG_NOT_ABOVEWATER here, because
+        // that interrupt fires as soon as a player touches shallow water. Mount
+        // auras that already carry the flag are skipped until submersion there.
 
         // Fix range for trajectory triggered spell
         for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
