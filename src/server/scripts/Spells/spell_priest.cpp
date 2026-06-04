@@ -1779,6 +1779,59 @@ namespace ShadowPriestWraith
         }, Milliseconds(PossessionReleaseDelayMs));
     }
 
+    void ApplyWraithVisual(Player* player, Creature* wraith)
+    {
+        if (!wraith || !sSpellMgr->GetSpellInfo(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            return;
+
+        // Prefer a direct aura attach first. This bypasses normal target/cast checks,
+        // which matters because the wraith is intentionally immune and unselectable.
+        if (!wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            AddAuraIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+
+        if (wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            return;
+
+        // Some visual spells behave better when the player is the original caster.
+        if (player)
+            player->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
+
+        if (wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            return;
+
+        // Final fallback: self-cast from the wraith after it is already in-world.
+        wraith->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
+    }
+
+    void ScheduleWraithVisual(Player* player, Creature* wraith)
+    {
+        if (!player || !wraith)
+            return;
+
+        ObjectGuid const playerGuid = player->GetGUID();
+        ObjectGuid const wraithGuid = wraith->GetGUID();
+
+        // Re-apply a few times after spawn/possession. Applying the aura only inside
+        // PrepareWraith() can be too early for some client visuals, and the possess
+        // handoff can also stomp visual state on the controlled unit.
+        uint32 const visualRefreshDelays[] = { 50u, 150u, 300u, 600u, 1000u, 1500u, 2500u };
+        for (uint32 delay : visualRefreshDelays)
+        {
+            wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid]()
+            {
+                Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+                if (!owner || !owner->HasAura(SPELL_PRIEST_SHADOW_WRAITH))
+                    return;
+
+                Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
+                if (!ownedWraith)
+                    return;
+
+                ApplyWraithVisual(owner, ownedWraith);
+            }, Milliseconds(delay));
+        }
+    }
+
     void ScheduleChannelVisual(Player* player, Creature* wraith)
     {
         if (!player || !wraith)
@@ -1859,9 +1912,9 @@ namespace ShadowPriestWraith
         wraith->AttackStop();
         wraith->CombatStop(true);
 
-        // 89788 is the ghostly visual aura. Use direct AddAura so immunity/cast
-        // flags on the intentionally untargetable/immune wraith cannot block it.
-        AddAuraIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+        // 89788 is the ghostly visual aura. Apply once immediately; OnApply also
+        // re-applies it after possession so the client actually receives the visual.
+        ApplyWraithVisual(player, wraith);
     }
 }
 
@@ -1948,6 +2001,11 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
             return;
         }
+
+        // Re-apply the ghost aura after possession too. The initial aura can be lost
+        // or visually ignored during the client control handoff.
+        ShadowPriestWraith::ApplyWraithVisual(player, wraith);
+        ShadowPriestWraith::ScheduleWraithVisual(player, wraith);
 
         // Start/refresh the Drain Life channel after the possession handoff. Casting
         // it before possession is unreliable because the client/core can cancel the
