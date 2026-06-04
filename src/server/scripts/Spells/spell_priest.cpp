@@ -1650,6 +1650,7 @@ namespace ShadowPriestWraith
     constexpr uint32 ChannelRefreshMs = 750;
     constexpr uint32 ChannelMaxMs = 60000;
     constexpr uint32 ChannelPacketDurationMs = 1500;
+    constexpr uint32 PossessionReleaseDelayMs = 1;
 
     uint32 ControlMechanicMask()
     {
@@ -1724,6 +1725,58 @@ namespace ShadowPriestWraith
         player->SetChannelObjectGuid(ObjectGuid::Empty);
         player->SetChannelSpellId(0);
         player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+    }
+
+    void FinishWraithCleanup(Player* player, Creature* wraith)
+    {
+        if (!player)
+            return;
+
+        if (wraith)
+        {
+            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
+            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+
+            if (wraith->GetCharmerGUID() == player->GetGUID())
+                wraith->RemoveCharmedBy(player);
+        }
+
+        StopChannelVisual(player);
+        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
+        ApplyUnstoppable(player, false);
+        player->SetControlled(false, UNIT_STATE_ROOT);
+
+        if (wraith)
+            wraith->DespawnOrUnsummon();
+    }
+
+    void ScheduleWraithCleanup(Player* player, Creature* wraith)
+    {
+        if (!player)
+            return;
+
+        if (!wraith)
+        {
+            FinishWraithCleanup(player, nullptr);
+            return;
+        }
+
+        ObjectGuid const playerGuid = player->GetGUID();
+        ObjectGuid const wraithGuid = wraith->GetGUID();
+
+        // Do the destructive possession cleanup on the next map update rather than
+        // in the same stack as the teleport. This gives the client one frame where
+        // the real player body is already exactly at the possessed wraith location
+        // and facing before the camera owner is returned from wraith -> player.
+        wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid]()
+        {
+            Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+            if (!owner)
+                return;
+
+            Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
+            FinishWraithCleanup(owner, ownedWraith);
+        }, Milliseconds(PossessionReleaseDelayMs));
     }
 
     void ScheduleChannelVisual(Player* player, Creature* wraith)
@@ -1853,7 +1906,6 @@ class spell_pri_shadow_wraith_aura : public AuraScript
     bool Load() override
     {
         _wraithGuid.Clear();
-        _originalOrientation = 0.0f;
         return GetUnitOwner() && GetUnitOwner()->GetTypeId() == TYPEID_PLAYER;
     }
 
@@ -1864,8 +1916,6 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             return;
 
         Position pos = player->GetPosition();
-        _originalOrientation = player->GetOrientation();
-
         TempSummon* wraith = player->SummonCreature(PRIEST_SHADOW_WRAITH_NPC, pos, TEMPSUMMON_MANUAL_DESPAWN, Milliseconds(0), 0, SPELL_PRIEST_SHADOW_WRAITH);
         if (!wraith)
         {
@@ -1920,30 +1970,21 @@ class spell_pri_shadow_wraith_aura : public AuraScript
 
         if (shouldTeleport)
         {
-            // Keep the camera transition as smooth as possible: move the real body to the
-            // wraith before releasing possession. If we release possession first, the client
-            // snaps the camera back to the old body location/rotation, then snaps again on teleport.
+            // Camera-smoothing order:
+            // 1) teleport the real body to the possessed wraith, using the wraith's exact orientation
+            // 2) wait one server frame / map update
+            // 3) release possession and despawn the wraith
+            //
+            // This avoids the client returning camera control to a player body that is still
+            // back at the cast location or facing the old cast orientation.
             Position dest = wraith->GetPosition();
-            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), _originalOrientation, true);
+            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+            ShadowPriestWraith::ScheduleWraithCleanup(player, wraith);
+            _wraithGuid.Clear();
+            return;
         }
 
-        if (wraith)
-        {
-            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
-            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
-        }
-
-        if (wraith && wraith->GetCharmerGUID() == player->GetGUID())
-            wraith->RemoveCharmedBy(player);
-
-        ShadowPriestWraith::StopChannelVisual(player);
-        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
-        ShadowPriestWraith::ApplyUnstoppable(player, false);
-        player->SetControlled(false, UNIT_STATE_ROOT);
-
-        if (wraith)
-            wraith->DespawnOrUnsummon();
-
+        ShadowPriestWraith::FinishWraithCleanup(player, wraith);
         _wraithGuid.Clear();
     }
 
@@ -1955,7 +1996,6 @@ class spell_pri_shadow_wraith_aura : public AuraScript
 
 private:
     ObjectGuid _wraithGuid;
-    float _originalOrientation;
 };
 
 
