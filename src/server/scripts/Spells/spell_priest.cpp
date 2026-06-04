@@ -92,7 +92,7 @@ enum PriestSpells
 
     // Legionnaire+ custom shadow-priest wraith package. 89783 is already used by rogue Vanish.
     SPELL_PRIEST_SHADOW_WRAITH                      = 89784,
-    SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE          = 89785,
+    SPELL_PRIEST_SHADOW_WRAITH_CHARM                  = 89785,
     SPELL_PRIEST_SHADOW_WRAITH_CHANNEL              = 89786,
     SPELL_PRIEST_SHADOW_WRAITH_VISUAL               = 89787
 };
@@ -1659,21 +1659,21 @@ namespace ShadowPriestWraith
         uint32 const mechanicMask = ControlMechanicMask();
         for (uint8 mechanic = 1; mechanic < MAX_MECHANIC; ++mechanic)
             if (mechanicMask & (1u << mechanic))
-                player->ApplySpellImmune(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE, IMMUNITY_MECHANIC, mechanic, apply);
+                player->ApplySpellImmune(SPELL_PRIEST_SHADOW_WRAITH, IMMUNITY_MECHANIC, mechanic, apply);
 
         if (apply)
-            player->RemoveAurasWithMechanic(mechanicMask, AURA_REMOVE_BY_DEFAULT, SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE, true);
+            player->RemoveAurasWithMechanic(mechanicMask, AURA_REMOVE_BY_DEFAULT, SPELL_PRIEST_SHADOW_WRAITH, true);
     }
 
-    void CastIfSpellExists(Unit* caster, Unit* target, uint32 spellId)
+    SpellCastResult CastIfSpellExists(Unit* caster, Unit* target, uint32 spellId)
     {
         if (!caster || !target)
-            return;
+            return SPELL_FAILED_BAD_TARGETS;
 
         if (!sSpellMgr->GetSpellInfo(spellId))
-            return;
+            return SPELL_FAILED_SPELL_UNAVAILABLE;
 
-        caster->CastSpell(target, spellId, true);
+        return caster->CastSpell(target, spellId, true);
     }
 
     void ScheduleSpeedRamp(Player* player, Creature* wraith)
@@ -1799,16 +1799,19 @@ class spell_pri_shadow_wraith_aura : public AuraScript
         player->AttackStop();
         player->SetControlled(true, UNIT_STATE_ROOT);
         ShadowPriestWraith::ApplyUnstoppable(player, true);
-        ShadowPriestWraith::CastIfSpellExists(player, player, SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
 
         player->SetFacingToObject(wraith);
         ShadowPriestWraith::CastIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
 
-        if (!wraith->SetCharmedBy(player, CHARM_TYPE_POSSESS))
+        // 89785 is the real hidden possess/charm spell. Prefer the DBC aura path so
+        // the client/server state matches a normal possession spell. If that spell is
+        // missing or fails to charm immediately, fall back to direct core possession.
+        ShadowPriestWraith::CastIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_CHARM);
+
+        if (wraith->GetCharmerGUID() != player->GetGUID() && !wraith->SetCharmedBy(player, CHARM_TYPE_POSSESS))
         {
             wraith->DespawnOrUnsummon();
             _wraithGuid.Clear();
-            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
             ShadowPriestWraith::ApplyUnstoppable(player, false);
             player->SetControlled(false, UNIT_STATE_ROOT);
             player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
@@ -1826,22 +1829,27 @@ class spell_pri_shadow_wraith_aura : public AuraScript
 
         Creature* wraith = _wraithGuid.IsEmpty() ? nullptr : ObjectAccessor::GetCreature(*player, _wraithGuid);
 
-        if (wraith && wraith->GetCharmerGUID() == player->GetGUID())
-            wraith->RemoveCharmedBy(player);
-
-        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
-        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
-        ShadowPriestWraith::ApplyUnstoppable(player, false);
-        player->SetControlled(false, UNIT_STATE_ROOT);
-
         AuraRemoveMode const removeMode = GetTargetApplication() ? GetTargetApplication()->GetRemoveMode() : AURA_REMOVE_BY_DEFAULT;
         bool const shouldTeleport = wraith && player->IsAlive() && removeMode != AURA_REMOVE_BY_DEATH;
 
         if (shouldTeleport)
         {
+            // Keep the camera transition as smooth as possible: move the real body to the
+            // wraith before releasing possession. If we release possession first, the client
+            // snaps the camera back to the old body location/rotation, then snaps again on teleport.
             Position dest = wraith->GetPosition();
             player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
         }
+
+        if (wraith)
+            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
+
+        if (wraith && wraith->GetCharmerGUID() == player->GetGUID())
+            wraith->RemoveCharmedBy(player);
+
+        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+        ShadowPriestWraith::ApplyUnstoppable(player, false);
+        player->SetControlled(false, UNIT_STATE_ROOT);
 
         if (wraith)
             wraith->DespawnOrUnsummon();
