@@ -2142,14 +2142,6 @@ struct CasterSpellCooldownKeyHash
 
 std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
 
-struct StationaryCastStopState
-{
-    uint32 spellId = 0;
-    ObjectGuid targetGuid = ObjectGuid::Empty;
-    uint32 stopMs = 0;
-};
-
-std::unordered_map<uint64, StationaryCastStopState> g_StationaryCastStopByGuid;
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
 struct LastDirectiveState
@@ -3251,7 +3243,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
-        bool const hadActiveMovement = HasActiveMovementForStationaryCast(player);
+        // Force the bot into a fully stopped server-side state and attempt the
+        // stationary spell in the same decision tick. Non-move-allowed channels
+        // such as Drain Life still get an immediate SPELL_FAILED_MOVING retry
+        // below if a movement update races the first cast attempt.
         StopPlayerbotForStationaryCast(player);
 
         // Channeled spells such as Drain Life are checked for movement as soon
@@ -3319,7 +3314,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (castResult == SPELL_FAILED_MOVING && requiresStationaryCast)
         {
             StopPlayerbotForStationaryCast(player);
-            g_StationaryCastStopByGuid[player->GetGUID().GetRawValue()] = { resolvedSpellId, target ? target->GetGUID() : ObjectGuid::Empty, GameTime::GetGameTimeMS() };
 
             // If an immediately preceding movement update raced this cast, the
             // failed moving check did not consume the spell. Retry once after
@@ -3331,9 +3325,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
                 else
                     castResult = player->CastSpell(target, resolvedSpellId, false);
-
-                if (castResult == SPELL_CAST_OK)
-                    g_StationaryCastStopByGuid.erase(player->GetGUID().GetRawValue());
             }
         }
 
