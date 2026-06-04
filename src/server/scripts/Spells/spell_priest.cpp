@@ -25,6 +25,7 @@
 #include "Creature.h"
 #include "Errors.h"
 #include "GridNotifiers.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
 #include "SharedDefines.h"
@@ -87,7 +88,13 @@ enum PriestSpells
     SPELL_PRIEST_SPIRIT_OF_REDEMPTION               = 27827,
     SPELL_PRIEST_VAMPIRIC_EMBRACE_MANA              = 81356,
     SPELL_PRIEST_DARKNESS_R1                        = 15259,
-    SPELL_PRIEST_SHADOWFORM                         = 15473
+    SPELL_PRIEST_SHADOWFORM                         = 15473,
+
+    // Legionnaire+ custom shadow-priest wraith package. 89783 is already used by rogue Vanish.
+    SPELL_PRIEST_SHADOW_WRAITH                      = 89784,
+    SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE          = 89785,
+    SPELL_PRIEST_SHADOW_WRAITH_CHANNEL              = 89786,
+    SPELL_PRIEST_SHADOW_WRAITH_VISUAL               = 89787
 };
 
 enum PriestSpellIcons
@@ -105,7 +112,8 @@ enum PriestMisc
     PRIEST_LIGHTWELL_NPC_3                          = 31895,
     PRIEST_LIGHTWELL_NPC_4                          = 31894,
     PRIEST_LIGHTWELL_NPC_5                          = 31893,
-    PRIEST_LIGHTWELL_NPC_6                          = 31883
+    PRIEST_LIGHTWELL_NPC_6                          = 31883,
+    PRIEST_SHADOW_WRAITH_NPC                        = 89784
 };
 
 enum MiscSpells
@@ -1632,6 +1640,216 @@ class spell_pri_dispel_magic : public SpellScript
 };
 
 
+
+namespace ShadowPriestWraith
+{
+    constexpr uint32 SpeedRampDurationMs = 2500;
+    constexpr uint32 SpeedRampSteps = 5;
+
+    uint32 ControlMechanicMask()
+    {
+        return IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK;
+    }
+
+    void ApplyUnstoppable(Player* player, bool apply)
+    {
+        if (!player)
+            return;
+
+        uint32 const mechanicMask = ControlMechanicMask();
+        for (uint8 mechanic = 1; mechanic < MAX_MECHANIC; ++mechanic)
+            if (mechanicMask & (1u << mechanic))
+                player->ApplySpellImmune(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE, IMMUNITY_MECHANIC, mechanic, apply);
+
+        if (apply)
+            player->RemoveAurasWithMechanic(mechanicMask, AURA_REMOVE_BY_DEFAULT, SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE, true);
+    }
+
+    void CastIfSpellExists(Unit* caster, Unit* target, uint32 spellId)
+    {
+        if (!caster || !target)
+            return;
+
+        if (!sSpellMgr->GetSpellInfo(spellId))
+            return;
+
+        caster->CastSpell(target, spellId, true);
+    }
+
+    void ScheduleSpeedRamp(Player* player, Creature* wraith)
+    {
+        if (!player || !wraith)
+            return;
+
+        ObjectGuid const playerGuid = player->GetGUID();
+        ObjectGuid const wraithGuid = wraith->GetGUID();
+
+        wraith->SetSpeed(MOVE_RUN, 1.0f);
+        wraith->SetSpeed(MOVE_WALK, 1.0f);
+
+        for (uint32 step = 1; step <= SpeedRampSteps; ++step)
+        {
+            wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid, step]()
+            {
+                Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+                if (!owner || !owner->HasAura(SPELL_PRIEST_SHADOW_WRAITH))
+                    return;
+
+                Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
+                if (!ownedWraith)
+                    return;
+
+                float const bonus = 0.50f * float(step) / float(SpeedRampSteps);
+                ownedWraith->SetSpeed(MOVE_RUN, 1.0f + bonus);
+                ownedWraith->SetSpeed(MOVE_WALK, 1.0f + bonus);
+            }, Milliseconds(SpeedRampDurationMs * step / SpeedRampSteps));
+        }
+    }
+
+    void PrepareWraith(Player* player, Creature* wraith)
+    {
+        if (!player || !wraith)
+            return;
+
+        wraith->CopyAppearanceFromPlayer(player, false, false, false);
+        wraith->SetLevel(player->GetLevel());
+        wraith->SetFaction(player->GetFaction());
+        wraith->SetObjectScale(player->GetObjectScale());
+
+        wraith->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_PACIFIED | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+        wraith->SetReactState(REACT_PASSIVE);
+        wraith->SetImmuneToAll(true);
+        wraith->AttackStop();
+        wraith->CombatStop(true);
+
+        CastIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+        ScheduleSpeedRamp(player, wraith);
+    }
+}
+
+// 89784 - Shadow Wraith
+class spell_pri_shadow_wraith : public SpellScript
+{
+    PrepareSpellScript(spell_pri_shadow_wraith);
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return SPELL_FAILED_DONT_REPORT;
+
+        // Recast while active: finish the wraith walk early. The aura remove handler owns teleport and cleanup.
+        if (player->HasAura(SPELL_PRIEST_SHADOW_WRAITH))
+        {
+            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
+            return SPELL_FAILED_DONT_REPORT;
+        }
+
+        if (player->GetVehicle())
+            return SPELL_FAILED_DONT_REPORT;
+
+        if (player->isPossessing())
+            return SPELL_FAILED_DONT_REPORT;
+
+        return SPELL_CAST_OK;
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_pri_shadow_wraith::CheckCast);
+    }
+};
+
+// 89784 - Shadow Wraith aura
+class spell_pri_shadow_wraith_aura : public AuraScript
+{
+    PrepareAuraScript(spell_pri_shadow_wraith_aura);
+
+    bool Load() override
+    {
+        _wraithGuid.Clear();
+        return GetUnitOwner() && GetUnitOwner()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player)
+            return;
+
+        Position pos = player->GetPosition();
+        TempSummon* wraith = player->SummonCreature(PRIEST_SHADOW_WRAITH_NPC, pos, TEMPSUMMON_MANUAL_DESPAWN, Milliseconds(0), 0, SPELL_PRIEST_SHADOW_WRAITH);
+        if (!wraith)
+        {
+            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
+            return;
+        }
+
+        _wraithGuid = wraith->GetGUID();
+        ShadowPriestWraith::PrepareWraith(player, wraith);
+
+        player->AttackStop();
+        player->SetControlled(true, UNIT_STATE_ROOT);
+        ShadowPriestWraith::ApplyUnstoppable(player, true);
+        ShadowPriestWraith::CastIfSpellExists(player, player, SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
+
+        player->SetFacingToObject(wraith);
+        ShadowPriestWraith::CastIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+
+        if (!wraith->SetCharmedBy(player, CHARM_TYPE_POSSESS))
+        {
+            wraith->DespawnOrUnsummon();
+            _wraithGuid.Clear();
+            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
+            ShadowPriestWraith::ApplyUnstoppable(player, false);
+            player->SetControlled(false, UNIT_STATE_ROOT);
+            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
+            return;
+        }
+    }
+
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Player* player = GetTarget()->ToPlayer();
+        if (!player)
+            return;
+
+        Creature* wraith = _wraithGuid.IsEmpty() ? nullptr : ObjectAccessor::GetCreature(*player, _wraithGuid);
+
+        if (wraith && wraith->GetCharmerGUID() == player->GetGUID())
+            wraith->RemoveCharmedBy(player);
+
+        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
+        ShadowPriestWraith::ApplyUnstoppable(player, false);
+        player->SetControlled(false, UNIT_STATE_ROOT);
+
+        AuraRemoveMode const removeMode = GetTargetApplication() ? GetTargetApplication()->GetRemoveMode() : AURA_REMOVE_BY_DEFAULT;
+        bool const shouldTeleport = wraith && player->IsAlive() && removeMode != AURA_REMOVE_BY_DEATH;
+
+        if (shouldTeleport)
+        {
+            Position dest = wraith->GetPosition();
+            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+        }
+
+        if (wraith)
+            wraith->DespawnOrUnsummon();
+
+        _wraithGuid.Clear();
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_pri_shadow_wraith_aura::OnApply, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+        AfterEffectRemove += AuraEffectRemoveFn(spell_pri_shadow_wraith_aura::OnRemove, EFFECT_0, SPELL_AURA_ANY, AURA_EFFECT_HANDLE_REAL);
+    }
+
+private:
+    ObjectGuid _wraithGuid;
+};
+
+
 //81432
 class spell_pre_renew_bonus : public AuraScript
 {
@@ -1726,5 +1944,6 @@ void AddSC_priest_spell_scripts()
     RegisterSpellScript(spell_ps_cd_reduce);
     RegisterSpellScript(spell_pre_renew_bonus);
     RegisterSpellScript(spell_pri_dispel_magic);
+    RegisterSpellAndAuraScriptPair(spell_pri_shadow_wraith, spell_pri_shadow_wraith_aura);
     RegisterSpellScript(spell_pri_silence);
 }
