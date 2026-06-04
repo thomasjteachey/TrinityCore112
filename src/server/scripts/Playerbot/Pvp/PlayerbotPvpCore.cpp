@@ -3124,8 +3124,6 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* fearWardTarget = (player->GetRace() == RACE_DWARF && IsSpellReady(player, 6346)) ? SelectFriendlyMissingBuffTarget(player, 6346, 40.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, isHolyPriest && player->HealthBelowPct(50) && IsSpellReady(player, 81321), 61.0f,
-        { "priest spirit of redemption", "enter spirit of redemption below half health", 81321, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, spiritHealTarget, 60.5f,
         { "priest flash heal", "spam flash heal during spirit of redemption", 10917, spiritHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, spiritHealTarget ? spiritHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, fearWardTarget, 60.2f,
@@ -4641,10 +4639,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    // PvP insignia/class-trinket crowd-control breaks are handled by the
-    // per-player fast path in RandomBotParticipationManager::ProcessPlayerLifecycle.
-    // Keep them out of the normal class-spell decision graph so they are not
-    // throttled by decision cadence and do not consume the class action tick/GCD.
+    // PvP insignia/class-trinket crowd-control breaks and holy-priest Spirit
+    // of Redemption are handled by per-player fast paths in
+    // RandomBotParticipationManager::ProcessPlayerLifecycle. Keep them out of
+    // the normal class-spell decision graph so they are not throttled by
+    // decision cadence and do not consume the class action tick/GCD.
 
     context.shouldExecute = context.shouldExecute || context.spellId != 0;
 

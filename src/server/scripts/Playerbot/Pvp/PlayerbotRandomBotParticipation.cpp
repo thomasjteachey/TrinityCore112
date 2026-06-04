@@ -117,6 +117,8 @@ using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(1500);
 constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(500);
+constexpr uint32 kPriestSpiritOfRedemptionSpellId = 81321;
+constexpr uint32 kHolyPriestProfileTalentSpellId = 724;
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
@@ -248,6 +250,69 @@ uint32 GetFirstOnUseItemSpell(ItemTemplate const* itemTemplate)
     }
 
     return 0;
+}
+
+uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
+{
+    if (!player || !spellId)
+        return 0;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!baseSpellInfo || !baseSpellInfo->GetFirstRankSpell())
+        return 0;
+
+    uint32 resolvedSpellId = 0;
+    for (uint32 chainSpellId = baseSpellInfo->GetFirstRankSpell()->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+    {
+        if (player->HasSpell(chainSpellId))
+            resolvedSpellId = chainSpellId;
+    }
+
+    return resolvedSpellId;
+}
+
+bool TryCastPriestSpiritOfRedemption(Player* player)
+{
+    if (!player)
+        return false;
+
+    playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+    if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpClassSpellsEnabled)
+        return false;
+
+    if (!playerbot::IsManagedRandomBot(player) || !player->IsInWorld() || !player->IsAlive())
+        return false;
+
+    bool const inActiveBattleground = player->InBattleground() &&
+        player->GetBattleground() &&
+        player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
+    bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
+    if (!inActiveBattleground && !inActiveDuel)
+        return false;
+
+    if (player->GetClass() != CLASS_PRIEST || !player->HealthBelowPct(50))
+        return false;
+
+    if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
+        return false;
+
+    uint8 const activeSpec = player->GetActiveSpec();
+    if (!player->HasTalent(kHolyPriestProfileTalentSpellId, activeSpec))
+        return false;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    uint32 const spellId = ResolveKnownPlayerSpellInChain(player, kPriestSpiritOfRedemptionSpellId);
+    SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
+    if (!spellInfo || player->GetSpellHistory()->HasCooldown(spellId))
+        return false;
+
+    SpellCastResult const castResult = player->CastSpell(player, spellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)));
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP spirit of redemption fast-path attempt: guid={} spell={} result={}.",
+        player->GetGUID().ToString(), spellId, uint32(castResult));
+    return castResult == SPELL_CAST_OK;
 }
 
 bool TryUseEquippedInsigniaTrinket(Player* player)
@@ -1465,6 +1530,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingManagedBotTeleport(player);
     TryUsePlayerbotInsigniaBreaker(player);
+    TryCastPriestSpiritOfRedemption(player);
     ProcessActiveBattlegroundTacticalTick(player);
 
     if (!CanProcessPlayerLifecycle(player))
