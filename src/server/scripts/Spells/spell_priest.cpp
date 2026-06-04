@@ -1952,7 +1952,7 @@ namespace ShadowPriestWraith
                 if (!ownedWraith)
                     return;
 
-                float const bonus = 0.50f * float(step) / float(SpeedRampSteps);
+                float const bonus = 0.75f * float(step) / float(SpeedRampSteps);
                 float const speedRate = 1.0f + bonus;
 
                 ownedWraith->SetWalk(false);
