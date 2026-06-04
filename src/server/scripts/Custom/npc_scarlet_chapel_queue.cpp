@@ -10,13 +10,17 @@
 #include "SharedDefines.h"
 #include "WorldSession.h"
 #include <DBCStores.h>
+#include <string>
 
 namespace
 {
-constexpr uint32 ACTION_QUEUE_REGULAR = GOSSIP_ACTION_INFO_DEF + 1;
-constexpr uint32 ACTION_QUEUE_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 2;
-constexpr uint32 ACTION_QUEUE_HORDE = GOSSIP_ACTION_INFO_DEF + 3;
-constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 4;
+constexpr uint32 ACTION_QUEUE_SCARLET_REGULAR = GOSSIP_ACTION_INFO_DEF + 1;
+constexpr uint32 ACTION_QUEUE_SCARLET_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 2;
+constexpr uint32 ACTION_QUEUE_SCARLET_HORDE = GOSSIP_ACTION_INFO_DEF + 3;
+constexpr uint32 ACTION_QUEUE_BLACKROCK_REGULAR = GOSSIP_ACTION_INFO_DEF + 4;
+constexpr uint32 ACTION_QUEUE_BLACKROCK_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 5;
+constexpr uint32 ACTION_QUEUE_BLACKROCK_HORDE = GOSSIP_ACTION_INFO_DEF + 6;
+constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 7;
 
 void SendQueueError(Player* player, char const* text)
 {
@@ -25,16 +29,16 @@ void SendQueueError(Player* player, char const* text)
         session->SendNotification("%s", text);
 }
 
-bool QueueSinglePlayer(Player* player, uint32 forcedTeam)
+bool QueueSinglePlayer(Player* player, BattlegroundTypeId bgTypeId, uint32 forcedTeam)
 {
-    if (!player || !player->GetBGAccessByLevel(BATTLEGROUND_SCM) || !player->HasFreeBattlegroundQueueId())
+    if (!player || !player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
         return false;
 
-    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(BATTLEGROUND_SCM);
+    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bgTemplate)
         return false;
 
-    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(BATTLEGROUND_SCM, 0);
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, 0);
     if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
         return false;
 
@@ -54,7 +58,7 @@ bool QueueSinglePlayer(Player* player, uint32 forcedTeam)
         player->SetBGTeam(0);
 
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
-    GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, BATTLEGROUND_SCM, bracketEntry, 0, false, false, 0, 0);
+    GroupQueueInfo* ginfo = bgQueue.AddGroup(player, nullptr, bgTypeId, bracketEntry, 0, false, false, 0, 0);
 
     player->SetBGTeam(previousBgTeam);
 
@@ -62,7 +66,7 @@ bool QueueSinglePlayer(Player* player, uint32 forcedTeam)
         return false;
 
     player->AddBattlegroundQueueId(queueTypeId);
-    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, queueTypeId, BATTLEGROUND_SCM, bracketEntry->GetBracketId());
+    sBattlegroundMgr->ScheduleQueueUpdate(ginfo->ArenaMatchmakerRating, ginfo->ArenaType, queueTypeId, bgTypeId, bracketEntry->GetBracketId());
     return true;
 }
 }
@@ -79,9 +83,12 @@ public:
         bool OnGossipHello(Player* player) override
         {
             ClearGossipMenuFor(player);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel", GOSSIP_SENDER_MAIN, ACTION_QUEUE_REGULAR);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_ALLIANCE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_REGULAR);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_ALLIANCE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Scarlet Chapel (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_SCARLET_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_REGULAR);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_ALLIANCE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_HORDE);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -92,15 +99,18 @@ public:
             uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
             switch (action)
             {
-                case ACTION_QUEUE_REGULAR: return HandleQueue(player, TEAM_NEUTRAL);
-                case ACTION_QUEUE_ALLIANCE: return HandleQueue(player, TEAM_ALLIANCE);
-                case ACTION_QUEUE_HORDE: return HandleQueue(player, TEAM_HORDE);
+                case ACTION_QUEUE_SCARLET_REGULAR: return HandleQueue(player, BATTLEGROUND_SCM, "Scarlet Chapel", TEAM_NEUTRAL);
+                case ACTION_QUEUE_SCARLET_ALLIANCE: return HandleQueue(player, BATTLEGROUND_SCM, "Scarlet Chapel", TEAM_ALLIANCE);
+                case ACTION_QUEUE_SCARLET_HORDE: return HandleQueue(player, BATTLEGROUND_SCM, "Scarlet Chapel", TEAM_HORDE);
+                case ACTION_QUEUE_BLACKROCK_REGULAR: return HandleQueue(player, BATTLEGROUND_BRT, "Blackrock Throne", TEAM_NEUTRAL);
+                case ACTION_QUEUE_BLACKROCK_ALLIANCE: return HandleQueue(player, BATTLEGROUND_BRT, "Blackrock Throne", TEAM_ALLIANCE);
+                case ACTION_QUEUE_BLACKROCK_HORDE: return HandleQueue(player, BATTLEGROUND_BRT, "Blackrock Throne", TEAM_HORDE);
                 case ACTION_CLOSE: CloseGossipMenuFor(player); return true;
                 default: return false;
             }
         }
 
-        bool HandleQueue(Player* player, uint32 forcedTeam)
+        bool HandleQueue(Player* player, BattlegroundTypeId bgTypeId, char const* battlegroundName, uint32 forcedTeam)
         {
             Group* group = player->GetGroup();
             if (group && !group->IsLeader(player->GetGUID()))
@@ -111,8 +121,13 @@ public:
 
             if (!group)
             {
-                if (!QueueSinglePlayer(player, forcedTeam))
-                    SendQueueError(player, "Unable to queue for Scarlet Chapel right now.");
+                if (!QueueSinglePlayer(player, bgTypeId, forcedTeam))
+                {
+                    std::string error = "Unable to queue for ";
+                    error += battlegroundName;
+                    error += " right now.";
+                    SendQueueError(player, error.c_str());
+                }
                 else
                     CloseGossipMenuFor(player);
                 return true;
@@ -132,7 +147,7 @@ public:
             for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
             {
                 Player* member = ref->GetSource();
-                if (!QueueSinglePlayer(member, forcedTeam))
+                if (!QueueSinglePlayer(member, bgTypeId, forcedTeam))
                     anyFailed = true;
             }
 

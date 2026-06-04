@@ -38,6 +38,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
+#include "Totem.h"
 #include "Unit.h"
 #include "Util.h"
 
@@ -843,6 +844,27 @@ bool IsDruidCasterForm(Player const* player)
     return player && player->GetClass() == CLASS_DRUID && player->GetShapeshiftForm() == FORM_NONE;
 }
 
+float GetPlayerbotTotemRefreshDistance(Creature const* totem)
+{
+    if (!totem || !totem->IsTotem())
+        return kPlayerbotTotemRefreshDistance;
+
+    float maxRadius = 0.0f;
+    Totem const* totemUnit = totem->ToTotem();
+    for (uint8 spellSlot = 0; spellSlot < MAX_CREATURE_SPELLS; ++spellSlot)
+    {
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(totemUnit->GetSpell(spellSlot));
+        if (!spellInfo)
+            continue;
+
+        for (SpellEffectInfo const& spellEffectInfo : spellInfo->GetEffects())
+            if (spellEffectInfo.IsEffect() && spellEffectInfo.HasRadius())
+                maxRadius = std::max(maxRadius, spellEffectInfo.CalcRadius(const_cast<Creature*>(totem)));
+    }
+
+    return maxRadius > 0.0f ? maxRadius : kPlayerbotTotemRefreshDistance;
+}
+
 bool HasActiveTotemInSlot(Player const* player, uint8 slot)
 {
     if (!player || slot >= MAX_SUMMON_SLOT)
@@ -853,7 +875,10 @@ bool HasActiveTotemInSlot(Player const* player, uint8 slot)
         return false;
 
     Creature* totem = ObjectAccessor::GetCreature(*player, summonGuid);
-    return totem && totem->IsAlive();
+    if (!totem || !totem->IsAlive())
+        return false;
+
+    return player->IsWithinDistInMap(totem, GetPlayerbotTotemRefreshDistance(totem));
 }
 
 bool HasActiveEarthTotem(Player const* player)
@@ -3603,18 +3628,18 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     AddDecisionCandidate(candidates, hasHostileTarget && IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 10473), 55.0f,
         { "shaman frost shock", "snare medium-range melee threats", 10473, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     Unit const* poisonedAllyInTotemRange = IsSpellReady(player, 8170) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 20.0f) : nullptr;
-    AddDecisionCandidate(candidates, poisonedAllyInTotemRange && !HasActiveWaterTotem(player) && !HasAuraFromSpellChain(player, 8170), 54.0f,
-        { "shaman poison cleansing totem", "answer rogue poison pressure", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, poisonedAllyInTotemRange && !HasActiveWaterTotem(player), 54.0f,
+        { "shaman poison cleansing totem", "answer rogue poison pressure with a nearby water totem", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasHostileTarget && (target->GetClass() == CLASS_PRIEST || target->GetClass() == CLASS_WARLOCK) && player->IsWithinDistInMap(target, 20.0f) && !HasActiveEarthTotem(player) && IsSpellReady(player, 8143), 53.0f,
         { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && player->GetPowerPct(POWER_MANA) < 50.0f && !HasActiveWaterTotem(player) && IsSpellReady(player, 16190), 52.8f,
         { "shaman mana tide totem", "restore mana below half", 16190, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveEarthTotem(player) && !HasAuraFromSpellChain(player, 81476) && IsSpellReady(player, 81476), 52.7f,
-        { "shaman tremor totem", "maintain tremor totem", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveWaterTotem(player) && !HasAuraFromSpellChain(player, 81477) && IsSpellReady(player, 81477), 52.6f,
-        { "shaman poison cleansing totem", "maintain poison cleansing totem", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveAirTotem(player) && !HasAuraFromSpellChain(player, 81478) && IsSpellReady(player, 81478), 52.5f,
-        { "shaman grounding totem", "maintain grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
+        { "shaman tremor totem", "maintain a nearby tremor totem", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
+        { "shaman poison cleansing totem", "maintain a nearby poison cleansing totem", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
+        { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && distantEscapeTarget && player->HasAura(2645) && IsSpellReady(player, 82419), 52.3f,
