@@ -1646,7 +1646,7 @@ class spell_pri_dispel_magic : public SpellScript
 namespace ShadowPriestWraith
 {
     constexpr uint32 SpeedRampDurationMs = 2500;
-    constexpr uint32 SpeedRampSteps = 5;
+    constexpr uint32 SpeedRampSteps = 10;
     constexpr uint32 ChannelRefreshMs = 750;
     constexpr uint32 ChannelMaxMs = 60000;
     constexpr uint32 ChannelPacketDurationMs = 1500;
@@ -1952,7 +1952,7 @@ namespace ShadowPriestWraith
                 if (!ownedWraith)
                     return;
 
-                float const bonus = 0.75f * float(step) / float(SpeedRampSteps);
+                float const bonus = 1.0f * float(step) / float(SpeedRampSteps);
                 float const speedRate = 1.0f + bonus;
 
                 ownedWraith->SetWalk(false);
