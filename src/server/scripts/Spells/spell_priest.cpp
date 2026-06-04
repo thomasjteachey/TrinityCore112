@@ -1727,6 +1727,32 @@ namespace ShadowPriestWraith
         player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
     }
 
+    void HideWraithForHandoff(Player* player, Creature* wraith)
+    {
+        if (!wraith)
+            return;
+
+        // The possessed wraith can keep client-side movement for one more frame while
+        // possession is being released. Freeze it and destroy it for the owner now,
+        // then do the real charm/despawn cleanup on the next map update. This keeps
+        // the handoff seamless without the wraith visibly running ahead or fading out.
+        wraith->AttackStop();
+        wraith->CombatStop(true);
+        wraith->StopMoving();
+        wraith->SetControlled(true, UNIT_STATE_ROOT);
+        wraith->SetSpeedRate(MOVE_RUN, 0.01f);
+        wraith->SetSpeedRate(MOVE_WALK, 0.01f);
+        wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+
+        wraith->SetVisible(false);
+
+        // SetVisible(false) is GM-visibility based in this core, so an elevated test
+        // account may still see it. Force-destroy it for the owner too. onDeath=false
+        // avoids a death animation/fade.
+        if (player)
+            wraith->DestroyForPlayer(player, false);
+    }
+
     void FinishWraithCleanup(Player* player, Creature* wraith)
     {
         if (!player)
@@ -2037,6 +2063,7 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             // back at the cast location or facing the old cast orientation.
             Position dest = wraith->GetPosition();
             player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+            ShadowPriestWraith::HideWraithForHandoff(player, wraith);
             ShadowPriestWraith::ScheduleWraithCleanup(player, wraith);
             _wraithGuid.Clear();
             return;
