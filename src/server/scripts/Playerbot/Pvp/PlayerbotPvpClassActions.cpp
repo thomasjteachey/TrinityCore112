@@ -509,6 +509,15 @@ struct TargetRelativeMoveOrderState
 
 std::unordered_map<uint64, TargetRelativeMoveOrderState> g_TargetRelativeMoveOrderByGuid;
 
+struct StationaryCastStopState
+{
+    ObjectGuid targetGuid = ObjectGuid::Empty;
+    uint32 spellId = 0;
+    uint32 stopMs = 0;
+};
+
+std::unordered_map<uint64, StationaryCastStopState> g_StationaryCastStopByGuid;
+
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode)
 {
     if (!player || !target)
@@ -3242,6 +3251,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             failureReason = "stationary_cast_deferred_for_active_movement";
             return false;
         }
+
+        bool const hadActiveMovement = HasActiveMovementForStationaryCast(player);
 
         // Force the bot into a fully stopped server-side state and attempt the
         // stationary spell in the same decision tick. Non-move-allowed channels
