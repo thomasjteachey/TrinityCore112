@@ -20,6 +20,7 @@
 #include "Item.h"
 #include "ObjectAccessor.h"
 #include "ObjectDefines.h"
+#include "ObjectMgr.h"
 #include "Log.h"
 #include "Map.h"
 #include "MovementDefines.h"
@@ -75,9 +76,12 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
+constexpr uint32 kHunterCallPetSpellId = 883;
+constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
+constexpr std::chrono::seconds kHunterPetFailureBackoff = std::chrono::seconds(12);
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
@@ -2501,6 +2505,73 @@ void NotifyWandDiagnostic(Player*, Unit*, std::string const&, uint32, char const
     // its call sites without producing player-visible diagnostics.
 }
 
+
+std::string BuildHunterPetDiagnostic(Player* player, char const* phase, SpellCastResult castResult)
+{
+    std::ostringstream os;
+    EnumText const resultText = EnumUtils::ToString(castResult);
+    os << "HUNTER PET DIAG: phase=" << (phase ? phase : "unknown")
+       << " result=" << resultText.Title;
+
+    if (!player)
+        return os.str();
+
+    Pet const* activePet = player->GetPet();
+    os << " active_pet=" << (activePet ? "yes" : "no");
+    if (activePet)
+    {
+        os << " active_guid=" << activePet->GetGUID().ToString()
+           << " active_entry=" << activePet->GetEntry()
+           << " active_alive=" << (activePet->IsAlive() ? "yes" : "no")
+           << " active_dead=" << (activePet->isDead() ? "yes" : "no")
+           << " active_health=" << activePet->GetHealth()
+           << "/" << activePet->GetMaxHealth()
+           << " active_type=" << uint32(activePet->getPetType());
+    }
+
+    PetStable const* stable = player->GetPetStable();
+    os << " stable=" << (stable ? "yes" : "no");
+    if (!stable)
+        return os.str();
+
+    std::size_t stabledCount = 0;
+    for (Optional<PetStable::PetInfo> const& stableSlot : stable->StabledPets)
+        if (stableSlot)
+            ++stabledCount;
+
+    os << " current=" << (stable->CurrentPet ? "yes" : "no")
+       << " unslotted=" << stable->UnslottedPets.size()
+       << " stabled=" << stabledCount;
+
+    if (stable->CurrentPet)
+    {
+        PetStable::PetInfo const& current = *stable->CurrentPet;
+        os << " current_num=" << current.PetNumber
+           << " current_entry=" << current.CreatureId
+           << " current_type=" << uint32(current.Type)
+           << " current_health=" << current.Health;
+    }
+
+    std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo = Pet::GetLoadPetInfo(*stable, 0, 0, false);
+    PetStable::PetInfo const* loadable = loadInfo.first;
+    os << " loadable=" << (loadable ? "yes" : "no");
+    if (loadable)
+    {
+        CreatureTemplate const* creatureInfo = sObjectMgr->GetCreatureTemplate(loadable->CreatureId);
+        bool const tameable = creatureInfo && creatureInfo->IsTameable(player->CanTameExoticPets());
+        os << " load_slot=" << uint32(loadInfo.second)
+           << " load_num=" << loadable->PetNumber
+           << " load_entry=" << loadable->CreatureId
+           << " load_type=" << uint32(loadable->Type)
+           << " load_health=" << loadable->Health
+           << " load_template=" << (creatureInfo ? "yes" : "no")
+           << " load_tameable=" << (tameable ? "yes" : "no")
+           << " exotic_ok=" << (player->CanTameExoticPets() ? "yes" : "no");
+    }
+
+    return os.str();
+}
+
 void ScheduleWandDiagnostics(Player*, Unit*, uint32)
 {
     // Intentionally silent; delayed wand diagnostics were temporary.
@@ -3463,6 +3534,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         if (castResult != SPELL_CAST_OK)
         {
+            if (context.spellId == kHunterCallPetSpellId || context.spellId == kHunterRevivePetSpellId)
+            {
+                playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId, kHunterPetFailureBackoff);
+                WhisperPlayerbotDiagnostic(player, BuildHunterPetDiagnostic(player,
+                    context.spellId == kHunterCallPetSpellId ? "call_pet_failed" : "revive_pet_failed", castResult));
+            }
+
             NotifySpellCastFailureToGameMasters(player, context, castResult);
             EnumText const reasonText = EnumUtils::ToString(castResult);
             failureReason = reasonText.Title;

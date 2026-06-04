@@ -67,6 +67,8 @@ constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
+constexpr uint32 kHunterCallPetSpellId = 883;
+constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
@@ -397,6 +399,53 @@ bool IsWandShootReadyForDecision(Player const* player)
         IsSpellReady(player, kWandShootSpellId) &&
         !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kWandShootSpellId) &&
         !IsAutoRepeatRangedSpellActive(player, kWandShootSpellId);
+}
+
+
+struct HunterPetDecisionState
+{
+    bool hasActivePet = false;
+    bool hasLivingPet = false;
+    bool hasDeadPet = false;
+    bool hasLoadableHunterPet = false;
+    bool loadablePetDead = false;
+    bool loadablePetTameable = false;
+    bool canCallPet = false;
+    bool shouldRevivePet = false;
+};
+
+HunterPetDecisionState GetHunterPetDecisionState(Player const* player)
+{
+    HunterPetDecisionState state;
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return state;
+
+    if (Pet const* pet = player->GetPet())
+    {
+        state.hasActivePet = true;
+        state.hasLivingPet = pet->IsAlive();
+        state.hasDeadPet = !pet->IsAlive();
+        state.shouldRevivePet = state.hasDeadPet;
+        return state;
+    }
+
+    PetStable const* petStable = player->GetPetStable();
+    if (!petStable)
+        return state;
+
+    std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo = Pet::GetLoadPetInfo(*petStable, 0, 0, false);
+    PetStable::PetInfo const* petInfo = loadInfo.first;
+    if (!petInfo || petInfo->Type != HUNTER_PET)
+        return state;
+
+    state.hasLoadableHunterPet = true;
+    state.loadablePetDead = petInfo->Health == 0;
+
+    CreatureTemplate const* creatureInfo = sObjectMgr->GetCreatureTemplate(petInfo->CreatureId);
+    state.loadablePetTameable = creatureInfo && creatureInfo->IsTameable(player->CanTameExoticPets());
+    state.canCallPet = !state.loadablePetDead && state.loadablePetTameable;
+    state.shouldRevivePet = state.loadablePetDead;
+    return state;
 }
 
 bool IsFlagCarrierNear(Player const* player, ObjectGuid const& carrierGuid, float maxDistance)
@@ -3043,9 +3092,13 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     if (SelectHunterDeadZoneEnemy(player, activeTarget))
         return decision;
 
-    Pet const* pet = player->GetPet();
-    bool const hasLivingPet = pet && pet->IsAlive();
-    bool const hasDeadPet = pet && !pet->IsAlive();
+    HunterPetDecisionState const petState = GetHunterPetDecisionState(player);
+    bool const hasLivingPet = petState.hasLivingPet;
+    bool const hasDeadPet = petState.hasDeadPet || petState.shouldRevivePet;
+    bool const canCallPet = !hasLivingPet && !hasDeadPet && petState.canCallPet &&
+        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterCallPetSpellId);
+    bool const shouldRevivePet = hasDeadPet &&
+        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterRevivePetSpellId);
 
     Unit const* enemyOnTopTarget = SelectNearbyEnemyTarget(player, activeTarget, 5.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 20.0f, activeTarget);
@@ -3087,10 +3140,10 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter mark", "mark rogue targets for anti-stealth pressure", 14325, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && !HasAuraFromSpellChain(player, 20906) && IsSpellReady(player, 20906), 27.5f,
         { "hunter trueshot aura", "maintain personal buff aura", 20906, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !hasLivingPet && !hasDeadPet && IsSpellReady(player, 883), 26.0f,
-        { "hunter call pet", "summon active stable pet when no pet is present", 883, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasDeadPet && !player->IsInCombat() && IsSpellReady(player, 982), 25.0f,
-        { "hunter revive pet", "recover pet out of combat", 982, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, canCallPet && IsSpellReady(player, kHunterCallPetSpellId), 26.0f,
+        { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
+        { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && IsSpellReady(player, 19503), 23.0f,
