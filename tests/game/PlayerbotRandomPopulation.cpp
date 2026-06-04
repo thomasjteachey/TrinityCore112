@@ -74,6 +74,14 @@ TEST_CASE("Playerbot battleground queue target remains Warsong", "[playerbot][po
     CHECK(source.find("BATTLEGROUND_WS") != std::string::npos);
 }
 
+TEST_CASE("Playerbot class spell decision cadence is once per second", "[playerbot][pvp]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp");
+    CHECK(source.find("RandomBotLifecycleCadenceInterval(1000)") != std::string::npos);
+    CHECK(source.find("PvpClassSpellContext const classSpellContext = PvpCore::BuildClassSpellContext(player, values)") != std::string::npos);
+    CHECK(source.find("bool const didExecuteClassSpell = PvpClassActions::Execute(player, classSpellContext)") != std::string::npos);
+}
+
 TEST_CASE("Playerbot class spell fallback skips player spell cooldowns during selection", "[playerbot][pvp]")
 {
     std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotPvpCore.cpp");
