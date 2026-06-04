@@ -2207,112 +2207,6 @@ void Aura::ResetProcCooldown()
     m_procCooldown = std::chrono::steady_clock::now();
 }
 
-
-namespace
-{
-uint32 constexpr INTERLOPED_AURA_ID = 81388;
-uint32 constexpr INTERLOPED_PROC_ID = 81391;
-uint32 constexpr AIMED_SHOT_ID = 20904;
-
-bool IsInterlopedAimedShotProcDebug(Aura const* aura, ProcEventInfo& eventInfo)
-{
-    SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo();
-    return aura && aura->GetId() == INTERLOPED_AURA_ID && eventSpellInfo && eventSpellInfo->Id == AIMED_SHOT_ID;
-}
-
-Player* GetInterlopedDebugPlayer(AuraApplication const* aurApp, ProcEventInfo& eventInfo)
-{
-    if (aurApp)
-        if (Player* player = aurApp->GetTarget()->ToPlayer())
-            return player;
-
-    if (Unit* actor = eventInfo.GetActor())
-    {
-        if (Player* player = actor->ToPlayer())
-            return player;
-
-        if (Player* owner = actor->GetSpellModOwner())
-            return owner;
-    }
-
-    return nullptr;
-}
-
-void SendInterlopedProcDebug(AuraApplication const* aurApp, ProcEventInfo& eventInfo, char const* reason)
-{
-    if (Player* player = GetInterlopedDebugPlayer(aurApp, eventInfo))
-        if (WorldSession* session = player->GetSession())
-            ChatHandler(session).PSendSysMessage("[Interloped proc debug] %s", reason);
-}
-
-char const* GetInterlopedDbProcFailureReason(SpellProcEntry const& procEntry, ProcEventInfo& eventInfo)
-{
-    if (!(eventInfo.GetTypeMask() & procEntry.ProcFlags))
-        return "spell_proc_event ProcFlags do not match this Aimed Shot proc event type mask";
-
-    if (procEntry.AttributesMask & PROC_ATTR_REQ_EXP_OR_HONOR)
-        if (Player* actor = eventInfo.GetActor()->ToPlayer())
-            if (eventInfo.GetActionTarget() && !actor->isHonorOrXPTarget(eventInfo.GetActionTarget()))
-                return "spell_proc_event requires an honor/XP target and the Aimed Shot target does not qualify";
-
-    if (procEntry.AttributesMask & PROC_ATTR_REQ_MANA_COST)
-        if (SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo())
-            if (!eventSpellInfo->ManaCost && !eventSpellInfo->ManaCostPercentage)
-                return "spell_proc_event requires a mana cost and this Aimed Shot event reports no mana cost";
-
-    if (eventInfo.GetTypeMask() & (PROC_FLAG_KILLED | PROC_FLAG_KILL | PROC_FLAG_DEATH))
-        return "unknown spell_proc_event mismatch after kill/death checks";
-
-    if (!(procEntry.AttributesMask & PROC_ATTR_TRIGGERED_CAN_PROC) && !(eventInfo.GetTypeMask() & AUTO_ATTACK_PROC_FLAG_MASK))
-    {
-        if (Spell const* spell = eventInfo.GetProcSpell())
-        {
-            if (spell->IsTriggered())
-            {
-                SpellInfo const* spellInfo = spell->GetSpellInfo();
-                if (!spellInfo->HasAttribute(SPELL_ATTR3_TRIGGERED_CAN_TRIGGER_PROC_2) &&
-                    !spellInfo->HasAttribute(SPELL_ATTR2_TRIGGERED_CAN_TRIGGER_PROC))
-                    return "Aimed Shot was a triggered cast and spell_proc_event does not allow triggered casts to proc it";
-            }
-        }
-    }
-
-    if (procEntry.SchoolMask && !(eventInfo.GetSchoolMask() & procEntry.SchoolMask))
-        return "spell_proc_event SchoolMask does not match Aimed Shot school mask";
-
-    if (eventInfo.GetTypeMask() & SPELL_PROC_FLAG_MASK)
-    {
-        if (SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo())
-            if (!eventSpellInfo->IsAffected(procEntry.SpellFamilyName, procEntry.SpellFamilyMask))
-                return "spell_proc_event spell family name/mask does not match Aimed Shot";
-
-        if (procEntry.SpellTypeMask && !(eventInfo.GetSpellTypeMask() & procEntry.SpellTypeMask))
-            return "spell_proc_event SpellTypeMask does not match this Aimed Shot damage/heal/no-damage event";
-    }
-
-    if (eventInfo.GetTypeMask() & REQ_SPELL_PHASE_PROC_FLAG_MASK)
-        if (!(eventInfo.GetSpellPhaseMask() & procEntry.SpellPhaseMask))
-            return "spell_proc_event SpellPhaseMask does not match this Aimed Shot cast/hit/finish phase";
-
-    if ((eventInfo.GetTypeMask() & TAKEN_HIT_PROC_FLAG_MASK) || ((eventInfo.GetTypeMask() & DONE_HIT_PROC_FLAG_MASK) && !(eventInfo.GetSpellPhaseMask() & PROC_SPELL_PHASE_CAST)))
-    {
-        uint32 hitMask = procEntry.HitMask;
-        if (!hitMask)
-        {
-            if (eventInfo.GetTypeMask() & TAKEN_HIT_PROC_FLAG_MASK)
-                hitMask |= PROC_HIT_NORMAL | PROC_HIT_CRITICAL;
-            else
-                hitMask |= PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB;
-        }
-
-        if (!(eventInfo.GetHitMask() & hitMask))
-            return "spell_proc_event HitMask does not match this Aimed Shot hit result (miss/dodge/parry/etc. will not pass a normal/crit-only proc)";
-    }
-
-    return "spell_proc_event filters failed for an unclassified reason";
-}
-}
-
 void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInfo, TimePoint now)
 {
     bool prepare = CallScriptPrepareProcHandlers(aurApp, eventInfo);
@@ -2341,23 +2235,12 @@ void Aura::PrepareProcToTrigger(AuraApplication* aurApp, ProcEventInfo& eventInf
 
 uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo, TimePoint now) const
 {
-    bool const interlopedDebug = IsInterlopedAimedShotProcDebug(this, eventInfo);
     SpellProcEntry const* procEntry = sSpellMgr->GetSpellProcEntry(GetId());
     // only auras with spell proc entry can trigger proc
     if (!procEntry)
     {
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "aura 81388 has no spell_proc_event entry, so it cannot proc Interloped 81391");
         return 0;
     }
-
-    if (interlopedDebug)
-        if (Unit* actor = eventInfo.GetActor())
-            if (Unit* target = eventInfo.GetActionTarget())
-                if (Player* player = GetInterlopedDebugPlayer(aurApp, eventInfo))
-                    if (WorldSession* session = player->GetSession())
-                        ChatHandler(session).PSendSysMessage("[Interloped proc debug] evaluating aura 81388 for Aimed Shot 20904: actor=%s target=%s typeMask=0x%08X spellTypeMask=0x%08X phaseMask=0x%08X hitMask=0x%08X procFlags=0x%08X procSpellType=0x%08X procPhase=0x%08X procHit=0x%08X chance=%.2f ppm=%.2f cooldownMs=%u charges=%u",
-                            actor->GetName().c_str(), target->GetName().c_str(), eventInfo.GetTypeMask(), eventInfo.GetSpellTypeMask(), eventInfo.GetSpellPhaseMask(), eventInfo.GetHitMask(), procEntry->ProcFlags, procEntry->SpellTypeMask, procEntry->SpellPhaseMask, procEntry->HitMask, procEntry->Chance, procEntry->ProcsPerMinute, uint32(procEntry->Cooldown.count()), procEntry->Charges);
 
     // check spell triggering us
     if (Spell const* spell = eventInfo.GetProcSpell())
@@ -2365,8 +2248,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
         // Do not allow auras to proc from effect triggered from itself
         if (spell->IsTriggeredByAura(m_spellInfo))
         {
-            if (interlopedDebug)
-                SendInterlopedProcDebug(aurApp, eventInfo, "blocked: Aimed Shot proc spell is triggered by aura 81388 itself");
             return 0;
         }
 
@@ -2374,15 +2255,11 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
         if (spell->IsTriggered() && !(procEntry->AttributesMask & PROC_ATTR_TRIGGERED_CAN_PROC) && !(eventInfo.GetTypeMask() & AUTO_ATTACK_PROC_FLAG_MASK))
             if (!GetSpellInfo()->HasAttribute(SPELL_ATTR3_CAN_PROC_WITH_TRIGGERED))
             {
-                if (interlopedDebug)
-                    SendInterlopedProcDebug(aurApp, eventInfo, "blocked: Aimed Shot was triggered and aura 81388 is not allowed to proc from triggered spells");
                 return 0;
             }
 
         if (spell->m_CastItem && (procEntry->AttributesMask & PROC_ATTR_CANT_PROC_FROM_ITEM_CAST))
         {
-            if (interlopedDebug)
-                SendInterlopedProcDebug(aurApp, eventInfo, "blocked: Aimed Shot was cast from an item and aura 81388 forbids item-cast procs");
             return 0;
         }
     }
@@ -2393,8 +2270,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
         if (SpellInfo const* spellInfo = eventInfo.GetSpellInfo())
             if (spellInfo->HasAttribute(SPELL_ATTR0_CU_DONT_BREAK_STEALTH))
             {
-                if (interlopedDebug)
-                    SendInterlopedProcDebug(aurApp, eventInfo, "blocked: aura 81388 is a stealth aura and Aimed Shot is flagged not to break stealth");
                 return 0;
             }
     }
@@ -2404,8 +2279,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     {
         if (!GetCharges())
         {
-            if (interlopedDebug)
-                SendInterlopedProcDebug(aurApp, eventInfo, "blocked: aura 81388 has no proc charges remaining");
             return 0;
         }
 
@@ -2413,8 +2286,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
             if (Spell const* spell = eventInfo.GetProcSpell())
                 if (!spell->m_appliedMods.count(const_cast<Aura*>(this)))
                 {
-                    if (interlopedDebug)
-                        SendInterlopedProcDebug(aurApp, eventInfo, "blocked: aura 81388 requires a spellmod and this Aimed Shot did not apply that aura as a spellmod");
                     return 0;
                 }
     }
@@ -2422,24 +2293,18 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     // check proc cooldown
     if (IsProcOnCooldown(now))
     {
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: aura 81388 proc is on cooldown");
         return 0;
     }
 
     // do checks against db data
     if (!SpellMgr::CanSpellTriggerProcOnEvent(*procEntry, eventInfo))
     {
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, GetInterlopedDbProcFailureReason(*procEntry, eventInfo));
         return 0;
     }
 
     // do checks using conditions table
     if (!sConditionMgr->IsObjectMeetingNotGroupedConditions(CONDITION_SOURCE_TYPE_SPELL_PROC, GetId(), eventInfo.GetActor(), eventInfo.GetActionTarget()))
     {
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: conditions table entry for aura 81388 spell proc was not met");
         return 0;
     }
 
@@ -2447,8 +2312,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     bool check = const_cast<Aura*>(this)->CallScriptCheckProcHandlers(aurApp, eventInfo);
     if (!check)
     {
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: AuraScript CheckProc handler rejected aura 81388");
         return 0;
     }
 
@@ -2461,8 +2324,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
 
     if (!procEffectMask)
     {
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: all aura 81388 effects failed DisableEffectsMask or CheckEffectProc checks");
         return 0;
     }
 
@@ -2484,8 +2345,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
             {
                 if (target->ToPlayer()->IsInFeralForm())
                 {
-                    if (interlopedDebug)
-                        SendInterlopedProcDebug(aurApp, eventInfo, "blocked: passive aura 81388 has weapon requirements but the player is in feral form");
                     return 0;
                 }
 
@@ -2513,8 +2372,6 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
 
             if (!item || item->IsBroken() || !item->IsFitToSpellRequirements(GetSpellInfo()))
             {
-                if (interlopedDebug)
-                    SendInterlopedProcDebug(aurApp, eventInfo, "blocked: equipped item requirement for passive aura 81388 was not met or the required item is broken");
                 return 0;
             }
         }
@@ -2524,17 +2381,9 @@ uint8 Aura::GetProcEffectMask(AuraApplication* aurApp, ProcEventInfo& eventInfo,
     double const roll = rand_chance();
     if (chance > roll)
     {
-        if (interlopedDebug)
-            if (Player* player = GetInterlopedDebugPlayer(aurApp, eventInfo))
-                if (WorldSession* session = player->GetSession())
-                    ChatHandler(session).PSendSysMessage("[Interloped proc debug] passed: aura 81388 will proc Interloped 81391 (effectMask=0x%02X chance=%.2f roll=%.2f)", procEffectMask, chance, roll);
         return procEffectMask;
     }
 
-    if (interlopedDebug)
-        if (Player* player = GetInterlopedDebugPlayer(aurApp, eventInfo))
-            if (WorldSession* session = player->GetSession())
-                ChatHandler(session).PSendSysMessage("[Interloped proc debug] blocked: chance roll failed for aura 81388 (chance=%.2f roll=%.2f); Interloped 81391 will not trigger", chance, roll);
 
     return 0;
 }
