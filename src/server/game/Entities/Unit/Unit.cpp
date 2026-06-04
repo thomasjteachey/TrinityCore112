@@ -10798,11 +10798,6 @@ void Unit::GetProcAurasTriggeredOnEvent(AuraApplicationProcContainer& aurasTrigg
 
 void Unit::TriggerAurasProcOnEvent(Unit* actionTarget, uint32 typeMaskActor, uint32 typeMaskActionTarget, uint32 spellTypeMask, uint32 spellPhaseMask, uint32 hitMask, Spell* spell, DamageInfo* damageInfo, HealInfo* healInfo)
 {
-    if (spell && spell->GetSpellInfo() && spell->GetSpellInfo()->Id == 20904 && HasAura(81388))
-        if (Player* player = ToPlayer())
-            if (WorldSession* session = player->GetSession())
-                ChatHandler(session).PSendSysMessage("[Interloped proc debug] received Aimed Shot 20904 proc event while aura 81388 is present: typeMaskActor=0x%08X typeMaskActionTarget=0x%08X spellTypeMask=0x%08X phaseMask=0x%08X hitMask=0x%08X damageInfo=%s healInfo=%s",
-                    typeMaskActor, typeMaskActionTarget, spellTypeMask, spellPhaseMask, hitMask, damageInfo ? "yes" : "no", healInfo ? "yes" : "no");
 
     // prepare data for self trigger
     ProcEventInfo myProcEventInfo(this, actionTarget, actionTarget, typeMaskActor, spellTypeMask, spellPhaseMask, hitMask, spell, damageInfo, healInfo);

@@ -49,41 +49,6 @@
 #include <numeric>
 namespace
 {
-    uint32 constexpr INTERLOPED_AURA_ID = 81388;
-    uint32 constexpr INTERLOPED_PROC_ID = 81391;
-    uint32 constexpr AIMED_SHOT_ID = 20904;
-
-    bool IsInterlopedTriggeredSpellDebug(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
-    {
-        SpellInfo const* eventSpellInfo = eventInfo.GetSpellInfo();
-        return aurEff && aurEff->GetId() == INTERLOPED_AURA_ID && aurEff->GetSpellEffectInfo().TriggerSpell == INTERLOPED_PROC_ID && eventSpellInfo && eventSpellInfo->Id == AIMED_SHOT_ID;
-    }
-
-    Player* GetInterlopedDebugPlayer(AuraApplication const* aurApp, ProcEventInfo& eventInfo)
-    {
-        if (aurApp)
-            if (Player* player = aurApp->GetTarget()->ToPlayer())
-                return player;
-
-        if (Unit* actor = eventInfo.GetActor())
-        {
-            if (Player* player = actor->ToPlayer())
-                return player;
-
-            if (Player* owner = actor->GetSpellModOwner())
-                return owner;
-        }
-
-        return nullptr;
-    }
-
-    void SendInterlopedProcDebug(AuraApplication const* aurApp, ProcEventInfo& eventInfo, char const* reason)
-    {
-        if (Player* player = GetInterlopedDebugPlayer(aurApp, eventInfo))
-            if (WorldSession* session = player->GetSession())
-                ChatHandler(session).PSendSysMessage("[Interloped proc debug] %s", reason);
-    }
-
     bool IsFollowFearSpell(SpellInfo const* spellInfo)
     {
         if (!spellInfo)
@@ -1087,8 +1052,6 @@ void AuraEffect::HandleProc(AuraApplication* aurApp, ProcEventInfo& eventInfo)
     bool prevented = GetBase()->CallScriptEffectProcHandlers(this, aurApp, eventInfo);
     if (prevented)
     {
-        if (IsInterlopedTriggeredSpellDebug(this, eventInfo))
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: AuraScript OnEffectProc handler prevented Interloped 81391 from being cast");
         return;
     }
 
@@ -5907,29 +5870,11 @@ void AuraEffect::HandleProcTriggerSpellAuraProc(AuraApplication* aurApp, ProcEve
     Unit* triggerTarget = eventInfo.GetProcTarget();
 
     uint32 triggerSpellId = GetSpellEffectInfo().TriggerSpell;
-    bool const interlopedDebug = IsInterlopedTriggeredSpellDebug(this, eventInfo);
-    if (triggerSpellId == 0)
-    {
-        TC_LOG_WARN("spells.aura.effect.nospell", "AuraEffect::HandleProcTriggerSpellAuraProc: Spell {} [EffectIndex: {}] does not have triggered spell.", GetId(), GetEffIndex());
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: aura 81388 effect has no trigger spell configured, so Interloped 81391 cannot be cast");
-        return;
-    }
 
     if (SpellInfo const* triggeredSpellInfo = sSpellMgr->GetSpellInfo(triggerSpellId))
     {
         TC_LOG_DEBUG("spells.aura.effect", "AuraEffect::HandleProcTriggerSpellAuraProc: Triggering spell {} from aura {} proc", triggeredSpellInfo->Id, GetId());
         SpellCastResult const castResult = triggerCaster->CastSpell(triggerTarget, triggeredSpellInfo->Id, this);
-        if (interlopedDebug)
-        {
-            if (Player* player = GetInterlopedDebugPlayer(aurApp, eventInfo))
-                if (WorldSession* session = player->GetSession())
-                {
-                    EnumText const reasonText = EnumUtils::ToString(castResult);
-                    ChatHandler(session).PSendSysMessage("[Interloped proc debug] CastSpell for Interloped 81391 returned %s (%u); caster=%s target=%s",
-                        reasonText.Title, uint32(castResult), triggerCaster ? triggerCaster->GetName().c_str() : "<none>", triggerTarget ? triggerTarget->GetName().c_str() : "<none>");
-                }
-        }
 
         if (castResult != SPELL_CAST_OK && IsNaturesGraspAura(GetId()))
         {
@@ -5946,8 +5891,6 @@ void AuraEffect::HandleProcTriggerSpellAuraProc(AuraApplication* aurApp, ProcEve
     else
     {
         TC_LOG_ERROR("spells.aura.effect.nospell","AuraEffect::HandleProcTriggerSpellAuraProc: Spell {} has non-existent spell {} in EffectTriggered[{}] and is therefore not triggered.", GetId(), triggerSpellId, GetEffIndex());
-        if (interlopedDebug)
-            SendInterlopedProcDebug(aurApp, eventInfo, "blocked: Interloped trigger spell 81391 does not exist in Spell.dbc/SpellInfo");
     }
 }
 
