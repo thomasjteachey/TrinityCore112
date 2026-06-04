@@ -1654,9 +1654,9 @@ namespace ShadowPriestWraith
 {
     constexpr uint32 SpeedRampDurationMs = 2500;
     constexpr uint32 SpeedRampSteps = 10;
-    constexpr uint32 ChannelRefreshMs = 3000;
-    constexpr uint32 ChannelMaxMs = 60000;
-    constexpr uint32 ChannelPacketDurationMs = 1500;
+    constexpr uint32 ChannelRefreshMs = 2500;
+    constexpr uint32 ChannelMaxMs = 2500;
+    constexpr uint32 ChannelPacketDurationMs = 2500;
     constexpr uint32 PossessionReleaseDelayMs = 1;
 
     uint32 ControlMechanicMask()
