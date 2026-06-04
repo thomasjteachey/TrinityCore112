@@ -26,6 +26,7 @@
 #include "Errors.h"
 #include "GridNotifiers.h"
 #include "ObjectAccessor.h"
+#include "Opcodes.h"
 #include "Player.h"
 #include "Random.h"
 #include "SharedDefines.h"
@@ -92,9 +93,10 @@ enum PriestSpells
 
     // Legionnaire+ custom shadow-priest wraith package. 89783 is already used by rogue Vanish.
     SPELL_PRIEST_SHADOW_WRAITH                      = 89784,
-    SPELL_PRIEST_SHADOW_WRAITH_CHARM                  = 89785,
-    SPELL_PRIEST_SHADOW_WRAITH_CHANNEL              = 89786,
-    SPELL_PRIEST_SHADOW_WRAITH_VISUAL               = 89787
+    SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE          = 89785,
+    SPELL_PRIEST_SHADOW_WRAITH_CHARM                = 89786,
+    SPELL_PRIEST_SHADOW_WRAITH_CHANNEL              = 89787,
+    SPELL_PRIEST_SHADOW_WRAITH_VISUAL               = 89788
 };
 
 enum PriestSpellIcons
@@ -1645,6 +1647,9 @@ namespace ShadowPriestWraith
 {
     constexpr uint32 SpeedRampDurationMs = 2500;
     constexpr uint32 SpeedRampSteps = 5;
+    constexpr uint32 ChannelRefreshMs = 750;
+    constexpr uint32 ChannelMaxMs = 60000;
+    constexpr uint32 ChannelPacketDurationMs = 1500;
 
     uint32 ControlMechanicMask()
     {
@@ -1674,6 +1679,76 @@ namespace ShadowPriestWraith
             return SPELL_FAILED_SPELL_UNAVAILABLE;
 
         return caster->CastSpell(target, spellId, true);
+    }
+
+    Aura* AddAuraIfSpellExists(Unit* caster, Unit* target, uint32 spellId)
+    {
+        if (!caster || !target || !sSpellMgr->GetSpellInfo(spellId))
+            return nullptr;
+
+        // AddAura bypasses normal cast checks/immune checks. This is intentional for the
+        // wraith cosmetic aura, because the wraith is intentionally immune/untargetable.
+        return caster->AddAura(spellId, target);
+    }
+
+    void ForceChannelVisual(Player* player, Creature* wraith)
+    {
+        if (!player || !wraith || !sSpellMgr->GetSpellInfo(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL))
+            return;
+
+        // Triggered CastSpell can be cancelled by the possession handoff, depending on
+        // the helper spell data. Send the channel packet/fields too, so the body keeps
+        // looking like it is draining the wraith while the player controls the wraith.
+        player->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_CHANNEL, true);
+
+        WorldPacket data(MSG_CHANNEL_START, 8 + 4 + 4);
+        data << player->GetPackGUID();
+        data << uint32(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+        data << uint32(ChannelPacketDurationMs);
+        player->SendMessageToSet(&data, true);
+
+        player->SetChannelObjectGuid(wraith->GetGUID());
+        player->SetChannelSpellId(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+    }
+
+    void StopChannelVisual(Player* player)
+    {
+        if (!player)
+            return;
+
+        WorldPacket data(MSG_CHANNEL_UPDATE, 8 + 4);
+        data << player->GetPackGUID();
+        data << uint32(0);
+        player->SendMessageToSet(&data, true);
+
+        player->SetChannelObjectGuid(ObjectGuid::Empty);
+        player->SetChannelSpellId(0);
+        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+    }
+
+    void ScheduleChannelVisual(Player* player, Creature* wraith)
+    {
+        if (!player || !wraith)
+            return;
+
+        ObjectGuid const playerGuid = player->GetGUID();
+        ObjectGuid const wraithGuid = wraith->GetGUID();
+
+        for (uint32 delay = 100; delay <= ChannelMaxMs; delay += ChannelRefreshMs)
+        {
+            wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid]()
+            {
+                Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+                if (!owner || !owner->HasAura(SPELL_PRIEST_SHADOW_WRAITH))
+                    return;
+
+                Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
+                if (!ownedWraith)
+                    return;
+
+                ForceChannelVisual(owner, ownedWraith);
+            }, Milliseconds(delay));
+        }
     }
 
     void ScheduleSpeedRamp(Player* player, Creature* wraith)
@@ -1731,7 +1806,9 @@ namespace ShadowPriestWraith
         wraith->AttackStop();
         wraith->CombatStop(true);
 
-        CastIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+        // 89788 is the ghostly visual aura. Use direct AddAura so immunity/cast
+        // flags on the intentionally untargetable/immune wraith cannot block it.
+        AddAuraIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
     }
 }
 
@@ -1776,6 +1853,7 @@ class spell_pri_shadow_wraith_aura : public AuraScript
     bool Load() override
     {
         _wraithGuid.Clear();
+        _originalOrientation = 0.0f;
         return GetUnitOwner() && GetUnitOwner()->GetTypeId() == TYPEID_PLAYER;
     }
 
@@ -1786,6 +1864,8 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             return;
 
         Position pos = player->GetPosition();
+        _originalOrientation = player->GetOrientation();
+
         TempSummon* wraith = player->SummonCreature(PRIEST_SHADOW_WRAITH_NPC, pos, TEMPSUMMON_MANUAL_DESPAWN, Milliseconds(0), 0, SPELL_PRIEST_SHADOW_WRAITH);
         if (!wraith)
         {
@@ -1799,11 +1879,11 @@ class spell_pri_shadow_wraith_aura : public AuraScript
         player->AttackStop();
         player->SetControlled(true, UNIT_STATE_ROOT);
         ShadowPriestWraith::ApplyUnstoppable(player, true);
+        ShadowPriestWraith::AddAuraIfSpellExists(player, player, SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
 
         player->SetFacingToObject(wraith);
-        ShadowPriestWraith::CastIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
 
-        // 89785 is the real hidden possess/charm spell. Prefer the DBC aura path so
+        // 89786 is the real hidden possess/charm spell. Prefer the DBC aura path so
         // the client/server state matches a normal possession spell. If that spell is
         // missing or fails to charm immediately, fall back to direct core possession.
         ShadowPriestWraith::CastIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_CHARM);
@@ -1812,12 +1892,18 @@ class spell_pri_shadow_wraith_aura : public AuraScript
         {
             wraith->DespawnOrUnsummon();
             _wraithGuid.Clear();
+            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
             ShadowPriestWraith::ApplyUnstoppable(player, false);
             player->SetControlled(false, UNIT_STATE_ROOT);
             player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
             return;
         }
 
+        // Start/refresh the Drain Life channel after the possession handoff. Casting
+        // it before possession is unreliable because the client/core can cancel the
+        // channel when control changes to the wraith.
+        ShadowPriestWraith::ForceChannelVisual(player, wraith);
+        ShadowPriestWraith::ScheduleChannelVisual(player, wraith);
         ShadowPriestWraith::ScheduleSpeedRamp(player, wraith);
     }
 
@@ -1838,16 +1924,20 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             // wraith before releasing possession. If we release possession first, the client
             // snaps the camera back to the old body location/rotation, then snaps again on teleport.
             Position dest = wraith->GetPosition();
-            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), player->GetOrientation(), true);
+            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), _originalOrientation, true);
         }
 
         if (wraith)
+        {
             wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
+            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+        }
 
         if (wraith && wraith->GetCharmerGUID() == player->GetGUID())
             wraith->RemoveCharmedBy(player);
 
-        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
+        ShadowPriestWraith::StopChannelVisual(player);
+        player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
         ShadowPriestWraith::ApplyUnstoppable(player, false);
         player->SetControlled(false, UNIT_STATE_ROOT);
 
@@ -1865,6 +1955,7 @@ class spell_pri_shadow_wraith_aura : public AuraScript
 
 private:
     ObjectGuid _wraithGuid;
+    float _originalOrientation;
 };
 
 
