@@ -1838,7 +1838,7 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             // wraith before releasing possession. If we release possession first, the client
             // snaps the camera back to the old body location/rotation, then snaps again on teleport.
             Position dest = wraith->GetPosition();
-            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), player->GetOrientation(), true);
         }
 
         if (wraith)
