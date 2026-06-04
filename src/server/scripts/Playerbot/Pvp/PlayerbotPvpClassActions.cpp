@@ -2141,6 +2141,7 @@ struct CasterSpellCooldownKeyHash
 };
 
 std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point, CasterSpellCooldownKeyHash> g_CasterSpellCooldowns;
+
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
 struct LastDirectiveState
@@ -2432,11 +2433,17 @@ void StopPlayerbotForStationaryCast(Player* player)
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-    {
-        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-        player->SendMovementFlagUpdate();
-    }
+    // Unit::StopMoving() only strips the spline forward flag when an active
+    // server spline exists. Playerbots can also carry stale client-style
+    // movement flags (strafe/back/fall/spline elevation) after chase/follow
+    // movement was cleared, and Spell::CheckCast rejects stationary channeled
+    // spells such as Drain Life while any MOVEMENTFLAG_MASK_MOVING bit remains.
+    // Clear the full moving mask for bot-controlled stationary casts so the
+    // immediate cast attempt observes the same stopped state that a real client
+    // would send before casting.
+    player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+    player->SendMovementFlagUpdate();
 }
 
 bool CanIssueFollowCommands(Player const* player)
@@ -3218,6 +3225,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+        // Force the bot into a fully stopped server-side state and attempt the
+        // stationary spell in the same decision tick. Non-move-allowed channels
+        // such as Drain Life still get an immediate SPELL_FAILED_MOVING retry
+        // below if a movement update races the first cast attempt.
         StopPlayerbotForStationaryCast(player);
     }
 
@@ -3242,7 +3253,24 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (castResult != SPELL_CAST_OK)
     {
-        if (!itemTarget && target && CanIssueFollowCommands(player))
+        if (castResult == SPELL_FAILED_MOVING && requiresStationaryCast)
+        {
+            StopPlayerbotForStationaryCast(player);
+
+            // If an immediately preceding movement update raced this cast, the
+            // failed moving check did not consume the spell. Retry once after
+            // force-clearing the stopped state so channels do not keep reporting
+            // SPELL_FAILED_MOVING even though the bot has now stopped.
+            if (!player->isMoving())
+            {
+                if (itemTarget)
+                    castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
+                else
+                    castResult = player->CastSpell(target, resolvedSpellId, false);
+            }
+        }
+
+        if (castResult != SPELL_CAST_OK && !itemTarget && target && CanIssueFollowCommands(player))
         {
             if (castResult == SPELL_FAILED_OUT_OF_RANGE)
             {
@@ -3286,10 +3314,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 IssueBehindTargetMeleeMovement(player, target);
         }
 
-        NotifySpellCastFailureToGameMasters(player, context, castResult);
-        EnumText const reasonText = EnumUtils::ToString(castResult);
-        failureReason = reasonText.Title;
-        return false;
+        if (castResult != SPELL_CAST_OK)
+        {
+            NotifySpellCastFailureToGameMasters(player, context, castResult);
+            EnumText const reasonText = EnumUtils::ToString(castResult);
+            failureReason = reasonText.Title;
+            return false;
+        }
     }
 
     if (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel())
