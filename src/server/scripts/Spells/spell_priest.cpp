@@ -24,6 +24,7 @@
 #include "ScriptMgr.h"
 #include "Creature.h"
 #include "Errors.h"
+#include "GameTime.h"
 #include "GridNotifiers.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
@@ -39,6 +40,12 @@
 #include "WorldPacket.h"
 #include <algorithm>
 #include <chrono>
+
+namespace LPlusShadowWraithMovement
+{
+    bool TryGetClientWraithPosition(Player* owner, Unit* mover, Position& out);
+    void ClearClientWraithPosition(Player* owner);
+}
 
 enum PriestSpells
 {
@@ -1646,11 +1653,10 @@ class spell_pri_dispel_magic : public SpellScript
 namespace ShadowPriestWraith
 {
     constexpr uint32 SpeedRampDurationMs = 2500;
-    constexpr uint32 SpeedRampSteps = 10;
+    constexpr uint32 SpeedRampSteps = 5;
     constexpr uint32 ChannelRefreshMs = 750;
     constexpr uint32 ChannelMaxMs = 60000;
     constexpr uint32 ChannelPacketDurationMs = 1500;
-    constexpr uint32 FinalTeleportStallMs = 500;
     constexpr uint32 PossessionReleaseDelayMs = 1;
 
     uint32 ControlMechanicMask()
@@ -1748,6 +1754,8 @@ namespace ShadowPriestWraith
         ApplyUnstoppable(player, false);
         player->SetControlled(false, UNIT_STATE_ROOT);
 
+        LPlusShadowWraithMovement::ClearClientWraithPosition(player);
+
         if (wraith)
             wraith->DespawnOrUnsummon();
     }
@@ -1781,53 +1789,27 @@ namespace ShadowPriestWraith
         }, Milliseconds(PossessionReleaseDelayMs));
     }
 
-    void BeginFinalTeleportStall(Player* player, Creature* wraith)
+    void TeleportToWraithAndScheduleCleanup(Player* player, Creature* wraith)
     {
         if (!player)
             return;
 
-        if (!wraith)
+        if (!wraith || !player->IsAlive())
         {
-            FinishWraithCleanup(player, nullptr);
+            FinishWraithCleanup(player, wraith);
             return;
         }
 
-        // End-of-wraith stall:
-        // The client can think the possessed wraith is slightly farther ahead than
-        // the server's authoritative creature position. Freeze both bodies for a
-        // short moment while the priest remains unstoppable/channeling, then teleport
-        // to the stabilized wraith position and release possession one map update later.
-        player->StopMoving();
-        player->SetControlled(true, UNIT_STATE_ROOT);
+        Position dest = wraith->GetPosition();
+        Position clientDest;
+        if (LPlusShadowWraithMovement::TryGetClientWraithPosition(player, wraith, clientDest))
+            dest = clientDest;
 
-        wraith->StopMoving();
-        wraith->SetControlled(true, UNIT_STATE_ROOT);
-        wraith->SendMovementFlagUpdate(true);
-
-        // Keep the body looking like it is still tethered to the wraith during the
-        // 500ms stall. The normal refresh loop stops once 89784 is removed.
-        ForceChannelVisual(player, wraith);
-
-        ObjectGuid const playerGuid = player->GetGUID();
-        ObjectGuid const wraithGuid = wraith->GetGUID();
-
-        wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid]()
-        {
-            Player* owner = ObjectAccessor::FindPlayer(playerGuid);
-            if (!owner)
-                return;
-
-            Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
-            if (!ownedWraith || !owner->IsAlive())
-            {
-                FinishWraithCleanup(owner, ownedWraith);
-                return;
-            }
-
-            Position dest = ownedWraith->GetPosition();
-            owner->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
-            ScheduleWraithCleanup(owner, ownedWraith);
-        }, Milliseconds(FinalTeleportStallMs));
+        // Teleport immediately to the possessed wraith's latest accepted position,
+        // then release possession/despawn one map update later. The client-reported
+        // position is accepted only by MovementHandler's close-range validation.
+        player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+        ScheduleWraithCleanup(player, wraith);
     }
 
     void ApplyWraithVisual(Player* player, Creature* wraith)
@@ -1952,7 +1934,7 @@ namespace ShadowPriestWraith
                 if (!ownedWraith)
                     return;
 
-                float const bonus = 1.0f * float(step) / float(SpeedRampSteps);
+                float const bonus = 0.50f * float(step) / float(SpeedRampSteps);
                 float const speedRate = 1.0f + bonus;
 
                 ownedWraith->SetWalk(false);
@@ -2095,12 +2077,7 @@ class spell_pri_shadow_wraith_aura : public AuraScript
 
         if (shouldTeleport)
         {
-            // Do not teleport immediately on aura removal. First freeze the possessed
-            // wraith and the real priest body for 500ms so client/server movement can
-            // settle, while the priest remains unstoppable and the channel visual stays up.
-            // After the stall, teleport to the wraith's authoritative position/orientation,
-            // then release possession/despawn one map update later.
-            ShadowPriestWraith::BeginFinalTeleportStall(player, wraith);
+            ShadowPriestWraith::TeleportToWraithAndScheduleCleanup(player, wraith);
             _wraithGuid.Clear();
             return;
         }

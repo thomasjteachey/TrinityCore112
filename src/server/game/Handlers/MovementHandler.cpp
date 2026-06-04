@@ -42,6 +42,98 @@
 #include <boost/accumulators/statistics.hpp>
 #include <boost/circular_buffer.hpp>
 #include <BattlegroundMgr.h>
+#include <unordered_map>
+
+namespace LPlusShadowWraithMovement
+{
+    constexpr uint32 SpellShadowWraith = 89784;
+    constexpr uint32 SpellShadowWraithUnstoppable = 89785;
+    constexpr uint32 NpcShadowWraith = 89784;
+    constexpr uint32 MaxClientPositionAgeMs = 1500;
+    constexpr float MaxClientPositionDelta = 5.0f;
+
+    struct ClientWraithPosition
+    {
+        uint32 MapId = 0;
+        uint32 TimeMs = 0;
+        float X = 0.0f;
+        float Y = 0.0f;
+        float Z = 0.0f;
+        float O = 0.0f;
+    };
+
+    std::unordered_map<ObjectGuid::LowType, ClientWraithPosition> LastClientWraithPositionByOwner;
+
+    bool IsShadowWraithMover(Player* owner, Unit* mover)
+    {
+        return owner
+            && mover
+            && mover != owner
+            && mover->GetEntry() == NpcShadowWraith
+            && mover->GetCharmerGUID() == owner->GetGUID();
+    }
+
+    void RecordClientWraithMovement(Player* owner, Unit* mover, Position const& pos)
+    {
+        if (!IsShadowWraithMover(owner, mover))
+            return;
+
+        // Record while the main aura is active, and briefly during cleanup while
+        // the unstoppable helper is still up.
+        if (!owner->HasAura(SpellShadowWraith) && !owner->HasAura(SpellShadowWraithUnstoppable))
+            return;
+
+        if (!pos.IsPositionValid() || !Trinity::IsValidMapCoord(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation()))
+            return;
+
+        ClientWraithPosition& stored = LastClientWraithPositionByOwner[owner->GetGUID().GetCounter()];
+        stored.MapId = mover->GetMapId();
+        stored.TimeMs = GameTime::GetGameTimeMS();
+        stored.X = pos.GetPositionX();
+        stored.Y = pos.GetPositionY();
+        stored.Z = pos.GetPositionZ();
+        stored.O = pos.GetOrientation();
+    }
+
+    bool TryGetClientWraithPosition(Player* owner, Unit* mover, Position& out)
+    {
+        if (!IsShadowWraithMover(owner, mover))
+            return false;
+
+        auto itr = LastClientWraithPositionByOwner.find(owner->GetGUID().GetCounter());
+        if (itr == LastClientWraithPositionByOwner.end())
+            return false;
+
+        ClientWraithPosition const& stored = itr->second;
+        if (stored.MapId != mover->GetMapId() || stored.MapId != owner->GetMapId())
+            return false;
+
+        uint32 const now = GameTime::GetGameTimeMS();
+        if (now < stored.TimeMs || now - stored.TimeMs > MaxClientPositionAgeMs)
+            return false;
+
+        Position candidate(stored.X, stored.Y, stored.Z, stored.O);
+        if (!candidate.IsPositionValid() || !Trinity::IsValidMapCoord(stored.X, stored.Y, stored.Z, stored.O))
+            return false;
+
+        // This is the safety valve: use the client's final wraith position only if it
+        // is close to the server's authoritative wraith position. This smooths
+        // out latency/prediction without giving the client a free teleport.
+        if (mover->GetExactDist(candidate) > MaxClientPositionDelta)
+            return false;
+
+        out = candidate;
+        return true;
+    }
+
+    void ClearClientWraithPosition(Player* owner)
+    {
+        if (!owner)
+            return;
+
+        LastClientWraithPositionByOwner.erase(owner->GetGUID().GetCounter());
+    }
+}
 
 void WorldSession::HandleMoveWorldportAckOpcode(WorldPacket & /*recvData*/)
 {
@@ -453,6 +545,12 @@ void WorldSession::HandleMovementOpcodes(WorldPacket& recvData)
     }
 
     movementInfo.guid = mover->GetGUID();
+
+    // Shadow Wraith: when the player is possessing the wraith, preserve the
+    // latest client-reported mover position. The spell can use this at the
+    // final handoff if it is still within a tiny tolerance of the server position.
+    LPlusShadowWraithMovement::RecordClientWraithMovement(GetPlayer(), mover, movementInfo.pos);
+
     WriteMovementInfo(&data, &movementInfo);
     mover->SendMessageToSet(&data, _player);
 
