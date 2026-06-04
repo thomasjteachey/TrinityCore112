@@ -2432,11 +2432,17 @@ void StopPlayerbotForStationaryCast(Player* player)
     if (MotionMaster* motionMaster = player->GetMotionMaster())
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-    {
-        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-        player->SendMovementFlagUpdate();
-    }
+    // Unit::StopMoving() only strips the spline forward flag when an active
+    // server spline exists. Playerbots can also carry stale client-style
+    // movement flags (strafe/back/fall/spline elevation) after chase/follow
+    // movement was cleared, and Spell::CheckCast rejects stationary channeled
+    // spells such as Drain Life while any MOVEMENTFLAG_MASK_MOVING bit remains.
+    // Clear the full moving mask for bot-controlled stationary casts so the
+    // immediate cast attempt observes the same stopped state that a real client
+    // would send before casting.
+    player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
+    player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+    player->SendMovementFlagUpdate();
 }
 
 bool CanIssueFollowCommands(Player const* player)
