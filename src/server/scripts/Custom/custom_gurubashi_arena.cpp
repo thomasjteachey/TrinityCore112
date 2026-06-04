@@ -781,7 +781,7 @@ public:
 
             if (tracked.HasPosition)
             {
-                float const distance2d = tracked.Position.GetExactDist2d(currentPosition);
+                float const distance2d = tracked.LastPosition.GetExactDist2d(currentPosition);
                 bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 45.0f;
                 bool const crossedBattleRingBoundary =
                     tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
@@ -798,7 +798,7 @@ public:
             }
 
             tracked.AreaState = currentState;
-            tracked.Position = currentPosition;
+            tracked.LastPosition = currentPosition;
             tracked.MapId = player->GetMapId();
             tracked.HasPosition = true;
         }
@@ -814,7 +814,7 @@ private:
     struct TrackedState
     {
         GurubashiAreaState AreaState = GurubashiAreaState::Outside;
-        Position Position;
+        Position LastPosition;
         uint32 MapId = 0;
         bool HasPosition = false;
     };

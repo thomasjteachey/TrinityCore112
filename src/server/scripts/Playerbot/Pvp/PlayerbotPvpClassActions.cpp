@@ -111,7 +111,14 @@ struct LastLosCastFailureState
     float requestedRecoveryRange = 0.0f;
 };
 
+struct StationaryCastStopState
+{
+    uint32 lastStopMs = 0;
+    uint32 stopCount = 0;
+};
+
 std::unordered_map<uint64, LastLosCastFailureState> g_LastLosCastFailureByGuid;
+std::unordered_map<uint64, StationaryCastStopState> g_StationaryCastStopByGuid;
 
 bool IsEffectivelyOutdoors(Player const* player)
 {
@@ -2728,7 +2735,36 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+        bool const hadActiveMovement = player->isMoving() ||
+            player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+            player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+            motionType == CHASE_MOTION_TYPE ||
+            motionType == FOLLOW_MOTION_TYPE ||
+            (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+
         player->StopMoving();
+
+        if (!isFoodOrDrinkSpell && hadActiveMovement)
+        {
+            uint64 const botKey = player->GetGUID().GetRawValue();
+            StationaryCastStopState& stopState = g_StationaryCastStopByGuid[botKey];
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            stopState.stopCount = stopState.lastStopMs && nowMs >= stopState.lastStopMs && nowMs - stopState.lastStopMs <= 2000
+                ? std::min<uint32>(stopState.stopCount + 1, 100)
+                : 1;
+            stopState.lastStopMs = nowMs;
+
+            std::ostringstream diag;
+            diag << "stationary_cast_stop"
+                 << " spell=" << resolvedSpellId
+                 << " motion=" << uint32(motionType)
+                 << " active_before_stop=yes"
+                 << " recent_stop_count=" << stopState.stopCount;
+            SetLastMovementDebugStatus(player, diag.str());
+        }
+
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
