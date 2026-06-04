@@ -509,15 +509,6 @@ struct TargetRelativeMoveOrderState
 
 std::unordered_map<uint64, TargetRelativeMoveOrderState> g_TargetRelativeMoveOrderByGuid;
 
-struct StationaryCastStopState
-{
-    ObjectGuid targetGuid = ObjectGuid::Empty;
-    uint32 spellId = 0;
-    uint32 stopMs = 0;
-};
-
-std::unordered_map<uint64, StationaryCastStopState> g_StationaryCastStopByGuid;
-
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode)
 {
     if (!player || !target)
@@ -2433,24 +2424,6 @@ bool HasActiveStationaryChannel(Player const* player)
     return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
 }
 
-bool HasActiveMovementForStationaryCast(Player const* player)
-{
-    if (!player)
-        return false;
-
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-    bool const activeMotion =
-        motionType == CHASE_MOTION_TYPE ||
-        motionType == FOLLOW_MOTION_TYPE ||
-        motionType == POINT_MOTION_TYPE;
-
-    return player->isMoving() ||
-        player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
-        activeMotion ||
-        (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
-}
-
 void StopPlayerbotForStationaryCast(Player* player)
 {
     if (!player)
@@ -3252,53 +3225,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
 
-        bool const hadActiveMovement = HasActiveMovementForStationaryCast(player);
-
         // Force the bot into a fully stopped server-side state and attempt the
-        // stationary spell in the same decision tick. Non-move-allowed channels
-        // such as Drain Life still get an immediate SPELL_FAILED_MOVING retry
-        // below if a movement update races the first cast attempt.
+        // stationary spell in the same decision tick. Playerbots do not have a
+        // client that can send a separate stop packet between AI decisions, so
+        // waiting for the next decision tick after stopping leaves them idle for
+        // seconds before casting. If a movement update still races the first
+        // cast attempt, the SPELL_FAILED_MOVING retry below immediately stops
+        // again and retries once without yielding the decision tick.
         StopPlayerbotForStationaryCast(player);
-
-        // Channeled spells such as Drain Life are checked for movement as soon
-        // as CastSpell enters the server spell pipeline. When a bot was just
-        // running a chase/follow/point generator, spend one decision tick on the
-        // stop transition before starting the stationary cast. This mirrors a
-        // real client sending a stop packet before pressing a non-movable
-        // channel and prevents same-tick movement orders from racing the cast.
-        if (!isFoodOrDrinkSpell && hadActiveMovement)
-        {
-            uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint64 const botKey = player->GetGUID().GetRawValue();
-            ObjectGuid const castTargetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
-            StationaryCastStopState& stopState = g_StationaryCastStopByGuid[botKey];
-            bool const alreadyStoppedForCast =
-                stopState.spellId == resolvedSpellId &&
-                stopState.targetGuid == castTargetGuid &&
-                stopState.stopMs != 0 &&
-                nowMs >= stopState.stopMs &&
-                nowMs - stopState.stopMs <= 10000;
-
-            stopState.spellId = resolvedSpellId;
-            stopState.targetGuid = castTargetGuid;
-            stopState.stopMs = nowMs;
-
-            if (!alreadyStoppedForCast)
-            {
-                std::ostringstream diag;
-                diag << "stationary_cast_waiting_for_stop"
-                     << " spell=" << resolvedSpellId
-                     << " action=" << (context.actionName ? context.actionName : "none")
-                     << " target=" << castTargetGuid.ToString()
-                     << " moving_after_stop=" << (player->isMoving() ? "yes" : "no")
-                     << " unit_moving_after_stop=" << (player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
-                     << " flags=" << player->GetUnitMovementFlags();
-                SetLastMovementDebugStatus(player, diag.str());
-                TC_LOG_DEBUG("playerbots.pvp.classspell", "PB stationary cast delayed for stop: {}", diag.str());
-                failureReason = "stationary_cast_waiting_for_stop";
-                return false;
-            }
-        }
     }
 
     // Blink (1953) is a leap-forward spell with a destination target
