@@ -1727,31 +1727,6 @@ namespace ShadowPriestWraith
         player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHANNEL);
     }
 
-    void HideWraithForHandoff(Player* player, Creature* wraith)
-    {
-        if (!wraith)
-            return;
-
-        // The possessed wraith can keep client-side movement for one more frame while
-        // possession is being released. Freeze it and destroy it for the owner now,
-        // then do the real charm/despawn cleanup on the next map update. This keeps
-        // the handoff seamless without the wraith visibly running ahead or fading out.
-        wraith->AttackStop();
-        wraith->CombatStop(true);
-        wraith->StopMoving();
-        wraith->SetControlled(true, UNIT_STATE_ROOT);
-        wraith->SetSpeedRate(MOVE_RUN, 0.01f);
-        wraith->SetSpeedRate(MOVE_WALK, 0.01f);
-        wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
-
-        wraith->SetVisible(false);
-
-        // SetVisible(false) is GM-visibility based in this core, so an elevated test
-        // account may still see it. Force-destroy it for the owner too. onDeath=false
-        // avoids a death animation/fade.
-        if (player)
-            wraith->DestroyForPlayer(player, false);
-    }
 
     void FinishWraithCleanup(Player* player, Creature* wraith)
     {
@@ -1810,23 +1785,40 @@ namespace ShadowPriestWraith
         if (!wraith || !sSpellMgr->GetSpellInfo(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
             return;
 
-        // Prefer a direct aura attach first. This bypasses normal target/cast checks,
-        // which matters because the wraith is intentionally immune and unselectable.
-        if (!wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
-            AddAuraIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+        // 89788 is a cosmetic transparency aura. Do NOT stop after AddAura() succeeds:
+        // some visuals only become visible to the client from an actual spell cast,
+        // while AddAura() only attaches the server aura state.
+        //
+        // Also, the wraith is immune to all spells during normal gameplay. Temporarily
+        // drop that immunity only for this triggered cosmetic application, then put it
+        // right back. Otherwise a real CastSpell(89788) can silently immune/fizzle.
+        bool const wasImmuneToAll = wraith->IsImmuneToAll();
+        if (wasImmuneToAll)
+            wraith->SetImmuneToAll(false);
 
-        if (wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
-            return;
+        // If 89788 targets caster, this is the important path.
+        wraith->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
 
-        // Some visual spells behave better when the player is the original caster.
+        // If 89788 targets unit target, this path covers it.
         if (player)
             player->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
 
-        if (wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
-            return;
+        // Force the persistent aura onto the wraith too, bypassing normal target checks.
+        // Use both possible casters because client visuals can differ by original caster.
+        if (player && !wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            AddAuraIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
 
-        // Final fallback: self-cast from the wraith after it is already in-world.
-        wraith->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
+        if (!wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            AddAuraIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+
+        if (wasImmuneToAll)
+            wraith->SetImmuneToAll(true);
+
+        // Make sure nearby clients get a fresh create/update for the creature after the
+        // cosmetic aura is attached. This is especially useful because the wraith is
+        // created, appearance-copied, charmed, and aura-decorated all in the same tick.
+        wraith->SetVisible(true);
+        wraith->UpdateObjectVisibility(true);
     }
 
     void ScheduleWraithVisual(Player* player, Creature* wraith)
@@ -2063,7 +2055,6 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             // back at the cast location or facing the old cast orientation.
             Position dest = wraith->GetPosition();
             player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
-            ShadowPriestWraith::HideWraithForHandoff(player, wraith);
             ShadowPriestWraith::ScheduleWraithCleanup(player, wraith);
             _wraithGuid.Clear();
             return;
