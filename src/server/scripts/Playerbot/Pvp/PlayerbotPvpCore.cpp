@@ -69,6 +69,7 @@ constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
+constexpr float kPlayerbotTotemRefreshDistance = 30.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
