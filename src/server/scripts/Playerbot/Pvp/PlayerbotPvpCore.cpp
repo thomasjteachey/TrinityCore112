@@ -56,6 +56,8 @@ struct SpellDecision;
 bool HasHostileTarget(Player const* player, Unit const* target);
 uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId);
 bool IsPetSpellReady(Player const* player, uint32 spellId);
+bool IsSpellReady(Player const* player, uint32 spellId);
+bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId);
 bool IsFriendlySupportTarget(Player const* player, Unit const* target);
 bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
@@ -65,6 +67,7 @@ constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
+constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
@@ -374,6 +377,27 @@ bool HasWandEquipped(Player const* player)
     return ranged->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_WAND;
 }
 
+bool IsAutoRepeatRangedSpellActive(Player const* player, uint32 spellId)
+{
+    if (!player || !spellId)
+        return false;
+
+    Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    if (!autoRepeat)
+        return false;
+
+    SpellInfo const* activeAutoRepeatInfo = autoRepeat->GetSpellInfo();
+    return activeAutoRepeatInfo && activeAutoRepeatInfo->Id == spellId;
+}
+
+bool IsWandShootReadyForDecision(Player const* player)
+{
+    return HasWandEquipped(player) &&
+        IsSpellReady(player, kWandShootSpellId) &&
+        !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kWandShootSpellId) &&
+        !IsAutoRepeatRangedSpellActive(player, kWandShootSpellId);
+}
+
 bool IsFlagCarrierNear(Player const* player, ObjectGuid const& carrierGuid, float maxDistance)
 {
     if (!player || carrierGuid.IsEmpty())
@@ -606,8 +630,15 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
         playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kDruidCasterFaerieFireSpellId))
         return false;
 
-    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(decision.spellId);
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(knownByPlayer ? knownPlayerSpellId : decision.spellId);
     if (!spellInfo)
+        return false;
+
+    // Reactive spells like Revenge can be known and off cooldown while still
+    // being unusable because the required caster aura state is not active yet.
+    // Treat that as not immediately castable so the selector picks another
+    // candidate instead of logging SPELL_FAILED_CASTER_AURASTATE every tick.
+    if (knownByPlayer && !MeetsCasterAuraStateRequirements(player, knownPlayerSpellId))
         return false;
 
     Unit const* resolvedTarget = nullptr;
@@ -3215,12 +3246,12 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled or open targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, controlledTarget && !HasAuraFromSpellChain(controlledTarget, 27605), 18.0f,
         { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy, controlledTarget ? controlledTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && IsLowOrOutOfManaForFallback(player) && HasWandEquipped(player) && IsSpellReady(player, 5019), 18.5f,
-        { "priest shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, hasHostileTarget && target && IsLowOrOutOfManaForFallback(player) && IsWandShootReadyForDecision(player), 18.5f,
+        { "priest shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 10917) && player->HealthBelowPct(85), 17.0f,
         { "priest flash heal", "fallback self-healing while under pressure", 10917, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && !HasBreakableCrowdControl(target) && HasWandEquipped(player) && IsSpellReady(player, 5019), 8.0f,
-        { "priest shoot wand", "default offensive fallback when no better priest action is available", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, hasHostileTarget && target && !HasBreakableCrowdControl(target) && IsWandShootReadyForDecision(player), 8.0f,
+        { "priest shoot wand", "default offensive fallback when no better priest action is available", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
 }
@@ -3510,16 +3541,16 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
         { "warlock howl of terror", "fear clustered nearby enemies", 17928, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, player->GetPower(POWER_MANA) < 400 && IsSpellReady(player, 11689), 32.0f,
         { "warlock life tap", "convert health to mana for sustained casting", 11689, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, IsLowOrOutOfManaForFallback(player) && HasWandEquipped(player) && IsSpellReady(player, 5019), 31.5f,
-        { "warlock shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, IsLowOrOutOfManaForFallback(player) && IsWandShootReadyForDecision(player), 31.5f,
+        { "warlock shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HasAura(17941) && IsSpellReady(player, 25307), 20.0f,
         { "warlock shadow bolt", "consume nightfall proc for instant pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && IsSpellReady(player, 25307), 19.0f,
         { "warlock shadow bolt", "default ranged pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isAfflictionWarlock && IsSpellReady(player, 11700), 18.0f,
         { "warlock drain life", "fallback affliction channel", 11700, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(target) && HasWandEquipped(player) && IsSpellReady(player, 5019), 8.0f,
-        { "warlock shoot wand", "default offensive fallback when no better warlock action is available", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, HasHostileTarget(player, target) && target && !HasBreakableCrowdControl(target) && IsWandShootReadyForDecision(player), 8.0f,
+        { "warlock shoot wand", "default offensive fallback when no better warlock action is available", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
@@ -3553,7 +3584,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
-    bool const revengeReady = isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 25288);
+    bool const revengeReady = isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReadyAndCasterAuraAllowed(player, 25288);
+    bool const executeReady = activeTarget && activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662) && player->GetPower(POWER_RAGE) >= 150;
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
     bool const nearbyMeleeThreatSnared = hasNearbyMeleeThreat && nearbyMeleeTarget->HasAuraWithMechanic(1 << MECHANIC_SNARE);
     bool const canDisarmNearbyMeleeThreat = hasNearbyMeleeThreat &&
@@ -3603,8 +3635,10 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, !isProtWarrior && player->IsWithinMeleeRange(activeTarget) && !inBerserkerStance &&
             IsSpellReady(player, 1680) && IsSpellReady(player, 2458), 50.4f,
         { "warrior berserker stance", "switch to berserker stance to enable whirlwind in melee", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662), 50.0f,
-        { "warrior execute", "finisher at low enemy health", 20662, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, executeReady && !inBerserkerStance && IsSpellReady(player, 2458), 50.2f,
+        { "warrior berserker stance", "switch to berserker stance before execute", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, executeReady && inBerserkerStance, 50.0f,
+        { "warrior execute", "finisher at low enemy health while in berserker stance", 20662, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 25289) && IsSpellReady(player, 25289), 40.0f,
         { "warrior battle shout", "maintain attack power buff", 25289, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, revengeReady && inDefensiveStance, 40.5f,
@@ -3781,8 +3815,8 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
     case CLASS_MAGE:
     {
         SpellDecision mageDecision = SelectMageSpell(player, target, inMelee, profileSelection);
-        if (!mageDecision.spellId && HasHostileTarget(player, target) && IsLowOrOutOfManaForFallback(player) && HasWandEquipped(player) && IsSpellReady(player, 5019))
-            return { "mage shoot wand", "fallback to wand pressure while low on mana", 5019, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+        if (!mageDecision.spellId && HasHostileTarget(player, target) && IsLowOrOutOfManaForFallback(player) && IsWandShootReadyForDecision(player))
+            return { "mage shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy };
         return mageDecision;
     }
     case CLASS_PRIEST:
@@ -4662,11 +4696,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         Unit const* fallbackTarget = resolveTargetByGuid(selectedTargetGuid);
         if (fallbackTarget)
         {
-            if (HasWandEquipped(player) && IsSpellReady(player, 5019) && !HasBreakableCrowdControl(fallbackTarget))
+            if (IsWandShootReadyForDecision(player) && !HasBreakableCrowdControl(fallbackTarget))
             {
                 context.actionName = "fallback wand";
                 context.reason = "low mana fallback to wand pressure";
-                context.spellId = 5019;
+                context.spellId = kWandShootSpellId;
                 context.targetMode = PvpClassSpellContext::TargetMode::Enemy;
                 context.targetGuid = fallbackTarget->GetGUID();
                 context.selfCast = false;

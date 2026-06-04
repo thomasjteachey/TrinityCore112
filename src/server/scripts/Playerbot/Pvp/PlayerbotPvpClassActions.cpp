@@ -77,6 +77,7 @@ constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
+constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
@@ -3214,15 +3215,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
 
     // Auto-repeat spells (wand Shoot / Auto Shot) should not be re-cast every
-    // AI tick when already channeling on the same target. Reissuing the spell
-    // repeatedly restarts the opener and causes "startup only" behavior where
-    // bots appear to idle after the start sound.
+    // AI tick once the server has an active auto-repeat spell. Reissuing Shoot
+    // repeatedly can restart the opener before the wand swing timer ever fires.
     if (spellInfo->IsAutoRepeatRangedSpell())
+    {
         if (Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+        {
             if (SpellInfo const* activeAutoRepeatInfo = autoRepeat->GetSpellInfo())
-                if (activeAutoRepeatInfo->Id == resolvedSpellId &&
-                    autoRepeat->m_targets.GetUnitTargetGUID() == target->GetGUID())
+                if (activeAutoRepeatInfo->Id == resolvedSpellId)
                     return true;
+        }
+    }
 
     // Cast-time spells like Frostbolt fail while moving. Since playerbots do
     // not have client-side stop-cast behavior, explicitly stop movement before
@@ -3507,6 +3510,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, 32593, std::chrono::seconds(12));
     if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(kDruidCasterFaerieFireSpellId))
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kDruidCasterFaerieFireSpellId, kDruidCasterFaerieFireCooldown);
+    if (spellInfo->IsAutoRepeatRangedSpell())
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, resolvedSpellId, kPlayerbotAutoRepeatRangedStartCooldown);
 
     // Shared tactical cooldown for dispel/decurse effects. This keeps
     // playerbots from spam-casting into protected or undispellable auras while
