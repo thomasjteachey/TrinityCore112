@@ -100,6 +100,28 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
     }
 }
 
+SpellInfo const* GetFirstOnUseItemSpellInfo(Item const* item)
+{
+    if (!item)
+        return nullptr;
+
+    ItemTemplate const* itemTemplate = item->GetTemplate();
+    if (!itemTemplate)
+        return nullptr;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = itemTemplate->Spells[i];
+        if (spellData.SpellId <= 0 || spellData.SpellTrigger != ITEM_SPELLTRIGGER_ON_USE)
+            continue;
+
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellData.SpellId))
+            return spellInfo;
+    }
+
+    return nullptr;
+}
+
 bool IsSurvivalHunter(Player const* player)
 {
     return player && player->GetClass() == CLASS_HUNTER && player->HasTalent(19386, player->GetActiveSpec());
@@ -3528,9 +3550,28 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
+    SpellInfo const* itemSpellInfo = GetFirstOnUseItemSpellInfo(item);
+    if (!itemSpellInfo)
+    {
+        failureReason = "item_spell_missing";
+        return false;
+    }
+
+    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
+        player->GetSpellHistory()->HasGlobalCooldown(itemSpellInfo))
+    {
+        failureReason = "item_spell_not_ready";
+        return false;
+    }
+
     SpellCastTargets targets;
     targets.SetUnitTarget(player);
     player->CastItemUseSpell(item, targets, 1, 0);
+
+    // CastItemUseSpell queues the Spell and does not return the prepare result.
+    // Give the PvP decision layer a tiny local throttle so this item action cannot
+    // monopolize several AI ticks if the item spell was rejected internally.
+    playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId ? context.spellId : itemSpellInfo->Id, std::chrono::seconds(2));
     return true;
 }
 }

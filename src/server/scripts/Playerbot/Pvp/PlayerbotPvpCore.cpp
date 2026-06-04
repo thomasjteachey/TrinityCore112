@@ -69,6 +69,8 @@ constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
+constexpr uint32 kMageManaRubyUseSpellId = 22044;
+constexpr uint32 kMageManaRubyItemId = 8008;
 constexpr float kPlayerbotTotemRefreshDistance = 30.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
@@ -96,6 +98,51 @@ bool IsPriestInSpiritOfRedemption(Player const* player)
 bool IsSpiritOfRedemptionFreeHeal(Player const* player, uint32 spellId)
 {
     return IsPriestInSpiritOfRedemption(player) && IsPriestFlashHealSpell(spellId);
+}
+
+SpellInfo const* GetFirstOnUseItemSpellInfo(Item const* item)
+{
+    if (!item)
+        return nullptr;
+
+    ItemTemplate const* itemTemplate = item->GetTemplate();
+    if (!itemTemplate)
+        return nullptr;
+
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        _Spell const& spellData = itemTemplate->Spells[i];
+        if (spellData.SpellId <= 0 || spellData.SpellTrigger != ITEM_SPELLTRIGGER_ON_USE)
+            continue;
+
+        if (SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellData.SpellId))
+            return spellInfo;
+    }
+
+    return nullptr;
+}
+
+bool IsOnUseItemReady(Player const* player, uint32 itemEntry)
+{
+    if (!player || !itemEntry)
+        return false;
+
+    Item* item = player->GetItemByEntry(itemEntry);
+    if (!item)
+        return false;
+
+    if (player->CanUseItem(item) != EQUIP_ERR_OK)
+        return false;
+
+    SpellInfo const* itemSpellInfo = GetFirstOnUseItemSpellInfo(item);
+    if (!itemSpellInfo)
+        return false;
+
+    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
+        player->GetSpellHistory()->HasGlobalCooldown(itemSpellInfo))
+        return false;
+
+    return true;
 }
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
@@ -534,7 +581,7 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
         return false;
 
     if (decision.itemEntry)
-        return player->HasItemCount(decision.itemEntry);
+        return IsOnUseItemReady(player, decision.itemEntry);
 
     if (!decision.spellId)
         return false;
@@ -3075,8 +3122,9 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { isFireMage ? "mage dragon's breath" : "mage cone of cold", isFireMage ? "disorient nearby melee pressure" : "defensive snare versus nearby melee", isFireMage ? uint32(33041) : uint32(10161), playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "low mana", manaPct < 25.0f && IsSpellReady(player, 12051), 41.0f,
             { "mage evocation", "recover mana below 25 percent", 12051, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "high mana", manaPct < 50.0f && player->HasItemCount(8008), 40.0f,
-            { "use mana ruby", "consume mana ruby below 50 percent mana", 22044, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 8008 } },
+        { "high mana", manaPct < 50.0f && IsOnUseItemReady(player, kMageManaRubyItemId) &&
+            !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kMageManaRubyUseSpellId), 40.0f,
+            { "use mana ruby", "consume mana ruby below 50 percent mana", kMageManaRubyUseSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), kMageManaRubyItemId } },
         { "remove curse", cursedTarget != nullptr, 39.0f,
             { "remove lesser curse", "dispel curse from friendly target", 475, (cursedTarget == player) ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cursedTarget ? cursedTarget->GetGUID() : ObjectGuid::Empty } },
         { "ice barrier", !isFireMage && !HasAuraFromSpellChain(player, 13033) && IsSpellReady(player, 13033), 35.0f,
