@@ -1650,6 +1650,7 @@ namespace ShadowPriestWraith
     constexpr uint32 ChannelRefreshMs = 750;
     constexpr uint32 ChannelMaxMs = 60000;
     constexpr uint32 ChannelPacketDurationMs = 1500;
+    constexpr uint32 FinalTeleportStallMs = 500;
     constexpr uint32 PossessionReleaseDelayMs = 1;
 
     uint32 ControlMechanicMask()
@@ -1780,6 +1781,55 @@ namespace ShadowPriestWraith
         }, Milliseconds(PossessionReleaseDelayMs));
     }
 
+    void BeginFinalTeleportStall(Player* player, Creature* wraith)
+    {
+        if (!player)
+            return;
+
+        if (!wraith)
+        {
+            FinishWraithCleanup(player, nullptr);
+            return;
+        }
+
+        // End-of-wraith stall:
+        // The client can think the possessed wraith is slightly farther ahead than
+        // the server's authoritative creature position. Freeze both bodies for a
+        // short moment while the priest remains unstoppable/channeling, then teleport
+        // to the stabilized wraith position and release possession one map update later.
+        player->StopMoving();
+        player->SetControlled(true, UNIT_STATE_ROOT);
+
+        wraith->StopMoving();
+        wraith->SetControlled(true, UNIT_STATE_ROOT);
+        wraith->SendMovementFlagUpdate(true);
+
+        // Keep the body looking like it is still tethered to the wraith during the
+        // 500ms stall. The normal refresh loop stops once 89784 is removed.
+        ForceChannelVisual(player, wraith);
+
+        ObjectGuid const playerGuid = player->GetGUID();
+        ObjectGuid const wraithGuid = wraith->GetGUID();
+
+        wraith->m_Events.AddEventAtOffset([playerGuid, wraithGuid]()
+        {
+            Player* owner = ObjectAccessor::FindPlayer(playerGuid);
+            if (!owner)
+                return;
+
+            Creature* ownedWraith = ObjectAccessor::GetCreature(*owner, wraithGuid);
+            if (!ownedWraith || !owner->IsAlive())
+            {
+                FinishWraithCleanup(owner, ownedWraith);
+                return;
+            }
+
+            Position dest = ownedWraith->GetPosition();
+            owner->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
+            ScheduleWraithCleanup(owner, ownedWraith);
+        }, Milliseconds(FinalTeleportStallMs));
+    }
+
     void ApplyWraithVisual(Player* player, Creature* wraith)
     {
         if (!wraith || !sSpellMgr->GetSpellInfo(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
@@ -1796,20 +1846,19 @@ namespace ShadowPriestWraith
         if (wasImmuneToAll)
             wraith->SetImmuneToAll(false);
 
-        // If 89788 targets caster, this is the important path.
+        // 89788 is a wraith-only cosmetic aura. Cast it ONLY from the wraith onto
+        // itself. Do not cast it from the player: if the DBC target is "caster",
+        // player->CastSpell(wraith, 89788, true) applies the ghost aura to the priest.
         wraith->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
 
-        // If 89788 targets unit target, this path covers it.
-        if (player)
-            player->CastSpell(wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL, true);
-
         // Force the persistent aura onto the wraith too, bypassing normal target checks.
-        // Use both possible casters because client visuals can differ by original caster.
-        if (player && !wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
-            AddAuraIfSpellExists(player, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
-
         if (!wraith->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
             AddAuraIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+
+        // Belt-and-suspenders cleanup for anyone who tested the older build where
+        // player->CastSpell(...) could put 89788 on the priest.
+        if (player && player->HasAura(SPELL_PRIEST_SHADOW_WRAITH_VISUAL))
+            player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
 
         if (wasImmuneToAll)
             wraith->SetImmuneToAll(true);
@@ -2046,16 +2095,12 @@ class spell_pri_shadow_wraith_aura : public AuraScript
 
         if (shouldTeleport)
         {
-            // Camera-smoothing order:
-            // 1) teleport the real body to the possessed wraith, using the wraith's exact orientation
-            // 2) wait one server frame / map update
-            // 3) release possession and despawn the wraith
-            //
-            // This avoids the client returning camera control to a player body that is still
-            // back at the cast location or facing the old cast orientation.
-            Position dest = wraith->GetPosition();
-            player->NearTeleportTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), dest.GetOrientation(), true);
-            ShadowPriestWraith::ScheduleWraithCleanup(player, wraith);
+            // Do not teleport immediately on aura removal. First freeze the possessed
+            // wraith and the real priest body for 500ms so client/server movement can
+            // settle, while the priest remains unstoppable and the channel visual stays up.
+            // After the stall, teleport to the wraith's authoritative position/orientation,
+            // then release possession/despawn one map update later.
+            ShadowPriestWraith::BeginFinalTeleportStall(player, wraith);
             _wraithGuid.Clear();
             return;
         }
