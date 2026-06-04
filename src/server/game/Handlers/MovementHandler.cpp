@@ -50,7 +50,7 @@ namespace LPlusShadowWraithMovement
     constexpr uint32 SpellShadowWraithUnstoppable = 89785;
     constexpr uint32 NpcShadowWraith = 89784;
     constexpr uint32 MaxClientPositionAgeMs = 1500;
-    constexpr float MaxClientPositionDelta = 5.0f;
+    constexpr float MaxClientPositionDelta = 10.0f;
 
     struct ClientWraithPosition
     {
