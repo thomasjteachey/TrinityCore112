@@ -1684,6 +1684,133 @@ namespace
         return player->GetPowerPct(POWER_MANA) <= 10.0f || player->GetPower(POWER_MANA) < 250;
     }
 
+    constexpr uint32 kPlayerbotWandShootSpellId = 5019;
+    std::unordered_map<uint64, uint32> g_WandLifecycleDiagNextMs;
+
+    bool HasActiveWandAutoRepeat(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+        if (!autoRepeat || !autoRepeat->GetSpellInfo())
+            return false;
+
+        SpellInfo const* firstRank = autoRepeat->GetSpellInfo()->GetFirstRankSpell();
+        uint32 const firstRankSpellId = firstRank ? firstRank->Id : autoRepeat->GetSpellInfo()->Id;
+        return firstRankSpellId == kPlayerbotWandShootSpellId;
+    }
+
+    bool IsInWandShootRange(Player const* player, Unit const* target)
+    {
+        if (!player || !target)
+            return false;
+
+        SpellInfo const* wandInfo = sSpellMgr->GetSpellInfo(kPlayerbotWandShootSpellId);
+        if (!wandInfo)
+            return false;
+
+        float const distance = player->GetDistance(target);
+        float const minRange = wandInfo->GetMinRange(false);
+        float const maxRange = wandInfo->GetMaxRange(false);
+        return distance >= minRange && (maxRange <= 0.0f || distance <= maxRange) && player->IsWithinLOSInMap(target);
+    }
+
+    void NotifyWandLifecycleDiagnostic(Player* player, Unit* target, char const* reason, bool activeWand, bool recentWandStart)
+    {
+        if (!player)
+            return;
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
+        uint32& nextDiagMs = g_WandLifecycleDiagNextMs[playerGuidRaw];
+        if (nextDiagMs > nowMs)
+            return;
+        nextDiagMs = nowMs + 750;
+
+        uint32 motionType = 0;
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionType = uint32(motionMaster->GetCurrentMovementGeneratorType());
+
+        Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+        uint32 const autoRepeatId = autoRepeat && autoRepeat->GetSpellInfo() ? autoRepeat->GetSpellInfo()->Id : 0;
+
+        std::ostringstream os;
+        os << "WAND MOVE DIAG: reason=" << (reason ? reason : "none")
+           << " active=" << (activeWand ? "yes" : "no")
+           << " recent_start=" << (recentWandStart ? "yes" : "no")
+           << " auto=" << autoRepeatId
+           << " moving=" << (player->isMoving() ? "yes" : "no")
+           << " move_state=" << (player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
+           << " move_flags=" << player->GetUnitMovementFlags()
+           << " motion=" << motionType
+           << " ranged_timer=" << player->getAttackTimer(RANGED_ATTACK);
+
+        if (target)
+        {
+            os << " dist=" << player->GetDistance(target)
+               << " exact=" << player->GetExactDist(target)
+               << " los=" << (player->IsWithinLOSInMap(target) ? "yes" : "no")
+               << " front=" << (player->isInFront(target) ? "yes" : "no")
+               << " range=" << (IsInWandShootRange(player, target) ? "yes" : "no")
+               << " target_moving=" << (target->isMoving() ? "yes" : "no");
+        }
+        else
+            os << " target=none";
+
+        std::string const message = os.str();
+        if (player->duel && player->duel->Opponent)
+            player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
+
+        if (Map* map = player->FindMap())
+        {
+            for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+            {
+                Player* observer = itr->GetSource();
+                if (!observer || !observer->IsGameMaster())
+                    continue;
+
+                if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
+                    continue;
+
+                player->Whisper(message, LANG_UNIVERSAL, observer);
+            }
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
+    }
+
+    bool HoldPositionForWand(Player* player, Unit* target, char const* reason)
+    {
+        if (!player || !target || !target->IsAlive())
+            return false;
+
+        bool const activeWand = HasActiveWandAutoRepeat(player);
+        bool const recentWandStart = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotWandShootSpellId);
+        if (!activeWand && !recentWandStart)
+            return false;
+
+        if (!IsInWandShootRange(player, target))
+            return false;
+
+        bool const wasMoving = player->isMoving() || player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) || (player->GetUnitMovementFlags() & MOVEMENTFLAG_MASK_MOVING);
+        player->StopMoving();
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        {
+            player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
+            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            player->SendMovementFlagUpdate();
+        }
+
+        if (wasMoving || activeWand || recentWandStart)
+            NotifyWandLifecycleDiagnostic(player, target, reason, activeWand, recentWandStart);
+
+        return true;
+    }
+
     struct CombatPositioningProfile
     {
         float preferredMinRange = 0.0f;
@@ -2383,6 +2510,9 @@ namespace playerbot
         bool const hasLos = player->IsWithinLOSInMap(target);
         if (!hasLos)
             return TryRecoverLineOfSight(player, target, profile, "drive-combat-positioning");
+
+        if (HoldPositionForWand(player, target, "combat_positioning_hold_for_wand"))
+            return true;
 
         if (profile.primarilyRanged)
         {

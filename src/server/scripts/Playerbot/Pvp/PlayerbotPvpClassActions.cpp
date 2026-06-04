@@ -2434,6 +2434,147 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
     }
 }
 
+bool IsWandShootSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+    return firstRankSpellId == 5019;
+}
+
+char const* GetSpellStateLabel(Spell const* spell)
+{
+    if (!spell)
+        return "none";
+
+    switch (spell->getState())
+    {
+        case SPELL_STATE_NULL: return "null";
+        case SPELL_STATE_PREPARING: return "preparing";
+        case SPELL_STATE_CASTING: return "casting";
+        case SPELL_STATE_FINISHED: return "finished";
+        case SPELL_STATE_DELAYED: return "delayed";
+        default: return "unknown";
+    }
+}
+
+uint32 GetCurrentSpellId(Player const* player, CurrentSpellTypes spellType)
+{
+    if (!player)
+        return 0;
+
+    Spell const* spell = player->GetCurrentSpell(spellType);
+    return spell && spell->GetSpellInfo() ? spell->GetSpellInfo()->Id : 0;
+}
+
+void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
+{
+    if (!bot || message.empty())
+        return;
+
+    if (bot->duel && bot->duel->Opponent)
+        bot->Whisper(message, LANG_UNIVERSAL, bot->duel->Opponent);
+
+    Map* map = bot->FindMap();
+    if (!map)
+        return;
+
+    for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+    {
+        Player* observer = itr->GetSource();
+        if (!observer || !observer->IsGameMaster())
+            continue;
+
+        if (bot->duel && bot->duel->Opponent && observer->GetGUID() == bot->duel->Opponent->GetGUID())
+            continue;
+
+        bot->Whisper(message, LANG_UNIVERSAL, observer);
+    }
+}
+
+void NotifyWandDiagnostic(Player* bot, Unit* target, std::string const& phase, uint32 spellId, char const* extra = nullptr)
+{
+    if (!bot || !IsWandShootSpell(spellId))
+        return;
+
+    Spell const* autoRepeat = bot->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    Spell const* generic = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    Spell const* channeled = bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    SpellInfo const* wandInfo = sSpellMgr->GetSpellInfo(spellId);
+
+    float distance = target ? bot->GetDistance(target) : -1.0f;
+    float exactDistance = target ? bot->GetExactDist(target) : -1.0f;
+    bool const hasLos = target && bot->IsWithinLOSInMap(target);
+    bool const inFront = target && bot->isInFront(target);
+    bool inRange = false;
+    if (target && wandInfo)
+    {
+        float const minRange = wandInfo->GetMinRange(false);
+        float const maxRange = wandInfo->GetMaxRange(false);
+        inRange = distance >= minRange && (maxRange <= 0.0f || distance <= maxRange);
+    }
+
+    uint32 motionType = 0;
+    if (MotionMaster* motionMaster = bot->GetMotionMaster())
+        motionType = uint32(motionMaster->GetCurrentMovementGeneratorType());
+
+    std::ostringstream os;
+    os << "WAND DIAG: phase=" << phase
+       << " spell=" << spellId
+       << " auto=" << GetCurrentSpellId(bot, CURRENT_AUTOREPEAT_SPELL) << ":" << GetSpellStateLabel(autoRepeat)
+       << " gen=" << GetCurrentSpellId(bot, CURRENT_GENERIC_SPELL) << ":" << GetSpellStateLabel(generic)
+       << " chan=" << GetCurrentSpellId(bot, CURRENT_CHANNELED_SPELL) << ":" << GetSpellStateLabel(channeled)
+       << " moving=" << (bot->isMoving() ? "yes" : "no")
+       << " move_state=" << (bot->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
+       << " move_flags=" << bot->GetUnitMovementFlags()
+       << " motion=" << motionType
+       << " nonmelee=" << (bot->IsNonMeleeSpellCast(false, false, true, false) ? "yes" : "no")
+       << " ranged_timer=" << bot->getAttackTimer(RANGED_ATTACK)
+       << " victim=" << (bot->GetVictim() && target && bot->GetVictim()->GetGUID() == target->GetGUID() ? "target" : (bot->GetVictim() ? "other" : "none"));
+
+    if (target)
+    {
+        os << " dist=" << distance
+           << " exact=" << exactDistance
+           << " los=" << (hasLos ? "yes" : "no")
+           << " front=" << (inFront ? "yes" : "no")
+           << " range=" << (inRange ? "yes" : "no")
+           << " target_moving=" << (target->isMoving() ? "yes" : "no");
+    }
+    else
+        os << " target=none";
+
+    if (extra && *extra)
+        os << " extra=" << extra;
+
+    std::string const message = os.str();
+    WhisperPlayerbotDiagnostic(bot, message);
+    TC_LOG_DEBUG("playerbots.pvp.class", "{}", message);
+}
+
+void ScheduleWandDiagnostics(Player* bot, Unit* target, uint32 spellId)
+{
+    if (!bot || !IsWandShootSpell(spellId))
+        return;
+
+    ObjectGuid const botGuid = bot->GetGUID();
+    ObjectGuid const targetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
+    for (uint32 delayMs : std::array<uint32, 5>{ 100u, 500u, 1100u, 1800u, 2600u })
+    {
+        bot->m_Events.AddEventAtOffset([botGuid, targetGuid, spellId, delayMs]()
+        {
+            Player* delayedBot = ObjectAccessor::FindConnectedPlayer(botGuid);
+            if (!delayedBot || !delayedBot->IsInWorld())
+                return;
+
+            Unit* delayedTarget = targetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*delayedBot, targetGuid);
+            NotifyWandDiagnostic(delayedBot, delayedTarget, "post_" + std::to_string(delayMs) + "ms", spellId);
+        }, std::chrono::milliseconds(delayMs));
+    }
+}
+
 bool HasActiveStationaryChannel(Player const* player)
 {
     if (!player)
@@ -3223,7 +3364,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         {
             if (SpellInfo const* activeAutoRepeatInfo = autoRepeat->GetSpellInfo())
                 if (activeAutoRepeatInfo->Id == resolvedSpellId)
+                {
+                    NotifyWandDiagnostic(player, target, "already_active_skip_recast", resolvedSpellId);
                     return true;
+                }
         }
     }
 
@@ -3257,7 +3401,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // seconds before casting. If a movement update still races the first
         // cast attempt, the SPELL_FAILED_MOVING retry below immediately stops
         // again and retries once without yielding the decision tick.
+        NotifyWandDiagnostic(player, target, "pre_stationary_stop", resolvedSpellId);
         StopPlayerbotForStationaryCast(player);
+        NotifyWandDiagnostic(player, target, "post_stationary_stop", resolvedSpellId);
     }
 
     // Blink (1953) is a leap-forward spell with a destination target
@@ -3267,6 +3413,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
         FaceTargetForInstantCast(player, target, spellInfo);
+
+    NotifyWandDiagnostic(player, target, "pre_cast", resolvedSpellId);
 
     SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
@@ -3278,6 +3426,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
     else
         castResult = player->CastSpell(target, resolvedSpellId, false);
+
+    if (castResult == SPELL_CAST_OK)
+        NotifyWandDiagnostic(player, target, "cast_ok", resolvedSpellId);
+    else
+    {
+        EnumText const wandCastResultText = EnumUtils::ToString(castResult);
+        NotifyWandDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
+    }
 
     if (castResult != SPELL_CAST_OK)
     {
@@ -3295,6 +3451,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
                 else
                     castResult = player->CastSpell(target, resolvedSpellId, false);
+
+                if (castResult == SPELL_CAST_OK)
+                    NotifyWandDiagnostic(player, target, "retry_after_moving_ok", resolvedSpellId);
+                else
+                {
+                    EnumText const retryResultText = EnumUtils::ToString(castResult);
+                    NotifyWandDiagnostic(player, target, "retry_after_moving_failed", resolvedSpellId, retryResultText.Title);
+                }
             }
         }
 
@@ -3511,7 +3675,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (resolvedSpellId && sSpellMgr->GetFirstSpellInChain(resolvedSpellId) == sSpellMgr->GetFirstSpellInChain(kDruidCasterFaerieFireSpellId))
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kDruidCasterFaerieFireSpellId, kDruidCasterFaerieFireCooldown);
     if (spellInfo->IsAutoRepeatRangedSpell())
+    {
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, resolvedSpellId, kPlayerbotAutoRepeatRangedStartCooldown);
+        ScheduleWandDiagnostics(player, target, resolvedSpellId);
+    }
 
     // Shared tactical cooldown for dispel/decurse effects. This keeps
     // playerbots from spam-casting into protected or undispellable auras while
