@@ -1684,6 +1684,28 @@ namespace
         return player->GetPowerPct(POWER_MANA) <= 10.0f || player->GetPower(POWER_MANA) < 250;
     }
 
+    bool HasHunterKiteControl(Unit const* target)
+    {
+        if (!target)
+            return false;
+
+        return target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
+            target->HasAuraWithMechanic((1 << MECHANIC_ROOT) | (1 << MECHANIC_STUN));
+    }
+
+    void StopVirtualPlayerbotMovement(Player* player)
+    {
+        if (!player)
+            return;
+
+        player->StopMoving();
+        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        {
+            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            player->SendMovementFlagUpdate();
+        }
+    }
+
     constexpr uint32 kPlayerbotWandShootSpellId = 5019;
     std::unordered_map<uint64, uint32> g_WandLifecycleDiagNextMs;
 
@@ -2474,7 +2496,7 @@ namespace playerbot
                 uint32& pauseUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
                 if (pauseUntilMs > nowMs)
                 {
-                    player->StopMoving();
+                    StopVirtualPlayerbotMovement(player);
                     return true;
                 }
 
@@ -2483,26 +2505,32 @@ namespace playerbot
                 {
                     float const minAutoShotRange = autoShotInfo->GetMinRange(false);
                     float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-                    bool const canAutoShotWithoutDeadzone = distance > minAutoShotRange && distance <= maxAutoShotRange;
+                    float const exactDistance = player->GetExactDist(target);
+                    bool const canAutoShotWithoutDeadzone = hasLos && exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
                     uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
-                    if (canAutoShotWithoutDeadzone && autoShotTimerMs <= 600)
+                    bool const targetControlled = HasHunterKiteControl(target);
+                    bool const shotReadySoon = autoShotTimerMs == 0 || autoShotTimerMs <= 1200;
+                    bool const safeEnoughToStutter = targetControlled || exactDistance >= std::max(profile.preferredMinRange + 2.0f, 10.0f);
+                    if (canAutoShotWithoutDeadzone && safeEnoughToStutter && (shotReadySoon || targetControlled))
                     {
-                        uint32 const pauseDurationMs = std::max<uint32>(autoShotTimerMs, 150);
+                        uint32 const pauseDurationMs = std::clamp<uint32>(std::max<uint32>(autoShotTimerMs, 300), 300, 1250);
                         pauseUntilMs = nowMs + pauseDurationMs;
 
                         ObjectGuid const hunterGuid = player->GetGUID();
                         ObjectGuid const targetGuid = target->GetGUID();
                         float const followDistance = profile.preferredIdealRange;
-                        float const followAngle = player->GetFollowAngle();
 
-                        player->StopMoving();
-                        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-                        {
-                            player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-                            player->SendMovementFlagUpdate();
-                        }
+                        StopVirtualPlayerbotMovement(player);
+                        player->SetFacingToObject(target);
+                        player->SetInFront(target);
+                        StopVirtualPlayerbotMovement(player);
 
-                        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, followDistance, followAngle]()
+                        Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+                        bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
+                        if (!autoShotActive && player->HasSpell(75))
+                            player->CastSpell(target, 75, false);
+
+                        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, followDistance]()
                         {
                             Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
                             if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
@@ -2510,11 +2538,15 @@ namespace playerbot
 
                             if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, targetGuid))
                             {
-                                if (resumedTarget->IsAlive())
+                                if (resumedTarget->IsAlive() && !HasHunterKiteControl(resumedTarget))
                                     IssueHumanLikeFollow(hunter, resumedTarget, followDistance, 6.0f, 500);
                             }
                         }, std::chrono::milliseconds(pauseDurationMs));
 
+                        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                            "Playerbot PvP hunter stutter-step: bot={} target={} distance={} timer={} controlled={} pauseMs={}.",
+                            player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs,
+                            targetControlled ? 1 : 0, pauseDurationMs);
                         return true;
                     }
                 }
