@@ -76,6 +76,7 @@ namespace
     constexpr uint32 SPELL_DRUID_BEEFS_TENACITY = 89766;
     constexpr uint32 SPELL_DRUID_UNSTOPPABLE = 89765;
     constexpr uint32 SPELL_ROGUE_VANISH_AURA = 89783;
+    constexpr uint32 SPELL_PRIEST_SHADOW_WRAITH = 89784;
 
     bool IsTrapGameObject(GameObject const* caster)
     {
@@ -5444,6 +5445,12 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
         if (m_targets.GetGOTarget()->GetGOInfo()->CannotBeUsedUnderImmunity() && m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_IMMUNE))
             return SPELL_FAILED_DONT_REPORT;
     }
+
+    // Shadow Wraith: while the priest is controlling the wraith, the priest body may only
+    // cast Shadow Wraith again to cancel/rejoin. Triggered helper visuals/auras are allowed.
+    if (Player* playerCaster = m_caster->ToPlayer())
+        if (!IsTriggered() && playerCaster->HasAura(SPELL_PRIEST_SHADOW_WRAITH) && m_spellInfo->Id != SPELL_PRIEST_SHADOW_WRAITH)
+            return SPELL_FAILED_SILENCED;
 
     // check cooldowns to prevent cheating
     if (!m_spellInfo->IsPassive())

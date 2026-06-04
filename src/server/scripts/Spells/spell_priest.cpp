@@ -1684,8 +1684,13 @@ namespace ShadowPriestWraith
         ObjectGuid const playerGuid = player->GetGUID();
         ObjectGuid const wraithGuid = wraith->GetGUID();
 
-        wraith->SetSpeed(MOVE_RUN, 1.0f);
-        wraith->SetSpeed(MOVE_WALK, 1.0f);
+        // SetSpeed() takes absolute yards/sec in this core.
+        // The old SetSpeed(MOVE_RUN, 1.0f) made the wraith crawl at 1 yd/sec.
+        // SetSpeedRate() is the movement multiplier we want.
+        wraith->SetWalk(false);
+        wraith->SetSpeedRate(MOVE_RUN, 1.0f);
+        wraith->SetSpeedRate(MOVE_WALK, 1.0f);
+        wraith->SendMovementFlagUpdate(true);
 
         for (uint32 step = 1; step <= SpeedRampSteps; ++step)
         {
@@ -1700,8 +1705,11 @@ namespace ShadowPriestWraith
                     return;
 
                 float const bonus = 0.50f * float(step) / float(SpeedRampSteps);
-                ownedWraith->SetSpeed(MOVE_RUN, 1.0f + bonus);
-                ownedWraith->SetSpeed(MOVE_WALK, 1.0f + bonus);
+                float const speedRate = 1.0f + bonus;
+
+                ownedWraith->SetWalk(false);
+                ownedWraith->SetSpeedRate(MOVE_RUN, speedRate);
+                ownedWraith->SetSpeedRate(MOVE_WALK, speedRate);
             }, Milliseconds(SpeedRampDurationMs * step / SpeedRampSteps));
         }
     }
@@ -1719,11 +1727,11 @@ namespace ShadowPriestWraith
         wraith->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_PACIFIED | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
         wraith->SetReactState(REACT_PASSIVE);
         wraith->SetImmuneToAll(true);
+        wraith->SetWalk(false);
         wraith->AttackStop();
         wraith->CombatStop(true);
 
         CastIfSpellExists(wraith, wraith, SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
-        ScheduleSpeedRamp(player, wraith);
     }
 }
 
@@ -1806,6 +1814,8 @@ class spell_pri_shadow_wraith_aura : public AuraScript
             player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH);
             return;
         }
+
+        ShadowPriestWraith::ScheduleSpeedRamp(player, wraith);
     }
 
     void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
