@@ -216,7 +216,12 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
     }
     else
     {
-        if (target->GetVictim() != player && distance >= kReferenceHunterSwitchDistance)
+        // Once the hunter has created real ranged-weapon separation, immediately
+        // return to ranged mode even if the enemy is still targeting/chasing the
+        // hunter. The old victim check kept hunters stuck in melee mode while a
+        // warrior/rogue followed them, so they would Wing Clip once and never
+        // resume shooting.
+        if (distance >= kReferenceHunterSwitchDistance)
             rangedMode = true;
     }
 
@@ -340,6 +345,26 @@ float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
     float const currentDistance = player->GetExactDist(target);
     float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange() + 4.0f, 12.0f);
     return std::clamp(desiredExactDistance - currentDistance, 4.0f, 10.0f);
+}
+
+float ComputeHunterMeleeKiteRetreatStep(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return 10.0f;
+
+    float const currentDistance = player->GetExactDist(target);
+    float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange() + 5.0f, 13.0f);
+    return std::clamp(desiredExactDistance - currentDistance, 8.0f, 14.0f);
+}
+
+bool IsHunterMeleeKiteTargetControlled(Unit const* target)
+{
+    if (!target)
+        return false;
+
+    return HasAuraFromSpellChain(target, 14268) || // Wing Clip
+        target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
+        target->HasAuraWithMechanic((1 << MECHANIC_ROOT) | (1 << MECHANIC_STUN));
 }
 
 float GetConfiguredCombatRange()
@@ -3119,7 +3144,10 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     bool const enemyOnTop = HasHostileTarget(player, enemyOnTopTarget);
     bool const enemyNear = player->IsWithinDistInMap(target, GetConfiguredCloseRange());
     bool const rangedMode = IsHunterInRangedMode(player);
-    bool const preferredTrapReady = isSurvivalHunter && enemyOnTopTarget && HasDotAura(enemyOnTopTarget) ? IsSpellReady(player, 13809) : IsSpellReady(player, 14311);
+    uint32 const preferredTrapSpellId = isSurvivalHunter && enemyOnTopTarget && HasDotAura(enemyOnTopTarget) ? uint32(13809) : uint32(14311);
+    bool const preferredTrapReady = IsSpellReady(player, preferredTrapSpellId);
+    bool const canDropTrapNow = enemyOnTop && enemyOnTopTarget && preferredTrapReady &&
+        (!player->IsInCombat() || HasAuraFromSpellChain(player, 5384));
 
     bool const targetSnaredOrStunned = target &&
         (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
@@ -3129,7 +3157,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     AddDecisionCandidate(candidates, player->HealthBelowPct(35) && IsSpellReady(player, 19263), 35.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, enemyOnTop && HasAuraFromSpellChain(enemyOnTopTarget, 14268) && IsSpellReady(player, 5384) && preferredTrapReady, 35.0f,
-        { "hunter feign death", "set up freezing trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+        { "hunter feign death", "set up trap while pressured in melee", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, canDropTrapNow, 34.75f,
+        { preferredTrapSpellId == 13809 ? "hunter frost trap" : "hunter freezing trap", "drop trap while escaping melee pressure", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263) && !IsSpellReady(player, 19263), 34.0f,
         { "hunter readiness", "reset cooldowns after deterrence has fallen", 23989, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isSurvivalHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReadyAndCasterAuraAllowed(player, 20910), 34.5f,
@@ -4452,6 +4482,25 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 ComputeHunterDeadZoneRetreatStep(player, deadZoneTarget),
                 "hunter deadzone retreat", "enemy in hunter dead-zone", 100.0f);
             return context;
+        }
+
+        // True melee range is a hunter emergency. Allow an immediate Wing Clip
+        // attempt first when it is ready and not already applied; otherwise run
+        // away now so the next tick can resume ranged shots instead of idling in
+        // melee/dead-zone posture.
+        Unit const* meleeKiteTarget = SelectNearbyEnemyTarget(player, activeHunterTarget, kReferenceHunterMeleeDistance);
+        if (meleeKiteTarget && player->IsWithinMeleeRange(meleeKiteTarget))
+        {
+            bool const shouldTryWingClipFirst = IsSpellReady(player, 14268) &&
+                !HasAuraFromSpellChain(meleeKiteTarget, 14268) &&
+                !IsHunterMeleeKiteTargetControlled(meleeKiteTarget);
+            if (!shouldTryWingClipFirst)
+            {
+                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, meleeKiteTarget->GetGUID(),
+                    ComputeHunterMeleeKiteRetreatStep(player, meleeKiteTarget),
+                    "hunter melee kite retreat", IsHunterMeleeKiteTargetControlled(meleeKiteTarget) ? "melee threat controlled" : "enemy in melee range", 101.0f);
+                return context;
+            }
         }
     }
 
