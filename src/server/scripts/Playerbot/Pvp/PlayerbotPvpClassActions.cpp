@@ -2674,6 +2674,14 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
     if (spellInfo->CalcCastTime() > 0)
         return;
 
+    // Do not re-issue a facing packet for auto-repeat ranged spells when the
+    // target is already in front. Diagnostics showed SetFacingToObject can
+    // briefly restore stale forward/spline movement flags on virtual sessions
+    // after StopPlayerbotForStationaryCast cleared them, and that 100ms
+    // movement blip cancels wand Shoot before the first repeat tick lands.
+    if (spellInfo->IsAutoRepeatRangedSpell() && player->isInFront(target))
+        return;
+
     player->SetFacingToObject(target);
     player->SetInFront(target);
 }
@@ -3412,7 +3420,23 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // front destination to mirror client cast payload semantics.
     bool const isInstantCast = spellInfo->CalcCastTime() == 0;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+    {
         FaceTargetForInstantCast(player, target, spellInfo);
+
+        if (spellInfo->IsAutoRepeatRangedSpell())
+        {
+            NotifyWandDiagnostic(player, target, "post_face", resolvedSpellId);
+
+            bool const faceRestoredMovement = player->isMoving() ||
+                player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
+                (player->GetUnitMovementFlags() & MOVEMENTFLAG_MASK_MOVING);
+            if (faceRestoredMovement)
+            {
+                StopPlayerbotForStationaryCast(player);
+                NotifyWandDiagnostic(player, target, "post_face_stop", resolvedSpellId);
+            }
+        }
+    }
 
     NotifyWandDiagnostic(player, target, "pre_cast", resolvedSpellId);
 
