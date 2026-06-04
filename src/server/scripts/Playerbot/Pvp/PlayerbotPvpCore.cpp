@@ -68,7 +68,7 @@ constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
-constexpr float kPlayerbotTotemRefreshDistance = 20.0f;
+constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -2230,7 +2230,7 @@ Unit const* SelectEnemyClassTarget(Player const* player, uint8 classId, float ma
     return best;
 }
 
-Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, float maxHealthPct)
+Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, float maxHealthPct, uint32 excludedAuraId = 0)
 {
     if (!player || !player->FindMap())
         return nullptr;
@@ -2245,6 +2245,8 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
         if (!candidate || !candidate->IsAlive())
             return;
         if (!IsFriendlySupportTarget(player, candidate))
+            return;
+        if (excludedAuraId && candidate->HasAura(excludedAuraId))
             return;
         if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
             return;
@@ -3058,7 +3060,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     Unit const* debuffedAlly = (!dispelThrottleActive && IsSpellReady(player, 988)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
     Unit const* enemyBuffedTarget = (!dispelThrottleActive && IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
-    Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f) : nullptr;
+    Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f, kPriestWeakenedSoulSpellId) : nullptr;
     Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
     Unit const* emergencyLowAlly = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, 15.0f, 25.0f) : nullptr;

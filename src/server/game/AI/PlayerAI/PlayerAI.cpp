@@ -191,6 +191,7 @@ enum Spells
     SPELL_PAIN_SUPPRESSION    = 33206,
     SPELL_INNER_FOCUS         = 14751,
     SPELL_POWER_WORD_SHIELD   = 48066,
+    SPELL_WEAKENED_SOUL       =  6788,
 
     /* Priest - Holy */
     PASSIVE_SPIRIT_REDEMPTION = 20711,
@@ -834,7 +835,9 @@ PlayerAI::TargetedSpell SimpleCharmedPlayerAI::SelectAppropriateCastForSpec()
             switch (GetSpec())
             {
                 case SPEC_PRIEST_DISCIPLINE:
-                    VerifyAndPushSpellCast(spells, SPELL_POWER_WORD_SHIELD, TARGET_CHARMER, 3);
+                    if (Unit* charmer = me->GetCharmer())
+                        if (!charmer->HasAura(SPELL_WEAKENED_SOUL))
+                            VerifyAndPushSpellCast(spells, SPELL_POWER_WORD_SHIELD, charmer, 3);
                     VerifyAndPushSpellCast(spells, SPELL_INNER_FOCUS, TARGET_NONE, 3);
                     VerifyAndPushSpellCast(spells, SPELL_PAIN_SUPPRESSION, TARGET_CHARMER, 15);
                     VerifyAndPushSpellCast(spells, SPELL_POWER_INFUSION, TARGET_CHARMER, 10);
