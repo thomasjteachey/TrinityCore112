@@ -72,6 +72,7 @@ constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
+constexpr uint32 kPriestShadowWordPainSpellId = 589;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
 constexpr uint32 kMageManaRubyItemId = 8008;
 constexpr float kPlayerbotTotemRefreshDistance = 30.0f;
@@ -3194,9 +3195,12 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
     Unit const* emergencyLowAlly = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, 15.0f, 25.0f) : nullptr;
     Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyCasterTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
-    Unit const* controlledTarget = IsSpellReady(player, 27605) ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
+    bool const shadowWordPainReady = IsSpellReady(player, kPriestShadowWordPainSpellId);
+    Unit const* controlledTarget = shadowWordPainReady ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
     Unit const* manaBurnTarget = IsSpellReady(player, 10876) ? SelectNearbyEnemyManaTarget(player, target, GetConfiguredLongRange(), 25.0f) : nullptr;
-    Unit const* rogueTarget = IsSpellReady(player, 27605) ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr;
+    Unit const* selectedRogueTarget = (shadowWordPainReady && HasHostileTarget(player, target) && target->GetClass() == CLASS_ROGUE &&
+        !IsTargetInvalidByImmunity(player, target) && player->IsWithinLOSInMap(target) && player->IsWithinDistInMap(target, GetConfiguredLongRange())) ? target : nullptr;
+    Unit const* rogueTarget = selectedRogueTarget ? selectedRogueTarget : (shadowWordPainReady ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr);
     bool const isHolyPriest = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest;
     Unit const* spiritHealTarget = (isHolyPriest && IsPriestInSpiritOfRedemption(player) && IsSpellReady(player, 10917)) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
@@ -3232,8 +3236,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             { "priest flash heal", "heal party with flash heal", 10917, healTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, healTarget ? healTarget->GetGUID() : ObjectGuid::Empty });
     }
 
-    AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, 27605), 22.0f,
-        { "priest shadow word pain", "maintain dot pressure on rogues", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, kPriestShadowWordPainSpellId), 35.0f,
+        { "priest shadow word pain", "maintain dot pressure on rogues", kPriestShadowWordPainSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isHolyPriest && manaBurnTarget, 21.0f,
         { "priest mana burn", "burn mana from enemy casters", 10876, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaBurnTarget ? manaBurnTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isHolyPriest && hasHostileTarget && IsSpellReady(player, 10934), 21.0f,
@@ -3242,10 +3246,10 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         { "priest holy nova", "aoe pressure and splash healing in melee cluster", 27801, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, CountNearbyEnemies(player, 8.0f) >= 2 && IsSpellReady(player, 10890), 19.5f,
         { "priest psychic scream", "fear nearby enemies when surrounded", 10890, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && target && IsSpellReady(player, 27605) && !HasBreakableCrowdControl(target) && !HasAuraFromSpellChain(target, 27605), 19.0f,
-        { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled or open targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, controlledTarget && !HasAuraFromSpellChain(controlledTarget, 27605), 18.0f,
-        { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled targets", 27605, playerbot::PvpClassSpellContext::TargetMode::Enemy, controlledTarget ? controlledTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, hasHostileTarget && target && shadowWordPainReady && !HasBreakableCrowdControl(target) && !HasAuraFromSpellChain(target, kPriestShadowWordPainSpellId), 19.0f,
+        { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled or open targets", kPriestShadowWordPainSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, controlledTarget && !HasAuraFromSpellChain(controlledTarget, kPriestShadowWordPainSpellId), 18.0f,
+        { "priest shadow word pain", "fallback pressure on non-breakable crowd-controlled targets", kPriestShadowWordPainSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, controlledTarget ? controlledTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, hasHostileTarget && target && IsLowOrOutOfManaForFallback(player) && IsWandShootReadyForDecision(player), 18.5f,
         { "priest shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, IsSpellReady(player, 10917) && player->HealthBelowPct(85), 17.0f,

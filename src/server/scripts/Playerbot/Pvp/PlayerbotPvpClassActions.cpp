@@ -2494,85 +2494,16 @@ void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
     }
 }
 
-void NotifyWandDiagnostic(Player* bot, Unit* target, std::string const& phase, uint32 spellId, char const* extra = nullptr)
+void NotifyWandDiagnostic(Player*, Unit*, std::string const&, uint32, char const* = nullptr)
 {
-    if (!bot || !IsWandShootSpell(spellId))
-        return;
-
-    Spell const* autoRepeat = bot->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-    Spell const* generic = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL);
-    Spell const* channeled = bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
-    SpellInfo const* wandInfo = sSpellMgr->GetSpellInfo(spellId);
-
-    float distance = target ? bot->GetDistance(target) : -1.0f;
-    float exactDistance = target ? bot->GetExactDist(target) : -1.0f;
-    bool const hasLos = target && bot->IsWithinLOSInMap(target);
-    bool const inFront = target && bot->isInFront(target);
-    bool inRange = false;
-    if (target && wandInfo)
-    {
-        float const minRange = wandInfo->GetMinRange(false);
-        float const maxRange = wandInfo->GetMaxRange(false);
-        inRange = distance >= minRange && (maxRange <= 0.0f || distance <= maxRange);
-    }
-
-    uint32 motionType = 0;
-    if (MotionMaster* motionMaster = bot->GetMotionMaster())
-        motionType = uint32(motionMaster->GetCurrentMovementGeneratorType());
-
-    std::ostringstream os;
-    os << "WAND DIAG: phase=" << phase
-       << " spell=" << spellId
-       << " auto=" << GetCurrentSpellId(bot, CURRENT_AUTOREPEAT_SPELL) << ":" << GetSpellStateLabel(autoRepeat)
-       << " gen=" << GetCurrentSpellId(bot, CURRENT_GENERIC_SPELL) << ":" << GetSpellStateLabel(generic)
-       << " chan=" << GetCurrentSpellId(bot, CURRENT_CHANNELED_SPELL) << ":" << GetSpellStateLabel(channeled)
-       << " moving=" << (bot->isMoving() ? "yes" : "no")
-       << " move_state=" << (bot->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
-       << " move_flags=" << bot->GetUnitMovementFlags()
-       << " motion=" << motionType
-       << " nonmelee=" << (bot->IsNonMeleeSpellCast(false, false, true, false) ? "yes" : "no")
-       << " ranged_timer=" << bot->getAttackTimer(RANGED_ATTACK)
-       << " victim=" << (bot->GetVictim() && target && bot->GetVictim()->GetGUID() == target->GetGUID() ? "target" : (bot->GetVictim() ? "other" : "none"));
-
-    if (target)
-    {
-        os << " dist=" << distance
-           << " exact=" << exactDistance
-           << " los=" << (hasLos ? "yes" : "no")
-           << " front=" << (inFront ? "yes" : "no")
-           << " range=" << (inRange ? "yes" : "no")
-           << " target_moving=" << (target->isMoving() ? "yes" : "no");
-    }
-    else
-        os << " target=none";
-
-    if (extra && *extra)
-        os << " extra=" << extra;
-
-    std::string const message = os.str();
-    WhisperPlayerbotDiagnostic(bot, message);
-    TC_LOG_DEBUG("playerbots.pvp.class", "{}", message);
+    // Intentionally silent. This hook was used for temporary wand troubleshooting
+    // whispers and is left as a no-op so the wand stabilization code can keep
+    // its call sites without producing player-visible diagnostics.
 }
 
-void ScheduleWandDiagnostics(Player* bot, Unit* target, uint32 spellId)
+void ScheduleWandDiagnostics(Player*, Unit*, uint32)
 {
-    if (!bot || !IsWandShootSpell(spellId))
-        return;
-
-    ObjectGuid const botGuid = bot->GetGUID();
-    ObjectGuid const targetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
-    for (uint32 delayMs : std::array<uint32, 5>{ 100u, 500u, 1100u, 1800u, 2600u })
-    {
-        bot->m_Events.AddEventAtOffset([botGuid, targetGuid, spellId, delayMs]()
-        {
-            Player* delayedBot = ObjectAccessor::FindConnectedPlayer(botGuid);
-            if (!delayedBot || !delayedBot->IsInWorld())
-                return;
-
-            Unit* delayedTarget = targetGuid.IsEmpty() ? nullptr : ObjectAccessor::GetUnit(*delayedBot, targetGuid);
-            NotifyWandDiagnostic(delayedBot, delayedTarget, "post_" + std::to_string(delayMs) + "ms", spellId);
-        }, std::chrono::milliseconds(delayMs));
-    }
+    // Intentionally silent; delayed wand diagnostics were temporary.
 }
 
 bool HasActiveStationaryChannel(Player const* player)

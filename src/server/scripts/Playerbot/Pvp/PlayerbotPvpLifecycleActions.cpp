@@ -1716,68 +1716,11 @@ namespace
         return distance >= minRange && (maxRange <= 0.0f || distance <= maxRange) && player->IsWithinLOSInMap(target);
     }
 
-    void NotifyWandLifecycleDiagnostic(Player* player, Unit* target, char const* reason, bool activeWand, bool recentWandStart)
+    void NotifyWandLifecycleDiagnostic(Player*, Unit*, char const*, bool, bool)
     {
-        if (!player)
-            return;
-
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
-        uint32& nextDiagMs = g_WandLifecycleDiagNextMs[playerGuidRaw];
-        if (nextDiagMs > nowMs)
-            return;
-        nextDiagMs = nowMs + 750;
-
-        uint32 motionType = 0;
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
-            motionType = uint32(motionMaster->GetCurrentMovementGeneratorType());
-
-        Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-        uint32 const autoRepeatId = autoRepeat && autoRepeat->GetSpellInfo() ? autoRepeat->GetSpellInfo()->Id : 0;
-
-        std::ostringstream os;
-        os << "WAND MOVE DIAG: reason=" << (reason ? reason : "none")
-           << " active=" << (activeWand ? "yes" : "no")
-           << " recent_start=" << (recentWandStart ? "yes" : "no")
-           << " auto=" << autoRepeatId
-           << " moving=" << (player->isMoving() ? "yes" : "no")
-           << " move_state=" << (player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
-           << " move_flags=" << player->GetUnitMovementFlags()
-           << " motion=" << motionType
-           << " ranged_timer=" << player->getAttackTimer(RANGED_ATTACK);
-
-        if (target)
-        {
-            os << " dist=" << player->GetDistance(target)
-               << " exact=" << player->GetExactDist(target)
-               << " los=" << (player->IsWithinLOSInMap(target) ? "yes" : "no")
-               << " front=" << (player->isInFront(target) ? "yes" : "no")
-               << " range=" << (IsInWandShootRange(player, target) ? "yes" : "no")
-               << " target_moving=" << (target->isMoving() ? "yes" : "no");
-        }
-        else
-            os << " target=none";
-
-        std::string const message = os.str();
-        if (player->duel && player->duel->Opponent)
-            player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
-
-        if (Map* map = player->FindMap())
-        {
-            for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
-            {
-                Player* observer = itr->GetSource();
-                if (!observer || !observer->IsGameMaster())
-                    continue;
-
-                if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
-                    continue;
-
-                player->Whisper(message, LANG_UNIVERSAL, observer);
-            }
-        }
-
-        TC_LOG_DEBUG("playerbots.pvp.lifecycle", "{}", message);
+        // Intentionally silent. This hook was used for temporary wand movement
+        // troubleshooting whispers; keep HoldPositionForWand behavior without
+        // player-visible diagnostics.
     }
 
     bool HoldPositionForWand(Player* player, Unit* target, char const* reason)
