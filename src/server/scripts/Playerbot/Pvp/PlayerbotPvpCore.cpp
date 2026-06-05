@@ -72,6 +72,7 @@ constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
+constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
@@ -137,6 +138,45 @@ bool IsHunterTrapSpell(uint32 spellId)
         default:
             return false;
     }
+}
+
+bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 19434; // Aimed Shot (rank 1)
+}
+
+bool IsActiveHunterCastTimeSpell(Spell const* spell)
+{
+    if (!spell || spell->getState() == SPELL_STATE_FINISHED)
+        return false;
+
+    SpellInfo const* spellInfo = spell->GetSpellInfo();
+    if (!spellInfo)
+        return false;
+
+    return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo) ||
+        (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
+}
+
+bool IsHunterCastTimeActionLocked(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return false;
+
+    if (IsActiveHunterCastTimeSpell(player->GetCurrentSpell(CURRENT_GENERIC_SPELL)))
+        return true;
+
+    if (IsActiveHunterCastTimeSpell(player->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
+        return true;
+
+    if (player->IsNonMeleeSpellCast(false, false, true))
+        return true;
+
+    return playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHunterStationaryCastLockToken);
 }
 
 SpellInfo const* GetFirstOnUseItemSpellInfo(Item const* item)
@@ -988,6 +1028,9 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
         return IsOnUseItemReady(player, decision.itemEntry);
 
     if (!decision.spellId)
+        return false;
+
+    if (IsHunterCastTimeActionLocked(player))
         return false;
 
     uint32 const knownPlayerSpellId = ResolveKnownPlayerSpellInChain(player, decision.spellId);
@@ -4362,6 +4405,19 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     // itself and Flash Heal is free during this aura.
     if (IsPriestInSpiritOfRedemption(player))
         return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
+
+    // Hunter cast-time actions (especially Aimed Shot and Revive Pet) must be
+    // exclusive. Lifecycle movement already holds the hunter still, but the
+    // selector also has to stop returning other instant actions like Rapid Fire
+    // while the accepted cast is preparing/channeling. Otherwise the next AI
+    // tick can attempt another action during Aimed Shot and clip/interrupt it on
+    // some branches.
+    if (IsHunterCastTimeActionLocked(player))
+    {
+        SpellDecision holdDecision;
+        holdDecision.reason = "hunter cast-time spell in progress";
+        return holdDecision;
+    }
 
     if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
         return racialDecision;
