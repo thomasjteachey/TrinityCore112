@@ -104,6 +104,7 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS = 900;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
+constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -2071,6 +2072,35 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         return player->IsNonMeleeSpellCast(false, false, true);
     }
 
+    bool HoldHunterStationaryCast(Player* player, Unit* target, char const* reason)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return false;
+
+        bool const activeCast = HunterIsHardCastingStationaryShot(player);
+        bool const explicitLock = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHunterStationaryCastLockToken);
+        if (!activeCast && !explicitLock)
+            return false;
+
+        StopVirtualPlayerbotMovement(player);
+
+        // Face only when there is an enemy target. Revive Pet and other self/pet
+        // casts merely need the hunter to stay stationary; forcing an enemy face
+        // is unnecessary but harmless, so keep it conservative.
+        if (target && target->IsAlive() && player->IsValidAttackTarget(target) && player->IsWithinLOSInMap(target))
+        {
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+        }
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP hunter stationary cast hold: bot={} target={} reason={} activeCast={} explicitLock={} timer={}",
+            player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+            reason ? reason : "stationary-cast", activeCast ? 1 : 0, explicitLock ? 1 : 0,
+            player->getAttackTimer(RANGED_ATTACK));
+        return true;
+    }
+
     bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
     {
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !CanIssueBotMovement(player))
@@ -2222,16 +2252,8 @@ bool BreakExpiredHunterFeignDeath(Player* player);
                 player->CastSpell(target, 75, false);
         };
 
-        if (HunterIsHardCastingStationaryShot(player))
-        {
-            // Aimed Shot and any other cast-time hunter shot must not be
-            // interrupted by the kite loop. Stop/facing is enough here; do not
-            // restart Auto Shot or issue a flee segment until the cast finishes.
-            StopVirtualPlayerbotMovement(player);
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
+        if (HoldHunterStationaryCast(player, target, "hunter-kite-loop"))
             return true;
-        }
 
         if (!hasLos)
         {
@@ -2953,7 +2975,17 @@ namespace playerbot
 
     bool DriveCombatPositioning(Player* player, Unit* target, CombatPositioningProfile const& profile)
     {
-        if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
+        if (!player || !target || !target->IsAlive())
+            return false;
+
+        // Cast-time hunter actions such as Aimed Shot and Revive Pet must win
+        // over every movement system. Check this before CanIssueBotMovement(),
+        // recent-order preservation, LOS recovery, or distance-band movement so
+        // a stutter/flee tick cannot clip the cast.
+        if (HoldHunterStationaryCast(player, target, "drive-combat-positioning"))
+            return true;
+
+        if (!CanIssueBotMovement(player))
             return false;
 
         // Hunter movement is handled by DriveHunterKiteLoop below. Do not issue

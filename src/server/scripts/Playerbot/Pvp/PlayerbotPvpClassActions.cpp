@@ -156,6 +156,7 @@ constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
+constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
@@ -3933,8 +3934,20 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
     {
+        uint32 const castTimeMs = uint32(spellInfo->CalcCastTime());
+        uint32 const lockSeconds = std::clamp<uint32>((castTimeMs + 1750) / 1000, 2, 12);
+
+        // Aimed Shot / Revive Pet can be clipped by the lifecycle stutter loop
+        // before CURRENT_GENERIC_SPELL is visible to the next AI tick on some
+        // branches. Publish an explicit short movement lock after the cast is
+        // accepted, so every movement path yields until the cast has actually
+        // had time to finish. The lifecycle also checks the real current spell,
+        // so this is only a bridge for racey ticks and not a replacement for
+        // spell-state checks.
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHunterStationaryCastLockToken, std::chrono::seconds(lockSeconds));
+
         Unit* castGuardTarget = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy ? target : nullptr;
-        ScheduleHunterStationaryCastGuard(player, castGuardTarget, resolvedSpellId, uint32(spellInfo->CalcCastTime()));
+        ScheduleHunterStationaryCastGuard(player, castGuardTarget, resolvedSpellId, castTimeMs);
     }
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterBreakableCrowdControlSpell(spellInfo))
