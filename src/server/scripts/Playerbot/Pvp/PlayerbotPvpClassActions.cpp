@@ -3962,7 +3962,8 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
-    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
+    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo->Id) ||
+        player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
         player->GetSpellHistory()->HasGlobalCooldown(itemSpellInfo))
     {
         failureReason = "item_spell_not_ready";

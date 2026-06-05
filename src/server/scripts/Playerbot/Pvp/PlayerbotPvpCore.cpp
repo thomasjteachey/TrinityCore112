@@ -164,7 +164,8 @@ bool IsOnUseItemReady(Player const* player, uint32 itemEntry)
     if (!itemSpellInfo)
         return false;
 
-    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
+    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo->Id) ||
+        player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
         player->GetSpellHistory()->HasGlobalCooldown(itemSpellInfo))
         return false;
 
