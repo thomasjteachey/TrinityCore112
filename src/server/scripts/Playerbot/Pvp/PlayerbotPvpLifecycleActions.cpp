@@ -43,6 +43,7 @@
 #include "ItemTemplate.h"
 #include "PathGenerator.h"
 #include "Player.h"
+#include "Pet.h"
 #include "Spell.h"
 #include "SpellMgr.h"
 #include "SpellInfo.h"

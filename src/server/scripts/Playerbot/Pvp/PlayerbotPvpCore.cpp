@@ -3749,12 +3749,11 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     Unit const* spellLockTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19647)) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* devourEnemyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
-    Unit const* enemyCastingTarget = SelectEnemyCastingTarget(player, 30.0f, target);
     uint32 const spellstoneItemEntry = isAfflictionWarlock ? SelectReadyWarlockSpellstoneItemEntry(player) : 0;
     bool const hasSelfMagicDebuff = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 0.0f) == player;
     bool const underCasterPressure = target && IsCasterClass(target) && player->HealthBelowPct(80);
     bool const shouldUseSpellstone = spellstoneItemEntry != 0 &&
-        (hasSelfMagicDebuff || player->HealthBelowPct(50) || underCasterPressure || enemyCastingTarget != nullptr);
+        (hasSelfMagicDebuff || underCasterPressure);
 
     bool const canUseVoidwalkerSacrifice = !isAfflictionWarlock && player->HealthBelowPct(25) && !player->HasAura(19443) &&
         hasLivingPet && IsPetSpellReady(player, 19443);
