@@ -1758,24 +1758,28 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (inArenaMap || inActiveDuel)
         return decision;
 
-    if (inBattlegroundPreparation)
-        return decision;
-
     if (!IsStrictlyOutdoorsForMount(player))
         return decision;
 
-    // Keep pressure logic responsive: don't choose an out-of-combat mount
-    // action while hostile players are already within practical engage range.
-    if (!player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
+    // During battleground preparation this selector only runs after
+    // SelectPreparationBuffSpell() has no pet/buff actions left. At that point,
+    // mount if the starting area is a legal outdoor mount location so bots are
+    // ready to move as soon as the gates open.
+    char const* mountReason = inBattlegroundPreparation ? "mount during preparation after prep actions" : "mount while outside and out of combat";
+
+    // Keep pressure logic responsive outside the prep phase: don't choose an
+    // out-of-combat mount action while hostile players are already within
+    // practical engage range.
+    if (!inBattlegroundPreparation && !player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
         return decision;
 
     if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
         if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
             if (CanAttemptMount(player, defaultMountInfo))
-                return { "mount", "mount while outside and out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
+                return { "mount", mountReason, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
-        return { "mount", "mount while outside and out of combat", knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+        return { "mount", mountReason, knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
 
     return decision;
 }
