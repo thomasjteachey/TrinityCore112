@@ -257,125 +257,6 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
     return adjustedDestination;
 }
 
-
-constexpr float PLAYERBOT_WALL_CLEARANCE_RADIUS = 2.0f;
-constexpr float PLAYERBOT_WALL_CLEARANCE_PI = 3.14159265358979323846f;
-
-float BotWallClearanceProbeZ(Player const* player, Position const& position)
-{
-    if (!player)
-        return position.GetPositionZ() + 1.0f;
-
-    return position.GetPositionZ() + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f));
-}
-
-bool HasLocalTwoYardWallClearance(Player* player, Position const& destination, float* blockedDirectionX = nullptr, float* blockedDirectionY = nullptr)
-{
-    if (!player)
-        return true;
-
-    Map const* map = player->FindMap();
-    if (!map)
-        return true;
-
-    Position center = BuildCollisionSafeDestination(player, destination);
-    float const centerX = center.GetPositionX();
-    float const centerY = center.GetPositionY();
-    float const centerZ = BotWallClearanceProbeZ(player, center);
-    float blockedX = 0.0f;
-    float blockedY = 0.0f;
-    uint8 blockedSamples = 0;
-
-    for (uint8 i = 0; i < 16; ++i)
-    {
-        float const angle = float(i) * PLAYERBOT_WALL_CLEARANCE_PI / 8.0f;
-        float const dirX = std::cos(angle);
-        float const dirY = std::sin(angle);
-        float sampleZ = center.GetPositionZ();
-        float const sampleX = centerX + dirX * PLAYERBOT_WALL_CLEARANCE_RADIUS;
-        float const sampleY = centerY + dirY * PLAYERBOT_WALL_CLEARANCE_RADIUS;
-        player->UpdateAllowedPositionZ(sampleX, sampleY, sampleZ);
-
-        bool blocked = std::fabs(sampleZ - center.GetPositionZ()) > 2.5f;
-        if (!blocked)
-        {
-            blocked = !map->isInLineOfSight(centerX, centerY, centerZ,
-                sampleX, sampleY, sampleZ + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f)),
-                player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-        }
-
-        if (blocked)
-        {
-            ++blockedSamples;
-            blockedX += dirX;
-            blockedY += dirY;
-        }
-    }
-
-    if (blockedDirectionX)
-        *blockedDirectionX = blockedX;
-    if (blockedDirectionY)
-        *blockedDirectionY = blockedY;
-
-    return blockedSamples <= 1;
-}
-
-Position BuildTwoYardWallClearDestination(Player* player, Position const& destination)
-{
-    if (!player)
-        return destination;
-
-    Position safeDestination = BuildCollisionSafeDestination(player, destination);
-    float blockedX = 0.0f;
-    float blockedY = 0.0f;
-    if (HasLocalTwoYardWallClearance(player, safeDestination, &blockedX, &blockedY))
-        return safeDestination;
-
-    auto tryCandidate = [&](Position const& candidate, Position& accepted) -> bool
-    {
-        Position safeCandidate = BuildCollisionSafeDestination(player, candidate);
-        if (player->GetExactDist2d(safeCandidate.GetPositionX(), safeCandidate.GetPositionY()) < 0.75f)
-            return false;
-
-        if (!HasLocalTwoYardWallClearance(player, safeCandidate))
-            return false;
-
-        accepted = safeCandidate;
-        return true;
-    };
-
-    Position accepted;
-    float const blockedLength = std::sqrt(blockedX * blockedX + blockedY * blockedY);
-    if (blockedLength > 0.05f)
-    {
-        float const awayX = -blockedX / blockedLength;
-        float const awayY = -blockedY / blockedLength;
-        for (float distance : std::array<float, 4>{ 2.25f, 3.5f, 5.0f, 7.0f })
-        {
-            Position probe(safeDestination.GetPositionX() + awayX * distance,
-                safeDestination.GetPositionY() + awayY * distance,
-                safeDestination.GetPositionZ(), safeDestination.GetOrientation());
-            if (tryCandidate(probe, accepted))
-                return accepted;
-        }
-    }
-
-    for (float distance : std::array<float, 4>{ 2.5f, 4.0f, 6.0f, 8.0f })
-    {
-        for (uint8 i = 0; i < 16; ++i)
-        {
-            float const angle = float(i) * PLAYERBOT_WALL_CLEARANCE_PI / 8.0f;
-            Position probe(safeDestination.GetPositionX() + std::cos(angle) * distance,
-                safeDestination.GetPositionY() + std::sin(angle) * distance,
-                safeDestination.GetPositionZ(), safeDestination.GetOrientation());
-            if (tryCandidate(probe, accepted))
-                return accepted;
-        }
-    }
-
-    return safeDestination;
-}
-
 Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
 {
     if (!player || !target)
@@ -551,7 +432,7 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
         return false;
 
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
-    motionMaster->MovePoint(0, BuildTwoYardWallClearDestination(player, segmentDestination), true);
+    motionMaster->MovePoint(0, segmentDestination, true);
 
     state.lastDestination = segmentDestination;
     state.lastIssueMs = nowMs;
@@ -1409,7 +1290,7 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
     if (!issuedStrict)
     {
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        motionMaster->MovePoint(0, BuildTwoYardWallClearDestination(player, destination), true);
+        motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
     }
 
     std::ostringstream diag;
@@ -1687,7 +1568,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetPositionY() + dyToTarget * invPlanar * stepDistance,
             player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
             player->GetOrientation());
-        Position const downhillDestination = BuildTwoYardWallClearDestination(player, downhillProbe);
+        Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
         motionMaster->MovePoint(0, downhillDestination, false);
 
         stallState.targetGuid = target->GetGUID();
@@ -4213,14 +4094,14 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                         // move so flee directives never devolve into idle.
                         MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
                         if (fallbackMotionMaster)
-                            fallbackMotionMaster->MovePoint(0, BuildTwoYardWallClearDestination(player, destination), true);
+                            fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
                     }
                 }
                 else
                 {
                     MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
                     if (fallbackMotionMaster)
-                        fallbackMotionMaster->MovePoint(0, BuildTwoYardWallClearDestination(player, destination), true);
+                        fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
                 }
                 break;
             }

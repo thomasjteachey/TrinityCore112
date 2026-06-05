@@ -750,137 +750,6 @@ namespace
         return adjustedDestination;
     }
 
-
-    constexpr float PLAYERBOT_WALL_CLEARANCE_RADIUS = 2.0f;
-    constexpr float PLAYERBOT_WALL_CLEARANCE_PI = 3.14159265358979323846f;
-
-    float BotWallClearanceProbeZ(Player const* player, Position const& position)
-    {
-        if (!player)
-            return position.GetPositionZ() + 1.0f;
-
-        return position.GetPositionZ() + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f));
-    }
-
-    bool HasLocalTwoYardWallClearance(Player const* player, Position const& destination, float* blockedDirectionX = nullptr, float* blockedDirectionY = nullptr)
-    {
-        if (!player)
-            return true;
-
-        Map const* map = player->FindMap();
-        if (!map)
-            return true;
-
-        Position center = BuildCollisionSafeDestination(player, destination);
-        float const centerX = center.GetPositionX();
-        float const centerY = center.GetPositionY();
-        float const centerZ = BotWallClearanceProbeZ(player, center);
-        float blockedX = 0.0f;
-        float blockedY = 0.0f;
-        uint8 blockedSamples = 0;
-
-        // Check only local clearance around the endpoint. Do not require line of
-        // sight from the bot to the endpoint; requiring that breaks valid pathing
-        // around corners and was the reason Blackrock Throne bots stopped moving.
-        for (uint8 i = 0; i < 16; ++i)
-        {
-            float const angle = float(i) * PLAYERBOT_WALL_CLEARANCE_PI / 8.0f;
-            float const dirX = std::cos(angle);
-            float const dirY = std::sin(angle);
-            float sampleZ = center.GetPositionZ();
-            float const sampleX = centerX + dirX * PLAYERBOT_WALL_CLEARANCE_RADIUS;
-            float const sampleY = centerY + dirY * PLAYERBOT_WALL_CLEARANCE_RADIUS;
-            player->UpdateAllowedPositionZ(sampleX, sampleY, sampleZ);
-
-            bool blocked = std::fabs(sampleZ - center.GetPositionZ()) > 2.5f;
-            if (!blocked)
-            {
-                blocked = !map->isInLineOfSight(centerX, centerY, centerZ,
-                    sampleX, sampleY, sampleZ + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f)),
-                    player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-            }
-
-            if (blocked)
-            {
-                ++blockedSamples;
-                blockedX += dirX;
-                blockedY += dirY;
-            }
-        }
-
-        if (blockedDirectionX)
-            *blockedDirectionX = blockedX;
-        if (blockedDirectionY)
-            *blockedDirectionY = blockedY;
-
-        // One flaky VMAP sample should not stall movement; multiple blocked rays
-        // indicate the point is actually hugging a wall/object/ledge.
-        return blockedSamples <= 1;
-    }
-
-    Position BuildTwoYardWallClearDestination(Player const* player, Position const& destination)
-    {
-        if (!player)
-            return destination;
-
-        Position safeDestination = BuildCollisionSafeDestination(player, destination);
-        float blockedX = 0.0f;
-        float blockedY = 0.0f;
-        if (HasLocalTwoYardWallClearance(player, safeDestination, &blockedX, &blockedY))
-            return safeDestination;
-
-        auto tryCandidate = [&](Position const& candidate, Position& accepted) -> bool
-        {
-            Position safeCandidate = BuildCollisionSafeDestination(player, candidate);
-            if (player->GetExactDist2d(safeCandidate.GetPositionX(), safeCandidate.GetPositionY()) < 0.75f)
-                return false;
-
-            if (!HasLocalTwoYardWallClearance(player, safeCandidate))
-                return false;
-
-            accepted = safeCandidate;
-            return true;
-        };
-
-        Position accepted;
-
-        // First move directly away from the locally blocked direction. This keeps
-        // the bot on the same side of the wall instead of asking pathing to solve
-        // a random point on the other side of geometry.
-        float const blockedLength = std::sqrt(blockedX * blockedX + blockedY * blockedY);
-        if (blockedLength > 0.05f)
-        {
-            float const awayX = -blockedX / blockedLength;
-            float const awayY = -blockedY / blockedLength;
-            for (float distance : std::array<float, 4>{ 2.25f, 3.5f, 5.0f, 7.0f })
-            {
-                Position probe(safeDestination.GetPositionX() + awayX * distance,
-                    safeDestination.GetPositionY() + awayY * distance,
-                    safeDestination.GetPositionZ(), safeDestination.GetOrientation());
-                if (tryCandidate(probe, accepted))
-                    return accepted;
-            }
-        }
-
-        // Fallback: local radial search around the requested point. If nothing is
-        // truly clear, return the original collision-safe point instead of
-        // refusing movement; bad wall clearance should never freeze a bot.
-        for (float distance : std::array<float, 4>{ 2.5f, 4.0f, 6.0f, 8.0f })
-        {
-            for (uint8 i = 0; i < 16; ++i)
-            {
-                float const angle = float(i) * PLAYERBOT_WALL_CLEARANCE_PI / 8.0f;
-                Position probe(safeDestination.GetPositionX() + std::cos(angle) * distance,
-                    safeDestination.GetPositionY() + std::sin(angle) * distance,
-                    safeDestination.GetPositionZ(), safeDestination.GetOrientation());
-                if (tryCandidate(probe, accepted))
-                    return accepted;
-            }
-        }
-
-        return safeDestination;
-    }
-
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
     {
         if (!player || !target)
@@ -1207,7 +1076,7 @@ namespace
         }
 
         bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-        Position const safeDestination = generatePath ? BuildTwoYardWallClearDestination(player, destination) : destination;
+        Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
         if (generatePath && player->InBattleground())
         {
@@ -2168,23 +2037,60 @@ namespace
         // still for the whole post-shot window. Issue this flee segment directly
         // and keep our own lightweight reissue throttle above.
         ClearEatDrinkAurasForMovement(player);
-        Position const safeDestination = BuildTwoYardWallClearDestination(player, destination);
+        Position const safeDestination = BuildCollisionSafeDestination(player, destination);
         bool issued = false;
+        char const* movementMode = "direct";
+        PathType pathType = PathType(0);
         if (MotionMaster* motionMaster = player->GetMotionMaster())
         {
             MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
             if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
                 motionMaster->Clear();
 
-            motionMaster->MovePoint(0, safeDestination, false);
-            issued = true;
-            lastFleeIssueMs = nowMs;
+            bool const shouldUsePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            Position pathDestination;
+            if (shouldUsePath && player->InBattleground() && TryBuildBattlegroundSegmentDestination(player, safeDestination, pathDestination, &pathType))
+            {
+                // Hunters were visually clipping through Blackrock Throne WMO
+                // walls because the stutter-flee loop used a raw direct spline.
+                // Always prefer a real mmap segment in battlegrounds; if mmaps
+                // cannot build a non-shortcut path, do not fall back to direct
+                // wall-crossing movement.
+                motionMaster->MovePoint(0, pathDestination, true);
+                movementMode = "mmap-segment";
+                issued = true;
+            }
+            else if (!player->InBattleground())
+            {
+                // Outside battlegrounds keep the old lightweight behavior, but
+                // still request path generation when possible so we do not draw
+                // straight splines through nearby terrain.
+                motionMaster->MovePoint(0, safeDestination, shouldUsePath);
+                movementMode = shouldUsePath ? "path" : "direct";
+                issued = true;
+            }
+            else if (alreadyMoving)
+            {
+                // Existing movement is safer than issuing a direct no-path flee
+                // through WMO geometry. Let the current path continue and retry
+                // on the next flee tick.
+                movementMode = "preserve-existing";
+                issued = true;
+            }
+            else
+            {
+                movementMode = "blocked-no-mmap";
+            }
+
+            if (issued)
+                lastFleeIssueMs = nowMs;
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP hunter stutter loop: bot={} target={} decision=flee reason={} current={} desired={} move={} timer={} issued={} moving={}",
+            "Playerbot PvP hunter stutter loop: bot={} target={} decision=flee reason={} current={} desired={} move={} timer={} issued={} moving={} mode={} pathType={}",
             player->GetGUID().ToString(), target->GetGUID().ToString(), reason ? reason : "kite",
-            currentDistance, desiredExactDistance, moveDistance, player->getAttackTimer(RANGED_ATTACK), issued ? 1 : 0, alreadyMoving ? 1 : 0);
+            currentDistance, desiredExactDistance, moveDistance, player->getAttackTimer(RANGED_ATTACK), issued ? 1 : 0, alreadyMoving ? 1 : 0,
+            movementMode, uint32(pathType));
         return issued || alreadyMoving || player->isMoving();
     }
 
