@@ -3751,9 +3751,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
     uint32 const spellstoneItemEntry = isAfflictionWarlock ? SelectReadyWarlockSpellstoneItemEntry(player) : 0;
     bool const hasSelfMagicDebuff = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 0.0f) == player;
-    bool const underCasterPressure = target && IsCasterClass(target) && player->HealthBelowPct(80);
-    bool const shouldUseSpellstone = spellstoneItemEntry != 0 &&
-        (hasSelfMagicDebuff || underCasterPressure);
+    bool const shouldUseSpellstone = spellstoneItemEntry != 0 && hasSelfMagicDebuff;
 
     bool const canUseVoidwalkerSacrifice = !isAfflictionWarlock && player->HealthBelowPct(25) && !player->HasAura(19443) &&
         hasLivingPet && IsPetSpellReady(player, 19443);
@@ -3784,7 +3782,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
             !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713), 35.0f,
         { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, shouldUseSpellstone, 56.7f,
-        { "warlock spellstone", hasSelfMagicDebuff ? "use spellstone to remove magic debuffs" : "use spellstone under caster pressure", 0, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), spellstoneItemEntry });
+        { "warlock spellstone", "use spellstone to remove magic debuffs", 0, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), spellstoneItemEntry });
     AddDecisionCandidate(candidates, isAfflictionWarlock && !HasAuraFromSpellChain(target, 48181) && IsSpellReady(player, 48181), 34.5f,
         { "warlock haunt", "maintain haunt on kill target", 48181, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !HasAuraFromSpellChain(target, 11672) && IsSpellReady(player, 11672), 34.0f,
@@ -4577,7 +4575,9 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     }
 
     bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
-    bool const criticalLowMana = !inSpiritOfRedemption && player->GetClass() != CLASS_HUNTER &&
+    bool const criticalLowMana = !inSpiritOfRedemption &&
+        player->GetClass() != CLASS_HUNTER &&
+        player->GetClass() != CLASS_WARLOCK &&
         player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
     // Hard-priority mana preservation policy: below 10% mana, disengage from
@@ -4678,10 +4678,10 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         Unit const* decisionTarget = resolveTargetByGuid(activeTargetGuid);
         Unit const* decisionAllyTarget = resolveTargetByGuid(selectedAllyGuid);
         SpellDecision const candidate = SelectClassOrUtilitySpell(player, decisionTarget, decisionAllyTarget, profileSelection);
-        if (!candidate.spellId)
+        if (!candidate.spellId && !candidate.itemEntry)
             break;
 
-        if (!firstDecision.spellId)
+        if (!firstDecision.spellId && !firstDecision.itemEntry)
             firstDecision = candidate;
 
         Unit const* immediateCastTarget = resolveTargetByGuid(activeTargetGuid);
@@ -4698,6 +4698,9 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             break;
         }
+
+        if (!candidate.spellId)
+            break;
 
         suppressedSpellId = candidate.spellId;
     }
@@ -4988,7 +4991,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // the normal class-spell decision graph so they are not throttled by
     // decision cadence and do not consume the class action tick/GCD.
 
-    context.shouldExecute = context.shouldExecute || context.spellId != 0;
+    context.shouldExecute = context.shouldExecute || context.spellId != 0 || context.itemEntry != 0;
 
     char const* targetModeLabel = "none";
     switch (context.targetMode)

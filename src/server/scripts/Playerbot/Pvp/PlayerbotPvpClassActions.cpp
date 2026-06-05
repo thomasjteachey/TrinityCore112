@@ -2499,6 +2499,8 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         std::string message = "Decision: ";
         message += context.actionName ? context.actionName : "none";
         message += " | spell=" + std::to_string(context.spellId);
+        if (context.itemEntry)
+            message += " | item=" + std::to_string(context.itemEntry);
         message += " | target=";
         message += GetTargetModeLabel(context.targetMode);
         message += " | success=";
