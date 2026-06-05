@@ -1649,6 +1649,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
+    void StopVirtualPlayerbotMovement(Player* player);
+
     bool HasActiveStationaryChannel(Player const* player)
     {
         if (!player)
