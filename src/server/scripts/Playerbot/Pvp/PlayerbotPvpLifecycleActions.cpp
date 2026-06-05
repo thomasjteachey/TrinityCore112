@@ -86,6 +86,7 @@ namespace
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
     std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
+    std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid;
 
     struct HunterFleeState
     {
@@ -510,7 +511,9 @@ constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
     float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
     bool CanIssueBotMovement(Player* player);
-bool BreakExpiredHunterFeignDeath(Player* player);
+    bool HunterIsHardCastingStationaryShot(Player const* player);
+    void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra, uint32 throttleMs);
+    bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
@@ -1666,6 +1669,12 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         if (HasActiveStationaryChannel(player))
             return false;
 
+        if (player->GetClass() == CLASS_HUNTER && HunterIsHardCastingStationaryShot(player))
+        {
+            WhisperHunterAimedLifecycleDiagnostic(player, nullptr, "movement_blocked_active_cast", nullptr, 250);
+            return false;
+        }
+
         BreakExpiredHunterFeignDeath(player);
 
         if (IsCrowdControlledForAction(player))
@@ -2014,7 +2023,10 @@ bool BreakExpiredHunterFeignDeath(Player* player);
             return;
 
         if (HunterHasActiveAutoShot(player))
+        {
+            WhisperHunterAimedLifecycleDiagnostic(player, nullptr, "autoshot_interrupt_for_stationary_cast", reason, 150);
             player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+        }
 
         if (reason)
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -2043,13 +2055,130 @@ bool BreakExpiredHunterFeignDeath(Player* player);
             player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(), reason ? reason : "breakable-cc");
     }
 
+    char const* GetSpellStateLabelForAimedDiag(Spell const* spell)
+    {
+        if (!spell)
+            return "none";
+
+        switch (spell->getState())
+        {
+            case SPELL_STATE_NULL: return "null";
+            case SPELL_STATE_PREPARING: return "preparing";
+            case SPELL_STATE_CASTING: return "casting";
+            case SPELL_STATE_FINISHED: return "finished";
+            case SPELL_STATE_DELAYED: return "delayed";
+            default: return "unknown";
+        }
+    }
+
+    void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (throttleMs)
+        {
+            uint32& lastMs = g_HunterAimedDiagLastMsByGuid[player->GetGUID().GetRawValue()];
+            if (lastMs && nowMs < lastMs + throttleMs)
+                return;
+            lastMs = nowMs;
+        }
+
+        Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        Spell const* channel = player->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+        Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+        SpellInfo const* genericInfo = generic ? generic->GetSpellInfo() : nullptr;
+        SpellInfo const* channelInfo = channel ? channel->GetSpellInfo() : nullptr;
+        SpellInfo const* autoInfo = autoRepeat ? autoRepeat->GetSpellInfo() : nullptr;
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+        std::ostringstream os;
+        os << "AIMED DIAG: lifecycle phase=" << (phase ? phase : "unknown");
+        if (extra && *extra)
+            os << " extra=" << extra;
+
+        os << " gen=" << (genericInfo ? genericInfo->Id : 0) << ':' << GetSpellStateLabelForAimedDiag(generic)
+           << " chan=" << (channelInfo ? channelInfo->Id : 0) << ':' << GetSpellStateLabelForAimedDiag(channel)
+           << " auto=" << (autoInfo ? autoInfo->Id : 0) << ':' << GetSpellStateLabelForAimedDiag(autoRepeat)
+           << " moving=" << (player->isMoving() ? "yes" : "no")
+           << " move_state=" << (player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
+           << " move_flags=" << uint32(player->GetUnitMovementFlags())
+           << " motion=" << uint32(motionType)
+           << " nonmelee=" << (player->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
+           << " ranged_timer=" << player->getAttackTimer(RANGED_ATTACK)
+           << " lock=" << (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHunterStationaryCastLockToken) ? "yes" : "no");
+
+        if (target)
+        {
+            os << " target=" << target->GetGUID().ToString()
+               << " dist=" << player->GetDistance(target)
+               << " exact=" << player->GetExactDist(target)
+               << " los=" << (player->IsWithinLOSInMap(target) ? "yes" : "no")
+               << " front=" << (player->isInFront(target) ? "yes" : "no");
+        }
+
+        std::string const message = os.str();
+        if (player->duel && player->duel->Opponent)
+            player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
+
+        Map* map = player->FindMap();
+        if (!map)
+            return;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* observer = itr->GetSource();
+            if (!observer || !observer->IsGameMaster())
+                continue;
+            if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
+                continue;
+            player->Whisper(message, LANG_UNIVERSAL, observer);
+        }
+    }
+
+    bool IsHunterAimedShotSpellId(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 19434: // Aimed Shot rank 1
+            case 20900:
+            case 20901:
+            case 20902:
+            case 20903:
+            case 20904:
+            case 27065:
+            case 49049:
+            case 49050:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
     {
         if (!spellInfo)
             return false;
 
+        if (IsHunterAimedShotSpellId(spellInfo->Id))
+            return true;
+
         SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
-        return firstRank && firstRank->Id == 19434; // Aimed Shot (rank 1)
+        return firstRank && IsHunterAimedShotSpellId(firstRank->Id);
+    }
+
+    uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return 0;
+
+        uint32 castTimeMs = uint32(std::max<int32>(0, spellInfo->CalcCastTime()));
+        if (IsHunterAimedShotSpell(spellInfo))
+            return std::max<uint32>(castTimeMs, 3000);
+
+        return castTimeMs;
     }
 
     bool IsActiveHunterStationaryShotSpell(Spell const* spell)
@@ -2064,7 +2193,7 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         // Aimed Shot is the important case here, but treat any hunter cast-time
         // generic/channel spell as movement-locked. The stutter loop must yield
         // once the cast has started; otherwise a movement tick can clip the cast.
-        return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo) ||
+        return GetHunterStationaryCastTimeMs(spellInfo) > 0 || IsHunterAimedShotSpell(spellInfo) ||
             (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
     }
 
@@ -2099,6 +2228,7 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         // Do not let an already-queued Auto Shot live through Aimed Shot/Revive
         // Pet. The decision and movement layers can be held, but auto-repeat is
         // updated by the core independently.
+        WhisperHunterAimedLifecycleDiagnostic(player, target, reason ? reason : "stationary_hold", activeCast ? "activeCast=1" : "activeCast=0", 250);
         StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
         StopVirtualPlayerbotMovement(player);
 
@@ -2121,6 +2251,12 @@ bool BreakExpiredHunterFeignDeath(Player* player);
 
     bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
     {
+        if (player && player->GetClass() == CLASS_HUNTER && HunterIsHardCastingStationaryShot(player))
+        {
+            WhisperHunterAimedLifecycleDiagnostic(player, target, "flee_blocked_active_cast", reason, 200);
+            return false;
+        }
+
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !CanIssueBotMovement(player))
             return false;
 

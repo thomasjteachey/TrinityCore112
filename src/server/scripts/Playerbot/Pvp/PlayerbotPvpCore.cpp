@@ -140,13 +140,52 @@ bool IsHunterTrapSpell(uint32 spellId)
     }
 }
 
+bool IsHunterAimedShotSpellId(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 19434: // Aimed Shot rank 1
+        case 20900:
+        case 20901:
+        case 20902:
+        case 20903:
+        case 20904:
+        case 27065:
+        case 49049:
+        case 49050:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
         return false;
 
+    if (IsHunterAimedShotSpellId(spellInfo->Id))
+        return true;
+
     SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
-    return firstRank && firstRank->Id == 19434; // Aimed Shot (rank 1)
+    return firstRank && IsHunterAimedShotSpellId(firstRank->Id);
+}
+
+uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return 0;
+
+    uint32 castTimeMs = uint32(std::max<int32>(0, spellInfo->CalcCastTime()));
+
+    // Some 3.3.5 / custom DBC branches do not report the rank-chain or cast
+    // time consistently for Aimed Shot. Treat every known Aimed Shot rank as
+    // a 3s stationary cast so the selector/lifecycle cannot re-cast it and
+    // cancel the previous Aimed Shot while it is still preparing.
+    if (IsHunterAimedShotSpell(spellInfo))
+        return std::max<uint32>(castTimeMs, 3000);
+
+    return castTimeMs;
 }
 
 bool IsActiveHunterCastTimeSpell(Spell const* spell)
@@ -158,7 +197,7 @@ bool IsActiveHunterCastTimeSpell(Spell const* spell)
     if (!spellInfo)
         return false;
 
-    return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo) ||
+    return GetHunterStationaryCastTimeMs(spellInfo) > 0 || IsHunterAimedShotSpell(spellInfo) ||
         (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
 }
 
@@ -1010,6 +1049,13 @@ SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpell
 
     if (!player)
         return candidates.front().decision;
+
+    // Cast-time hunter actions are exclusive. Do not use the normal fallback
+    // behavior here: if every candidate is rejected because Aimed Shot/Revive
+    // Pet is already preparing, returning candidates.front() would re-cast the
+    // same action and cancel the original cast.
+    if (IsHunterCastTimeActionLocked(player))
+        return {};
 
     for (PrioritizedSpellDecision const& candidate : candidates)
         if (IsDecisionImmediatelyCastable(player, candidate.decision, defaultEnemyTarget, defaultAllyTarget))

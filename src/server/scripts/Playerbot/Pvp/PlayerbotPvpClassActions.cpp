@@ -51,6 +51,7 @@
 namespace
 {
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
+void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra);
 
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
@@ -76,13 +77,52 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool IsHunterAimedShotSpellId(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 19434: // Aimed Shot rank 1
+        case 20900:
+        case 20901:
+        case 20902:
+        case 20903:
+        case 20904:
+        case 27065:
+        case 49049:
+        case 49050:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
         return false;
 
+    if (IsHunterAimedShotSpellId(spellInfo->Id))
+        return true;
+
     SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
-    return firstRank && firstRank->Id == 19434; // Aimed Shot (rank 1)
+    return firstRank && IsHunterAimedShotSpellId(firstRank->Id);
+}
+
+uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return 0;
+
+    uint32 castTimeMs = uint32(std::max<int32>(0, spellInfo->CalcCastTime()));
+
+    // Some 3.3.5 / custom DBC branches do not report the rank-chain or cast
+    // time consistently for Aimed Shot. Treat every known Aimed Shot rank as
+    // a 3s stationary cast so the selector/lifecycle cannot re-cast it and
+    // cancel the previous Aimed Shot while it is still preparing.
+    if (IsHunterAimedShotSpell(spellInfo))
+        return std::max<uint32>(castTimeMs, 3000);
+
+    return castTimeMs;
 }
 
 bool IsHunterCastTimeShot(Player const* player, SpellInfo const* spellInfo)
@@ -90,7 +130,7 @@ bool IsHunterCastTimeShot(Player const* player, SpellInfo const* spellInfo)
     if (!player || player->GetClass() != CLASS_HUNTER || !spellInfo)
         return false;
 
-    return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo);
+    return GetHunterStationaryCastTimeMs(spellInfo) > 0 || IsHunterAimedShotSpell(spellInfo);
 }
 
 bool HunterHasActiveAutoShot(Player const* player)
@@ -108,7 +148,10 @@ void StopHunterAutoShotForStationaryCast(Player* player, char const* reason)
         return;
 
     if (HunterHasActiveAutoShot(player))
+    {
+        WhisperHunterCastDiagnostic(player, nullptr, "autoshot_interrupt_for_cast", 20904, reason);
         player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+    }
 
     if (reason)
         SetLastMovementDebugStatus(player, reason);
@@ -2827,6 +2870,66 @@ void NotifyWandDiagnostic(Player*, Unit*, std::string const&, uint32, char const
     // its call sites without producing player-visible diagnostics.
 }
 
+std::string BuildHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra = nullptr)
+{
+    std::ostringstream os;
+    os << "AIMED DIAG: phase=" << (phase ? phase : "unknown")
+       << " spell=" << spellId;
+
+    if (extra && *extra)
+        os << " extra=" << extra;
+
+    if (!player)
+        return os.str();
+
+    Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    Spell const* channel = player->GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+
+    SpellInfo const* genericInfo = generic ? generic->GetSpellInfo() : nullptr;
+    SpellInfo const* channelInfo = channel ? channel->GetSpellInfo() : nullptr;
+    SpellInfo const* autoInfo = autoRepeat ? autoRepeat->GetSpellInfo() : nullptr;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+
+    os << " gen=" << (genericInfo ? genericInfo->Id : 0) << ':' << GetSpellStateLabel(generic)
+       << " chan=" << (channelInfo ? channelInfo->Id : 0) << ':' << GetSpellStateLabel(channel)
+       << " auto=" << (autoInfo ? autoInfo->Id : 0) << ':' << GetSpellStateLabel(autoRepeat)
+       << " moving=" << (player->isMoving() ? "yes" : "no")
+       << " move_state=" << (player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ? "yes" : "no")
+       << " move_flags=" << uint32(player->GetUnitMovementFlags())
+       << " motion=" << uint32(motionType)
+       << " nonmelee=" << (player->IsNonMeleeSpellCast(false, false, true) ? "yes" : "no")
+       << " ranged_timer=" << player->getAttackTimer(RANGED_ATTACK)
+       << " lock=" << (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHunterStationaryCastLockToken) ? "yes" : "no")
+       << " combat=" << (player->IsInCombat() ? "yes" : "no");
+
+    if (target)
+    {
+        os << " target=" << target->GetGUID().ToString()
+           << " dist=" << player->GetDistance(target)
+           << " exact=" << player->GetExactDist(target)
+           << " los=" << (player->IsWithinLOSInMap(target) ? "yes" : "no")
+           << " front=" << (player->isInFront(target) ? "yes" : "no")
+           << " target_victim_me=" << (target->GetVictim() == player ? "yes" : "no");
+    }
+
+    Unit* victim = player->GetVictim();
+    if (victim)
+        os << " victim=" << victim->GetGUID().ToString();
+
+    return os.str();
+}
+
+void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra = nullptr)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !IsHunterAimedShotSpellId(spellId))
+        return;
+
+    WhisperPlayerbotDiagnostic(player, BuildHunterCastDiagnostic(player, target, phase, spellId, extra));
+}
+
 
 std::string BuildHunterPetDiagnostic(Player* player, char const* phase, SpellCastResult castResult)
 {
@@ -2945,35 +3048,44 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
 
     for (uint32 delayMs = 100; delayMs <= guardMs; delayMs += 100)
     {
-        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, spellId]()
+        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, spellId, delayMs]()
         {
             Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
             if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive() || hunter->GetClass() != CLASS_HUNTER)
                 return;
 
+            Unit* castTarget = !targetGuid.IsEmpty() ? ObjectAccessor::GetUnit(*hunter, targetGuid) : nullptr;
+            std::string delayExtra = "delay=" + std::to_string(delayMs);
+
             Spell const* current = hunter->GetCurrentSpell(CURRENT_GENERIC_SPELL);
-            if (!current || current->getState() == SPELL_STATE_FINISHED)
+            if (!current)
+            {
+                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_missing_generic", spellId, delayExtra.c_str());
                 return;
+            }
+
+            if (current->getState() == SPELL_STATE_FINISHED)
+            {
+                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_finished", spellId, delayExtra.c_str());
+                return;
+            }
 
             SpellInfo const* currentInfo = current->GetSpellInfo();
             if (!currentInfo || currentInfo->Id != spellId)
+            {
+                std::string mismatchExtra = delayExtra + " current=" + std::to_string(currentInfo ? currentInfo->Id : 0);
+                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_mismatch", spellId, mismatchExtra.c_str());
                 return;
+            }
 
-            // Keep Auto Shot from updating/firing while Aimed Shot or another
-            // stationary hunter cast is being prepared. In this core Auto Shot
-            // lives in CURRENT_AUTOREPEAT_SPELL and can otherwise interact with
-            // the generic spell slot/timer during Aimed Shot.
+            WhisperHunterCastDiagnostic(hunter, castTarget, "guard_active", spellId, delayExtra.c_str());
             StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
             StopPlayerbotForStationaryCast(hunter);
 
-            if (!targetGuid.IsEmpty())
+            if (castTarget && castTarget->IsAlive() && hunter->IsWithinLOSInMap(castTarget))
             {
-                Unit* castTarget = ObjectAccessor::GetUnit(*hunter, targetGuid);
-                if (castTarget && castTarget->IsAlive() && hunter->IsWithinLOSInMap(castTarget))
-                {
-                    hunter->SetFacingToObject(castTarget);
-                    hunter->SetInFront(castTarget);
-                }
+                hunter->SetFacingToObject(castTarget);
+                hunter->SetInFront(castTarget);
             }
         }, std::chrono::milliseconds(delayMs));
     }
@@ -3798,16 +3910,36 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // stop_moving_request reason=cast_time_or_autorepeat killed the spline and
     // left the bot inching or stuck.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
-    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
-        (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
-
     bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
+    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
+        isHunterStationaryCastTimeAction || (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
+
     if (isHunterStationaryCastTimeAction)
     {
+        WhisperHunterCastDiagnostic(player, target, "stationary_candidate", resolvedSpellId);
+
+        if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHunterStationaryCastLockToken))
+        {
+            WhisperHunterCastDiagnostic(player, target, "stationary_blocked_lock_active", resolvedSpellId);
+            failureReason = "hunter_stationary_cast_already_in_progress";
+            return false;
+        }
+
+        if (Spell const* currentGeneric = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            if (currentGeneric->getState() != SPELL_STATE_FINISHED)
+                if (SpellInfo const* currentInfo = currentGeneric->GetSpellInfo())
+                    if (IsHunterCastTimeShot(player, currentInfo))
+                    {
+                        WhisperHunterCastDiagnostic(player, target, "stationary_blocked_casttime_active", resolvedSpellId);
+                        failureReason = "hunter_stationary_cast_already_in_progress";
+                        return false;
+                    }
+
         // Aimed Shot/Revive Pet must not coexist with a queued Auto Shot.
         // Movement/decision locks are not enough: CURRENT_AUTOREPEAT_SPELL can
         // still update independently and clip the generic cast on this branch.
         StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
+        WhisperHunterCastDiagnostic(player, target, "pre_cast_autoshot_suppressed", resolvedSpellId);
     }
 
     if (requiresStationaryCast)
@@ -3837,7 +3969,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
     // front destination to mirror client cast payload semantics.
-    bool const isInstantCast = spellInfo->CalcCastTime() == 0;
+    bool const isInstantCast = spellInfo->CalcCastTime() == 0 && !isHunterStationaryCastTimeAction;
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
     {
         FaceTargetForInstantCast(player, target, spellInfo);
@@ -3858,6 +3990,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     NotifyWandDiagnostic(player, target, "pre_cast", resolvedSpellId);
+    if (isHunterStationaryCastTimeAction)
+        WhisperHunterCastDiagnostic(player, target, "pre_cast", resolvedSpellId);
 
     SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
@@ -3876,11 +4010,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         castResult = player->CastSpell(target, resolvedSpellId, false);
 
     if (castResult == SPELL_CAST_OK)
+    {
         NotifyWandDiagnostic(player, target, "cast_ok", resolvedSpellId);
+        if (isHunterStationaryCastTimeAction)
+            WhisperHunterCastDiagnostic(player, target, "cast_ok", resolvedSpellId);
+    }
     else
     {
         EnumText const wandCastResultText = EnumUtils::ToString(castResult);
         NotifyWandDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
+        if (isHunterStationaryCastTimeAction)
+            WhisperHunterCastDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
     }
 
     if (castResult != SPELL_CAST_OK)
@@ -3973,8 +4113,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
     {
         StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
-        uint32 const castTimeMs = uint32(spellInfo->CalcCastTime());
-        uint32 const lockSeconds = std::clamp<uint32>((castTimeMs + 1750) / 1000, 2, 12);
+        uint32 const castTimeMs = GetHunterStationaryCastTimeMs(spellInfo);
+        uint32 const lockSeconds = std::clamp<uint32>((castTimeMs + 1750) / 1000, 3, 12);
 
         // Aimed Shot / Revive Pet can be clipped by the lifecycle stutter loop
         // before CURRENT_GENERIC_SPELL is visible to the next AI tick on some
@@ -3984,6 +4124,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // so this is only a bridge for racey ticks and not a replacement for
         // spell-state checks.
         playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHunterStationaryCastLockToken, std::chrono::seconds(lockSeconds));
+        {
+            std::string acceptExtra = "castTimeMs=" + std::to_string(castTimeMs) + " lockSeconds=" + std::to_string(lockSeconds);
+            WhisperHunterCastDiagnostic(player, target, "accepted_lock_registered", resolvedSpellId, acceptExtra.c_str());
+        }
 
         Unit* castGuardTarget = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy ? target : nullptr;
         ScheduleHunterStationaryCastGuard(player, castGuardTarget, resolvedSpellId, castTimeMs);
