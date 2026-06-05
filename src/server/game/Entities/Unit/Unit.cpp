@@ -3527,17 +3527,20 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
 
         // Scarlet Chapel and Ruins of Lordaeron's water are part of intended
         // PvP pathing and should never force players out of mounts or Travel
-        // Form. Everywhere else, mounts are handled explicitly on full
-        // submersion so shallow water does not dismount players before they
-        // transition from walking to swimming.
-        if (!ShouldPreserveMountInWaterForBattleground(player))
+        // Form. Everywhere else, shallow water should not dismount players
+        // while they can still walk, but once the client transitions to
+        // swimming the mounted state must be cleared even if the map liquid
+        // height has not crossed the stricter underwater threshold for the
+        // current collision height.
+        bool const shouldDismount = !ShouldPreserveMountInWaterForBattleground(player) &&
+            (IsUnderWater() || HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING));
+        if (shouldDismount)
         {
-            bool const underwater = IsUnderWater();
-            if (underwater)
-                RemoveAurasByType(SPELL_AURA_MOUNTED);
-
-            RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER, 0, !underwater);
+            Dismount();
+            RemoveAurasByType(SPELL_AURA_MOUNTED);
         }
+
+        RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_ABOVEWATER, 0, !shouldDismount);
     }
     else
         RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_NOT_UNDERWATER);
