@@ -78,6 +78,8 @@ constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
+constexpr uint32 kDruidThornsSpellId = 9910;
+constexpr uint32 kDruidMassThornsSpellId = 89762;
 constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
 constexpr uint32 kPriestShadowWordPainSpellId = 589;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
@@ -930,6 +932,12 @@ struct PrioritizedSpellDecision
 SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget)
 {
     if (!player || !player->IsAlive())
+        return {};
+
+    // Avoid breaking rogue/druid stealth openers or Shadowmeld recovery windows
+    // with racial utility. Stealthed bots should commit to their opener instead
+    // of spending a racial before they engage.
+    if (player->HasStealthAura())
         return {};
 
     switch (player->GetRace())
@@ -1985,15 +1993,31 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
 
             break;
         }
+        case CLASS_HUNTER:
+        {
+            HunterPetDecisionState const petState = GetHunterPetDecisionState(player);
+            bool const hasDeadPet = petState.hasDeadPet || petState.shouldRevivePet;
+            if (hasDeadPet &&
+                !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterRevivePetSpellId) &&
+                IsSpellReady(player, kHunterRevivePetSpellId))
+                return { "hunter revive pet prep", "revive dead hunter pet before gates open", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (!petState.hasLivingPet && !hasDeadPet && petState.canCallPet &&
+                !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterCallPetSpellId) &&
+                IsSpellReady(player, kHunterCallPetSpellId))
+                return { "hunter call pet prep", "call active stable pet before gates open", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            break;
+        }
         case CLASS_DRUID:
         {
             if (IsSpellReady(player, 21850) && !HasAuraFromSpellChain(player, 21850))
                 return { "druid gift of the wild prep", "apply raid-wide stat buff before gates open", 21850, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
-            if (IsSpellReady(player, 9910))
+            if (IsSpellReady(player, kDruidMassThornsSpellId))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 9910, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "druid thorns prep", "apply thorns to nearby allies before gates open", 9910, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, kDruidThornsSpellId, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "druid mass thorns prep", "apply mass thorns to nearby allies before gates open", kDruidMassThornsSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
             }
 
             break;
@@ -2031,6 +2055,20 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
                 if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
                     return { "paladin greater blessing of kings prep", "buff nearby team before gates open", 25898, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
             }
+
+            break;
+        }
+        case CLASS_WARLOCK:
+        {
+            Pet const* pet = player->GetPet();
+            if (pet && pet->IsAlive())
+                break;
+
+            ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+            bool const isAfflictionWarlock = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
+            uint32 const summonPetSpell = isAfflictionWarlock ? 691 : 697;
+            if (IsSpellReady(player, summonPetSpell))
+                return { isAfflictionWarlock ? "warlock summon felhunter prep" : "warlock summon voidwalker prep", isAfflictionWarlock ? "summon felhunter before gates open" : "summon voidwalker before gates open", summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             break;
         }
