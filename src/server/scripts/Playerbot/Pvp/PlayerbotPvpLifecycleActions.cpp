@@ -2231,6 +2231,19 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return castTimeMs > 0 ? castTimeMs : 0;
     }
 
+
+    void DelayHunterRangedTimerForStationaryShot(Player* player, SpellInfo const* spellInfo)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER || !spellInfo)
+            return;
+
+        if (GetHunterStationaryCastTimeMs(spellInfo) == 0)
+            return;
+
+        if (player->getAttackTimer(RANGED_ATTACK) < 500)
+            player->setAttackTimer(RANGED_ATTACK, 434);
+    }
+
     bool IsActiveHunterStationaryShotSpell(Spell const* spell)
     {
         if (!spell || spell->getState() == SPELL_STATE_FINISHED)
@@ -2276,8 +2289,12 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // Pet. The decision and movement layers can be held, but auto-repeat is
         // updated by the core independently.
         WhisperHunterAimedLifecycleDiagnostic(player, target, reason ? reason : "stationary_hold", activeCast ? "activeCast=1" : "activeCast=0", 250);
+        if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
         StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
         StopVirtualPlayerbotMovement(player);
+        if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+            DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
 
         // Face only when there is an enemy target. Revive Pet and other self/pet
         // casts merely need the hunter to stay stationary; forcing an enemy face

@@ -3091,6 +3091,33 @@ void StopPlayerbotForStationaryCast(Player* player)
     player->SendMovementFlagUpdate();
 }
 
+
+void DelayHunterRangedTimerForStationaryShot(Player* player, SpellInfo const* spellInfo, char const* reason)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !spellInfo)
+        return;
+
+    if (GetHunterStationaryCastTimeMs(spellInfo) == 0)
+        return;
+
+    uint32 const timerMs = player->getAttackTimer(RANGED_ATTACK);
+    if (timerMs >= 500)
+        return;
+
+    // Mirror the core Auto Shot protection in Unit::_UpdateAutoRepeatSpell():
+    // when a hunter has a generic/channel spell preparing and the ranged timer
+    // gets inside the Auto Shot launch window, keep the ranged timer slightly
+    // delayed.  The playerbot cast guard intentionally suppresses CURRENT_AUTOREPEAT_SPELL
+    // during Aimed Shot/Multi-Shot, so the core's auto-repeat update does not
+    // get a chance to perform this delay itself.  Without this, RANGED_ATTACK
+    // can hit 0 in the middle of Aimed Shot and the shot can be clipped/aborted
+    // even though the bot did not move.
+    player->setAttackTimer(RANGED_ATTACK, 434);
+
+    if (reason && IsHunterAimedShotSpell(spellInfo))
+        WhisperHunterCastDiagnostic(player, nullptr, "ranged_timer_delayed", spellInfo->Id, reason);
+}
+
 void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spellId, uint32 castTimeMs)
 {
     if (!player || player->GetClass() != CLASS_HUNTER || !spellId)
@@ -3153,9 +3180,11 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
                 return;
             }
 
+            DelayHunterRangedTimerForStationaryShot(hunter, currentInfo, delayExtra.c_str());
             WhisperHunterCastDiagnostic(hunter, castTarget, "guard_active", spellId, delayExtra.c_str());
             StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
             StopPlayerbotForStationaryCast(hunter);
+            DelayHunterRangedTimerForStationaryShot(hunter, currentInfo, "post_guard_stop");
 
             if (castTarget && castTarget->IsAlive() && hunter->IsWithinLOSInMap(castTarget))
             {
@@ -4048,6 +4077,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // again and retries once without yielding the decision tick.
         NotifyWandDiagnostic(player, target, "pre_stationary_stop", resolvedSpellId);
         StopPlayerbotForStationaryCast(player);
+        if (isHunterStationaryCastTimeAction)
+            DelayHunterRangedTimerForStationaryShot(player, spellInfo, "pre_cast_stationary_stop");
         NotifyWandDiagnostic(player, target, "post_stationary_stop", resolvedSpellId);
     }
 
@@ -4206,6 +4237,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
     {
         StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
+        DelayHunterRangedTimerForStationaryShot(player, spellInfo, "cast_accepted");
         uint32 const castTimeMs = GetHunterStationaryCastTimeMs(spellInfo);
         uint32 const lockMs = std::clamp<uint32>(castTimeMs + 750, 750, 12000);
 
