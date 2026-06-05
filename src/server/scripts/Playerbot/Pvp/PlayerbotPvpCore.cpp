@@ -3296,8 +3296,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* enemyBuffedTarget = (!dispelThrottleActive && IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
     Unit const* shieldTarget = IsSpellReady(player, 10901) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 50.0f, kPriestWeakenedSoulSpellId) : nullptr;
     Unit const* renewTarget = IsSpellReady(player, 10929) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 80.0f) : nullptr;
-    Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 85.0f) : nullptr;
-    Unit const* emergencyLowAlly = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, 15.0f, 25.0f) : nullptr;
+    Unit const* healTarget = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 75.0f) : nullptr;
+    Unit const* emergencyLowAlly = IsSpellReady(player, 10917) ? SelectFriendlyHealthTarget(player, GetConfiguredHealRange(), 75.0f) : nullptr;
     Unit const* casterAlly = (player->IsInCombat() && IsSpellReady(player, 10060)) ? SelectFriendlyCasterTarget(player, GetConfiguredHealRange(), 100.0f) : nullptr;
     bool const shadowWordPainReady = IsSpellReady(player, kPriestShadowWordPainSpellId);
     Unit const* controlledTarget = shadowWordPainReady ? SelectEnemyNonBreakableCrowdControlTarget(player, 30.0f) : nullptr;
@@ -3319,7 +3319,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     if (isHealingPriest)
     {
         AddDecisionCandidate(candidates, emergencyLowAlly, 47.0f,
-            { "priest flash heal", "prioritize emergency healing for nearby ally below 25 percent health", 10917, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
+            { "priest flash heal", "prioritize healing for any nearby ally below 75 percent health", 10917, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !emergencyLowAlly && debuffedAlly, 46.0f,
             { "priest dispel magic ally", "prioritize dispelling magic debuffs from allies", 988, debuffedAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, debuffedAlly ? debuffedAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !emergencyLowAlly && enemyBuffedTarget, 45.0f,
@@ -3337,7 +3337,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         AddDecisionCandidate(candidates, renewTarget && !HasAuraFromSpellChain(renewTarget, 10929), 28.0f,
             { "priest renew", "maintain renew on moderately injured allies", 10929, renewTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, renewTarget ? renewTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, healTarget, 27.0f,
-            { "priest flash heal", "heal party with flash heal", 10917, healTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, healTarget ? healTarget->GetGUID() : ObjectGuid::Empty });
+            { "priest flash heal", "heal party members below 75 percent health with flash heal", 10917, healTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, healTarget ? healTarget->GetGUID() : ObjectGuid::Empty });
     }
 
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, kPriestShadowWordPainSpellId), 35.0f,

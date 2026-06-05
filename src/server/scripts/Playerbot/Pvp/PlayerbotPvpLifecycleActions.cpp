@@ -80,7 +80,17 @@ namespace
 {
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
+
+    struct HunterFleeState
+    {
+        Position destination;
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        uint32 untilMs = 0;
+    };
+
+    std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
+    constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 1350;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -1952,6 +1962,158 @@ namespace
         return true;
     }
 
+
+    bool IssueHunterStickyFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER || !target || !CanIssueBotMovement(player))
+            return false;
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint64 const guid = player->GetGUID().GetRawValue();
+        auto stateItr = g_HunterFleeStateByGuid.find(guid);
+        if (stateItr != g_HunterFleeStateByGuid.end())
+        {
+            HunterFleeState const& state = stateItr->second;
+            if (state.untilMs > nowMs && state.targetGuid == target->GetGUID())
+            {
+                float const dx = player->GetPositionX() - state.destination.GetPositionX();
+                float const dy = player->GetPositionY() - state.destination.GetPositionY();
+                if (std::sqrt(dx * dx + dy * dy) > 1.5f)
+                {
+                    if (!CanIssueMovementCommand(player, 350))
+                        return true;
+
+                    bool const issued = IssueMovePointThrottled(player, state.destination, 2.0f, 700);
+                    return issued || player->isMoving();
+                }
+            }
+        }
+
+        if (!CanIssueMovementCommand(player, 350))
+            return true;
+
+        float const currentDistance = player->GetDistance(target);
+        float const angleAway = target->GetAbsoluteAngle(player);
+        float const moveDistance = std::clamp(desiredExactDistance - currentDistance + 3.0f, 6.0f, 18.0f);
+        Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
+            player->GetPositionY() + std::sin(angleAway) * moveDistance,
+            player->GetPositionZ(), player->GetOrientation());
+
+        HunterFleeState& state = g_HunterFleeStateByGuid[guid];
+        state.destination = destination;
+        state.targetGuid = target->GetGUID();
+        state.untilMs = nowMs + PLAYERBOT_HUNTER_FLEE_STICK_MS;
+
+        bool const issued = IssueMovePointThrottled(player, destination, 2.0f, 700);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP hunter kite loop: bot={} target={} decision=flee reason={} current={} desired={} move={} issued={}",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), reason ? reason : "kite", currentDistance, desiredExactDistance, moveDistance, issued ? 1 : 0);
+        return issued || player->isMoving();
+    }
+
+    bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& /*profile*/)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
+            return false;
+
+        float exactDistance = 0.0f;
+        float minAutoShotRange = 0.0f;
+        float maxAutoShotRange = 0.0f;
+        if (!GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange))
+            return false;
+
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
+        uint32& pauseUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
+        float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
+        bool const hasLos = player->IsWithinLOSInMap(target);
+        bool const canAutoShot = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
+        bool const tooClose = exactDistance <= safeShootMin;
+        bool const tooFar = exactDistance > maxAutoShotRange + 1.0f;
+
+        if (tooClose)
+        {
+            pauseUntilMs = 0;
+            MarkHunterKiteHold(player);
+            return IssueHunterStickyFlee(player, target, std::max(safeShootMin + 5.0f, 14.0f), "too-close-or-deadzone");
+        }
+
+        if (pauseUntilMs > nowMs)
+        {
+            StopVirtualPlayerbotMovement(player);
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+            StopVirtualPlayerbotMovement(player);
+            return true;
+        }
+
+        if (canAutoShot)
+        {
+            Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+            bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
+            uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
+            bool const targetControlled = HasHunterKiteControl(target);
+            bool const shouldPlantForShot = !autoShotActive || autoShotTimerMs == 0 || autoShotTimerMs <= 650 || targetControlled;
+
+            if (shouldPlantForShot)
+            {
+                uint32 const pauseDurationMs = targetControlled
+                    ? std::clamp<uint32>(std::max<uint32>(autoShotTimerMs, 450), 450, 1200)
+                    : (autoShotTimerMs == 0 ? 450 : std::clamp<uint32>(autoShotTimerMs + 250, 450, 950));
+                pauseUntilMs = nowMs + pauseDurationMs;
+                g_HunterFleeStateByGuid.erase(hunterGuidRaw);
+
+                StopVirtualPlayerbotMovement(player);
+                player->SetFacingToObject(target);
+                player->SetInFront(target);
+                StopVirtualPlayerbotMovement(player);
+
+                if (!autoShotActive && player->HasSpell(75))
+                    player->CastSpell(target, 75, false);
+
+                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                    "Playerbot PvP hunter kite loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} pause={} controlled={}.",
+                    player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs, autoShotActive ? 1 : 0,
+                    pauseDurationMs, targetControlled ? 1 : 0);
+                return true;
+            }
+
+            // Default hunter state: keep opening distance between shot windows.
+            // Do not orbit/chase back to preferred range; only stop again when the
+            // ranged weapon timer is close enough to fire.
+            if (exactDistance < maxAutoShotRange - 2.0f)
+                return IssueHunterStickyFlee(player, target, maxAutoShotRange - 1.0f, "between-autoshots");
+
+            StopVirtualPlayerbotMovement(player);
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+            StopVirtualPlayerbotMovement(player);
+            return true;
+        }
+
+        if (tooFar)
+        {
+            // Only close when genuinely outside Auto Shot range, and only to the
+            // outer edge of Auto Shot. This is not the old preferred-range chase.
+            if (!CanIssueMovementCommand(player, 500))
+                return true;
+
+            float const closeToRange = std::max(1.0f, maxAutoShotRange - 1.0f);
+            bool const issued = IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 700);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP hunter kite loop: bot={} target={} decision=close-only-to-autoshot-edge distance={} followRange={} issued={}",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, closeToRange, issued ? 1 : 0);
+            return issued || player->isMoving();
+        }
+
+        // In an odd range gap, prefer stillness/facing over triangular correction.
+        StopVirtualPlayerbotMovement(player);
+        player->SetFacingToObject(target);
+        player->SetInFront(target);
+        StopVirtualPlayerbotMovement(player);
+        return true;
+    }
+
     Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)
     {
         if (!player || directive == playerbot::FlagCarrierDirective::None || !player->InBattleground())
@@ -2541,26 +2703,15 @@ namespace playerbot
         if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
             return false;
 
-        // Hunter classic dead-zone must beat stale target-relative orders. The
-        // class spell layer may have just failed Arcane/Auto Shot at exact 5-8y
-        // and recorded a chase/follow order that would otherwise suppress this
-        // lifecycle escape for 1500ms.
+        // Hunter movement is handled by DriveHunterKiteLoop below. Do not issue
+        // an early generic flee here; re-issuing ad-hoc destinations every tick
+        // was one cause of visible triangle/orbit movement.
         if (player->GetClass() == CLASS_HUNTER)
         {
             float const exactDistance = player->GetExactDist(target);
             bool const targetPressuringHunter = target->GetVictim() == player || player->IsWithinMeleeRange(target);
-
-            if (targetPressuringHunter && exactDistance < 12.0f)
+            if ((targetPressuringHunter && exactDistance < 12.0f) || (exactDistance > 5.0f && exactDistance < 8.0f))
                 MarkHunterKiteHold(player);
-
-            if (exactDistance > 5.0f && exactDistance < 8.0f)
-            {
-                MarkHunterKiteHold(player);
-                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP distance band: bot={} profile={} decision=hunter-deadzone-retreat exactDistance={}.",
-                    player->GetGUID().ToString(), profile.label, exactDistance);
-                return MoveAwayFromUnit(player, target, 13.0f);
-            }
         }
 
         // Class spell actions can issue target-relative chase/follow in the same
@@ -2603,109 +2754,8 @@ namespace playerbot
                 return MoveTowardUnit(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
             }
 
-            if (player->GetClass() == CLASS_HUNTER)
-            {
-                uint32 const nowMs = GameTime::GetGameTimeMS();
-                uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
-                uint32& pauseUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
-                if (pauseUntilMs > nowMs)
-                {
-                    StopVirtualPlayerbotMovement(player);
-                    return true;
-                }
-
-                if (IsHunterKiteHoldActive(player, nowMs))
-                {
-                    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-                    float const exactDistance = player->GetExactDist(target);
-
-                    if (exactDistance < 11.5f)
-                    {
-                        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                            "Playerbot PvP hunter kite hold: bot={} target={} decision=keep-opening-gap distance={}.",
-                            player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance);
-                        return MoveAwayFromUnit(player, target, 13.5f);
-                    }
-
-                    if (autoShotInfo)
-                    {
-                        float const minAutoShotRange = autoShotInfo->GetMinRange(false);
-                        float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-                        bool const canAutoShotWithoutDeadzone = hasLos && exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
-                        if (canAutoShotWithoutDeadzone)
-                        {
-                            StopVirtualPlayerbotMovement(player);
-                            player->SetFacingToObject(target);
-                            player->SetInFront(target);
-                            StopVirtualPlayerbotMovement(player);
-
-                            Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-                            bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
-                            if (!autoShotActive && player->HasSpell(75))
-                                player->CastSpell(target, 75, false);
-
-                            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                                "Playerbot PvP hunter kite hold: bot={} target={} decision=stop-and-shoot distance={} timer={}.",
-                                player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, player->getAttackTimer(RANGED_ATTACK));
-                            return true;
-                        }
-                    }
-
-                    // During the short post-escape window, do not let normal
-                    // ranged positioning pull the hunter back toward the target.
-                    // This prevents the visible run-away/run-back-in oscillation.
-                    StopVirtualPlayerbotMovement(player);
-                    if (hasLos)
-                    {
-                        player->SetFacingToObject(target);
-                        player->SetInFront(target);
-                        StopVirtualPlayerbotMovement(player);
-                    }
-                    TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                        "Playerbot PvP hunter kite hold: bot={} target={} decision=hold-no-reclose distance={}.",
-                        player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance);
-                    return true;
-                }
-
-                SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-                if (autoShotInfo)
-                {
-                    float const minAutoShotRange = autoShotInfo->GetMinRange(false);
-                    float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-                    float const exactDistance = player->GetExactDist(target);
-                    bool const canAutoShotWithoutDeadzone = hasLos && exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
-                    uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
-                    bool const targetControlled = HasHunterKiteControl(target);
-                    bool const shotReadySoon = autoShotTimerMs == 0 || autoShotTimerMs <= 1200;
-                    bool const safeEnoughToStutter = targetControlled || exactDistance >= std::max(profile.preferredMinRange + 2.0f, 10.0f);
-                    if (canAutoShotWithoutDeadzone && safeEnoughToStutter && (shotReadySoon || targetControlled))
-                    {
-                        uint32 const pauseDurationMs = std::clamp<uint32>(std::max<uint32>(autoShotTimerMs, 300), 300, 1250);
-                        pauseUntilMs = nowMs + pauseDurationMs;
-
-                        StopVirtualPlayerbotMovement(player);
-                        player->SetFacingToObject(target);
-                        player->SetInFront(target);
-                        StopVirtualPlayerbotMovement(player);
-
-                        Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-                        bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
-                        if (!autoShotActive && player->HasSpell(75))
-                            player->CastSpell(target, 75, false);
-
-                        // Do not schedule an automatic follow-back to ideal range after
-                        // the shot pause. That was the visible "kite out, then run back
-                        // in" loop. The next lifecycle tick will only close if the
-                        // target is actually beyond Auto Shot max range.
-
-                        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                            "Playerbot PvP hunter stutter-step: bot={} target={} distance={} timer={} controlled={} pauseMs={}.",
-                            player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs,
-                            targetControlled ? 1 : 0, pauseDurationMs);
-                        return true;
-                    }
-                }
-            }
+            if (player->GetClass() == CLASS_HUNTER && DriveHunterKiteLoop(player, target, profile))
+                return true;
 
             if (profile.createDistanceWhenCrowded && IsActivelyPressuringInMelee(target, player) && distance < profile.preferredIdealRange)
             {
