@@ -247,6 +247,9 @@ bool TryCastHumanInsigniaRacial(Player* player)
     if (!spellId || !player->HasSpell(spellId))
         return false;
 
+    if (player->HasStealthAura())
+        return false;
+
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo || player->GetSpellHistory()->HasCooldown(spellId))
         return false;
