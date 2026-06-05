@@ -616,6 +616,12 @@ SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileT
     if (!player)
         return {};
 
+    // Spirit of Redemption is a short free-cast healing window. Never let
+    // food/drink/mount utility preempt the priest healing selector here, even
+    // if the priest is technically out of combat or at 0 mana.
+    if (IsPriestInSpiritOfRedemption(player))
+        return {};
+
     constexpr uint32 kPlayerbotDrinkSpell = 22734;
     bool const maintainExistingDrink = !player->IsInCombat() &&
         player->GetMaxPower(POWER_MANA) > 0 &&
@@ -1247,6 +1253,11 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
 {
     SpellDecision decision;
     if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
+        return decision;
+
+    // Spirit of Redemption makes priest healing free and time-limited. Do not
+    // waste that window by selecting drink/eat/mount recovery.
+    if (IsPriestInSpiritOfRedemption(player))
         return decision;
 
     // Do not attempt recovery/mount actions while hard controlled. This avoids
@@ -4039,6 +4050,12 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
 
 SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
 {
+    // Spirit of Redemption must run the priest healing selector even with no
+    // selected hostile/ally target; the selector finds the lowest-health ally
+    // itself and Flash Heal is free during this aura.
+    if (IsPriestInSpiritOfRedemption(player))
+        return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
+
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
         return utilityDecision;
 
@@ -4514,10 +4531,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             return context;
     }
 
-    bool const criticalLowMana = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
+    bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
+    bool const criticalLowMana = !inSpiritOfRedemption && player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
     // Hard-priority mana preservation policy: below 10% mana, disengage from
     // combat above all other class behavior, then drink as soon as combat drops.
+    // Spirit of Redemption is exempt because its healing casts are free and the
+    // aura duration is too short to spend on drinking or disengaging.
     if (criticalLowMana)
     {
         if (player->IsInCombat())
