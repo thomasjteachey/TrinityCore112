@@ -79,6 +79,8 @@ namespace playerbot
 namespace
 {
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+    std::unordered_map<uint64, uint32> g_HunterForceFleeUntilMs;
+    std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
     std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
 
@@ -93,8 +95,9 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MS = 500;
+    constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
-    constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 700;
+    constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -1994,34 +1997,60 @@ namespace
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !CanIssueBotMovement(player))
             return false;
 
-        if (!CanIssueMovementCommand(player, 350))
+        uint64 const guid = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+
+        // Do not let the generic movement throttle turn a flee phase into a
+        // stationary turret phase. If the hunter is already moving, preserving
+        // that movement is success; if he is stopped, allow a forced flee issue
+        // even if a recent stop/face/autoshot command just ran.
+        bool const alreadyMoving = player->isMoving() || player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
+        uint32& lastFleeIssueMs = g_HunterLastFleeIssueMs[guid];
+        if (alreadyMoving && nowMs < lastFleeIssueMs + PLAYERBOT_HUNTER_FLEE_REISSUE_MS)
             return true;
 
-        uint64 const guid = player->GetGUID().GetRawValue();
         int8& side = g_HunterKiteSideByGuid[guid];
         if (side == 0)
             side = (guid & 1) ? int8(1) : int8(-1);
 
         float const currentDistance = player->GetExactDist(target);
         float const angleAway = target->GetAbsoluteAngle(player);
-        // Move in short, repeated "away" segments instead of committing to a
-        // long stale point. Long sticky points were the source of visible
-        // triangle/orbit movement when the target moved during the kite.
         float const neededDistance = desiredExactDistance > currentDistance ? desiredExactDistance - currentDistance : 0.0f;
-        float const moveDistance = std::clamp(neededDistance + 3.0f, 7.0f, 14.0f);
-        float const edgeBias = currentDistance >= desiredExactDistance - 1.0f ? 0.35f * float(side) : 0.0f;
+        float const moveDistance = std::clamp(neededDistance + 4.0f, 8.0f, 16.0f);
+
+        // Bias only slightly, and keep the side stable, so the hunter travels
+        // generally away from the attacker instead of re-picking triangle legs.
+        float const edgeBias = 0.18f * float(side);
         float const fleeAngle = angleAway + edgeBias;
 
         Position destination(player->GetPositionX() + std::cos(fleeAngle) * moveDistance,
             player->GetPositionY() + std::sin(fleeAngle) * moveDistance,
             player->GetPositionZ(), player->GetOrientation());
 
-        bool const issued = IssueMovePointThrottled(player, destination, 4.0f, PLAYERBOT_HUNTER_FLEE_REISSUE_MS);
+        // Hunter stutter movement needs to be able to resume immediately after
+        // StopMoving()/face/autoshot. The generic movement throttle is shared
+        // with stop/follow helpers and can otherwise leave the hunter standing
+        // still for the whole post-shot window. Issue this flee segment directly
+        // and keep our own lightweight reissue throttle above.
+        ClearEatDrinkAurasForMovement(player);
+        Position const safeDestination = BuildCollisionSafeDestination(player, destination);
+        bool issued = false;
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+        {
+            MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+            if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+                motionMaster->Clear();
+
+            motionMaster->MovePoint(0, safeDestination, false);
+            issued = true;
+            lastFleeIssueMs = nowMs;
+        }
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP hunter stutter loop: bot={} target={} decision=flee reason={} current={} desired={} move={} timer={} issued={}",
+            "Playerbot PvP hunter stutter loop: bot={} target={} decision=flee reason={} current={} desired={} move={} timer={} issued={} moving={}",
             player->GetGUID().ToString(), target->GetGUID().ToString(), reason ? reason : "kite",
-            currentDistance, desiredExactDistance, moveDistance, player->getAttackTimer(RANGED_ATTACK), issued ? 1 : 0);
-        return issued || player->isMoving();
+            currentDistance, desiredExactDistance, moveDistance, player->getAttackTimer(RANGED_ATTACK), issued ? 1 : 0, alreadyMoving ? 1 : 0);
+        return issued || alreadyMoving || player->isMoving();
     }
 
     bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& /*profile*/)
@@ -2038,6 +2067,7 @@ namespace
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
         uint32& plantUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
+        uint32& forceFleeUntilMs = g_HunterForceFleeUntilMs[hunterGuidRaw];
         float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
         bool const hasLos = player->IsWithinLOSInMap(target);
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
@@ -2075,6 +2105,7 @@ namespace
         if (tooClose)
         {
             plantUntilMs = 0;
+            forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
             MarkHunterKiteHold(player);
             return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
         }
@@ -2085,6 +2116,19 @@ namespace
             return true;
         }
 
+        // After every 500ms plant window, force a flee window before another
+        // plant is allowed. Some core states report the ranged timer as 0/ready
+        // for more than one lifecycle tick, which previously made the hunter
+        // chain-plant forever and appear completely stuck.
+        if (forceFleeUntilMs > nowMs && inAutoShotBand)
+        {
+            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "post-plant-force-flee");
+        }
+
+        if (forceFleeUntilMs <= nowMs)
+            forceFleeUntilMs = 0;
+
         uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
         bool const autoShotActive = HunterHasActiveAutoShot(player);
         bool const shouldPlantForAutoShot = inAutoShotBand && (!autoShotActive || autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
@@ -2092,6 +2136,7 @@ namespace
         if (shouldPlantForAutoShot)
         {
             plantUntilMs = nowMs + PLAYERBOT_HUNTER_STUTTER_PLANT_MS;
+            forceFleeUntilMs = std::max(forceFleeUntilMs, plantUntilMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
             g_HunterFleeStateByGuid.erase(hunterGuidRaw);
             stopFaceAndKeepAutoShot();
 
