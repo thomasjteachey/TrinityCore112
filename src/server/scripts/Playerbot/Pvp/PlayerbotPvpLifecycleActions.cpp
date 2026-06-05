@@ -2292,17 +2292,43 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
             DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
         StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
-        StopVirtualPlayerbotMovement(player);
-        if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
-            DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
 
-        // Face only when there is an enemy target. Revive Pet and other self/pet
-        // casts merely need the hunter to stay stationary; forcing an enemy face
-        // is unnecessary but harmless, so keep it conservative.
-        if (target && target->IsAlive() && player->IsValidAttackTarget(target) && player->IsWithinLOSInMap(target))
+        bool const movedDuringCast = player->isMoving() ||
+            player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
+            (player->GetUnitMovementFlags() & MOVEMENTFLAG_MASK_MOVING);
+
+        // Critical: while a real stationary hunter cast is already active, do
+        // not repeatedly call StopMoving(), clear motion, or face the target on
+        // every lifecycle tick. Those calls can themselves produce movement /
+        // facing updates for virtual bots and clip the client cast bar. Only do
+        // an emergency stop if movement actually resumed during the cast.
+        if (activeCast && !movedDuringCast)
         {
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP hunter stationary cast hold without movement touch: bot={} target={} reason={} timer={}",
+                player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(),
+                reason ? reason : "stationary-cast", player->getAttackTimer(RANGED_ATTACK));
+            return true;
+        }
+
+        if (movedDuringCast)
+        {
+            WhisperHunterAimedLifecycleDiagnostic(player, target, "movement_detected_during_stationary_cast", reason ? reason : "stationary_hold", 150);
+            StopVirtualPlayerbotMovement(player);
+            if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+                DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
+        }
+        else if (!activeCast)
+        {
+            // Explicit lock race window before CURRENT_GENERIC_SPELL is visible:
+            // one stop/facing correction is okay here because the cast is not
+            // yet actively preparing.
+            StopVirtualPlayerbotMovement(player);
+            if (target && target->IsAlive() && player->IsValidAttackTarget(target) && player->IsWithinLOSInMap(target))
+            {
+                player->SetFacingToObject(target);
+                player->SetInFront(target);
+            }
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",

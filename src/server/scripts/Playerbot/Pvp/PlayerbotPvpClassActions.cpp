@@ -3203,14 +3203,25 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
 
             DelayHunterRangedTimerForStationaryShot(hunter, currentInfo, delayExtra.c_str());
             WhisperHunterCastDiagnostic(hunter, castTarget, "guard_active", spellId, delayExtra.c_str());
-            StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
-            StopPlayerbotForStationaryCast(hunter);
-            DelayHunterRangedTimerForStationaryShot(hunter, currentInfo, "post_guard_stop");
 
-            if (castTarget && castTarget->IsAlive() && hunter->IsWithinLOSInMap(castTarget))
+            // Once the stationary shot is actively preparing, do not keep
+            // re-issuing StopMoving(), clearing MotionMaster, or turning the
+            // hunter every guard tick. Those operations are safe before the
+            // cast starts, but on virtual playerbots they can generate server
+            // movement/facing updates during the cast bar and clip Aimed Shot.
+            // The guard should only HOLD other systems out and delay the ranged
+            // timer. If something actually made the hunter move, log it and
+            // apply one emergency stop.
+            StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
+
+            bool const movedDuringCast = hunter->isMoving() ||
+                hunter->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
+                (hunter->GetUnitMovementFlags() & MOVEMENTFLAG_MASK_MOVING);
+            if (movedDuringCast)
             {
-                hunter->SetFacingToObject(castTarget);
-                hunter->SetInFront(castTarget);
+                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_detected_movement_during_cast", spellId, delayExtra.c_str());
+                StopPlayerbotForStationaryCast(hunter);
+                DelayHunterRangedTimerForStationaryShot(hunter, currentInfo, "post_emergency_stop");
             }
         }, std::chrono::milliseconds(delayMs));
     }
