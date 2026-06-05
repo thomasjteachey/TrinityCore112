@@ -106,6 +106,26 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, uint32 spellId)
     return IsPriestInSpiritOfRedemption(player) && IsPriestFlashHealSpell(spellId);
 }
 
+bool IsHunterTrapSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+
+    switch (firstRankSpellId)
+    {
+        case 1499:  // Freezing Trap
+        case 13795: // Immolation Trap
+        case 13809: // Frost Trap
+        case 13813: // Explosive Trap
+            return true;
+        default:
+            return false;
+    }
+}
+
 SpellInfo const* GetFirstOnUseItemSpellInfo(Item const* item)
 {
     if (!item)
@@ -726,6 +746,13 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(knownByPlayer ? knownPlayerSpellId : decision.spellId);
     if (!spellInfo)
+        return false;
+
+    // Classic hunter traps cannot be placed while the hunter is still in combat.
+    // Feign Death may clear combat and make the next trap valid, but the selector
+    // must not return an in-combat trap attempt that would spam
+    // SPELL_FAILED_AFFECTING_COMBAT.
+    if (player->GetClass() == CLASS_HUNTER && IsHunterTrapSpell(knownByPlayer ? knownPlayerSpellId : decision.spellId) && player->IsInCombat())
         return false;
 
     // Reactive spells like Revenge can be known and off cooldown while still
@@ -2501,6 +2528,50 @@ Unit const* SelectFriendlyHealthTarget(Player const* player, float maxDistance, 
     return best ? best : selfCandidate;
 }
 
+Unit const* SelectFriendlyLowestHealthTarget(Player const* player, float maxDistance, float maxHealthPct, uint32 excludedAuraId = 0, bool includeSelf = true)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    Unit const* best = nullptr;
+    float bestHealth = 101.0f;
+    float bestDistance = std::numeric_limits<float>::max();
+
+    auto evaluateCandidate = [&](Unit const* candidate)
+    {
+        if (!candidate || !candidate->IsAlive())
+            return;
+        if (!includeSelf && candidate == player)
+            return;
+        if (!IsFriendlySupportTarget(player, candidate))
+            return;
+        if (excludedAuraId && candidate->HasAura(excludedAuraId))
+            return;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return;
+
+        float const healthPct = candidate->GetHealthPct();
+        if (healthPct > maxHealthPct)
+            return;
+
+        float const distance = player->GetDistance(candidate);
+        if (healthPct < bestHealth || (std::abs(healthPct - bestHealth) < 0.1f && distance < bestDistance))
+        {
+            best = candidate;
+            bestHealth = healthPct;
+            bestDistance = distance;
+        }
+    };
+
+    evaluateCandidate(player);
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        evaluateCandidate(itr->GetSource());
+
+    return best;
+}
+
 Unit const* SelectFriendlyCasterTarget(Player const* player, float maxDistance, float maxHealthPct)
 {
     if (!player || !player->FindMap())
@@ -3167,8 +3238,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     bool const rangedMode = IsHunterInRangedMode(player);
     uint32 const preferredTrapSpellId = isSurvivalHunter && trapSetupTarget && HasDotAura(trapSetupTarget) ? uint32(13809) : uint32(14311);
     bool const preferredTrapReady = IsSpellReady(player, preferredTrapSpellId);
-    bool const canDropTrapNow = trapSetupThreat && preferredTrapReady &&
-        (!player->IsInCombat() || HasAuraFromSpellChain(player, 5384));
+    bool const canFeignForTrap = trapSetupThreat && player->IsInCombat() && preferredTrapReady &&
+        IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384);
+    bool const canDropTrapNow = trapSetupThreat && !player->IsInCombat() && preferredTrapReady;
 
     bool const targetSnaredOrStunned = target &&
         (target->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
@@ -3177,8 +3249,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, player->HealthBelowPct(35) && IsSpellReady(player, 19263), 35.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, trapSetupThreat && IsSpellReady(player, 5384) && preferredTrapReady && !HasAuraFromSpellChain(player, 5384), 36.0f,
-        { "hunter feign death", "set up trap while pressured in melee/dead-zone", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, canFeignForTrap, 36.0f,
+        { "hunter feign death", "set up out-of-combat trap while pressured in melee/dead-zone", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, canDropTrapNow, 35.75f,
         { preferredTrapSpellId == 13809 ? "hunter frost trap" : "hunter freezing trap", "drop trap after feign death setup", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263) && !IsSpellReady(player, 19263), 34.0f,
@@ -3291,6 +3363,20 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
         return decision;
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
+
+    // Spirit of Redemption is a short pure-healing window. Do not let the normal
+    // priest fallback graph pick buffs, offensive casts, or arbitrary explicit
+    // ally targets here. Always pick the lowest-health injured ally in heal range,
+    // and do nothing if nobody is actually injured.
+    if (IsPriestInSpiritOfRedemption(player))
+    {
+        Unit const* spiritHealTarget = IsSpellReady(player, 10917) ? SelectFriendlyLowestHealthTarget(player, GetConfiguredHealRange(), 99.0f, 0, false) : nullptr;
+        if (spiritHealTarget)
+            return { "priest flash heal", "heal lowest-health ally during spirit of redemption", 10917, playerbot::PvpClassSpellContext::TargetMode::Ally, spiritHealTarget->GetGUID() };
+
+        return {};
+    }
+
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     Unit const* debuffedAlly = (!dispelThrottleActive && IsSpellReady(player, 988)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, GetConfiguredHealRange()) : nullptr;
     Unit const* enemyBuffedTarget = (!dispelThrottleActive && IsSpellReady(player, 988) && hasHostileTarget) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, GetConfiguredSpellRange()) : nullptr;
@@ -3307,7 +3393,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* rogueTarget = selectedRogueTarget ? selectedRogueTarget : (shadowWordPainReady ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr);
     bool const isHolyPriest = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest;
-    Unit const* spiritHealTarget = (isHolyPriest && IsPriestInSpiritOfRedemption(player) && IsSpellReady(player, 10917)) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
+    Unit const* spiritHealTarget = (isHolyPriest && IsPriestInSpiritOfRedemption(player) && IsSpellReady(player, 10917)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 99.5f, 0, false) : nullptr;
     Unit const* fearWardTarget = (player->GetRace() == RACE_DWARF && IsSpellReady(player, 6346)) ? SelectFriendlyMissingBuffTarget(player, 6346, 40.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
@@ -4500,8 +4586,9 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (deadZoneTarget)
         {
             bool const trapReady = IsSpellReady(player, 14311) || IsSpellReady(player, 13809);
-            bool const canFeignTrap = trapReady && (IsSpellReady(player, 5384) || HasAuraFromSpellChain(player, 5384) || !player->IsInCombat());
-            if (!canFeignTrap)
+            bool const canTrapNow = trapReady && !player->IsInCombat();
+            bool const canFeignForTrap = trapReady && player->IsInCombat() && IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384);
+            if (!canTrapNow && !canFeignForTrap)
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, deadZoneTarget->GetGUID(),
                     ComputeHunterDeadZoneRetreatStep(player, deadZoneTarget),
@@ -4518,7 +4605,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (meleeKiteTarget && player->IsWithinMeleeRange(meleeKiteTarget))
         {
             bool const trapReady = IsSpellReady(player, 14311) || IsSpellReady(player, 13809);
-            bool const shouldTryTrapFirst = trapReady && (IsSpellReady(player, 5384) || HasAuraFromSpellChain(player, 5384) || !player->IsInCombat());
+            bool const shouldTryTrapFirst = (trapReady && !player->IsInCombat()) ||
+                (trapReady && player->IsInCombat() && IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384));
             bool const shouldTryWingClipFirst = IsSpellReady(player, 14268) &&
                 !HasAuraFromSpellChain(meleeKiteTarget, 14268) &&
                 !IsHunterMeleeKiteTargetControlled(meleeKiteTarget);

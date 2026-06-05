@@ -73,6 +73,26 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool IsHunterTrapSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    uint32 const firstRankSpellId = firstRank ? firstRank->Id : spellInfo->Id;
+
+    switch (firstRankSpellId)
+    {
+        case 1499:  // Freezing Trap
+        case 13795: // Immolation Trap
+        case 13809: // Frost Trap
+        case 13813: // Explosive Trap
+            return true;
+        default:
+            return false;
+    }
+}
+
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
@@ -3398,6 +3418,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    // Classic hunter traps are out-of-combat only. Feign Death may make the
+    // hunter eligible on a later tick, but never send an in-combat trap cast
+    // into the core where it becomes SPELL_FAILED_AFFECTING_COMBAT spam.
+    if (player->GetClass() == CLASS_HUNTER && IsHunterTrapSpell(spellInfo) && player->IsInCombat())
+    {
+        failureReason = "hunter_trap_requires_out_of_combat";
+        return false;
+    }
 
     // Only force dismount when the bot is actually transitioning into combat
     // pressure. Allow benign out-of-combat utility/self-maintenance actions to
@@ -3661,6 +3689,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
                 SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(delayedTrapSpellId);
                 if (trapInfo &&
+                    !hunter->IsInCombat() &&
                     !hunter->GetSpellHistory()->HasCooldown(delayedTrapSpellId) &&
                     !hunter->GetSpellHistory()->HasGlobalCooldown(trapInfo) &&
                     !hunter->IsNonMeleeSpellCast(false, false, true))
