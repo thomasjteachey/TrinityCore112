@@ -3242,6 +3242,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         : nullptr;
 
     target = activeTarget;
+    bool const targetBreakableCrowdControl = target && HasBreakableCrowdControl(target);
     bool const targetClose = player->IsWithinDistInMap(target, kReferenceHunterSwitchDistance);
     bool const enemyOnTop = HasHostileTarget(player, enemyOnTopTarget);
     bool const trapSetupThreat = HasHostileTarget(player, trapSetupTarget);
@@ -3282,9 +3283,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter call pet", "summon active stable pet when no living pet is present", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldRevivePet && IsSpellReady(player, kHunterRevivePetSpellId), 25.0f,
         { "hunter revive pet", "revive dead hunter pet instead of repeatedly calling it", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 19503), 23.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && enemyOnTopTarget->HasUnitState(UNIT_STATE_CASTING) && !HasBreakableCrowdControl(enemyOnTopTarget) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && IsSpellReady(player, 19503), 23.0f,
+    AddDecisionCandidate(candidates, isMarksmanshipHunter && nearbyCastingTarget && !HasBreakableCrowdControl(nearbyCastingTarget) && IsSpellReady(player, 19503), 23.0f,
         { "hunter scatter shot", "scatter interrupt against nearby cast", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates,
         enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) &&
@@ -3292,22 +3293,22 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         21.0f,
         { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy,
             enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
         { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && isSurvivalHunter && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isSurvivalHunter && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
         !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, 25295), 19.75f,
         { "hunter serpent sting", "apply ranged dot pressure to non-mana kill target", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && rogueTarget && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 25295), 19.5f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && rogueTarget && !HasBreakableCrowdControl(rogueTarget) && !HasAuraFromSpellChain(rogueTarget, 25295) && IsSpellReady(player, 25295), 19.5f,
         { "hunter serpent sting", "apply ranged dot pressure", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && isSurvivalHunter && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isSurvivalHunter && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
         { "hunter arcane shot", "instant survival pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && manaTarget && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
+    AddDecisionCandidate(candidates, !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
         { "hunter viper sting", "drain mana on mana users", 14280, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget ? manaTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(enemyOnTopTarget), 14.0f,
         { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });

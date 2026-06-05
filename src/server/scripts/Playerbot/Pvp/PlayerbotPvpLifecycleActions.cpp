@@ -1983,6 +1983,27 @@ namespace
         return autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
     }
 
+
+    void StopHunterAutoShotForBreakableCrowdControl(Player* player, Unit* target, char const* reason)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        if (HunterHasActiveAutoShot(player))
+            player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+
+        if (target && player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID())
+            player->AttackStop();
+
+        if (Pet* pet = player->GetPet())
+            if (target && pet->GetVictim() && pet->GetVictim()->GetGUID() == target->GetGUID())
+                pet->AttackStop();
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP hunter suppress damage on breakable CC: bot={} target={} reason={}",
+            player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(), reason ? reason : "breakable-cc");
+    }
+
     bool HunterIsHardCastingStationaryShot(Player const* player)
     {
         if (!player || player->GetClass() != CLASS_HUNTER)
@@ -2122,8 +2143,22 @@ namespace
         bool const tooClose = exactDistance <= safeShootMin;
         bool const tooFar = exactDistance > maxAutoShotRange + 1.0f;
 
+        if (target->HasBreakableByDamageCrowdControlAura())
+        {
+            clearPlantState();
+            forceFleeUntilMs = 0;
+            StopHunterAutoShotForBreakableCrowdControl(player, target, "kite-loop-breakable-cc");
+            return false;
+        }
+
         auto stopFaceAndKeepAutoShot = [&]()
         {
+            if (target->HasBreakableByDamageCrowdControlAura())
+            {
+                StopHunterAutoShotForBreakableCrowdControl(player, target, "plant-suppressed-breakable-cc");
+                return;
+            }
+
             StopVirtualPlayerbotMovement(player);
             player->SetFacingToObject(target);
             player->SetInFront(target);
@@ -2223,6 +2258,11 @@ namespace
             // Auto Shot can stay queued as an auto-repeat spell while the hunter
             // is moving. Do not park early just because Auto Shot is inactive;
             // start the auto-repeat and keep fleeing until the real shot window.
+            if (target->HasBreakableByDamageCrowdControlAura())
+            {
+                StopHunterAutoShotForBreakableCrowdControl(player, target, "activate-autoshot-suppressed-breakable-cc");
+                return false;
+            }
             player->SetFacingToObject(target);
             player->SetInFront(target);
             player->CastSpell(target, 75, false);
@@ -3083,6 +3123,12 @@ namespace playerbot
         {
             Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
             bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo()->Id == 75;
+
+            if (targetInBreakableCrowdControl)
+            {
+                StopHunterAutoShotForBreakableCrowdControl(player, target, "engage-breakable-cc");
+                return DriveCombatPositioning(player, target, profile);
+            }
 
             bool inAutoShotRange = false;
             if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))

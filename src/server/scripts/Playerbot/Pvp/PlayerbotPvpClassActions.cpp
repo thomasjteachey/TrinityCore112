@@ -1221,10 +1221,18 @@ bool IsHunterAutoShotBand(Player const* player, Unit const* target)
     return exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
 }
 
+void StopHunterDamageOnBreakableCrowdControl(Player* player, Unit* target, char const* reason);
+
 void StopHunterAndStartAutoShot(Player* player, Unit* target, char const* reason)
 {
     if (!player || !target || !target->IsAlive())
         return;
+
+    if (target->HasBreakableByDamageCrowdControlAura())
+    {
+        StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_hold_autoshot_suppressed_breakable_cc");
+        return;
+    }
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     MovementGeneratorType const motionBefore = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
@@ -2386,10 +2394,68 @@ uint32 ResolveKnownPetSpellInChain(Player const* player, uint32 baseSpellId)
     return resolvedSpellId;
 }
 
+
+bool IsSpellInFirstRankChain(SpellInfo const* spellInfo, uint32 firstRankSpellId)
+{
+    if (!spellInfo || !firstRankSpellId)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == firstRankSpellId;
+}
+
+bool IsHunterBreakableCrowdControlSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    if (IsSpellInFirstRankChain(spellInfo, 19386)) // Wyvern Sting
+        return true;
+
+    if (IsSpellInFirstRankChain(spellInfo, 19503)) // Scatter Shot
+        return true;
+
+    // Freezing Trap effect/ranks. The trap itself is a self-cast, but stopping
+    // ranged auto-repeat after the cast is still safe and prevents a queued shot
+    // from instantly breaking the trap target when the trap arms/triggers.
+    if (IsSpellInFirstRankChain(spellInfo, 1499) || IsSpellInFirstRankChain(spellInfo, 3355))
+        return true;
+
+    return false;
+}
+
+void StopHunterDamageOnBreakableCrowdControl(Player* player, Unit* target, char const* reason)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return;
+
+    if (Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+        if (SpellInfo const* autoRepeatInfo = autoRepeat->GetSpellInfo())
+            if (autoRepeatInfo->Id == 75)
+                player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+
+    if (target && player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID())
+        player->AttackStop();
+
+    if (Pet* pet = player->GetPet())
+    {
+        if (target && pet->GetVictim() && pet->GetVictim()->GetGUID() == target->GetGUID())
+            pet->AttackStop();
+    }
+
+    SetLastMovementDebugStatus(player, reason ? reason : "hunter_stop_damage_for_breakable_cc");
+}
+
 void CommandPetAttackTarget(Player* player, Unit* target)
 {
     if (!player || !target || !target->IsAlive())
         return;
+
+    if (target->HasBreakableByDamageCrowdControlAura())
+    {
+        StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_pet_attack_suppressed_breakable_cc");
+        return;
+    }
 
     Pet* pet = player->GetPet();
     if (!pet || !pet->IsAlive() || !pet->IsValidAttackTarget(target))
@@ -3110,6 +3176,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // is not already in its face. Issue that command before range/LOS
             // validation so an out-of-range pet begins closing immediately
             // instead of spending repeated decision ticks on failed casts.
+            if (target && target->HasBreakableByDamageCrowdControlAura())
+            {
+                StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_pet_spell_suppressed_breakable_cc");
+                failureReason = "target_breakable_crowd_control";
+                return false;
+            }
             CommandPetAttackTarget(player, target);
 
             if (!petCaster->IsWithinLOSInMap(target))
@@ -3259,9 +3331,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             if (CanIssueFollowCommands(player))
                 IssueStealthOpenerMovement(player, target);
         }
+        else if (target && target->HasBreakableByDamageCrowdControlAura())
+            StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_owner_attack_suppressed_breakable_cc");
         else if (player->GetVictim() != target)
             player->Attack(target, false);
-        CommandPetAttackTarget(player, target);
+
+        if (!target || !target->HasBreakableByDamageCrowdControlAura())
+            CommandPetAttackTarget(player, target);
 
         // Virtual sessions can visually "turn" while server-side facing checks
         // still fail for the immediate cast tick. SetInFront updates orientation
@@ -3653,6 +3729,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
     }
+
+    if (player->GetClass() == CLASS_HUNTER && IsHunterBreakableCrowdControlSpell(spellInfo))
+        StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_breakable_cc_cast_stop_autoshot");
 
     if (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel())
         StopPlayerbotForStationaryCast(player);
