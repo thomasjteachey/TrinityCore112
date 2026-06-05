@@ -50,6 +50,8 @@
 
 namespace
 {
+void SetLastMovementDebugStatus(Player const* player, std::string const& status);
+
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
@@ -89,6 +91,27 @@ bool IsHunterCastTimeShot(Player const* player, SpellInfo const* spellInfo)
         return false;
 
     return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo);
+}
+
+bool HunterHasActiveAutoShot(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return false;
+
+    Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    return autoRepeat && autoRepeat->GetSpellInfo() && autoRepeat->GetSpellInfo()->Id == 75;
+}
+
+void StopHunterAutoShotForStationaryCast(Player* player, char const* reason)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return;
+
+    if (HunterHasActiveAutoShot(player))
+        player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+
+    if (reason)
+        SetLastMovementDebugStatus(player, reason);
 }
 
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
@@ -2936,6 +2959,11 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
             if (!currentInfo || currentInfo->Id != spellId)
                 return;
 
+            // Keep Auto Shot from updating/firing while Aimed Shot or another
+            // stationary hunter cast is being prepared. In this core Auto Shot
+            // lives in CURRENT_AUTOREPEAT_SPELL and can otherwise interact with
+            // the generic spell slot/timer during Aimed Shot.
+            StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
             StopPlayerbotForStationaryCast(hunter);
 
             if (!targetGuid.IsEmpty())
@@ -3772,6 +3800,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
     bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
         (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
+
+    bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
+    if (isHunterStationaryCastTimeAction)
+    {
+        // Aimed Shot/Revive Pet must not coexist with a queued Auto Shot.
+        // Movement/decision locks are not enough: CURRENT_AUTOREPEAT_SPELL can
+        // still update independently and clip the generic cast on this branch.
+        StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
+    }
+
     if (requiresStationaryCast)
     {
         std::string stationaryDeferDiag;
@@ -3934,6 +3972,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
     {
+        StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
         uint32 const castTimeMs = uint32(spellInfo->CalcCastTime());
         uint32 const lockSeconds = std::clamp<uint32>((castTimeMs + 1750) / 1000, 2, 12);
 

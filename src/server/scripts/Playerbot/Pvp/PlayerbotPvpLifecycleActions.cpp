@@ -2008,6 +2008,18 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         return autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
     }
 
+    void StopHunterAutoShotForStationaryCast(Player* player, char const* reason)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        if (HunterHasActiveAutoShot(player))
+            player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+
+        if (reason)
+            SetLastMovementDebugStatus(player, reason);
+    }
+
 
     void StopHunterAutoShotForBreakableCrowdControl(Player* player, Unit* target, char const* reason)
     {
@@ -2082,6 +2094,10 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         if (!activeCast && !explicitLock)
             return false;
 
+        // Do not let an already-queued Auto Shot live through Aimed Shot/Revive
+        // Pet. The decision and movement layers can be held, but auto-repeat is
+        // updated by the core independently.
+        StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
         StopVirtualPlayerbotMovement(player);
 
         // Face only when there is an enemy target. Revive Pet and other self/pet
