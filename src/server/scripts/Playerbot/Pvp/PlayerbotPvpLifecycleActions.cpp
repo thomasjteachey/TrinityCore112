@@ -2339,7 +2339,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return true;
     }
 
-    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
+    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason, bool allowEmergencyPathFallback = false)
     {
         if (player && player->GetClass() == CLASS_HUNTER && HunterIsHardCastingStationaryShot(player))
         {
@@ -2426,6 +2426,16 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 movementMode = "preserve-existing";
                 issued = true;
             }
+            else if (allowEmergencyPathFallback && shouldUsePath)
+            {
+                // If a hunter is inside melee/dead-zone, freezing in place is
+                // worse than taking a short normal pathing move. This still asks
+                // MotionMaster to generate a path; it does not use the old raw
+                // no-path spline that clipped through Blackrock Throne walls.
+                motionMaster->MovePoint(0, safeDestination, true);
+                movementMode = "emergency-path-fallback";
+                issued = true;
+            }
             else
             {
                 movementMode = "blocked-no-mmap";
@@ -2474,9 +2484,21 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (target->HasBreakableByDamageCrowdControlAura())
         {
             clearPlantState();
-            forceFleeUntilMs = 0;
             StopHunterAutoShotForBreakableCrowdControl(player, target, "kite-loop-breakable-cc");
-            return false;
+
+            // Breakable CC must suppress damage, not suppress movement. If the
+            // target is trapped/wyverned/scattered in the hunter's melee or
+            // dead-zone band, use that CC window to reposition out to firing
+            // range instead of standing still and waiting for the CC to end.
+            if (tooClose || exactDistance < safeShootMin + 6.0f)
+            {
+                forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
+                MarkHunterKiteHold(player);
+                return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 8.0f, 17.0f), "breakable-cc-reposition-too-close", true);
+            }
+
+            forceFleeUntilMs = 0;
+            return true;
         }
 
         auto stopFaceAndKeepAutoShot = [&]()
@@ -2510,7 +2532,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             clearPlantState();
             forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
             MarkHunterKiteHold(player);
-            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
+            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone", true);
         }
 
         if (plantUntilMs > nowMs)
