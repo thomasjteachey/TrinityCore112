@@ -2233,6 +2233,52 @@ bool IsCrowdControlledForAction(Player const* player)
     return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
+
+bool IsMageBlinkEscapeCast(Player const* player, playerbot::PvpClassSpellContext const& context, uint32 resolvedSpellId)
+{
+    if (!player || player->GetClass() != CLASS_MAGE)
+        return false;
+
+    if (context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    if (context.spellId != 1953 && resolvedSpellId != 1953)
+        return false;
+
+    constexpr uint32 blinkableMechanicMask =
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_ROOT);
+
+    constexpr uint32 nonBlinkableControlMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    bool const blinkableControl =
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        player->HasAuraWithMechanic(blinkableMechanicMask);
+
+    if (!blinkableControl)
+        return false;
+
+    bool const hardNonBlinkableControl =
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(nonBlinkableControlMask) ||
+        player->IsPolymorphed();
+
+    return !hardNonBlinkableControl;
+}
+
 bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo const* spellInfo)
 {
     if (!player || !target || !target->IsAlive())
@@ -3250,10 +3296,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return true;
     }
 
-    if (IsCrowdControlledForAction(player))
+    if (IsCrowdControlledForAction(player) && !IsMageBlinkEscapeCast(player, context, resolvedSpellId))
     {
         // Hard crowd-control gate: polymorphed/confused actors must not start
-        // attacks or cast attempts until control is restored.
+        // attacks or cast attempts until control is restored. Mage Blink is
+        // the explicit exception for stun/root escape because the real player
+        // action is intentionally usable while controlled.
         failureReason = "crowd_controlled_polymorph";
         return false;
     }

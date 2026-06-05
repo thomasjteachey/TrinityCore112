@@ -2944,6 +2944,46 @@ bool IsRootedOrSnared(Unit const* unit)
         HasNonStealthRootOrSnareMechanic(unit);
 }
 
+
+bool IsMageBlinkableControl(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_MAGE)
+        return false;
+
+    constexpr uint32 blinkableMechanicMask =
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_ROOT);
+
+    constexpr uint32 nonBlinkableControlMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    bool const blinkableControl =
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        player->HasAuraWithMechanic(blinkableMechanicMask);
+
+    if (!blinkableControl)
+        return false;
+
+    bool const hardNonBlinkableControl =
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(nonBlinkableControlMask) ||
+        player->IsPolymorphed();
+
+    return !hardNonBlinkableControl;
+}
+
 bool HasShieldEquipped(Player const* player)
 {
     if (!player)
@@ -3366,6 +3406,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, GetConfiguredMeleeRange());
+    bool const blinkableControl = IsMageBlinkableControl(player);
     float const manaPct = player->GetPowerPct(POWER_MANA);
     bool const isFireMage = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
@@ -3376,6 +3417,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
             { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mage is stunned or rooted", blinkableControl && IsSpellReady(player, 1953), 59.0f,
+            { "mage blink", "escape stun/root control", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
             { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
