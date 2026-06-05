@@ -54,7 +54,6 @@
 #include <deque>
 #include <limits>
 #include <mutex>
-#include <optional>
 #include <shared_mutex>
 #include <sstream>
 #include <unordered_map>
@@ -63,7 +62,9 @@
 
 namespace
 {
-bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts);
+using ManagedBotAccountIds = std::vector<uint32>;
+
+bool IsManagedRandomBotImpl(Player const* player, ManagedBotAccountIds const& botAccounts);
 
 bool IsCrowdControlledForLifecyclePause(Player const* player)
 {
@@ -517,7 +518,7 @@ struct RandomBotPopulationConfig
     uint8 allianceRatioPercent = 50;
     uint32 maxOnlineBotsPerAccount = 0;
     uint32 selectionHistorySize = 48;
-    std::unordered_set<uint32> botAccountIds;
+    ManagedBotAccountIds botAccountIds;
 };
 
 struct RandomBotPoolCandidate
@@ -838,7 +839,7 @@ void TryFinalizePendingManagedBotTeleport(Player* player)
     }
 }
 
-void RecoverManagedVirtualBotTeleports(std::unordered_set<uint32> const& botAccounts)
+void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
 {
     std::vector<ObjectGuid> managedTeleportGuids;
     {
@@ -906,7 +907,7 @@ uint32 ResolvePlayerAccountId(Player const* player)
     return sCharacterCache->GetCharacterAccountIdByGuid(player->GetGUID());
 }
 
-bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> const& botAccounts)
+bool IsManagedRandomBotImpl(Player const* player, ManagedBotAccountIds const& botAccounts)
 {
     if (!player)
         return false;
@@ -921,20 +922,20 @@ bool IsManagedRandomBotImpl(Player const* player, std::unordered_set<uint32> con
         return false;
 
     uint32 const accountId = ResolvePlayerAccountId(player);
-    if (!accountId || botAccounts.find(accountId) == botAccounts.end())
+    if (!accountId || !std::binary_search(botAccounts.begin(), botAccounts.end(), accountId))
         return false;
 
     // BotAccountIds remains an explicit allow-list for non-virtual sessions.
     return true;
 }
 
-std::unordered_set<uint32> GetManagedBotAccountIdsSnapshot()
+ManagedBotAccountIds GetManagedBotAccountIdsSnapshot()
 {
     std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
     return g_RandomPopulation.config.botAccountIds;
 }
 
-bool IsRandomBotCandidate(Player const* player, std::unordered_set<uint32> const& botAccounts)
+bool IsRandomBotCandidate(Player const* player, ManagedBotAccountIds const& botAccounts)
 {
     return IsManagedRandomBotImpl(player, botAccounts);
 }
@@ -952,7 +953,7 @@ struct OnlineRandomBotMetrics
     std::vector<ObjectGuid> guids;
 };
 
-bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, std::unordered_set<uint32> const& botAccounts)
+bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, ManagedBotAccountIds const& botAccounts)
 {
     if (targetBgType == BATTLEGROUND_TYPE_NONE)
         return false;
@@ -1001,7 +1002,7 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, std:
     return false;
 }
 
-void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
+void ForceManagedScmQueueSweep(ManagedBotAccountIds const& botAccounts)
 {
     constexpr BattlegroundTypeId kManagedBattleground = BATTLEGROUND_SCM;
     if (!HasAnyRealHumanInterestInBattleground(kManagedBattleground, botAccounts))
@@ -1048,7 +1049,7 @@ void ForceManagedScmQueueSweep(std::unordered_set<uint32> const& botAccounts)
         }
 }
 
-OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(std::unordered_set<uint32> const& botAccounts)
+OnlineRandomBotMetrics CollectOnlineRandomBotMetrics(ManagedBotAccountIds const& botAccounts)
 {
     OnlineRandomBotMetrics metrics;
 
@@ -1515,7 +1516,10 @@ void LoadPopulationConfigLocked(RandomBotPopulationState& state)
     for (std::string_view token : Trinity::Tokenize(rawBotAccounts, ',', false))
         if (Optional<uint32> accountId = Trinity::StringTo<uint32>(token))
             if (*accountId > 0)
-                config.botAccountIds.insert(*accountId);
+                config.botAccountIds.push_back(*accountId);
+
+    std::sort(config.botAccountIds.begin(), config.botAccountIds.end());
+    config.botAccountIds.erase(std::unique(config.botAccountIds.begin(), config.botAccountIds.end()), config.botAccountIds.end());
 
     state.config = std::move(config);
     state.runtimeEnabled = state.config.enabled;
@@ -1574,7 +1578,7 @@ void RandomBotParticipationManager::OnStartupBootstrap()
 
 void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
 {
-    std::optional<std::unordered_set<uint32>> botAccountsForSweep;
+    ManagedBotAccountIds botAccountsForSweep;
     bool shouldRunScmSweep = false;
 
     {
@@ -1589,9 +1593,7 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
             return;
         }
 
-        // Use copy-construction instead of assignment to avoid allocator-heavy
-        // unordered_set assignment internals on the world update thread.
-        botAccountsForSweep.emplace(g_RandomPopulation.config.botAccountIds);
+        botAccountsForSweep = g_RandomPopulation.config.botAccountIds;
 
         if (g_RandomPopulation.rebalanceTimerMs < g_RandomPopulation.config.rebalanceIntervalMs)
             g_RandomPopulation.rebalanceTimerMs += diffMs;
@@ -1609,7 +1611,7 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
         }
     }
 
-    RecoverManagedVirtualBotTeleports(*botAccountsForSweep);
+    RecoverManagedVirtualBotTeleports(botAccountsForSweep);
 
     // Avoid running the SCM sweep while holding g_RandomPopulationLock:
     // lifecycle queue operations can call TriggerImmediateRebalance(), which
@@ -1617,7 +1619,7 @@ void RandomBotParticipationManager::OnWorldUpdate(uint32 diffMs)
     if (!shouldRunScmSweep)
         return;
 
-    ForceManagedScmQueueSweep(*botAccountsForSweep);
+    ForceManagedScmQueueSweep(botAccountsForSweep);
 }
 
 void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
