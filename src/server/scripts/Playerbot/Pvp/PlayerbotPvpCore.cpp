@@ -1611,6 +1611,17 @@ bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
     return allowMount || mountSpellInfo->AreaGroupId;
 }
 
+bool CanCastMountSpellAtCurrentLocation(Player const* player, SpellInfo const* mountSpellInfo)
+{
+    if (!CanAttemptMount(player, mountSpellInfo))
+        return false;
+
+    // Let custom/playerbot mount spells that do not carry the outdoors-only
+    // attribute work in battleground prep rooms where the map permits mounting.
+    // Regular mounts still honor Spell::CheckCast's outdoors-only requirement.
+    return !mountSpellInfo->HasAttribute(SPELL_ATTR0_OUTDOORS_ONLY) || player->IsOutdoors();
+}
+
 bool IsHardControlled(Player const* player)
 {
     if (!player)
@@ -1641,13 +1652,33 @@ uint32 SelectReadyKnownMountSpell(Player const* player)
             continue;
         if (!IsSpellReady(player, spellId))
             continue;
-        if (!CanAttemptMount(player, spellInfo))
+        if (!CanCastMountSpellAtCurrentLocation(player, spellInfo))
             continue;
 
         return spellId;
     }
 
     return 0;
+}
+
+SpellDecision SelectMountSpell(Player const* player, char const* reason)
+{
+    SpellDecision decision;
+    if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
+        return decision;
+
+    if (IsHardControlled(player))
+        return decision;
+
+    if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+        if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+            if (CanCastMountSpellAtCurrentLocation(player, defaultMountInfo))
+                return { "mount", reason, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+    if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
+        return { "mount", reason, knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+    return decision;
 }
 
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
@@ -1758,14 +1789,11 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (inArenaMap || inActiveDuel)
         return decision;
 
-    if (!IsStrictlyOutdoorsForMount(player))
-        return decision;
-
     // During battleground preparation this selector only runs after
     // SelectPreparationBuffSpell() has no pet/buff actions left. At that point,
-    // mount if the starting area is a legal outdoor mount location so bots are
-    // ready to move as soon as the gates open.
-    char const* mountReason = inBattlegroundPreparation ? "mount during preparation after prep actions" : "mount while outside and out of combat";
+    // mount if the current spot is legal for the selected mount spell so bots
+    // are ready to move as soon as the gates open.
+    char const* mountReason = inBattlegroundPreparation ? "mount during preparation after prep actions" : "mount while out of combat";
 
     // Keep pressure logic responsive outside the prep phase: don't choose an
     // out-of-combat mount action while hostile players are already within
@@ -1773,15 +1801,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (!inBattlegroundPreparation && !player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
         return decision;
 
-    if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
-        if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
-            if (CanAttemptMount(player, defaultMountInfo))
-                return { "mount", mountReason, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
-
-    if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
-        return { "mount", mountReason, knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
-
-    return decision;
+    return SelectMountSpell(player, mountReason);
 }
 
 bool HasHostileTarget(Player const* player, Unit const* target)
@@ -1889,6 +1909,15 @@ bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId, ObjectGuid cast
     return false;
 }
 
+bool HasAnyAuraFromSpellChain(Unit const* unit, std::initializer_list<uint32> baseSpellIds)
+{
+    for (uint32 baseSpellId : baseSpellIds)
+        if (HasAuraFromSpellChain(unit, baseSpellId))
+            return true;
+
+    return false;
+}
+
 bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
 {
     return HasAuraFromSpellChain(unit, 25295, casterGuid) || // Serpent Sting
@@ -1938,6 +1967,48 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
     {
         return player->GetGUID();
     }
+
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isEligible(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
+
+ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std::initializer_list<uint32> baseSpellIds, float maxDistance, bool includeSelf)
+{
+    if (!player || !player->FindMap() || baseSpellIds.size() == 0)
+        return ObjectGuid::Empty;
+
+    auto isEligible = [&](Player* candidate)
+    {
+        if (!candidate || !candidate->IsAlive())
+            return false;
+        if (!IsFriendlySupportTarget(player, candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return false;
+        if (HasAnyAuraFromSpellChain(candidate, baseSpellIds))
+            return false;
+
+        return true;
+    };
+
+    if (includeSelf && isEligible(const_cast<Player*>(player)))
+        return player->GetGUID();
 
     Player* bestTarget = nullptr;
     float bestDistance = std::numeric_limits<float>::max();
@@ -2020,7 +2091,7 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
 
             if (IsSpellReady(player, kDruidMassThornsSpellId))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, kDruidThornsSpellId, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { kDruidThornsSpellId, kDruidMassThornsSpellId }, 45.0f, true); !targetGuid.IsEmpty())
                     return { "druid mass thorns prep", "apply mass thorns to nearby allies before gates open", kDruidMassThornsSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
             }
 
@@ -2079,6 +2150,9 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
         default:
             break;
     }
+
+    if (SpellDecision const mountDecision = SelectMountSpell(player, "mount during preparation after prep actions"); mountDecision.spellId)
+        return mountDecision;
 
     return decision;
 }
