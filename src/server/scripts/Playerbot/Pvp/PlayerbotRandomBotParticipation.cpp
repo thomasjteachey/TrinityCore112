@@ -315,26 +315,114 @@ bool TryCastPriestSpiritOfRedemption(Player* player)
     return castResult == SPELL_CAST_OK;
 }
 
+void WhisperInsigniaDiagnostic(Player const* player, std::string const& detail)
+{
+    if (!player || !player->duel || !player->duel->Opponent)
+        return;
+
+    const_cast<Player*>(player)->Whisper("INSIGNIA DIAG: " + detail, LANG_UNIVERSAL, player->duel->Opponent);
+}
+
+bool IsLikelyInsigniaTrinketItem(Item const* item)
+{
+    if (!item)
+        return false;
+
+    // Known Classic PvP insignia IDs. Keep this intentionally broad so custom
+    // class variants in either trinket slot can use the same fast path.
+    switch (item->GetEntry())
+    {
+        case 18834: // Insignia of the Horde
+        case 18846: // Insignia of the Horde
+        case 18849: // Insignia of the Horde
+        case 18850: // Insignia of the Horde
+        case 18851: // Insignia of the Horde
+        case 18852: // Insignia of the Horde
+        case 18853: // Insignia of the Horde
+        case 18854: // Insignia of the Alliance
+        case 18856: // Insignia of the Alliance
+        case 18857: // Insignia of the Alliance
+        case 18858: // Insignia of the Alliance
+        case 18859: // Insignia of the Alliance
+        case 18862: // Insignia of the Alliance
+        case 18863: // Insignia of the Alliance
+            return true;
+        default:
+            break;
+    }
+
+    ItemTemplate const* itemTemplate = item->GetTemplate();
+    if (!itemTemplate)
+        return false;
+
+    std::string const name = itemTemplate->Name1;
+    return name.find("Insignia of the Horde") != std::string::npos ||
+        name.find("Insignia of the Alliance") != std::string::npos;
+}
+
+bool TryUseEquippedInsigniaTrinketSlot(Player* player, EquipmentSlots slot)
+{
+    if (!player)
+        return false;
+
+    Item* trinket = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+    if (!trinket)
+        return false;
+
+    if (!IsLikelyInsigniaTrinketItem(trinket))
+        return false;
+
+    if (player->CanUseItem(trinket) != EQUIP_ERR_OK)
+    {
+        WhisperInsigniaDiagnostic(player, "slot=" + std::to_string(uint32(slot)) +
+            " item=" + std::to_string(trinket->GetEntry()) + " result=item_unusable");
+        return false;
+    }
+
+    uint32 const spellId = GetFirstOnUseItemSpell(trinket->GetTemplate());
+    SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
+    if (!spellInfo)
+    {
+        WhisperInsigniaDiagnostic(player, "slot=" + std::to_string(uint32(slot)) +
+            " item=" + std::to_string(trinket->GetEntry()) + " result=no_on_use_spell");
+        return false;
+    }
+
+    if (player->GetSpellHistory()->HasCooldown(spellId) ||
+        player->GetSpellHistory()->HasCooldown(spellInfo, trinket->GetEntry()))
+    {
+        WhisperInsigniaDiagnostic(player, "slot=" + std::to_string(uint32(slot)) +
+            " item=" + std::to_string(trinket->GetEntry()) + " spell=" + std::to_string(spellId) +
+            " result=cooldown");
+        return false;
+    }
+
+    SpellCastResult const castResult = player->CastSpell(player, spellId,
+        CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)).SetCastItem(trinket));
+
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP insignia trinket attempt: guid={} item={} spell={} slot={} result={}.",
+        player->GetGUID().ToString(), trinket->GetEntry(), spellId, uint32(slot), uint32(castResult));
+
+    WhisperInsigniaDiagnostic(player, "slot=" + std::to_string(uint32(slot)) +
+        " item=" + std::to_string(trinket->GetEntry()) + " spell=" + std::to_string(spellId) +
+        " result=" + std::to_string(uint32(castResult)));
+
+    return castResult == SPELL_CAST_OK;
+}
+
 bool TryUseEquippedInsigniaTrinket(Player* player)
 {
     if (!player)
         return false;
 
-    // Slot 13 is EQUIPMENT_SLOT_TRINKET2 in server-side zero-based equipment slots.
-    Item* trinket = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET2);
-    if (!trinket || player->CanUseItem(trinket) != EQUIP_ERR_OK)
-        return false;
+    // Check both trinket slots. The previous implementation only checked
+    // EQUIPMENT_SLOT_TRINKET2 (slot 13), so a bot wearing item 18834 in the
+    // top trinket slot (EQUIPMENT_SLOT_TRINKET1 / slot 12) never attempted it.
+    if (TryUseEquippedInsigniaTrinketSlot(player, EQUIPMENT_SLOT_TRINKET1))
+        return true;
 
-    uint32 const spellId = GetFirstOnUseItemSpell(trinket->GetTemplate());
-    SpellInfo const* spellInfo = spellId ? sSpellMgr->GetSpellInfo(spellId) : nullptr;
-    if (!spellInfo || player->GetSpellHistory()->HasCooldown(spellId))
-        return false;
-
-    SpellCastResult const castResult = player->CastSpell(player, spellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)).SetCastItem(trinket));
-    TC_LOG_DEBUG("playerbots.pvp.class",
-        "Playerbot PvP insignia trinket attempt: guid={} item={} spell={} slot={} result={}.",
-        player->GetGUID().ToString(), trinket->GetEntry(), spellId, uint32(EQUIPMENT_SLOT_TRINKET2), uint32(castResult));
-    return castResult == SPELL_CAST_OK;
+    return TryUseEquippedInsigniaTrinketSlot(player, EQUIPMENT_SLOT_TRINKET2);
 }
 
 bool TryUsePlayerbotInsigniaBreaker(Player* player)

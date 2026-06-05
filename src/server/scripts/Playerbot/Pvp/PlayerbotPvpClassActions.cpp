@@ -73,6 +73,8 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+constexpr uint32 kHunterFeignDeathSpellId = 5384;
+
 bool IsHunterTrapSpell(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
@@ -91,6 +93,44 @@ bool IsHunterTrapSpell(SpellInfo const* spellInfo)
         default:
             return false;
     }
+}
+
+bool HasHunterFeignDeathAura(Player const* player)
+{
+    return player && player->GetClass() == CLASS_HUNTER && player->HasAura(kHunterFeignDeathSpellId);
+}
+
+void BreakHunterFeignDeath(Player* player)
+{
+    if (!HasHunterFeignDeathAura(player))
+        return;
+
+    player->RemoveAurasDueToSpell(kHunterFeignDeathSpellId);
+    if (player->IsSitState())
+        player->SetStandState(UNIT_STAND_STATE_STAND);
+}
+
+void ScheduleHunterFeignDeathStandup(Player* player)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER)
+        return;
+
+    ObjectGuid const hunterGuid = player->GetGUID();
+    player->m_Events.AddEventAtOffset([hunterGuid]()
+    {
+        Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
+        if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
+            return;
+
+        if (!HasHunterFeignDeathAura(hunter))
+            return;
+
+        hunter->RemoveAurasDueToSpell(kHunterFeignDeathSpellId);
+        hunter->SetStandState(UNIT_STAND_STATE_STAND);
+
+        if (MotionMaster* motionMaster = hunter->GetMotionMaster())
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    }, std::chrono::milliseconds(1200));
 }
 
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
@@ -3496,6 +3536,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    // Feign Death is a short tactical drop-combat attempt for hunter bots. Once
+    // the next real action is selected, stand up first; otherwise a clipped FD
+    // can leave the virtual client lying down forever and unable to resume the
+    // normal flee/stutter/instant-shot loop.
+    if (player->GetClass() == CLASS_HUNTER && context.spellId != kHunterFeignDeathSpellId)
+        BreakHunterFeignDeath(player);
+
     // Classic hunter traps are out-of-combat only. Feign Death may make the
     // hunter eligible on a later tick, but never send an in-combat trap cast
     // into the core where it becomes SPELL_FAILED_AFFECTING_COMBAT spam.
@@ -3743,10 +3790,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // Feign Death is only an instant defensive/trap-setup attempt. Do not queue a
     // delayed trap or pause movement waiting for combat to drop; if combat drops,
     // the next AI tick can select the out-of-combat trap normally. If combat is
-    // clipped by damage, the hunter immediately continues with flee/stutter-shot
-    // and melee escape decisions instead of hanging in a trap-pending state.
-    if (context.spellId == 5384)
+    // clipped by damage, automatically stand back up shortly after and continue
+    // the flee/stutter-shot and melee escape decisions instead of lying there.
+    if (context.spellId == kHunterFeignDeathSpellId)
+    {
         player->SetSelection(ObjectGuid::Empty);
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kHunterFeignDeathSpellId, std::chrono::seconds(2));
+        ScheduleHunterFeignDeathStandup(player);
+    }
 
     bool hasTeleportEffect = false;
     bool hasChargeEffect = false;

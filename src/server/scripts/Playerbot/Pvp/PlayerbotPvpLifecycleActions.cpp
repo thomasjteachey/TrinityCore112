@@ -103,6 +103,7 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS = 900;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
+constexpr uint32 kHunterFeignDeathSpellId = 5384;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -508,6 +509,7 @@ namespace
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
     float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
     bool CanIssueBotMovement(Player* player);
+bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
@@ -1663,6 +1665,8 @@ namespace
         if (HasActiveStationaryChannel(player))
             return false;
 
+        BreakExpiredHunterFeignDeath(player);
+
         if (IsCrowdControlledForAction(player))
         {
             ClearActiveMovementForControlLoss(player);
@@ -1759,6 +1763,25 @@ namespace
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
             player->SendMovementFlagUpdate();
         }
+    }
+
+    bool BreakExpiredHunterFeignDeath(Player* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER || !player->HasAura(kHunterFeignDeathSpellId))
+            return false;
+
+        // Give Feign Death a tiny tactical grace window after the cast so it can
+        // actually drop combat for a trap, but never let a clipped/non-progressing
+        // FD state make the bot fail CanIssueBotMovement forever. Any selected
+        // class action will also stand the hunter before casting.
+        if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterFeignDeathSpellId))
+            return false;
+
+        player->RemoveAurasDueToSpell(kHunterFeignDeathSpellId);
+        player->SetStandState(UNIT_STAND_STATE_STAND);
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        return true;
     }
 
     bool GetHunterAutoShotRange(Player const* player, Unit const* target, float& exactDistance, float& minAutoShotRange, float& maxAutoShotRange)
@@ -3519,6 +3542,8 @@ namespace playerbot
         if (!player->IsAlive())
             return false;
 
+        BreakExpiredHunterFeignDeath(player);
+
         ClearStaleWaitingForResurrectAura(player);
 
         if (IsRecoveringByEatingOrDrinking(player))
@@ -3849,7 +3874,12 @@ namespace playerbot
 
     bool DuelTacticalActions::Execute(Player* player)
     {
-        if (!player || !player->IsAlive() || !CanIssueBotMovement(player))
+        if (!player || !player->IsAlive())
+            return false;
+
+        BreakExpiredHunterFeignDeath(player);
+
+        if (!CanIssueBotMovement(player))
             return false;
 
         if (!player->duel || player->duel->State != DUEL_STATE_IN_PROGRESS)
