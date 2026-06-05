@@ -2910,13 +2910,13 @@ void StopPlayerbotForStationaryCast(Player* player)
     player->SendMovementFlagUpdate();
 }
 
-void ScheduleHunterStationaryShotGuard(Player* player, Unit* target, uint32 spellId, uint32 castTimeMs)
+void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spellId, uint32 castTimeMs)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target || !spellId)
+    if (!player || player->GetClass() != CLASS_HUNTER || !spellId)
         return;
 
     ObjectGuid const hunterGuid = player->GetGUID();
-    ObjectGuid const targetGuid = target->GetGUID();
+    ObjectGuid const targetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
     uint32 const guardMs = std::clamp<uint32>(castTimeMs + 300, 700, 5000);
 
     for (uint32 delayMs = 100; delayMs <= guardMs; delayMs += 100)
@@ -2935,13 +2935,17 @@ void ScheduleHunterStationaryShotGuard(Player* player, Unit* target, uint32 spel
             if (!currentInfo || currentInfo->Id != spellId)
                 return;
 
-            Unit* castTarget = ObjectAccessor::GetUnit(*hunter, targetGuid);
-            if (!castTarget || !castTarget->IsAlive() || !hunter->IsWithinLOSInMap(castTarget))
-                return;
-
             StopPlayerbotForStationaryCast(hunter);
-            hunter->SetFacingToObject(castTarget);
-            hunter->SetInFront(castTarget);
+
+            if (!targetGuid.IsEmpty())
+            {
+                Unit* castTarget = ObjectAccessor::GetUnit(*hunter, targetGuid);
+                if (castTarget && castTarget->IsAlive() && hunter->IsWithinLOSInMap(castTarget))
+                {
+                    hunter->SetFacingToObject(castTarget);
+                    hunter->SetInFront(castTarget);
+                }
+            }
         }, std::chrono::milliseconds(delayMs));
     }
 }
@@ -3927,8 +3931,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
     }
 
-    if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo) && target)
-        ScheduleHunterStationaryShotGuard(player, target, resolvedSpellId, uint32(spellInfo->CalcCastTime()));
+    if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
+    {
+        Unit* castGuardTarget = context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy ? target : nullptr;
+        ScheduleHunterStationaryCastGuard(player, castGuardTarget, resolvedSpellId, uint32(spellInfo->CalcCastTime()));
+    }
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterBreakableCrowdControlSpell(spellInfo))
         StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_breakable_cc_cast_stop_autoshot");
