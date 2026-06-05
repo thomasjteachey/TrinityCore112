@@ -17,6 +17,7 @@
 
 #include "Totem.h"
 #include "CombatManager.h"
+#include "DBCStructure.h"
 #include "Group.h"
 #include "Log.h"
 #include "ObjectMgr.h"
@@ -32,6 +33,11 @@ Totem::Totem(SummonPropertiesEntry const* properties, Unit* owner) : Minion(prop
     m_unitTypeMask |= UNIT_MASK_TOTEM;
     m_duration = 0;
     m_type = TOTEM_PASSIVE;
+}
+
+bool Totem::IsFireTotem() const
+{
+    return m_Properties && m_Properties->Slot == SUMMON_SLOT_TOTEM_FIRE;
 }
 
 void Totem::Update(uint32 time)
