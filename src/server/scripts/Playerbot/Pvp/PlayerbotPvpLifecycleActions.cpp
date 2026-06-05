@@ -79,6 +79,8 @@ namespace playerbot
 namespace
 {
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantStartedMs;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantLastTimerMs;
     std::unordered_map<uint64, uint32> g_HunterForceFleeUntilMs;
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
@@ -94,9 +96,11 @@ namespace
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MS = 500;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MIN_PLANT_MS = 434;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS = 1500;
     constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS = 900;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
@@ -2068,6 +2072,13 @@ namespace
         uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
         uint32& plantUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
         uint32& forceFleeUntilMs = g_HunterForceFleeUntilMs[hunterGuidRaw];
+
+        auto clearPlantState = [&]()
+        {
+            plantUntilMs = 0;
+            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = 0;
+            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = 0;
+        };
         float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
         bool const hasLos = player->IsWithinLOSInMap(target);
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
@@ -2098,13 +2109,13 @@ namespace
 
         if (!hasLos)
         {
-            plantUntilMs = 0;
+            clearPlantState();
             return TryRecoverLineOfSight(player, target, GetCombatPositioningProfile(player), "hunter-stutter-los");
         }
 
         if (tooClose)
         {
-            plantUntilMs = 0;
+            clearPlantState();
             forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
             MarkHunterKiteHold(player);
             return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
@@ -2113,17 +2124,54 @@ namespace
         if (plantUntilMs > nowMs)
         {
             stopFaceAndKeepAutoShot();
+
+            uint32 const currentAutoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
+            uint32& plantStartedMs = g_HunterAutoShotPlantStartedMs[hunterGuidRaw];
+            uint32& lastPlantTimerMs = g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw];
+            uint32 const elapsedPlantMs = plantStartedMs ? nowMs - plantStartedMs : 0;
+
+            // Do not resume movement merely because a fixed 500ms window elapsed.
+            // In this core, Auto Shot actually fires inside Unit::_UpdateAutoRepeatSpell()
+            // when RANGED_ATTACK becomes ready, then resetAttackTimer(RANGED_ATTACK)
+            // bumps the timer back up to bow/gun speed.  Hold still until we observe
+            // that reset/increase, unless deadzone/melee already forced us out above.
+            bool const observedTimerReset = elapsedPlantMs >= PLAYERBOT_HUNTER_STUTTER_MIN_PLANT_MS &&
+                ((currentAutoShotTimerMs >= PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS) ||
+                    (lastPlantTimerMs != 0 && currentAutoShotTimerMs > lastPlantTimerMs + 250));
+
+            if (observedTimerReset)
+            {
+                plantUntilMs = 0;
+                plantStartedMs = 0;
+                lastPlantTimerMs = 0;
+                forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
+                float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+                return IssueHunterStutterFlee(player, target, desiredFleeDistance, "autoshot-fired-resume-flee");
+            }
+
+            lastPlantTimerMs = currentAutoShotTimerMs;
             return true;
         }
 
-        // After every 500ms plant window, force a flee window before another
+        // If we somehow reached the max plant deadline without seeing the ranged
+        // timer reset, resume fleeing anyway so the hunter never turns into a
+        // permanent turret because of a stale timer read.
+        if (plantUntilMs != 0 && plantUntilMs <= nowMs)
+        {
+            plantUntilMs = 0;
+            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = 0;
+            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = 0;
+            forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
+        }
+
+        // After every completed plant window, force a flee window before another
         // plant is allowed. Some core states report the ranged timer as 0/ready
         // for more than one lifecycle tick, which previously made the hunter
         // chain-plant forever and appear completely stuck.
         if (forceFleeUntilMs > nowMs && inAutoShotBand)
         {
             float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
-            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "post-plant-force-flee");
+            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "post-shot-force-flee");
         }
 
         if (forceFleeUntilMs <= nowMs)
@@ -2131,19 +2179,32 @@ namespace
 
         uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
         bool const autoShotActive = HunterHasActiveAutoShot(player);
-        bool const shouldPlantForAutoShot = inAutoShotBand && (!autoShotActive || autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
+        bool const shouldPlantForAutoShot = inAutoShotBand && (autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
+
+        if (inAutoShotBand && !autoShotActive && !shouldPlantForAutoShot && player->HasSpell(75))
+        {
+            // Auto Shot can stay queued as an auto-repeat spell while the hunter
+            // is moving. Do not park early just because Auto Shot is inactive;
+            // start the auto-repeat and keep fleeing until the real shot window.
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+            player->CastSpell(target, 75, false);
+            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "activate-autoshot-while-fleeing");
+        }
 
         if (shouldPlantForAutoShot)
         {
-            plantUntilMs = nowMs + PLAYERBOT_HUNTER_STUTTER_PLANT_MS;
-            forceFleeUntilMs = std::max(forceFleeUntilMs, plantUntilMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
+            plantUntilMs = nowMs + PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS;
+            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = nowMs;
+            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = autoShotTimerMs;
             g_HunterFleeStateByGuid.erase(hunterGuidRaw);
             stopFaceAndKeepAutoShot();
 
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                "Playerbot PvP hunter stutter loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} plantMs={}",
+                "Playerbot PvP hunter stutter loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} maxPlantMs={}",
                 player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs,
-                autoShotActive ? 1 : 0, PLAYERBOT_HUNTER_STUTTER_PLANT_MS);
+                autoShotActive ? 1 : 0, PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS);
             return true;
         }
 
