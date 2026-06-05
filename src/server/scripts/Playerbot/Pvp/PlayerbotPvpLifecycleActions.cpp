@@ -62,7 +62,6 @@
 #include <limits>
 #include <sstream>
 #include <unordered_map>
-#include <utility>
 #include <unordered_set>
 #include <array>
 #include <algorithm>
@@ -751,7 +750,11 @@ namespace
         return adjustedDestination;
     }
 
-    float BotMovementCollisionProbeZ(Player const* player, Position const& position)
+
+    constexpr float PLAYERBOT_WALL_CLEARANCE_RADIUS = 2.0f;
+    constexpr float PLAYERBOT_WALL_CLEARANCE_PI = 3.14159265358979323846f;
+
+    float BotWallClearanceProbeZ(Player const* player, Position const& position)
     {
         if (!player)
             return position.GetPositionZ() + 1.0f;
@@ -759,117 +762,123 @@ namespace
         return position.GetPositionZ() + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f));
     }
 
-    void NormalizeBotMoveDestinationZ(Player const* player, Position& destination)
+    bool HasLocalTwoYardWallClearance(Player const* player, Position const& destination, float* blockedDirectionX = nullptr, float* blockedDirectionY = nullptr)
     {
         if (!player)
-            return;
+            return true;
 
-        float adjustedZ = destination.GetPositionZ();
-        player->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), adjustedZ);
+        Map const* map = player->FindMap();
+        if (!map)
+            return true;
 
-        if (Map const* map = player->FindMap())
+        Position center = BuildCollisionSafeDestination(player, destination);
+        float const centerX = center.GetPositionX();
+        float const centerY = center.GetPositionY();
+        float const centerZ = BotWallClearanceProbeZ(player, center);
+        float blockedX = 0.0f;
+        float blockedY = 0.0f;
+        uint8 blockedSamples = 0;
+
+        // Check only local clearance around the endpoint. Do not require line of
+        // sight from the bot to the endpoint; requiring that breaks valid pathing
+        // around corners and was the reason Blackrock Throne bots stopped moving.
+        for (uint8 i = 0; i < 16; ++i)
         {
-            LiquidData liquidData{};
-            if (map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
-                    adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()))
+            float const angle = float(i) * PLAYERBOT_WALL_CLEARANCE_PI / 8.0f;
+            float const dirX = std::cos(angle);
+            float const dirY = std::sin(angle);
+            float sampleZ = center.GetPositionZ();
+            float const sampleX = centerX + dirX * PLAYERBOT_WALL_CLEARANCE_RADIUS;
+            float const sampleY = centerY + dirY * PLAYERBOT_WALL_CLEARANCE_RADIUS;
+            player->UpdateAllowedPositionZ(sampleX, sampleY, sampleZ);
+
+            bool blocked = std::fabs(sampleZ - center.GetPositionZ()) > 2.5f;
+            if (!blocked)
             {
-                bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
-                if (!canWalkOnWater)
-                    adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.25f));
+                blocked = !map->isInLineOfSight(centerX, centerY, centerZ,
+                    sampleX, sampleY, sampleZ + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f)),
+                    player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+            }
+
+            if (blocked)
+            {
+                ++blockedSamples;
+                blockedX += dirX;
+                blockedY += dirY;
             }
         }
 
-        destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), adjustedZ + 0.05f, destination.GetOrientation());
+        if (blockedDirectionX)
+            *blockedDirectionX = blockedX;
+        if (blockedDirectionY)
+            *blockedDirectionY = blockedY;
+
+        // One flaky VMAP sample should not stall movement; multiple blocked rays
+        // indicate the point is actually hugging a wall/object/ledge.
+        return blockedSamples <= 1;
     }
 
-    bool HasBotMoveLosToDestination(Player const* player, Position const& destination)
-    {
-        if (!player)
-            return false;
-
-        Map const* map = player->FindMap();
-        if (!map)
-            return true;
-
-        float const sourceZ = player->GetPositionZ() + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f));
-        float const destinationZ = BotMovementCollisionProbeZ(player, destination);
-        return map->isInLineOfSight(player->GetPositionX(), player->GetPositionY(), sourceZ,
-            destination.GetPositionX(), destination.GetPositionY(), destinationZ,
-            player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-    }
-
-    bool HasBotMoveEndpointClearance(Player const* player, Position const& destination)
-    {
-        if (!player)
-            return false;
-
-        if (!HasBotMoveLosToDestination(player, destination))
-            return false;
-
-        Map const* map = player->FindMap();
-        if (!map)
-            return true;
-
-        float const sourceZ = player->GetPositionZ() + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f));
-        float const clearance = 0.45f;
-        std::array<std::pair<float, float>, 4> const offsets = {{
-            { clearance, 0.0f },
-            { -clearance, 0.0f },
-            { 0.0f, clearance },
-            { 0.0f, -clearance }
-        }};
-
-        for (auto const& offset : offsets)
-        {
-            Position probe(destination.GetPositionX() + offset.first, destination.GetPositionY() + offset.second,
-                destination.GetPositionZ(), destination.GetOrientation());
-            NormalizeBotMoveDestinationZ(player, probe);
-            if (!map->isInLineOfSight(player->GetPositionX(), player->GetPositionY(), sourceZ,
-                    probe.GetPositionX(), probe.GetPositionY(), BotMovementCollisionProbeZ(player, probe),
-                    player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
-                return false;
-        }
-
-        return true;
-    }
-
-    Position BuildWallSafeMovePointDestination(Player const* player, Position const& destination)
+    Position BuildTwoYardWallClearDestination(Player const* player, Position const& destination)
     {
         if (!player)
             return destination;
 
-        Position adjustedDestination = destination;
-        NormalizeBotMoveDestinationZ(player, adjustedDestination);
-        if (HasBotMoveEndpointClearance(player, adjustedDestination))
-            return adjustedDestination;
+        Position safeDestination = BuildCollisionSafeDestination(player, destination);
+        float blockedX = 0.0f;
+        float blockedY = 0.0f;
+        if (HasLocalTwoYardWallClearance(player, safeDestination, &blockedX, &blockedY))
+            return safeDestination;
 
-        float const dx = adjustedDestination.GetPositionX() - player->GetPositionX();
-        float const dy = adjustedDestination.GetPositionY() - player->GetPositionY();
-        float const dz = adjustedDestination.GetPositionZ() - player->GetPositionZ();
-        float const planarDistance = std::sqrt(dx * dx + dy * dy);
-        if (planarDistance < 0.75f)
-            return adjustedDestination;
-
-        std::array<float, 8> const fractions = { 0.9f, 0.8f, 0.68f, 0.55f, 0.42f, 0.32f, 0.24f, 0.16f };
-        for (float fraction : fractions)
+        auto tryCandidate = [&](Position const& candidate, Position& accepted) -> bool
         {
-            Position probe(player->GetPositionX() + dx * fraction,
-                player->GetPositionY() + dy * fraction,
-                player->GetPositionZ() + dz * fraction,
-                adjustedDestination.GetOrientation());
-            NormalizeBotMoveDestinationZ(player, probe);
-            if (player->GetExactDist2d(probe.GetPositionX(), probe.GetPositionY()) >= 0.75f && HasBotMoveEndpointClearance(player, probe))
-                return probe;
+            Position safeCandidate = BuildCollisionSafeDestination(player, candidate);
+            if (player->GetExactDist2d(safeCandidate.GetPositionX(), safeCandidate.GetPositionY()) < 0.75f)
+                return false;
+
+            if (!HasLocalTwoYardWallClearance(player, safeCandidate))
+                return false;
+
+            accepted = safeCandidate;
+            return true;
+        };
+
+        Position accepted;
+
+        // First move directly away from the locally blocked direction. This keeps
+        // the bot on the same side of the wall instead of asking pathing to solve
+        // a random point on the other side of geometry.
+        float const blockedLength = std::sqrt(blockedX * blockedX + blockedY * blockedY);
+        if (blockedLength > 0.05f)
+        {
+            float const awayX = -blockedX / blockedLength;
+            float const awayY = -blockedY / blockedLength;
+            for (float distance : std::array<float, 4>{ 2.25f, 3.5f, 5.0f, 7.0f })
+            {
+                Position probe(safeDestination.GetPositionX() + awayX * distance,
+                    safeDestination.GetPositionY() + awayY * distance,
+                    safeDestination.GetPositionZ(), safeDestination.GetOrientation());
+                if (tryCandidate(probe, accepted))
+                    return accepted;
+            }
         }
 
-        // Last-resort local nudge: stay on the current side of the obstacle instead
-        // of allowing a point generator to finish with the bot half-inside a wall.
-        float const inv = 1.0f / std::max(0.01f, planarDistance);
-        Position conservative(player->GetPositionX() + dx * inv * std::min(2.5f, planarDistance),
-            player->GetPositionY() + dy * inv * std::min(2.5f, planarDistance),
-            player->GetPositionZ(), adjustedDestination.GetOrientation());
-        NormalizeBotMoveDestinationZ(player, conservative);
-        return conservative;
+        // Fallback: local radial search around the requested point. If nothing is
+        // truly clear, return the original collision-safe point instead of
+        // refusing movement; bad wall clearance should never freeze a bot.
+        for (float distance : std::array<float, 4>{ 2.5f, 4.0f, 6.0f, 8.0f })
+        {
+            for (uint8 i = 0; i < 16; ++i)
+            {
+                float const angle = float(i) * PLAYERBOT_WALL_CLEARANCE_PI / 8.0f;
+                Position probe(safeDestination.GetPositionX() + std::cos(angle) * distance,
+                    safeDestination.GetPositionY() + std::sin(angle) * distance,
+                    safeDestination.GetPositionZ(), safeDestination.GetOrientation());
+                if (tryCandidate(probe, accepted))
+                    return accepted;
+            }
+        }
+
+        return safeDestination;
     }
 
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
@@ -1198,7 +1207,7 @@ namespace
         }
 
         bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
-        Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
+        Position const safeDestination = generatePath ? BuildTwoYardWallClearDestination(player, destination) : destination;
 
         if (generatePath && player->InBattleground())
         {
@@ -1220,7 +1229,7 @@ namespace
                     directDropState.pending = false;
                     directDropState.suppressUntilMs = nowMs + 8000;
                     Position const escapeDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                    motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, escapeDestination), false);
+                    motionMaster->MovePoint(0, escapeDestination, false);
                     EmitBattlegroundGmDebug(player,
                         "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
                         " toDest=" + std::to_string(int32(toDestination)) +
@@ -1235,7 +1244,7 @@ namespace
             if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
             {
                 Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, shortcutDestination), false);
+                motionMaster->MovePoint(0, shortcutDestination, false);
                 EmitBattlegroundGmDebug(player,
                     "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
                     " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination))), 0);
@@ -1258,7 +1267,7 @@ namespace
             {
                 if (!allowDirectDrop)
                 {
-                    motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, safeDestination), true);
+                    motionMaster->MovePoint(0, safeDestination, true);
                     EmitBattlegroundGmDebug(player,
                         "movepoint=blocked-no-nav fallback=full-path directDrop=disabled-scarlet-chapel destDist=" +
                         std::to_string(int32(player->GetDistance(safeDestination))), 0);
@@ -1273,7 +1282,7 @@ namespace
                 // issue a direct movement order so the bot keeps progressing
                 // instead of stalling in place waiting on nav segment recovery.
                 Position const fallbackDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, fallbackDestination), false);
+                motionMaster->MovePoint(0, fallbackDestination, false);
                 EmitBattlegroundGmDebug(player,
                     "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
                     " stepDist=" + std::to_string(int32(player->GetDistance(fallbackDestination))), 0);
@@ -1288,14 +1297,14 @@ namespace
                 return true;
             }
 
-            motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, segmentDestination), true);
+            motionMaster->MovePoint(0, segmentDestination, true);
             EmitBattlegroundGmDebug(player,
                 "movepoint=nav-segment pathType=" + std::to_string(uint32(pathType)) +
                 " segDist=" + std::to_string(int32(player->GetDistance(segmentDestination))), 0);
         }
         else
         {
-            motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, safeDestination), generatePath);
+            motionMaster->MovePoint(0, safeDestination, generatePath);
         }
 
         // Throttle against the caller's tactical destination, not the intermediate
@@ -2159,7 +2168,7 @@ namespace
         // still for the whole post-shot window. Issue this flee segment directly
         // and keep our own lightweight reissue throttle above.
         ClearEatDrinkAurasForMovement(player);
-        Position const safeDestination = BuildCollisionSafeDestination(player, destination);
+        Position const safeDestination = BuildTwoYardWallClearDestination(player, destination);
         bool issued = false;
         if (MotionMaster* motionMaster = player->GetMotionMaster())
         {
@@ -2167,7 +2176,7 @@ namespace
             if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
                 motionMaster->Clear();
 
-            motionMaster->MovePoint(0, BuildWallSafeMovePointDestination(player, safeDestination), false);
+            motionMaster->MovePoint(0, safeDestination, false);
             issued = true;
             lastFleeIssueMs = nowMs;
         }
