@@ -74,6 +74,23 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 19434; // Aimed Shot (rank 1)
+}
+
+bool IsHunterCastTimeShot(Player const* player, SpellInfo const* spellInfo)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !spellInfo)
+        return false;
+
+    return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo);
+}
+
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
 
 bool IsHunterTrapSpell(SpellInfo const* spellInfo)
@@ -2893,6 +2910,42 @@ void StopPlayerbotForStationaryCast(Player* player)
     player->SendMovementFlagUpdate();
 }
 
+void ScheduleHunterStationaryShotGuard(Player* player, Unit* target, uint32 spellId, uint32 castTimeMs)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !target || !spellId)
+        return;
+
+    ObjectGuid const hunterGuid = player->GetGUID();
+    ObjectGuid const targetGuid = target->GetGUID();
+    uint32 const guardMs = std::clamp<uint32>(castTimeMs + 300, 700, 5000);
+
+    for (uint32 delayMs = 100; delayMs <= guardMs; delayMs += 100)
+    {
+        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, spellId]()
+        {
+            Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
+            if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive() || hunter->GetClass() != CLASS_HUNTER)
+                return;
+
+            Spell const* current = hunter->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+            if (!current || current->getState() == SPELL_STATE_FINISHED)
+                return;
+
+            SpellInfo const* currentInfo = current->GetSpellInfo();
+            if (!currentInfo || currentInfo->Id != spellId)
+                return;
+
+            Unit* castTarget = ObjectAccessor::GetUnit(*hunter, targetGuid);
+            if (!castTarget || !castTarget->IsAlive() || !hunter->IsWithinLOSInMap(castTarget))
+                return;
+
+            StopPlayerbotForStationaryCast(hunter);
+            hunter->SetFacingToObject(castTarget);
+            hunter->SetInFront(castTarget);
+        }, std::chrono::milliseconds(delayMs));
+    }
+}
+
 bool CanIssueFollowCommands(Player const* player)
 {
     if (!player || !player->IsAlive())
@@ -3873,6 +3926,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             return false;
         }
     }
+
+    if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo) && target)
+        ScheduleHunterStationaryShotGuard(player, target, resolvedSpellId, uint32(spellInfo->CalcCastTime()));
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterBreakableCrowdControlSpell(spellInfo))
         StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_breakable_cc_cast_stop_autoshot");

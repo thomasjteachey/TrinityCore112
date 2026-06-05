@@ -228,7 +228,7 @@ bool HasPlayerbotInsigniaCcDelayElapsed(Player const* player, bool hasBreakableA
 
     uint64 const playerGuid = player->GetGUID().GetRawValue();
     LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
-    constexpr std::chrono::milliseconds insigniaUseDelay(750);
+    constexpr std::chrono::milliseconds insigniaUseDelay(500);
 
     std::lock_guard<std::mutex> lock(g_PlayerbotInsigniaCheckLock);
     if (!hasBreakableAura)

@@ -2028,17 +2028,47 @@ bool BreakExpiredHunterFeignDeath(Player* player);
             player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(), reason ? reason : "breakable-cc");
     }
 
+    bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        return firstRank && firstRank->Id == 19434; // Aimed Shot (rank 1)
+    }
+
+    bool IsActiveHunterStationaryShotSpell(Spell const* spell)
+    {
+        if (!spell || spell->getState() == SPELL_STATE_FINISHED)
+            return false;
+
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (!spellInfo)
+            return false;
+
+        // Aimed Shot is the important case here, but treat any hunter cast-time
+        // generic/channel spell as movement-locked. The stutter loop must yield
+        // once the cast has started; otherwise a movement tick can clip the cast.
+        return spellInfo->CalcCastTime() > 0 || IsHunterAimedShotSpell(spellInfo) ||
+            (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
+    }
+
     bool HunterIsHardCastingStationaryShot(Player const* player)
     {
         if (!player || player->GetClass() != CLASS_HUNTER)
             return false;
 
-        Spell const* current = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
-        if (!current || current->getState() == SPELL_STATE_FINISHED)
-            return false;
+        if (IsActiveHunterStationaryShotSpell(player->GetCurrentSpell(CURRENT_GENERIC_SPELL)))
+            return true;
 
-        SpellInfo const* spellInfo = current->GetSpellInfo();
-        return spellInfo && spellInfo->CalcCastTime() > 0;
+        if (IsActiveHunterStationaryShotSpell(player->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
+            return true;
+
+        // Some branches expose a preparing cast through IsNonMeleeSpellCast()
+        // before CURRENT_GENERIC_SPELL is observable to this AI tick. The third
+        // argument skips auto-repeat, so queued Auto Shot does not look like an
+        // Aimed Shot / cast-time spell.
+        return player->IsNonMeleeSpellCast(false, false, true);
     }
 
     bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
@@ -2195,8 +2225,8 @@ bool BreakExpiredHunterFeignDeath(Player* player);
         if (HunterIsHardCastingStationaryShot(player))
         {
             // Aimed Shot and any other cast-time hunter shot must not be
-            // interrupted by the kite loop. Stop/facing is enough here; spell
-            // execution owns the cast.
+            // interrupted by the kite loop. Stop/facing is enough here; do not
+            // restart Auto Shot or issue a flee segment until the cast finishes.
             StopVirtualPlayerbotMovement(player);
             player->SetFacingToObject(target);
             player->SetInFront(target);
