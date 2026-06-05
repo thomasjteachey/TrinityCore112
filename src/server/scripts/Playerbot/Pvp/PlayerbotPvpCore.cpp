@@ -171,6 +171,45 @@ bool IsOnUseItemReady(Player const* player, uint32 itemEntry)
     return true;
 }
 
+bool IsWarlockSpellstoneItemEntry(uint32 itemEntry)
+{
+    switch (itemEntry)
+    {
+        case 5522:  // Spellstone
+        case 13602: // Greater Spellstone
+        case 13603: // Major Spellstone
+        case 22646: // Master Spellstone
+        case 41196: // Demonic Spellstone / later-client spellstone variant
+            return true;
+        default:
+            return false;
+    }
+}
+
+uint32 SelectReadyWarlockSpellstoneItemEntry(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_WARLOCK)
+        return 0;
+
+    // Prefer the actually equipped wand/relic slot item first. Spellstones are
+    // commonly equipped there on this branch, and GetItemByEntry can also find
+    // bag copies, so slot-first avoids selecting an older loose stone.
+    if (Item const* rangedItem = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+    {
+        uint32 const rangedEntry = rangedItem->GetEntry();
+        if (IsWarlockSpellstoneItemEntry(rangedEntry) && IsOnUseItemReady(player, rangedEntry))
+            return rangedEntry;
+    }
+
+    // Highest-rank-first fallback for spellstones in bags/equipment.
+    static constexpr std::array<uint32, 5> kSpellstoneEntries = { 41196, 22646, 13603, 13602, 5522 };
+    for (uint32 itemEntry : kSpellstoneEntries)
+        if (IsOnUseItemReady(player, itemEntry))
+            return itemEntry;
+
+    return 0;
+}
+
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
     if (!spellId)
@@ -663,10 +702,10 @@ private:
 
 void AddDecisionCandidate(std::vector<PrioritizedSpellDecision>& candidates, bool condition, float priority, SpellDecision const& decision)
 {
-    if (!condition || !decision.spellId)
+    if (!condition || (!decision.spellId && !decision.itemEntry))
         return;
 
-    if (g_SuppressedDecisionSpellId != 0 && decision.spellId == g_SuppressedDecisionSpellId)
+    if (g_SuppressedDecisionSpellId != 0 && decision.spellId != 0 && decision.spellId == g_SuppressedDecisionSpellId)
         return;
 
     candidates.push_back({ priority, decision });
@@ -3710,6 +3749,12 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     Unit const* spellLockTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19647)) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* devourEnemyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
+    Unit const* enemyCastingTarget = SelectEnemyCastingTarget(player, 30.0f, target);
+    uint32 const spellstoneItemEntry = isAfflictionWarlock ? SelectReadyWarlockSpellstoneItemEntry(player) : 0;
+    bool const hasSelfMagicDebuff = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 0.0f) == player;
+    bool const underCasterPressure = target && IsCasterClass(target) && player->HealthBelowPct(80);
+    bool const shouldUseSpellstone = spellstoneItemEntry != 0 &&
+        (hasSelfMagicDebuff || player->HealthBelowPct(50) || underCasterPressure || enemyCastingTarget != nullptr);
 
     bool const canUseVoidwalkerSacrifice = !isAfflictionWarlock && player->HealthBelowPct(25) && !player->HasAura(19443) &&
         hasLivingPet && IsPetSpellReady(player, 19443);
@@ -3739,8 +3784,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, !IsCasterClass(target) && !HasAuraFromSpellChain(target, 11713) && !HasAuraFromSpellChain(target, 11719) &&
             !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713), 35.0f,
         { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, isAfflictionWarlock && player->HasItemCount(13603) && SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 0.0f) == player, 34.7f,
-        { "warlock soulstone", "use soulstone to remove magic debuffs", 0, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), 13603 });
+    AddDecisionCandidate(candidates, shouldUseSpellstone, 56.7f,
+        { "warlock spellstone", hasSelfMagicDebuff ? "use spellstone to remove magic debuffs" : "use spellstone under caster pressure", 0, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), spellstoneItemEntry });
     AddDecisionCandidate(candidates, isAfflictionWarlock && !HasAuraFromSpellChain(target, 48181) && IsSpellReady(player, 48181), 34.5f,
         { "warlock haunt", "maintain haunt on kill target", 48181, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !HasAuraFromSpellChain(target, 11672) && IsSpellReady(player, 11672), 34.0f,
@@ -4658,9 +4703,9 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         suppressedSpellId = candidate.spellId;
     }
 
-    // If no immediately castable spell was found, keep the first decision so execution
+    // If no immediately castable spell or item was found, keep the first decision so execution
     // can still drive movement/position correction (for example out-of-range follow).
-    if (!decision.spellId)
+    if (!decision.spellId && !decision.itemEntry)
         decision = firstDecision;
 
     context.actionName = decision.actionName;
