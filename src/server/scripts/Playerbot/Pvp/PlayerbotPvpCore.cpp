@@ -3238,7 +3238,11 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     bool const rangedMode = IsHunterInRangedMode(player);
     uint32 const preferredTrapSpellId = isSurvivalHunter && trapSetupTarget && HasDotAura(trapSetupTarget) ? uint32(13809) : uint32(14311);
     bool const preferredTrapReady = IsSpellReady(player, preferredTrapSpellId);
-    bool const canFeignForTrap = trapSetupThreat && player->IsInCombat() && preferredTrapReady &&
+    // Traps are only legal out of combat. Feign Death is allowed as a quick
+    // defensive/trap-setup attempt, but it must never put hunter movement into a
+    // "wait for trap" state. If combat does not actually drop, the next tick
+    // should immediately fall through to Wing Clip / Counterattack / flee / shots.
+    bool const canFeignUnderPressure = trapSetupThreat && player->IsInCombat() &&
         IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384);
     bool const canDropTrapNow = trapSetupThreat && !player->IsInCombat() && preferredTrapReady;
 
@@ -3249,8 +3253,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, player->HealthBelowPct(35) && IsSpellReady(player, 19263), 35.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, canFeignForTrap, 36.0f,
-        { "hunter feign death", "set up out-of-combat trap while pressured in melee/dead-zone", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, canFeignUnderPressure, 36.0f,
+        { "hunter feign death", "drop combat under melee/dead-zone pressure", 5384, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, canDropTrapNow, 35.75f,
         { preferredTrapSpellId == 13809 ? "hunter frost trap" : "hunter freezing trap", "drop trap after feign death setup", preferredTrapSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, trapSetupTarget ? trapSetupTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isSurvivalHunter && IsSpellReady(player, 23989) && !HasAuraFromSpellChain(player, 19263) && !IsSpellReady(player, 19263), 34.0f,
@@ -4587,8 +4591,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         {
             bool const trapReady = IsSpellReady(player, 14311) || IsSpellReady(player, 13809);
             bool const canTrapNow = trapReady && !player->IsInCombat();
-            bool const canFeignForTrap = trapReady && player->IsInCombat() && IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384);
-            if (!canTrapNow && !canFeignForTrap)
+            if (!canTrapNow)
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, deadZoneTarget->GetGUID(),
                     ComputeHunterDeadZoneRetreatStep(player, deadZoneTarget),
@@ -4605,8 +4608,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (meleeKiteTarget && player->IsWithinMeleeRange(meleeKiteTarget))
         {
             bool const trapReady = IsSpellReady(player, 14311) || IsSpellReady(player, 13809);
-            bool const shouldTryTrapFirst = (trapReady && !player->IsInCombat()) ||
-                (trapReady && player->IsInCombat() && IsSpellReady(player, 5384) && !HasAuraFromSpellChain(player, 5384));
+            bool const shouldTryTrapFirst = trapReady && !player->IsInCombat();
             bool const shouldTryWingClipFirst = IsSpellReady(player, 14268) &&
                 !HasAuraFromSpellChain(meleeKiteTarget, 14268) &&
                 !IsHunterMeleeKiteTargetControlled(meleeKiteTarget);

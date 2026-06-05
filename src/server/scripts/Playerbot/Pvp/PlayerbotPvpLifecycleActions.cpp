@@ -79,6 +79,7 @@ namespace playerbot
 namespace
 {
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
+    std::unordered_map<uint64, uint32> g_HunterNextAutoShotPlantMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
 
     struct HunterFleeState
@@ -90,7 +91,10 @@ namespace
 
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
-    constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 1350;
+    constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 2200;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS = 1250;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS = 475;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS = 875;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -1994,7 +1998,7 @@ namespace
 
         float const currentDistance = player->GetDistance(target);
         float const angleAway = target->GetAbsoluteAngle(player);
-        float const moveDistance = std::clamp(desiredExactDistance - currentDistance + 3.0f, 6.0f, 18.0f);
+        float const moveDistance = std::clamp(desiredExactDistance - currentDistance + 5.0f, 10.0f, 28.0f);
         Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
             player->GetPositionY() + std::sin(angleAway) * moveDistance,
             player->GetPositionZ(), player->GetOrientation());
@@ -2038,12 +2042,22 @@ namespace
             return IssueHunterStickyFlee(player, target, std::max(safeShootMin + 5.0f, 14.0f), "too-close-or-deadzone");
         }
 
-        if (pauseUntilMs > nowMs)
+        auto stopFaceAndKeepAutoShot = [&]()
         {
             StopVirtualPlayerbotMovement(player);
             player->SetFacingToObject(target);
             player->SetInFront(target);
             StopVirtualPlayerbotMovement(player);
+
+            Spell const* currentAutoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+            bool const currentAutoShotActive = currentAutoRepeat && currentAutoRepeat->GetSpellInfo() && currentAutoRepeat->GetSpellInfo()->Id == 75;
+            if (!currentAutoShotActive && player->HasSpell(75))
+                player->CastSpell(target, 75, false);
+        };
+
+        if (pauseUntilMs > nowMs)
+        {
+            stopFaceAndKeepAutoShot();
             return true;
         }
 
@@ -2053,41 +2067,37 @@ namespace
             bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
             uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
             bool const targetControlled = HasHunterKiteControl(target);
-            bool const shouldPlantForShot = !autoShotActive || autoShotTimerMs == 0 || autoShotTimerMs <= 650 || targetControlled;
+            uint32& nextPlantMs = g_HunterNextAutoShotPlantMs[hunterGuidRaw];
+
+            bool const timerReady = autoShotTimerMs == 0 || autoShotTimerMs <= 650;
+            bool const forcedPlantWindow = nowMs >= nextPlantMs;
+            bool const shouldPlantForShot = !autoShotActive || timerReady || targetControlled || forcedPlantWindow;
 
             if (shouldPlantForShot)
             {
                 uint32 const pauseDurationMs = targetControlled
-                    ? std::clamp<uint32>(std::max<uint32>(autoShotTimerMs, 450), 450, 1200)
-                    : (autoShotTimerMs == 0 ? 450 : std::clamp<uint32>(autoShotTimerMs + 250, 450, 950));
+                    ? std::clamp<uint32>(std::max<uint32>(autoShotTimerMs, PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS), PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS, 1100)
+                    : (timerReady ? 525 : std::clamp<uint32>(autoShotTimerMs + 175, PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS, PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS));
                 pauseUntilMs = nowMs + pauseDurationMs;
+                nextPlantMs = pauseUntilMs + PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS;
                 g_HunterFleeStateByGuid.erase(hunterGuidRaw);
 
-                StopVirtualPlayerbotMovement(player);
-                player->SetFacingToObject(target);
-                player->SetInFront(target);
-                StopVirtualPlayerbotMovement(player);
-
-                if (!autoShotActive && player->HasSpell(75))
-                    player->CastSpell(target, 75, false);
+                stopFaceAndKeepAutoShot();
 
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP hunter kite loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} pause={} controlled={}.",
+                    "Playerbot PvP hunter kite loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} pause={} controlled={} forced={}.",
                     player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs, autoShotActive ? 1 : 0,
-                    pauseDurationMs, targetControlled ? 1 : 0);
+                    pauseDurationMs, targetControlled ? 1 : 0, forcedPlantWindow ? 1 : 0);
                 return true;
             }
 
             // Default hunter state: keep opening distance between shot windows.
-            // Do not orbit/chase back to preferred range; only stop again when the
-            // ranged weapon timer is close enough to fire.
-            if (exactDistance < maxAutoShotRange - 2.0f)
-                return IssueHunterStickyFlee(player, target, maxAutoShotRange - 1.0f, "between-autoshots");
+            // Do not orbit/chase back to preferred range; only stop again for a
+            // ranged weapon firing window or an occasional forced stutter plant.
+            if (exactDistance < maxAutoShotRange - 1.5f)
+                return IssueHunterStickyFlee(player, target, maxAutoShotRange - 0.75f, "between-autoshots");
 
-            StopVirtualPlayerbotMovement(player);
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
-            StopVirtualPlayerbotMovement(player);
+            stopFaceAndKeepAutoShot();
             return true;
         }
 

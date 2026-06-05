@@ -3659,52 +3659,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     ResumeDruidShapeshiftMovement(player, shapeshiftMovementResume, resolvedSpellId);
 
-    // Hunter PvP trap setup: when Feign Death succeeds against a nearby melee
-    // threat, pause movement, clear explicit target selection for visual parity,
-    // then cast Freezing Trap exactly 500ms later before resuming chase.
+    // Feign Death is only an instant defensive/trap-setup attempt. Do not queue a
+    // delayed trap or pause movement waiting for combat to drop; if combat drops,
+    // the next AI tick can select the out-of-combat trap normally. If combat is
+    // clipped by damage, the hunter immediately continues with flee/stutter-shot
+    // and melee escape decisions instead of hanging in a trap-pending state.
     if (context.spellId == 5384)
-    {
-        Unit* pressureTarget = nullptr;
-        if (!context.targetGuid.IsEmpty())
-            pressureTarget = ObjectAccessor::GetUnit(*player, context.targetGuid);
-        if (!pressureTarget)
-            pressureTarget = player->GetVictim();
-
-        bool const closeMeleePressure = pressureTarget && pressureTarget->IsAlive() && player->IsWithinDistInMap(pressureTarget, 5.0f);
-        uint32 const trapSpellId = IsSurvivalHunter(player) && pressureTarget && (pressureTarget->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE) || pressureTarget->HasAuraType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT)) ? 13809 : 1499;
-        if (closeMeleePressure && player->HasSpell(trapSpellId))
-        {
-            ObjectGuid const hunterGuid = player->GetGUID();
-            ObjectGuid const pressureTargetGuid = pressureTarget->GetGUID();
-            uint32 const delayedTrapSpellId = trapSpellId;
-
-            player->StopMoving();
-            player->SetSelection(ObjectGuid::Empty);
-
-            player->m_Events.AddEventAtOffset([hunterGuid, pressureTargetGuid, delayedTrapSpellId]()
-            {
-                Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
-                if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive())
-                    return;
-
-                SpellInfo const* trapInfo = sSpellMgr->GetSpellInfo(delayedTrapSpellId);
-                if (trapInfo &&
-                    !hunter->IsInCombat() &&
-                    !hunter->GetSpellHistory()->HasCooldown(delayedTrapSpellId) &&
-                    !hunter->GetSpellHistory()->HasGlobalCooldown(trapInfo) &&
-                    !hunter->IsNonMeleeSpellCast(false, false, true))
-                {
-                    SpellCastResult const trapCastResult = hunter->CastSpell(hunter, delayedTrapSpellId, false);
-                    if (trapCastResult != SPELL_CAST_OK)
-                        TC_LOG_DEBUG("playerbots.pvp.class", "Hunter trap follow-up failed after feign death delay: guid={}, spell={}, result={}.", hunter->GetGUID().ToString(), delayedTrapSpellId, uint32(trapCastResult));
-                }
-
-                if (Unit* resumedTarget = ObjectAccessor::GetUnit(*hunter, pressureTargetGuid))
-                    if (resumedTarget->IsAlive())
-                        hunter->Attack(resumedTarget, false);
-            }, std::chrono::milliseconds(500));
-        }
-    }
+        player->SetSelection(ObjectGuid::Empty);
 
     bool hasTeleportEffect = false;
     bool hasChargeEffect = false;
