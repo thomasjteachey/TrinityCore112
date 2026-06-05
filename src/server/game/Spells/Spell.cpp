@@ -2836,13 +2836,8 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         {
             if (Unit* unitCaster = spell->m_caster->ToUnit())
             {
-                bool isEntrap = (spell->m_spellInfo->Id == 19185);
-                bool fromFrostTrap = (spell->m_triggeredByAuraSpell && spell->m_triggeredByAuraSpell->Id == 13810);
-                bool isEarthbind = (spell->m_spellInfo->Id == 3600 || spell->m_spellInfo->Id == 6474);
-                if (!isEntrap && !fromFrostTrap && !isEarthbind) // freezing/frost traps/entrapment and Earthbind don't put you in combat
-                {
+                if (ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
                     unitCaster->AtTargetAttacked(unit, spell->m_spellInfo->HasInitialAggro());
-                }
             }
 
             if (!unit->IsStandState())
@@ -5411,6 +5406,9 @@ void Spell::HandleThreatSpells()
     // wild GameObject spells don't cause threat
     Unit* unitCaster = (m_originalCaster ? m_originalCaster : m_caster->ToUnit());
     if (!unitCaster)
+        return;
+
+    if (!ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
         return;
 
     if (m_UniqueTargetInfo.empty())

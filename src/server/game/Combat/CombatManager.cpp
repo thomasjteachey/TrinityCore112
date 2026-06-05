@@ -21,6 +21,7 @@
 #include "Unit.h"
 #include "CreatureAI.h"
 #include "Player.h"
+#include "Totem.h"
 
 /*static*/ bool CombatManager::CanBeginCombat(Unit const* a, Unit const* b)
 {
@@ -197,7 +198,13 @@ bool ShouldPropagateCombatToOwner(Unit* owner, Unit* controlled)
     if (!owner || owner->GetTypeId() != TYPEID_PLAYER)
         return true;
 
-    if (!controlled || !controlled->IsPet())
+    if (!controlled)
+        return true;
+
+    if (controlled->IsTotem())
+        return controlled->ToTotem()->IsFireTotem();
+
+    if (!controlled->IsPet())
         return true;
 
     if (controlled->GetOwnerGUID() != owner->GetGUID())
