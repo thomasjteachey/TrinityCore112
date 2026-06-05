@@ -3150,12 +3150,21 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
             Spell const* current = hunter->GetCurrentSpell(CURRENT_GENERIC_SPELL);
             if (!current)
             {
-                WhisperHunterCastDiagnostic(hunter, castTarget, delayMs <= 250 ? "guard_missing_generic_early" : "guard_missing_generic", spellId, delayExtra.c_str());
+                // If the generic spell disappeared before the stationary shot
+                // could plausibly finish, the core dropped/canceled it and the
+                // fake lock should be released.  But if it disappears at or
+                // after the expected cast time, that is the normal completion /
+                // delayed-impact transition.  Keep the original post-cast lock
+                // alive so racials/utility (notably Shadowmeld) cannot fire on
+                // the same tick and break the shot/combat state.
+                if (delayMs + 50 >= castTimeMs)
+                {
+                    WhisperHunterCastDiagnostic(hunter, castTarget, "guard_missing_generic_after_casttime", spellId, delayExtra.c_str());
+                    return;
+                }
 
-                // If the core has no generic spell by 250ms, this is no longer
-                // an active Aimed Shot cast. Do not keep the fake stationary lock
-                // alive for the full 3-5 seconds; that only makes the hunter sit
-                // there doing nothing after the core already dropped the spell.
+                WhisperHunterCastDiagnostic(hunter, castTarget, delayMs <= 250 ? "guard_missing_generic_early" : "guard_missing_generic_before_casttime", spellId, delayExtra.c_str());
+
                 if (delayMs >= 250)
                     playerbot::PvpClassActions::RegisterCasterSpellCooldown(hunter, kPlayerbotHunterStationaryCastLockToken, std::chrono::milliseconds(1));
                 return;
@@ -3165,7 +3174,13 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
             if (current->getState() == SPELL_STATE_FINISHED)
             {
                 std::string finishedExtra = delayExtra + " current=" + std::to_string(currentInfo ? currentInfo->Id : 0);
-                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_finished", spellId, finishedExtra.c_str());
+                if (delayMs + 50 >= castTimeMs)
+                {
+                    WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_finished_after_casttime", spellId, finishedExtra.c_str());
+                    return;
+                }
+
+                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_finished_before_casttime", spellId, finishedExtra.c_str());
                 if (delayMs >= 250)
                     playerbot::PvpClassActions::RegisterCasterSpellCooldown(hunter, kPlayerbotHunterStationaryCastLockToken, std::chrono::milliseconds(1));
                 return;
@@ -3174,7 +3189,13 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
             if (!currentInfo || currentInfo->Id != spellId)
             {
                 std::string mismatchExtra = delayExtra + " current=" + std::to_string(currentInfo ? currentInfo->Id : 0);
-                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_mismatch", spellId, mismatchExtra.c_str());
+                if (delayMs + 50 >= castTimeMs)
+                {
+                    WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_mismatch_after_casttime", spellId, mismatchExtra.c_str());
+                    return;
+                }
+
+                WhisperHunterCastDiagnostic(hunter, castTarget, "guard_generic_mismatch_before_casttime", spellId, mismatchExtra.c_str());
                 if (delayMs >= 250)
                     playerbot::PvpClassActions::RegisterCasterSpellCooldown(hunter, kPlayerbotHunterStationaryCastLockToken, std::chrono::milliseconds(1));
                 return;
