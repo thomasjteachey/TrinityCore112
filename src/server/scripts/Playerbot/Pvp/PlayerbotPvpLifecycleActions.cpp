@@ -79,8 +79,8 @@ namespace playerbot
 namespace
 {
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
-    std::unordered_map<uint64, uint32> g_HunterNextAutoShotPlantMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
+    std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
 
     struct HunterFleeState
     {
@@ -92,9 +92,9 @@ namespace
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS = 1700;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS = 325;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS = 650;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MS = 500;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
+    constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 700;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -1967,54 +1967,60 @@ namespace
     }
 
 
-    bool IssueHunterStickyFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
+    bool HunterHasActiveAutoShot(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+        return autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
+    }
+
+    bool HunterIsHardCastingStationaryShot(Player const* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return false;
+
+        Spell const* current = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+        if (!current || current->getState() == SPELL_STATE_FINISHED)
+            return false;
+
+        SpellInfo const* spellInfo = current->GetSpellInfo();
+        return spellInfo && spellInfo->CalcCastTime() > 0;
+    }
+
+    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
     {
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !CanIssueBotMovement(player))
             return false;
 
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint64 const guid = player->GetGUID().GetRawValue();
-        auto stateItr = g_HunterFleeStateByGuid.find(guid);
-        if (stateItr != g_HunterFleeStateByGuid.end())
-        {
-            HunterFleeState const& state = stateItr->second;
-            if (state.untilMs > nowMs && state.targetGuid == target->GetGUID())
-            {
-                float const dx = player->GetPositionX() - state.destination.GetPositionX();
-                float const dy = player->GetPositionY() - state.destination.GetPositionY();
-                if (std::sqrt(dx * dx + dy * dy) > 1.5f)
-                {
-                    if (!CanIssueMovementCommand(player, 350))
-                        return true;
-
-                    bool const issued = IssueMovePointThrottled(player, state.destination, 2.0f, 700);
-                    return issued || player->isMoving();
-                }
-            }
-        }
-
         if (!CanIssueMovementCommand(player, 350))
             return true;
 
-        float const currentDistance = player->GetDistance(target);
+        uint64 const guid = player->GetGUID().GetRawValue();
+        int8& side = g_HunterKiteSideByGuid[guid];
+        if (side == 0)
+            side = (guid & 1) ? int8(1) : int8(-1);
+
+        float const currentDistance = player->GetExactDist(target);
         float const angleAway = target->GetAbsoluteAngle(player);
-        // Hunter kiting should be mostly one-way. Pick a point directly away from
-        // the target and keep it for a few seconds. Do not overshoot far past Auto
-        // Shot range, or the bot will bounce/triangle by fleeing out then closing in.
-        float const moveDistance = std::clamp(desiredExactDistance - currentDistance + 2.0f, 5.0f, 20.0f);
-        Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
-            player->GetPositionY() + std::sin(angleAway) * moveDistance,
+        // Move in short, repeated "away" segments instead of committing to a
+        // long stale point. Long sticky points were the source of visible
+        // triangle/orbit movement when the target moved during the kite.
+        float const neededDistance = desiredExactDistance > currentDistance ? desiredExactDistance - currentDistance : 0.0f;
+        float const moveDistance = std::clamp(neededDistance + 3.0f, 7.0f, 14.0f);
+        float const edgeBias = currentDistance >= desiredExactDistance - 1.0f ? 0.35f * float(side) : 0.0f;
+        float const fleeAngle = angleAway + edgeBias;
+
+        Position destination(player->GetPositionX() + std::cos(fleeAngle) * moveDistance,
+            player->GetPositionY() + std::sin(fleeAngle) * moveDistance,
             player->GetPositionZ(), player->GetOrientation());
 
-        HunterFleeState& state = g_HunterFleeStateByGuid[guid];
-        state.destination = destination;
-        state.targetGuid = target->GetGUID();
-        state.untilMs = nowMs + PLAYERBOT_HUNTER_FLEE_STICK_MS;
-
-        bool const issued = IssueMovePointThrottled(player, destination, 2.0f, 700);
+        bool const issued = IssueMovePointThrottled(player, destination, 4.0f, PLAYERBOT_HUNTER_FLEE_REISSUE_MS);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP hunter kite loop: bot={} target={} decision=flee reason={} current={} desired={} move={} issued={}",
-            player->GetGUID().ToString(), target->GetGUID().ToString(), reason ? reason : "kite", currentDistance, desiredExactDistance, moveDistance, issued ? 1 : 0);
+            "Playerbot PvP hunter stutter loop: bot={} target={} decision=flee reason={} current={} desired={} move={} timer={} issued={}",
+            player->GetGUID().ToString(), target->GetGUID().ToString(), reason ? reason : "kite",
+            currentDistance, desiredExactDistance, moveDistance, player->getAttackTimer(RANGED_ATTACK), issued ? 1 : 0);
         return issued || player->isMoving();
     }
 
@@ -2031,19 +2037,12 @@ namespace
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
-        uint32& pauseUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
+        uint32& plantUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
         float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
         bool const hasLos = player->IsWithinLOSInMap(target);
-        bool const canAutoShot = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
+        bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
         bool const tooClose = exactDistance <= safeShootMin;
         bool const tooFar = exactDistance > maxAutoShotRange + 1.0f;
-
-        if (tooClose)
-        {
-            pauseUntilMs = 0;
-            MarkHunterKiteHold(player);
-            return IssueHunterStickyFlee(player, target, std::max(safeShootMin + 5.0f, 14.0f), "too-close-or-deadzone");
-        }
 
         auto stopFaceAndKeepAutoShot = [&]()
         {
@@ -2052,90 +2051,83 @@ namespace
             player->SetInFront(target);
             StopVirtualPlayerbotMovement(player);
 
-            Spell const* currentAutoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-            bool const currentAutoShotActive = currentAutoRepeat && currentAutoRepeat->GetSpellInfo() && currentAutoRepeat->GetSpellInfo()->Id == 75;
-            if (!currentAutoShotActive && player->HasSpell(75))
+            if (!HunterHasActiveAutoShot(player) && player->HasSpell(75))
                 player->CastSpell(target, 75, false);
         };
 
-        if (pauseUntilMs > nowMs)
+        if (HunterIsHardCastingStationaryShot(player))
+        {
+            // Aimed Shot and any other cast-time hunter shot must not be
+            // interrupted by the kite loop. Stop/facing is enough here; spell
+            // execution owns the cast.
+            StopVirtualPlayerbotMovement(player);
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+            return true;
+        }
+
+        if (!hasLos)
+        {
+            plantUntilMs = 0;
+            return TryRecoverLineOfSight(player, target, GetCombatPositioningProfile(player), "hunter-stutter-los");
+        }
+
+        if (tooClose)
+        {
+            plantUntilMs = 0;
+            MarkHunterKiteHold(player);
+            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
+        }
+
+        if (plantUntilMs > nowMs)
         {
             stopFaceAndKeepAutoShot();
             return true;
         }
 
-        if (canAutoShot)
+        uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
+        bool const autoShotActive = HunterHasActiveAutoShot(player);
+        bool const shouldPlantForAutoShot = inAutoShotBand && (!autoShotActive || autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
+
+        if (shouldPlantForAutoShot)
         {
-            Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-            bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
-            uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
-            bool const targetControlled = HasHunterKiteControl(target);
-            uint32& nextPlantMs = g_HunterNextAutoShotPlantMs[hunterGuidRaw];
+            plantUntilMs = nowMs + PLAYERBOT_HUNTER_STUTTER_PLANT_MS;
+            g_HunterFleeStateByGuid.erase(hunterGuidRaw);
+            stopFaceAndKeepAutoShot();
 
-            bool const timerReady = autoShotTimerMs == 0 || autoShotTimerMs <= 350;
-            bool const forcedPlantWindow = nowMs >= nextPlantMs && autoShotTimerMs <= 900;
-            // Being snared/rooted/stunned is NOT a reason to turret. Wing Clip and
-            // trap control should buy space, not make the hunter park at minimum
-            // ranged distance. Plant only for real shot windows, then resume fleeing.
-            bool const shouldPlantForShot = !autoShotActive || timerReady || forcedPlantWindow;
-
-            if (shouldPlantForShot)
-            {
-                uint32 const pauseDurationMs = timerReady
-                    ? 425
-                    : std::clamp<uint32>(autoShotTimerMs + 125, PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS, PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS);
-                pauseUntilMs = nowMs + pauseDurationMs;
-                nextPlantMs = pauseUntilMs + PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS;
-                g_HunterFleeStateByGuid.erase(hunterGuidRaw);
-
-                stopFaceAndKeepAutoShot();
-
-                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP hunter kite loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} pause={} controlled={} forced={}.",
-                    player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs, autoShotActive ? 1 : 0,
-                    pauseDurationMs, targetControlled ? 1 : 0, forcedPlantWindow ? 1 : 0);
-                return true;
-            }
-
-            // Default hunter state: run. The hunter should not treat the bottom of
-            // Auto Shot range as a parking spot; between shot windows he keeps
-            // opening the gap until the outer edge of Auto Shot range.
-            if (exactDistance < maxAutoShotRange - 0.75f)
-                return IssueHunterStickyFlee(player, target, maxAutoShotRange - 0.25f, "between-autoshots");
-
-            // At the extreme edge, don't close back in. Keep Auto Shot alive if it
-            // already exists, otherwise plant briefly to restart it.
-            if (!autoShotActive)
-                return StopHunterAndStartAutoShot(player, target, "outer-edge-start-autoshot");
-
-            StopVirtualPlayerbotMovement(player);
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
-            StopVirtualPlayerbotMovement(player);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP hunter stutter loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} plantMs={}",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs,
+                autoShotActive ? 1 : 0, PLAYERBOT_HUNTER_STUTTER_PLANT_MS);
             return true;
+        }
+
+        // Default state while Auto Shot is charging: keep moving away. Do not
+        // turret at the minimum ranged band, and do not run generic preferred
+        // range/chase logic.
+        if (inAutoShotBand)
+        {
+            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "timer-filling");
         }
 
         if (tooFar)
         {
-            // Only close when genuinely outside Auto Shot range, and only to the
-            // outer edge of Auto Shot. This is not the old preferred-range chase.
+            // Only close if the hunter has genuinely drifted outside Auto Shot
+            // range. Close to the outer edge, never to preferred/ideal range.
             if (!CanIssueMovementCommand(player, 500))
                 return true;
 
             float const closeToRange = std::max(1.0f, maxAutoShotRange - 1.0f);
             bool const issued = IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 700);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                "Playerbot PvP hunter kite loop: bot={} target={} decision=close-only-to-autoshot-edge distance={} followRange={} issued={}",
+                "Playerbot PvP hunter stutter loop: bot={} target={} decision=close-to-autoshot-edge distance={} followRange={} issued={}",
                 player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, closeToRange, issued ? 1 : 0);
             return issued || player->isMoving();
         }
 
-        // In an odd range gap, prefer stillness/facing over triangular correction.
-        StopVirtualPlayerbotMovement(player);
-        player->SetFacingToObject(target);
-        player->SetInFront(target);
-        StopVirtualPlayerbotMovement(player);
-        return true;
+        // Safety fallback for odd range gaps: flee rather than park.
+        return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "range-gap");
     }
 
     Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)

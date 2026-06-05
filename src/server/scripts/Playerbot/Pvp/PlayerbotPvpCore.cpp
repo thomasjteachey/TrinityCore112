@@ -4532,7 +4532,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     }
 
     bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
-    bool const criticalLowMana = !inSpiritOfRedemption && player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
+    bool const criticalLowMana = !inSpiritOfRedemption && player->GetClass() != CLASS_HUNTER &&
+        player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
     // Hard-priority mana preservation policy: below 10% mana, disengage from
     // combat above all other class behavior, then drink as soon as combat drops.
@@ -4605,41 +4606,11 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     if (player->GetClass() == CLASS_HUNTER)
     {
-        Unit const* activeHunterTarget = resolveTargetByGuid(activeTargetGuid);
-        Unit const* deadZoneTarget = SelectHunterDeadZoneEnemy(player, activeHunterTarget);
-        if (deadZoneTarget)
-        {
-            bool const trapReady = IsSpellReady(player, 14311) || IsSpellReady(player, 13809);
-            bool const canTrapNow = trapReady && !player->IsInCombat();
-            if (!canTrapNow)
-            {
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, deadZoneTarget->GetGUID(),
-                    ComputeHunterDeadZoneRetreatStep(player, deadZoneTarget),
-                    "hunter deadzone retreat", "enemy in hunter dead-zone", 100.0f);
-                return context;
-            }
-        }
-
-        // True melee range is a hunter emergency. Allow an immediate Wing Clip
-        // attempt first when it is ready and not already applied; otherwise run
-        // away now so the next tick can resume ranged shots instead of idling in
-        // melee/dead-zone posture.
-        Unit const* meleeKiteTarget = SelectNearbyEnemyTarget(player, activeHunterTarget, kReferenceHunterMeleeDistance);
-        if (meleeKiteTarget && player->IsWithinMeleeRange(meleeKiteTarget))
-        {
-            bool const trapReady = IsSpellReady(player, 14311) || IsSpellReady(player, 13809);
-            bool const shouldTryTrapFirst = trapReady && !player->IsInCombat();
-            bool const shouldTryWingClipFirst = IsSpellReady(player, 14268) &&
-                !HasAuraFromSpellChain(meleeKiteTarget, 14268) &&
-                !IsHunterMeleeKiteTargetControlled(meleeKiteTarget);
-            if (!shouldTryTrapFirst && !shouldTryWingClipFirst)
-            {
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, meleeKiteTarget->GetGUID(),
-                    ComputeHunterMeleeKiteRetreatStep(player, meleeKiteTarget),
-                    "hunter melee kite retreat", IsHunterMeleeKiteTargetControlled(meleeKiteTarget) ? "melee threat controlled" : "enemy in melee range", 101.0f);
-                return context;
-            }
-        }
+        // Do not emit hunter flee directives from the spell selector. Hunter
+        // movement is timer-driven in PlayerbotPvpLifecycleActions: run while
+        // Auto Shot is charging, plant briefly to fire, then resume running.
+        // Returning FleeTooCloseForSpell here created a second movement owner
+        // that fought the lifecycle loop and produced triangle/orbit movement.
     }
 
     if (player->GetClass() == CLASS_HUNTER)
@@ -4835,22 +4806,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else if (minRange > 0.0f && distance < std::max(0.0f, minRange + kRangedSpacingEnterTooCloseBuffer))
             {
-                bool issuedHunterDeadZoneRetreat = false;
-                if (IsHunterExactDeadZone(player, spacingTarget))
-                {
-                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
-                        ComputeHunterDeadZoneRetreatStep(player, spacingTarget),
-                        "hunter deadzone retreat", "selected hunter spell in dead-zone", 100.0f);
-                    issuedHunterDeadZoneRetreat = true;
-                }
-
-                if (!issuedHunterDeadZoneRetreat)
+                if (player->GetClass() != CLASS_HUNTER)
                 {
                     // Enter too-close movement before strict dead-zone boundaries so
                     // ranged users do not idle in 5-8y style min-range gaps.
-                    // Keep an extra cushion over strict spell minimum range so ranged
-                    // weapon casts (e.g. Hunter Auto Shot at 8y min range) do not
-                    // immediately re-enter the dead-zone from minor pathing drift.
+                    // Hunters are excluded because their movement is owned by the
+                    // Auto Shot stutter loop in lifecycle; emitting spell-selector
+                    // flee directives here creates competing movement vectors.
                     float const fleeFollowRange = std::max(std::max(1.0f, GetConfiguredCloseRange()), minRange + 2.0f);
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, spacingTarget->GetGUID(),
                         fleeFollowRange, "flee", "selected spell minimum range violation", 84.0f);
@@ -4903,7 +4865,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // Reference parity bridge: provide trigger-like movement directives even
     // when we do not have a castable spell yet ("enemy out of spell" / "enemy
     // too close for spell"). Keep classic spell IDs untouched.
-    if (!context.spellId && hasValidTarget && UsesRangedSpacingProfile(player, profileSelection) && !healerHasLivingAllyTarget)
+    if (!context.spellId && hasValidTarget && player->GetClass() != CLASS_HUNTER &&
+        UsesRangedSpacingProfile(player, profileSelection) && !healerHasLivingAllyTarget)
     {
         Unit const* movementTarget = resolveTargetByGuid(activeTargetGuid);
         if (movementTarget)
@@ -4960,12 +4923,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             }
             else
             {
-                if (UsesRangedSpacingProfile(player, profileSelection))
+                if (UsesRangedSpacingProfile(player, profileSelection) && player->GetClass() != CLASS_HUNTER)
                 {
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell, fallbackTarget->GetGUID(),
                         std::max(1.0f, GetConfiguredCloseRange()), "flee", "low mana fallback disengage to recover", 67.0f);
                 }
-                else
+                else if (player->GetClass() != CLASS_HUNTER)
                 {
                     ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, fallbackTarget->GetGUID(),
                         std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "low mana fallback to auto-attack", 67.0f);
