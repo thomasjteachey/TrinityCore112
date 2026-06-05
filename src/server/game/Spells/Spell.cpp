@@ -57,6 +57,7 @@
 #include "SpellPackets.h"
 #include "SpellScript.h"
 #include "TemporarySummon.h"
+#include "Totem.h"
 #include "TradeData.h"
 #include "Unit.h"
 #include "UpdateData.h"
@@ -148,6 +149,61 @@ namespace
             message << "[Trap Debug] " << spellName << " (" << spellInfo->Id << ") failed for " << targetName << ": " << resultText << ".";
 
         sWorld->SendServerMessage(SERVER_MSG_STRING, message.str(), ownerPlayer);
+    }
+
+
+    bool IsHuntersMark(SpellInfo const* spellInfo)
+    {
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER && (spellInfo->SpellFamilyFlags[0] & 0x400) && spellInfo->SpellIconID == 538;
+    }
+
+    bool IsNoCombatSpell(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        switch (spellInfo->Id)
+        {
+            // Freezing/Frost traps and Earthbind Totem do not put the caster in combat.
+            case 14309:
+            case 14308:
+            case 3355:
+            case 13810:
+            case 63487:
+            case 67035:
+            case 72216:
+            case 19185:
+            case 3600:
+            case 6474:
+                return true;
+            default:
+                break;
+        }
+
+        return IsHuntersMark(spellInfo);
+    }
+
+    bool ShouldTotemSpellStartCombat(Unit const* unit)
+    {
+        if (!unit || !unit->IsTotem())
+            return true;
+
+        return unit->ToTotem()->IsFireTotem();
+    }
+
+    bool ShouldSpellStartCombat(SpellInfo const* spellInfo, Unit const* originalCaster, WorldObject const* caster)
+    {
+        if (IsNoCombatSpell(spellInfo))
+            return false;
+
+        if (!ShouldTotemSpellStartCombat(originalCaster))
+            return false;
+
+        Unit const* casterUnit = caster ? caster->ToUnit() : nullptr;
+        if (casterUnit != originalCaster && !ShouldTotemSpellStartCombat(casterUnit))
+            return false;
+
+        return true;
     }
 
     bool IsVanishProtectedInFlightSpell(Spell const* spell, Unit const* target)
@@ -2496,12 +2552,8 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     else if (MissCondition == SPELL_MISS_REFLECT && ReflectResult == SPELL_MISS_NONE)
         _spellHitTarget = spell->m_caster->ToUnit();
 
-    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision())
-    {
-        if(spell->m_spellInfo->Id != 14309 && spell->m_spellInfo->Id != 14308 && spell->m_spellInfo->Id != 3355 && spell->m_spellInfo->Id != 13810 && spell->m_spellInfo->Id != 63487 && spell->m_spellInfo->Id != 67035
-            && spell->m_spellInfo->Id != 72216 && spell->m_spellInfo->Id != 19185 && spell->m_spellInfo->Id != 3600 && spell->m_spellInfo->Id != 6474) // freezing/frost traps and Earthbind Totem don't put you in combat
-            unit->SetInCombatWith(spell->m_originalCaster);
-    }
+    if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+        unit->SetInCombatWith(spell->m_originalCaster);
 
     bool reportedNaturesGraspFailure = false;
     if (MissCondition != SPELL_MISS_NONE)
@@ -2784,13 +2836,8 @@ void Spell::TargetInfo::DoDamageAndTriggers(Spell* spell)
         {
             if (Unit* unitCaster = spell->m_caster->ToUnit())
             {
-                bool isEntrap = (spell->m_spellInfo->Id == 19185);
-                bool fromFrostTrap = (spell->m_triggeredByAuraSpell && spell->m_triggeredByAuraSpell->Id == 13810);
-                bool isEarthbind = (spell->m_spellInfo->Id == 3600 || spell->m_spellInfo->Id == 6474);
-                if (!isEntrap && !fromFrostTrap && !isEarthbind) // freezing/frost traps/entrapment and Earthbind don't put you in combat
-                {
+                if (ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
                     unitCaster->AtTargetAttacked(unit, spell->m_spellInfo->HasInitialAggro());
-                }
             }
 
             if (!unit->IsStandState())
@@ -5359,6 +5406,9 @@ void Spell::HandleThreatSpells()
     // wild GameObject spells don't cause threat
     Unit* unitCaster = (m_originalCaster ? m_originalCaster : m_caster->ToUnit());
     if (!unitCaster)
+        return;
+
+    if (!ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
         return;
 
     if (m_UniqueTargetInfo.empty())
@@ -8177,9 +8227,7 @@ void Spell::PreprocessSpellLaunch(TargetInfo& targetInfo)
         return;
 
     // This will only cause combat - the target will engage once the projectile hits (in Spell::TargetInfo::PreprocessTarget)
-    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision()
-        && (m_spellInfo->Id != 14309 && m_spellInfo->Id != 14308 && m_spellInfo->Id != 3355 && m_spellInfo->Id != 13810 && m_spellInfo->Id != 63487 && m_spellInfo->Id != 67035 && m_spellInfo->Id != 72216 && m_spellInfo->Id != 19185
-            && m_spellInfo->Id != 3600 && m_spellInfo->Id != 6474)) //freezing/frost traps and Earthbind Totem don't put you in combat
+    if (m_originalCaster && targetInfo.MissCondition != SPELL_MISS_EVADE && !m_originalCaster->IsFriendlyTo(targetUnit) && (!m_spellInfo->IsPositive() || m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (m_spellInfo->HasInitialAggro() || targetUnit->IsEngaged()) && !m_spellInfo->IsMindVision() && ShouldSpellStartCombat(m_spellInfo, m_originalCaster, m_caster))
         m_originalCaster->SetInCombatWith(targetUnit, true);
 
     Unit* unit = nullptr;
