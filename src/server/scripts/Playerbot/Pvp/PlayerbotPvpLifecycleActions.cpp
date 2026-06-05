@@ -106,6 +106,7 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
+constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -1668,6 +1669,12 @@ constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 
         if (HasActiveStationaryChannel(player))
             return false;
+
+        if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotShadowmeldGraceToken))
+        {
+            StopVirtualPlayerbotMovement(player);
+            return false;
+        }
 
         if (player->GetClass() == CLASS_HUNTER && HunterIsHardCastingStationaryShot(player))
         {
@@ -3336,6 +3343,15 @@ namespace playerbot
         }
 
         player->SetSelection(target->GetGUID());
+
+        // Cast-time hunter actions such as Aimed Shot must be protected before
+        // the generic engagement code calls Attack() or starts Auto Shot.
+        // Previously the lifecycle reached DriveCombatPositioning() and held the
+        // hunter still, but EngageSelectedEnemyPlayer() had already called
+        // Attack()/CastSpell(75), which could queue Auto Shot while Aimed Shot
+        // was still preparing.
+        if (HoldHunterStationaryCast(player, target, "engage-selected-enemy"))
+            return true;
 
         // Ensure mounted bots immediately transition into combat posture once an
         // enemy target is acquired. Without this, bots that don't cast right away

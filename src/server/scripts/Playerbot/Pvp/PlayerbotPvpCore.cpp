@@ -73,6 +73,7 @@ constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
+constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
@@ -2284,6 +2285,47 @@ Unit const* SelectEnemyTargetInSpellRange(Player const* player, Unit const* pref
     return best;
 }
 
+Unit const* SelectEnemyGapCloserTarget(Player const* player, Unit const* preferredTarget, float minDistance, float maxDistance, bool preferFarthest)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    auto isCandidateUsable = [&](Unit const* candidate)
+    {
+        if (!HasHostileTarget(player, candidate) || IsTargetInvalidByImmunity(player, candidate))
+            return false;
+        if (HasBreakableCrowdControl(candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate))
+            return false;
+
+        float const distance = player->GetExactDist(candidate);
+        return distance >= minDistance && distance <= maxDistance;
+    };
+
+    if (isCandidateUsable(preferredTarget))
+        return preferredTarget;
+
+    Unit const* best = nullptr;
+    float bestDistance = preferFarthest ? -1.0f : std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isCandidateUsable(candidate))
+            continue;
+
+        float const distance = player->GetExactDist(candidate);
+        if ((preferFarthest && distance > bestDistance) || (!preferFarthest && distance < bestDistance))
+        {
+            best = candidate;
+            bestDistance = distance;
+        }
+    }
+
+    return best;
+}
+
 Unit const* SelectNearbyEnemyManaTarget(Player const* player, Unit const* preferredTarget, float maxDistance, float minManaPct)
 {
     if (!player || !player->FindMap())
@@ -3903,8 +3945,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         bool const isProwling = HasAuraFromSpellChain(player, 9913);
         Unit const* lowAlly = SelectFriendlyHealthTarget(player, 40.0f, 80.0f);
         Unit const* rootTarget = SelectPredatorsSwiftnessRootTarget(player, target, 30.0f);
-        Unit const* feralChargeBearTarget = IsSpellReady(player, 16979) ? SelectEnemyTargetInSpellRange(player, target, 16979) : nullptr;
-        Unit const* feralChargeCatTarget = IsSpellReady(player, 49376) ? SelectEnemyTargetInSpellRange(player, target, 49376) : nullptr;
+        Unit const* feralChargeBearTarget = IsSpellReady(player, 16979) ? SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) : nullptr;
+        Unit const* feralChargeCatTarget = IsSpellReady(player, 49376) ? SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) : nullptr;
         bool const safeAgain = !player->HealthBelowPct(60) || !heavyMeleePressure;
 
         std::vector<PrioritizedSpellDecision> feralCandidates;
@@ -3928,8 +3970,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid bear form", "swap bear under heavy melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, inBear && player->GetComboPoints() >= 5 && player->GetPowerPct(POWER_MANA) < 50.0f && !player->HasAura(89758) && IsSpellReady(player, 89758), 67.0f,
             { "druid thinnervate", "bear combo point thinnervate", 89758, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-        AddDecisionCandidate(feralCandidates, inBear && feralChargeBearTarget, 66.0f,
-            { "druid feral charge bear", "escape by charging a distant target", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, feralChargeBearTarget ? feralChargeBearTarget->GetGUID() : ObjectGuid::Empty });
+        AddDecisionCandidate(feralCandidates, inBear && feralChargeBearTarget, 70.7f,
+            { "druid feral charge bear", "bear gap close / interrupt from charge range", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, feralChargeBearTarget ? feralChargeBearTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 22842), 65.0f,
             { "druid frenzied regeneration", "bear survival recovery", 22842, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inBear && IsSpellReady(player, 5229), 64.0f,
@@ -3944,8 +3986,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
             { "druid cat form", "prefer cat form for feral pressure", 768, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inCat && IsRootedOrSnared(player) && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 768), 59.0f,
             { "druid cat form", "powershift root or snare", 768, playerbot::PvpClassSpellContext::TargetMode::Self, target ? target->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(feralCandidates, inCat && feralChargeCatTarget, 58.5f,
-            { "druid feral charge cat", "close gap in cat form", 49376, playerbot::PvpClassSpellContext::TargetMode::Enemy, feralChargeCatTarget ? feralChargeCatTarget->GetGUID() : ObjectGuid::Empty });
+        AddDecisionCandidate(feralCandidates, inCat && feralChargeCatTarget, 70.6f,
+            { "druid feral charge cat", "cat gap close / interrupt from charge range", 49376, playerbot::PvpClassSpellContext::TargetMode::Enemy, feralChargeCatTarget ? feralChargeCatTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(feralCandidates, inCat && !player->IsWithinMeleeRange(target) && IsSpellReady(player, 9821), 58.0f,
             { "druid dash", "catch target in cat form", 9821, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(feralCandidates, inCat && player->GetComboPoints() >= 5 && player->GetPowerPct(POWER_MANA) < 50.0f && !player->HasAura(89758) && IsSpellReady(player, 89758), 56.0f,
@@ -3994,8 +4036,9 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         { "druid faerie fire", "apply faerie fire to nearby rogues", kDruidCasterFaerieFireSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, ((!isFeralDruid && meleeThreat) || (isFeralDruid && player->HealthBelowPct(60) && heavyMeleePressure)) && IsSpellReady(player, 5487), 29.0f,
         { "druid bear form", isFeralDruid ? "swap to bear only under heavy melee pressure below 60 percent health" : "swap to bear under physical melee pressure", 5487, playerbot::PvpClassSpellContext::TargetMode::Self, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, player->HasAura(5487) && meleeThreat && IsSpellReady(player, 16979), 28.0f,
-        { "druid feral charge", "charge away from melee pressure in bear form", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, meleeThreat ? meleeThreat->GetGUID() : ObjectGuid::Empty });
+    Unit const* bearChargeTarget = player->HasAura(5487) && IsSpellReady(player, 16979) ? SelectEnemyGapCloserTarget(player, target, 8.0f, 25.0f, false) : nullptr;
+    AddDecisionCandidate(candidates, bearChargeTarget, 28.0f,
+        { "druid feral charge", "bear gap close / interrupt from charge range", 16979, playerbot::PvpClassSpellContext::TargetMode::Enemy, bearChargeTarget ? bearChargeTarget->GetGUID() : ObjectGuid::Empty });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
@@ -4338,7 +4381,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     Unit const* earthShieldTarget = isRestoShaman && IsSpellReady(player, 32593) && !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 32593) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
     Unit const* purgeTarget = isRestoShaman && hasHostileTarget && IsSpellReady(player, 81325) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* allyMagicTarget = isRestoShaman && IsSpellReady(player, 81325) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f) : nullptr;
-    Unit const* distantEscapeTarget = isRestoShaman && hasHostileTarget && SelectNearbyMeleeTarget(player, target, 8.0f) && IsSpellReady(player, 81910) ? SelectEnemyTargetInSpellRange(player, target, 81910) : nullptr;
+    Unit const* rehgarsFuryThreat = hasHostileTarget && IsSpellReady(player, 81910) ? SelectNearbyMeleeTarget(player, target, 10.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
@@ -4379,8 +4422,8 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && distantEscapeTarget && player->HasAura(2645), 59.5f,
-        { "shaman rehgar's fury", "leap to distant target while escaping", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy, distantEscapeTarget ? distantEscapeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, rehgarsFuryThreat && !HasBreakableCrowdControl(rehgarsFuryThreat), 59.5f,
+        { "shaman rehgar's fury", "escape nearby melee pressure", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy, rehgarsFuryThreat ? rehgarsFuryThreat->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && purgeTarget, 53.5f,
@@ -4446,6 +4489,13 @@ SpellDecision SelectClassicClassSpell(Player const* player, Unit const* target, 
 
 SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target, Unit const* allyTarget, ClassicProfileSelection const& profileSelection)
 {
+    if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotShadowmeldGraceToken))
+    {
+        SpellDecision holdDecision;
+        holdDecision.reason = "shadowmeld grace window";
+        return holdDecision;
+    }
+
     // Spirit of Redemption must run the priest healing selector even with no
     // selected hostile/ally target; the selector finds the lowest-health ally
     // itself and Flash Heal is free during this aura.

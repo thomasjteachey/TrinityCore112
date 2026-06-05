@@ -223,6 +223,8 @@ constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
+constexpr uint32 kRacialNightElfShadowmeldSpellId = 20580;
+constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
@@ -3824,6 +3826,17 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
+    // Shadowmeld should behave like a tiny tactical drop-combat window: after
+    // it lands, do not immediately move or cast and break it. The successful
+    // Shadowmeld cast registers a 500ms grace token; every later action waits
+    // until that token expires.
+    if (playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotShadowmeldGraceToken) &&
+        context.spellId != kRacialNightElfShadowmeldSpellId)
+    {
+        failureReason = "shadowmeld_grace";
+        return false;
+    }
+
     // Feign Death is a short tactical drop-combat attempt for hunter bots. Once
     // the next real action is selected, stand up first; otherwise a clipped FD
     // can leave the virtual client lying down forever and unable to resume the
@@ -4141,6 +4154,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     ResumeDruidShapeshiftMovement(player, shapeshiftMovementResume, resolvedSpellId);
 
+    if (resolvedSpellId == kRacialNightElfShadowmeldSpellId || context.spellId == kRacialNightElfShadowmeldSpellId)
+    {
+        StopPlayerbotForStationaryCast(player);
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotShadowmeldGraceToken, std::chrono::milliseconds(500));
+    }
+
     // Feign Death is only an instant defensive/trap-setup attempt. Do not queue a
     // delayed trap or pause movement waiting for combat to drop; if combat drops,
     // the next AI tick can select the out-of-combat trap normally. If combat is
@@ -4387,6 +4406,14 @@ bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 s
 void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::seconds cooldown)
 {
     if (!player || !spellId || cooldown <= std::chrono::seconds::zero())
+        return;
+
+    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+}
+
+void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown)
+{
+    if (!player || !spellId || cooldown <= std::chrono::milliseconds::zero())
         return;
 
     g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
