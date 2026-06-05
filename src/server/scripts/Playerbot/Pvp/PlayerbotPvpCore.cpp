@@ -78,6 +78,8 @@ constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
+constexpr uint32 kDruidThornsSpellId = 9910;
+constexpr uint32 kDruidMassThornsSpellId = 89762;
 constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
 constexpr uint32 kPriestShadowWordPainSpellId = 589;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
@@ -932,6 +934,12 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
     if (!player || !player->IsAlive())
         return {};
 
+    // Avoid breaking rogue/druid stealth openers or Shadowmeld recovery windows
+    // with racial utility. Stealthed bots should commit to their opener instead
+    // of spending a racial before they engage.
+    if (player->HasStealthAura())
+        return {};
+
     switch (player->GetRace())
     {
         case RACE_ORC:
@@ -1603,6 +1611,17 @@ bool CanAttemptMount(Player const* player, SpellInfo const* mountSpellInfo)
     return allowMount || mountSpellInfo->AreaGroupId;
 }
 
+bool CanCastMountSpellAtCurrentLocation(Player const* player, SpellInfo const* mountSpellInfo)
+{
+    if (!CanAttemptMount(player, mountSpellInfo))
+        return false;
+
+    // Let custom/playerbot mount spells that do not carry the outdoors-only
+    // attribute work in battleground prep rooms where the map permits mounting.
+    // Regular mounts still honor Spell::CheckCast's outdoors-only requirement.
+    return !mountSpellInfo->HasAttribute(SPELL_ATTR0_OUTDOORS_ONLY) || player->IsOutdoors();
+}
+
 bool IsHardControlled(Player const* player)
 {
     if (!player)
@@ -1633,13 +1652,33 @@ uint32 SelectReadyKnownMountSpell(Player const* player)
             continue;
         if (!IsSpellReady(player, spellId))
             continue;
-        if (!CanAttemptMount(player, spellInfo))
+        if (!CanCastMountSpellAtCurrentLocation(player, spellInfo))
             continue;
 
         return spellId;
     }
 
     return 0;
+}
+
+SpellDecision SelectMountSpell(Player const* player, char const* reason)
+{
+    SpellDecision decision;
+    if (!player || !player->IsAlive() || player->IsInCombat() || player->IsMounted())
+        return decision;
+
+    if (IsHardControlled(player))
+        return decision;
+
+    if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+        if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
+            if (CanCastMountSpellAtCurrentLocation(player, defaultMountInfo))
+                return { "mount", reason, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+    if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
+        return { "mount", reason, knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+    return decision;
 }
 
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
@@ -1750,26 +1789,19 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     if (inArenaMap || inActiveDuel)
         return decision;
 
-    if (inBattlegroundPreparation)
+    // During battleground preparation this selector only runs after
+    // SelectPreparationBuffSpell() has no pet/buff actions left. At that point,
+    // mount if the current spot is legal for the selected mount spell so bots
+    // are ready to move as soon as the gates open.
+    char const* mountReason = inBattlegroundPreparation ? "mount during preparation after prep actions" : "mount while out of combat";
+
+    // Keep pressure logic responsive outside the prep phase: don't choose an
+    // out-of-combat mount action while hostile players are already within
+    // practical engage range.
+    if (!inBattlegroundPreparation && !player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
         return decision;
 
-    if (!IsStrictlyOutdoorsForMount(player))
-        return decision;
-
-    // Keep pressure logic responsive: don't choose an out-of-combat mount
-    // action while hostile players are already within practical engage range.
-    if (!player->InBattleground() && HasNearbyAttackableEnemyPlayer(player, 45.0f))
-        return decision;
-
-    if (IsSpellReady(player, SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
-        if (SpellInfo const* defaultMountInfo = sSpellMgr->GetSpellInfo(SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT))
-            if (CanAttemptMount(player, defaultMountInfo))
-                return { "mount", "mount while outside and out of combat", SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT, playerbot::PvpClassSpellContext::TargetMode::Self };
-
-    if (uint32 const knownMountSpellId = SelectReadyKnownMountSpell(player))
-        return { "mount", "mount while outside and out of combat", knownMountSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
-
-    return decision;
+    return SelectMountSpell(player, mountReason);
 }
 
 bool HasHostileTarget(Player const* player, Unit const* target)
@@ -1877,6 +1909,15 @@ bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId, ObjectGuid cast
     return false;
 }
 
+bool HasAnyAuraFromSpellChain(Unit const* unit, std::initializer_list<uint32> baseSpellIds)
+{
+    for (uint32 baseSpellId : baseSpellIds)
+        if (HasAuraFromSpellChain(unit, baseSpellId))
+            return true;
+
+    return false;
+}
+
 bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
 {
     return HasAuraFromSpellChain(unit, 25295, casterGuid) || // Serpent Sting
@@ -1947,6 +1988,48 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
     return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
 }
 
+ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std::initializer_list<uint32> baseSpellIds, float maxDistance, bool includeSelf)
+{
+    if (!player || !player->FindMap() || baseSpellIds.size() == 0)
+        return ObjectGuid::Empty;
+
+    auto isEligible = [&](Player* candidate)
+    {
+        if (!candidate || !candidate->IsAlive())
+            return false;
+        if (!IsFriendlySupportTarget(player, candidate))
+            return false;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            return false;
+        if (HasAnyAuraFromSpellChain(candidate, baseSpellIds))
+            return false;
+
+        return true;
+    };
+
+    if (includeSelf && isEligible(const_cast<Player*>(player)))
+        return player->GetGUID();
+
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isEligible(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
+
 SpellDecision SelectPreparationBuffSpell(Player const* player)
 {
     SpellDecision decision;
@@ -1985,15 +2068,31 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
 
             break;
         }
+        case CLASS_HUNTER:
+        {
+            HunterPetDecisionState const petState = GetHunterPetDecisionState(player);
+            bool const hasDeadPet = petState.hasDeadPet || petState.shouldRevivePet;
+            if (hasDeadPet &&
+                !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterRevivePetSpellId) &&
+                IsSpellReady(player, kHunterRevivePetSpellId))
+                return { "hunter revive pet prep", "revive dead hunter pet before gates open", kHunterRevivePetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            if (!petState.hasLivingPet && !hasDeadPet && petState.canCallPet &&
+                !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kHunterCallPetSpellId) &&
+                IsSpellReady(player, kHunterCallPetSpellId))
+                return { "hunter call pet prep", "call active stable pet before gates open", kHunterCallPetSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            break;
+        }
         case CLASS_DRUID:
         {
             if (IsSpellReady(player, 21850) && !HasAuraFromSpellChain(player, 21850))
                 return { "druid gift of the wild prep", "apply raid-wide stat buff before gates open", 21850, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
-            if (IsSpellReady(player, 9910))
+            if (IsSpellReady(player, kDruidMassThornsSpellId))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 9910, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "druid thorns prep", "apply thorns to nearby allies before gates open", 9910, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { kDruidThornsSpellId, kDruidMassThornsSpellId }, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "druid mass thorns prep", "apply mass thorns to nearby allies before gates open", kDruidMassThornsSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
             }
 
             break;
@@ -2034,9 +2133,26 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
 
             break;
         }
+        case CLASS_WARLOCK:
+        {
+            Pet const* pet = player->GetPet();
+            if (pet && pet->IsAlive())
+                break;
+
+            ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+            bool const isAfflictionWarlock = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
+            uint32 const summonPetSpell = isAfflictionWarlock ? 691 : 697;
+            if (IsSpellReady(player, summonPetSpell))
+                return { isAfflictionWarlock ? "warlock summon felhunter prep" : "warlock summon voidwalker prep", isAfflictionWarlock ? "summon felhunter before gates open" : "summon voidwalker before gates open", summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+            break;
+        }
         default:
             break;
     }
+
+    if (SpellDecision const mountDecision = SelectMountSpell(player, "mount during preparation after prep actions"); mountDecision.spellId)
+        return mountDecision;
 
     return decision;
 }
