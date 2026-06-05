@@ -2017,7 +2017,9 @@ bool BreakExpiredHunterFeignDeath(Player* player);
             player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
 
         if (reason)
-            SetLastMovementDebugStatus(player, reason);
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP hunter stationary cast suppresses Auto Shot: bot={} reason={}",
+                player->GetGUID().ToString(), reason);
     }
 
 
