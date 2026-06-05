@@ -2279,6 +2279,48 @@ bool IsMageBlinkEscapeCast(Player const* player, playerbot::PvpClassSpellContext
     return !hardNonBlinkableControl;
 }
 
+
+bool PlayerHasPoisonForStoneform(Player const* player)
+{
+    if (!player)
+        return false;
+
+    if (player->HasAuraWithMechanic(1u << MECHANIC_POISON))
+        return true;
+
+    for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
+    {
+        AuraApplication const* aurApp = appliedAura.second;
+        SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
+        if (spellInfo && spellInfo->Dispel == DISPEL_POISON)
+            return true;
+    }
+
+    return false;
+}
+
+bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellContext const& context, uint32 resolvedSpellId)
+{
+    if (!player || context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    switch (resolvedSpellId)
+    {
+        case 7744: // Will of the Forsaken
+        {
+            constexpr uint32 wotfMechanicMask =
+                (1u << MECHANIC_FEAR) |
+                (1u << MECHANIC_CHARM) |
+                (1u << MECHANIC_SLEEP);
+            return player->HasUnitState(UNIT_STATE_FLEEING) || player->HasAuraWithMechanic(wotfMechanicMask);
+        }
+        case 20594: // Stoneform
+            return PlayerHasPoisonForStoneform(player);
+        default:
+            return false;
+    }
+}
+
 bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo const* spellInfo)
 {
     if (!player || !target || !target->IsAlive())
@@ -3296,12 +3338,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return true;
     }
 
-    if (IsCrowdControlledForAction(player) && !IsMageBlinkEscapeCast(player, context, resolvedSpellId))
+    if (IsCrowdControlledForAction(player) &&
+        !IsMageBlinkEscapeCast(player, context, resolvedSpellId) &&
+        !IsControlBreakingRacialCast(player, context, resolvedSpellId))
     {
         // Hard crowd-control gate: polymorphed/confused actors must not start
-        // attacks or cast attempts until control is restored. Mage Blink is
-        // the explicit exception for stun/root escape because the real player
-        // action is intentionally usable while controlled.
+        // attacks or cast attempts until control is restored. Mage Blink and
+        // specific control-breaking racials are explicit exceptions because
+        // they are intentionally usable while the corresponding control is active.
         failureReason = "crowd_controlled_polymorph";
         return false;
     }
@@ -3725,6 +3769,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    else if (resolvedSpellId == 89160 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
+    {
+        Position dest = target->GetPosition();
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (itemTarget)

@@ -116,7 +116,7 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(500);
-constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(100);
+constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(50);
 constexpr uint32 kPriestSpiritOfRedemptionSpellId = 81321;
 constexpr uint32 kHolyPriestProfileTalentSpellId = 724;
 
@@ -228,7 +228,7 @@ bool HasPlayerbotInsigniaCcDelayElapsed(Player const* player, bool hasBreakableA
 
     uint64 const playerGuid = player->GetGUID().GetRawValue();
     LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
-    constexpr std::chrono::milliseconds insigniaUseDelay(1000);
+    constexpr std::chrono::milliseconds insigniaUseDelay(750);
 
     std::lock_guard<std::mutex> lock(g_PlayerbotInsigniaCheckLock);
     if (!hasBreakableAura)
@@ -471,6 +471,10 @@ bool TryUsePlayerbotInsigniaBreaker(Player* player)
     if (!HasPlayerbotInsigniaCcDelayElapsed(player, hasBreakableAura))
         return false;
 
+    // Humans use the custom class-specific insignia racial from
+    // GetHumanInsigniaRacialSpell() instead of looking for an equipped PvP
+    // trinket. This keeps the same 500ms CC delay/cooldown-safe fast path,
+    // but does not require a physical Insignia item in either trinket slot.
     if (player->GetRace() == RACE_HUMAN)
         return TryCastHumanInsigniaRacial(player);
 
