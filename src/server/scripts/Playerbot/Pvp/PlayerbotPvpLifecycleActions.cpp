@@ -811,7 +811,7 @@ namespace
             return true;
 
         float const sourceZ = player->GetPositionZ() + std::min(1.8f, std::max(0.9f, player->GetCollisionHeight() * 0.65f));
-        float const clearance = std::min(0.65f, std::max(0.35f, player->GetObjectSize() * 0.5f));
+        float const clearance = 0.45f;
         std::array<std::pair<float, float>, 4> const offsets = {{
             { clearance, 0.0f },
             { -clearance, 0.0f },
