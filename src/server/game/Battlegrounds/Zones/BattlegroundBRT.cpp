@@ -10,6 +10,11 @@
 #include "WorldStatePackets.h"
 #include "WorldSession.h"
 
+namespace
+{
+float constexpr BRT_GHOST_WALL_SCALE_MULTIPLIER = 1.5f;
+}
+
 void BattlegroundBRTScore::BuildObjectivesBlock(WorldPacket& data)
 {
     data << uint32(0); // no extra custom scoreboard columns yet
@@ -153,12 +158,8 @@ bool BattlegroundBRT::SetupBattleground()
             1380.119995f, -710.481995f, -92.009300f, -1.5708f,
             0.0f, 0.0f, -0.707108f, 0.707106f,
             RESPAWN_IMMEDIATELY)
-        || !AddObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
-            1372.210693f, -687.344177f, -92.055161f, 4.71634f,
-            0.0f, 0.0f, 0.7057085f, -0.7085023f,
-            RESPAWN_IMMEDIATELY)
-        || !AddObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
-            1390.874756f, -687.270325f, -92.055161f, 4.71634f,
+        || !AddObject(BG_BRT_OBJECT_GHOST_WALL_CENTER, BG_BRT_OBJECT_GHOST_WALL_ENTRY,
+            1381.542725f, -687.307251f, -92.055161f, 4.71634f,
             0.0f, 0.0f, 0.7057085f, -0.7085023f,
             RESPAWN_IMMEDIATELY)
         || !AddObject(BG_BRT_OBJECT_IMPERIAL_THRONE, BG_BRT_OBJECT_IMPERIAL_THRONE_ENTRY,
@@ -234,6 +235,9 @@ bool BattlegroundBRT::SetupBattleground()
         return false;
     }
 
+    if (GameObject* ghostWall = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_CENTER))
+        ghostWall->SetObjectScale(ghostWall->GetObjectScale() * BRT_GHOST_WALL_SCALE_MULTIPLIER);
+
     WorldSafeLocsEntry const* allianceA = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_A);
     WorldSafeLocsEntry const* allianceB = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_ALLIANCE_B);
     WorldSafeLocsEntry const* hordeA = sWorldSafeLocsStore.LookupEntry(BG_BRT_GY_HORDE_A);
@@ -269,11 +273,8 @@ void BattlegroundBRT::ApplyNonInteractableObjectFlags()
     if (GameObject* hordeGate = GetBGObject(BG_BRT_OBJECT_HORDE_GATE))
         hordeGate->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
-    if (GameObject* ghostWallLeft = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT))
-        ghostWallLeft->SetFlag(GO_FLAG_NOT_SELECTABLE);
-
-    if (GameObject* ghostWallRight = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT))
-        ghostWallRight->SetFlag(GO_FLAG_NOT_SELECTABLE);
+    if (GameObject* ghostWall = GetBGObject(BG_BRT_OBJECT_GHOST_WALL_CENTER))
+        ghostWall->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundBRT::SpawnRandomBuffSet(uint32 variantAIndex)
@@ -295,8 +296,7 @@ void BattlegroundBRT::StartingEventCloseDoors()
     SpawnBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_LEFT, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_HORDE_GATE, RESPAWN_IMMEDIATELY);
-    SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_LEFT, RESPAWN_IMMEDIATELY);
-    SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_RIGHT, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(BG_BRT_OBJECT_GHOST_WALL_CENTER, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_IMPERIAL_THRONE, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_1, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_2, RESPAWN_IMMEDIATELY);
