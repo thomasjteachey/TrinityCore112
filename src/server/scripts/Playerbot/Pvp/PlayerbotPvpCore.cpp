@@ -230,9 +230,6 @@ bool HasPoisonEffect(Player const* player)
     if (!player)
         return false;
 
-    if (player->HasAuraWithMechanic(1u << MECHANIC_POISON))
-        return true;
-
     for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
     {
         AuraApplication const* aurApp = appliedAura.second;
@@ -4373,10 +4370,12 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return utilityDecision;
 
     if (!HasHostileTarget(player, target) && !allyTarget)
+    {
         if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
             return racialDecision;
-        else
-            return {};
+
+        return {};
+    }
 
     return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
 }

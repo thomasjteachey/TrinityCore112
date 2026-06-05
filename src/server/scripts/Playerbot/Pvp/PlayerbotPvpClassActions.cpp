@@ -33,6 +33,7 @@
 #include "Position.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
+#include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
@@ -2284,9 +2285,6 @@ bool PlayerHasPoisonForStoneform(Player const* player)
 {
     if (!player)
         return false;
-
-    if (player->HasAuraWithMechanic(1u << MECHANIC_POISON))
-        return true;
 
     for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
     {
