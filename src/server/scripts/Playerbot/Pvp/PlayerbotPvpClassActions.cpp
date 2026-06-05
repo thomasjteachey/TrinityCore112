@@ -33,6 +33,7 @@
 #include "Position.h"
 #include "Protocol/Opcodes.h"
 #include "Spell.h"
+#include "SpellAuras.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "SpellHistory.h"
@@ -2233,6 +2234,91 @@ bool IsCrowdControlledForAction(Player const* player)
     return hasLostControlState || hasHardCcState || hasCcAura;
 }
 
+
+bool IsMageBlinkEscapeCast(Player const* player, playerbot::PvpClassSpellContext const& context, uint32 resolvedSpellId)
+{
+    if (!player || player->GetClass() != CLASS_MAGE)
+        return false;
+
+    if (context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    if (context.spellId != 1953 && resolvedSpellId != 1953)
+        return false;
+
+    constexpr uint32 blinkableMechanicMask =
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_ROOT);
+
+    constexpr uint32 nonBlinkableControlMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    bool const blinkableControl =
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        player->HasAuraWithMechanic(blinkableMechanicMask);
+
+    if (!blinkableControl)
+        return false;
+
+    bool const hardNonBlinkableControl =
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(nonBlinkableControlMask) ||
+        player->IsPolymorphed();
+
+    return !hardNonBlinkableControl;
+}
+
+
+bool PlayerHasPoisonForStoneform(Player const* player)
+{
+    if (!player)
+        return false;
+
+    for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
+    {
+        AuraApplication const* aurApp = appliedAura.second;
+        SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
+        if (spellInfo && spellInfo->Dispel == DISPEL_POISON)
+            return true;
+    }
+
+    return false;
+}
+
+bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellContext const& context, uint32 resolvedSpellId)
+{
+    if (!player || context.targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    switch (resolvedSpellId)
+    {
+        case 7744: // Will of the Forsaken
+        {
+            constexpr uint32 wotfMechanicMask =
+                (1u << MECHANIC_FEAR) |
+                (1u << MECHANIC_CHARM) |
+                (1u << MECHANIC_SLEEP);
+            return player->HasUnitState(UNIT_STATE_FLEEING) || player->HasAuraWithMechanic(wotfMechanicMask);
+        }
+        case 20594: // Stoneform
+            return PlayerHasPoisonForStoneform(player);
+        default:
+            return false;
+    }
+}
+
 bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo const* spellInfo)
 {
     if (!player || !target || !target->IsAlive())
@@ -3250,10 +3336,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return true;
     }
 
-    if (IsCrowdControlledForAction(player))
+    if (IsCrowdControlledForAction(player) &&
+        !IsMageBlinkEscapeCast(player, context, resolvedSpellId) &&
+        !IsControlBreakingRacialCast(player, context, resolvedSpellId))
     {
         // Hard crowd-control gate: polymorphed/confused actors must not start
-        // attacks or cast attempts until control is restored.
+        // attacks or cast attempts until control is restored. Mage Blink and
+        // specific control-breaking racials are explicit exceptions because
+        // they are intentionally usable while the corresponding control is active.
         failureReason = "crowd_controlled_polymorph";
         return false;
     }
@@ -3679,6 +3769,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
+    else if (resolvedSpellId == 89160 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
+    {
+        Position dest = target->GetPosition();
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
     else if (itemTarget)
         castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
     else
@@ -3962,7 +4057,8 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
-    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
+    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo->Id) ||
+        player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
         player->GetSpellHistory()->HasGlobalCooldown(itemSpellInfo))
     {
         failureReason = "item_spell_not_ready";

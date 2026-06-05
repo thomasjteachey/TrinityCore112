@@ -60,7 +60,10 @@ bool IsSpellReady(Player const* player, uint32 spellId);
 bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId);
 bool IsFriendlySupportTarget(Player const* player, Unit const* target);
 bool HasAuraFromSpellChain(Unit const* unit, uint32 baseSpellId);
+bool HasBreakableCrowdControl(Unit const* unit);
+uint32 CountNearbyEnemies(Player const* player, float maxDistance);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
+SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget);
 
 constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
@@ -77,11 +80,21 @@ constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
 constexpr uint32 kPriestShadowWordPainSpellId = 589;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
 constexpr uint32 kMageManaRubyItemId = 8008;
+constexpr uint32 kRacialOrcBloodFurySpellId = 20572;
+constexpr uint32 kRacialTrollBloodlustSpellId = 20554;
+constexpr uint32 kRacialNightElfShadowmeldSpellId = 20580;
+constexpr uint32 kRacialTaurenWarStompSpellId = 20549;
+constexpr uint32 kRacialUndeadWillOfTheForsakenSpellId = 7744;
+constexpr uint32 kRacialDwarfStoneformSpellId = 20594;
+constexpr uint32 kRacialGnomeSurpriseSpellId = 89160;
+constexpr uint32 kRacialHumanPerceptionSpellId = 20600;
 constexpr float kPlayerbotTotemRefreshDistance = 30.0f;
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
 std::mutex g_CombatNoTargetTicksByBotLock;
+std::unordered_map<ObjectGuid, std::unordered_map<ObjectGuid, bool>> g_HumanPerceptionStealthStateByBot;
+std::mutex g_HumanPerceptionStealthStateLock;
 thread_local ObjectGuid g_CurrentDecisionBotGuid = ObjectGuid::Empty;
 thread_local uint32 g_SuppressedDecisionSpellId = 0;
 
@@ -164,7 +177,8 @@ bool IsOnUseItemReady(Player const* player, uint32 itemEntry)
     if (!itemSpellInfo)
         return false;
 
-    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
+    if (player->GetSpellHistory()->HasCooldown(itemSpellInfo->Id) ||
+        player->GetSpellHistory()->HasCooldown(itemSpellInfo, item->GetEntry()) ||
         player->GetSpellHistory()->HasGlobalCooldown(itemSpellInfo))
         return false;
 
@@ -209,6 +223,150 @@ uint32 SelectReadyWarlockSpellstoneItemEntry(Player const* player)
 
     return 0;
 }
+
+
+bool HasPoisonEffect(Player const* player)
+{
+    if (!player)
+        return false;
+
+    for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
+    {
+        AuraApplication const* aurApp = appliedAura.second;
+        SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
+        if (spellInfo && spellInfo->Dispel == DISPEL_POISON)
+            return true;
+    }
+
+    return false;
+}
+
+bool HasWillOfTheForsakenBreakableControl(Player const* player)
+{
+    if (!player)
+        return false;
+
+    constexpr uint32 wotfMechanicMask =
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_SLEEP);
+
+    return player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraWithMechanic(wotfMechanicMask);
+}
+
+bool HasCastTimeSpellTargetingPlayer(Unit const* caster, Player const* target)
+{
+    if (!caster || !target)
+        return false;
+
+    auto isCastTimeSpellTargetingPlayer = [target](Spell const* spell) -> bool
+    {
+        if (!spell)
+            return false;
+
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (!spellInfo || spellInfo->CalcCastTime() <= 0)
+            return false;
+
+        return spell->m_targets.GetUnitTargetGUID() == target->GetGUID();
+    };
+
+    return isCastTimeSpellTargetingPlayer(caster->GetCurrentSpell(CURRENT_GENERIC_SPELL)) ||
+        isCastTimeSpellTargetingPlayer(caster->GetCurrentSpell(CURRENT_CHANNELED_SPELL));
+}
+
+Unit const* SelectEnemyCastingAtPlayer(Player const* player, float maxDistance)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (!player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
+            continue;
+        if (HasCastTimeSpellTargetingPlayer(candidate, player))
+            return candidate;
+    }
+
+    return nullptr;
+}
+
+Unit const* SelectRandomEnemyWithoutBreakableCrowdControl(Player const* player, float maxDistance)
+{
+    if (!player || !player->FindMap())
+        return nullptr;
+
+    std::vector<Unit const*> candidates;
+    candidates.reserve(8);
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate))
+            continue;
+        if (!candidate->IsAlive() || !player->IsWithinDistInMap(candidate, maxDistance) || !player->IsWithinLOSInMap(candidate))
+            continue;
+        if (HasBreakableCrowdControl(candidate))
+            continue;
+        candidates.push_back(candidate);
+    }
+
+    if (candidates.empty())
+        return nullptr;
+
+    return candidates[urand(0u, static_cast<uint32>(candidates.size() - 1))];
+}
+
+bool HumanRecentlySawStealthTransition(Player const* player, float maxDistance)
+{
+    if (!player || player->GetRace() != RACE_HUMAN || !player->FindMap())
+        return false;
+
+    bool shouldPerceive = false;
+    std::lock_guard<std::mutex> lock(g_HumanPerceptionStealthStateLock);
+    std::unordered_map<ObjectGuid, bool>& seenStealthByEnemy = g_HumanPerceptionStealthStateByBot[player->GetGUID()];
+
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!HasHostileTarget(player, candidate) || !candidate->IsAlive() || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+
+        bool const currentlyStealthed = candidate->HasStealthAura();
+        auto knownItr = seenStealthByEnemy.find(candidate->GetGUID());
+        bool const wasKnown = knownItr != seenStealthByEnemy.end();
+        bool const wasStealthed = wasKnown ? knownItr->second : currentlyStealthed;
+
+        if (wasKnown && !wasStealthed && currentlyStealthed)
+            shouldPerceive = true;
+
+        seenStealthByEnemy[candidate->GetGUID()] = currentlyStealthed;
+    }
+
+    return shouldPerceive;
+}
+
+bool WantsNightElfShadowmeldUtility(Player const* player)
+{
+    if (!player || !player->IsInCombat())
+        return false;
+
+    bool const wantsDrink = player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 35.0f;
+    bool const wantsEat = player->HealthBelowPct(50);
+    bool const hunterWantsTrap = player->GetClass() == CLASS_HUNTER &&
+        (IsSpellReady(player, 1499) || IsSpellReady(player, 14311) || IsSpellReady(player, 13809));
+    bool const rogueWantsStealth = player->GetClass() == CLASS_ROGUE && !player->HasStealthAura() && IsSpellReady(player, 1784);
+
+    return wantsDrink || wantsEat || hunterWantsTrap || rogueWantsStealth;
+}
+
 
 bool IsPlayerbotDispelSpell(uint32 spellId)
 {
@@ -645,6 +803,69 @@ struct PrioritizedSpellDecision
     float priority = 0.0f;
     SpellDecision decision;
 };
+
+SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget)
+{
+    if (!player || !player->IsAlive())
+        return {};
+
+    switch (player->GetRace())
+    {
+        case RACE_ORC:
+        {
+            bool const wantsThroughput = player->IsInCombat() &&
+                ((target && HasHostileTarget(player, target) && !HasBreakableCrowdControl(target)) ||
+                 (allyTarget && IsFriendlySupportTarget(player, allyTarget) && allyTarget->GetHealthPct() < 85.0f));
+            if (wantsThroughput && IsSpellReady(player, kRacialOrcBloodFurySpellId))
+                return { "racial blood fury", "orc racial throughput for healing or damage", kRacialOrcBloodFurySpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        }
+        case RACE_TROLL:
+        {
+            bool const activelyDoingAnything = player->IsInCombat() ||
+                (target && HasHostileTarget(player, target)) ||
+                (allyTarget && IsFriendlySupportTarget(player, allyTarget) && allyTarget->GetHealthPct() < 95.0f);
+            if (activelyDoingAnything && IsSpellReady(player, kRacialTrollBloodlustSpellId))
+                return { "racial bloodlust", "troll racial haste while actively fighting or casting", kRacialTrollBloodlustSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        }
+        case RACE_NIGHTELF:
+        {
+            Unit const* casterTargetingMe = SelectEnemyCastingAtPlayer(player, 45.0f);
+            if ((casterTargetingMe || WantsNightElfShadowmeldUtility(player)) && IsSpellReady(player, kRacialNightElfShadowmeldSpellId))
+                return { "racial shadowmeld", casterTargetingMe ? "break incoming cast target with shadowmeld" : "drop combat for recovery or setup", kRacialNightElfShadowmeldSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        }
+        case RACE_TAUREN:
+            if (CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, kRacialTaurenWarStompSpellId))
+                return { "racial war stomp", "stomp clustered nearby enemies", kRacialTaurenWarStompSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        case RACE_UNDEAD_PLAYER:
+            if (HasWillOfTheForsakenBreakableControl(player) && IsSpellReady(player, kRacialUndeadWillOfTheForsakenSpellId))
+                return { "racial will of the forsaken", "break fear charm or sleep", kRacialUndeadWillOfTheForsakenSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        case RACE_DWARF:
+            if (HasPoisonEffect(player) && IsSpellReady(player, kRacialDwarfStoneformSpellId))
+                return { "racial stoneform", "remove poison effects", kRacialDwarfStoneformSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        case RACE_GNOME:
+        {
+            Unit const* surpriseTarget = IsSpellReady(player, kRacialGnomeSurpriseSpellId) ? SelectRandomEnemyWithoutBreakableCrowdControl(player, 30.0f) : nullptr;
+            if (surpriseTarget)
+                return { "racial surprise", "throw surprise grenade at random non-cc enemy", kRacialGnomeSurpriseSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, surpriseTarget->GetGUID() };
+            break;
+        }
+        case RACE_HUMAN:
+            if (HumanRecentlySawStealthTransition(player, 30.0f) && IsSpellReady(player, kRacialHumanPerceptionSpellId))
+                return { "racial perception", "enemy just entered stealth nearby", kRacialHumanPerceptionSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            break;
+        default:
+            break;
+    }
+
+    return {};
+}
+
 
 bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& decision, Unit const* defaultEnemyTarget, Unit const* defaultAllyTarget);
 SpellDecision SelectHighestPriorityCastableDecision(std::vector<PrioritizedSpellDecision>& candidates, Player const* player,
@@ -2943,6 +3164,46 @@ bool IsRootedOrSnared(Unit const* unit)
         HasNonStealthRootOrSnareMechanic(unit);
 }
 
+
+bool IsMageBlinkableControl(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_MAGE)
+        return false;
+
+    constexpr uint32 blinkableMechanicMask =
+        (1u << MECHANIC_STUN) |
+        (1u << MECHANIC_ROOT);
+
+    constexpr uint32 nonBlinkableControlMask =
+        (1u << MECHANIC_CHARM) |
+        (1u << MECHANIC_DISORIENTED) |
+        (1u << MECHANIC_FEAR) |
+        (1u << MECHANIC_SLEEP) |
+        (1u << MECHANIC_FREEZE) |
+        (1u << MECHANIC_POLYMORPH) |
+        (1u << MECHANIC_BANISH) |
+        (1u << MECHANIC_HORROR) |
+        (1u << MECHANIC_SAPPED);
+
+    bool const blinkableControl =
+        player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        player->HasAuraWithMechanic(blinkableMechanicMask);
+
+    if (!blinkableControl)
+        return false;
+
+    bool const hardNonBlinkableControl =
+        player->HasUnitState(UNIT_STATE_CONFUSED) ||
+        player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(nonBlinkableControlMask) ||
+        player->IsPolymorphed();
+
+    return !hardNonBlinkableControl;
+}
+
 bool HasShieldEquipped(Player const* player)
 {
     if (!player)
@@ -3365,6 +3626,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
 
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const closePressure = hasHostileTarget && player->IsWithinDistInMap(target, GetConfiguredMeleeRange());
+    bool const blinkableControl = IsMageBlinkableControl(player);
     float const manaPct = player->GetPowerPct(POWER_MANA);
     bool const isFireMage = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
@@ -3375,6 +3637,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
             { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mage is stunned or rooted", blinkableControl && IsSpellReady(player, 1953), 59.0f,
+            { "mage blink", "escape stun/root control", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
             { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
@@ -4099,11 +4363,19 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
     if (IsPriestInSpiritOfRedemption(player))
         return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
 
+    if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
+        return racialDecision;
+
     if (SpellDecision const utilityDecision = MaybeSelectUtilitySpell(player, target); utilityDecision.spellId)
         return utilityDecision;
 
     if (!HasHostileTarget(player, target) && !allyTarget)
+    {
+        if (SpellDecision const racialDecision = SelectRacialSpell(player, target, allyTarget); racialDecision.spellId)
+            return racialDecision;
+
         return {};
+    }
 
     return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
 }

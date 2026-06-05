@@ -116,13 +116,14 @@ using LifecycleCadenceClock = std::chrono::steady_clock;
 using LifecycleCadenceTimePoint = LifecycleCadenceClock::time_point;
 
 constexpr std::chrono::milliseconds RandomBotLifecycleCadenceInterval(500);
-constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(250);
+constexpr std::chrono::milliseconds PlayerbotInsigniaCheckInterval(50);
 constexpr uint32 kPriestSpiritOfRedemptionSpellId = 81321;
 constexpr uint32 kHolyPriestProfileTalentSpellId = 724;
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextPlayerbotInsigniaCheckTimeByGuid;
+std::unordered_map<uint64, LifecycleCadenceTimePoint> g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid;
 std::mutex g_PlayerbotInsigniaCheckLock;
 std::unordered_set<uint64> g_StartupRevivedManagedBotGuids;
 std::mutex g_StartupReviveLock;
@@ -218,6 +219,26 @@ bool IsPlayerbotInsigniaCheckReady(Player const* player)
 
     nextCheckTime = now + PlayerbotInsigniaCheckInterval;
     return true;
+}
+
+bool HasPlayerbotInsigniaCcDelayElapsed(Player const* player, bool hasBreakableAura)
+{
+    if (!player)
+        return false;
+
+    uint64 const playerGuid = player->GetGUID().GetRawValue();
+    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+    constexpr std::chrono::milliseconds insigniaUseDelay(750);
+
+    std::lock_guard<std::mutex> lock(g_PlayerbotInsigniaCheckLock);
+    if (!hasBreakableAura)
+    {
+        g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid.erase(playerGuid);
+        return false;
+    }
+
+    auto insertResult = g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid.emplace(playerGuid, now);
+    return now - insertResult.first->second >= insigniaUseDelay;
 }
 
 bool TryCastHumanInsigniaRacial(Player* player)
@@ -389,13 +410,9 @@ bool TryUseEquippedInsigniaTrinketSlot(Player* player, EquipmentSlots slot)
     }
 
     if (player->GetSpellHistory()->HasCooldown(spellId) ||
-        player->GetSpellHistory()->HasCooldown(spellInfo, trinket->GetEntry()))
-    {
-        WhisperInsigniaDiagnostic(player, "slot=" + std::to_string(uint32(slot)) +
-            " item=" + std::to_string(trinket->GetEntry()) + " spell=" + std::to_string(spellId) +
-            " result=cooldown");
+        player->GetSpellHistory()->HasCooldown(spellInfo, trinket->GetEntry()) ||
+        player->GetSpellHistory()->HasGlobalCooldown(spellInfo))
         return false;
-    }
 
     SpellCastResult const castResult = player->CastSpell(player, spellId,
         CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)).SetCastItem(trinket));
@@ -450,9 +467,14 @@ bool TryUsePlayerbotInsigniaBreaker(Player* player)
     if (!IsPlayerbotInsigniaCheckReady(player))
         return false;
 
-    if (!HasClassInsigniaBreakableAura(player))
+    bool const hasBreakableAura = HasClassInsigniaBreakableAura(player);
+    if (!HasPlayerbotInsigniaCcDelayElapsed(player, hasBreakableAura))
         return false;
 
+    // Humans use the custom class-specific insignia racial from
+    // GetHumanInsigniaRacialSpell() instead of looking for an equipped PvP
+    // trinket. This keeps the same 500ms CC delay/cooldown-safe fast path,
+    // but does not require a physical Insignia item in either trinket slot.
     if (player->GetRace() == RACE_HUMAN)
         return TryCastHumanInsigniaRacial(player);
 
@@ -1610,6 +1632,7 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
     {
         std::lock_guard<std::mutex> insigniaLock(g_PlayerbotInsigniaCheckLock);
         g_NextPlayerbotInsigniaCheckTimeByGuid.erase(rawGuid);
+        g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid.erase(rawGuid);
     }
 }
 
