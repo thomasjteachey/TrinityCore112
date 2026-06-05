@@ -109,6 +109,36 @@ bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
     return firstRank && IsHunterAimedShotSpellId(firstRank->Id);
 }
 
+bool IsHunterMultiShotSpellId(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 2643:  // Multi-Shot rank 1
+        case 14288:
+        case 14289:
+        case 14290:
+        case 25294:
+        case 27021:
+        case 49047:
+        case 49048:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsHunterMultiShotSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    if (IsHunterMultiShotSpellId(spellInfo->Id))
+        return true;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && IsHunterMultiShotSpellId(firstRank->Id);
+}
+
 uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
@@ -118,12 +148,26 @@ uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
 
     // Some 3.3.5 / custom DBC branches do not report the rank-chain or cast
     // time consistently for Aimed Shot. Treat every known Aimed Shot rank as
-    // a 3s stationary cast so the selector/lifecycle cannot re-cast it and
-    // cancel the previous Aimed Shot while it is still preparing.
+    // a true stationary hard-cast so the selector/lifecycle cannot re-cast it
+    // or restart Auto Shot while it is still preparing.
     if (IsHunterAimedShotSpell(spellInfo))
         return std::max<uint32>(castTimeMs, 3000);
 
-    return castTimeMs;
+    // Revive Pet is a real hunter cast and must not be clipped by the stutter
+    // movement loop either. Use the DBC cast time, but keep a non-zero fallback
+    // for custom data where CalcCastTime() is missing.
+    if (spellInfo->Id == 982)
+        return std::max<uint32>(castTimeMs, 1000);
+
+    // Multi-Shot is short, but it still has a stationary firing delay/cast
+    // window in this branch. It must be protected from stutter movement too;
+    // otherwise the hunter starts Multi-Shot, immediately resumes fleeing, and
+    // clips the shot before it launches. Use a short explicit guard even when
+    // custom DBC data reports zero cast time.
+    if (IsHunterMultiShotSpell(spellInfo))
+        return std::max<uint32>(castTimeMs, 500);
+
+    return castTimeMs > 0 ? castTimeMs : 0;
 }
 
 bool IsHunterCastTimeShot(Player const* player, SpellInfo const* spellInfo)
@@ -131,7 +175,7 @@ bool IsHunterCastTimeShot(Player const* player, SpellInfo const* spellInfo)
     if (!player || player->GetClass() != CLASS_HUNTER || !spellInfo)
         return false;
 
-    return GetHunterStationaryCastTimeMs(spellInfo) > 0 || IsHunterAimedShotSpell(spellInfo);
+    return GetHunterStationaryCastTimeMs(spellInfo) > 0;
 }
 
 bool HunterHasActiveAutoShot(Player const* player)
@@ -4163,18 +4207,18 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
         uint32 const castTimeMs = GetHunterStationaryCastTimeMs(spellInfo);
-        uint32 const lockSeconds = std::clamp<uint32>((castTimeMs + 1750) / 1000, 3, 12);
+        uint32 const lockMs = std::clamp<uint32>(castTimeMs + 750, 750, 12000);
 
-        // Aimed Shot / Revive Pet can be clipped by the lifecycle stutter loop
-        // before CURRENT_GENERIC_SPELL is visible to the next AI tick on some
-        // branches. Publish an explicit short movement lock after the cast is
-        // accepted, so every movement path yields until the cast has actually
-        // had time to finish. The lifecycle also checks the real current spell,
-        // so this is only a bridge for racey ticks and not a replacement for
-        // spell-state checks.
-        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHunterStationaryCastLockToken, std::chrono::seconds(lockSeconds));
+        // Hunter shots with a stationary launch window can be clipped by the
+        // lifecycle stutter loop before CURRENT_GENERIC_SPELL is visible to the
+        // next AI tick. Publish an explicit movement/decision lock after the
+        // cast is accepted, so every movement path yields until the shot/cast
+        // has actually had time to finish. Aimed Shot gets a long guard from
+        // its real cast time; Multi-Shot gets a short guard instead of the old
+        // accidental 3-second minimum.
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotHunterStationaryCastLockToken, std::chrono::milliseconds(lockMs));
         {
-            std::string acceptExtra = "castTimeMs=" + std::to_string(castTimeMs) + " lockSeconds=" + std::to_string(lockSeconds);
+            std::string acceptExtra = "castTimeMs=" + std::to_string(castTimeMs) + " lockMs=" + std::to_string(lockMs);
             WhisperHunterCastDiagnostic(player, target, "accepted_lock_registered", resolvedSpellId, acceptExtra.c_str());
         }
 

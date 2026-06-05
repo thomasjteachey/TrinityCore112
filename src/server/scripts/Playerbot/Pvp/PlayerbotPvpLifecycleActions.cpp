@@ -2178,6 +2178,36 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return firstRank && IsHunterAimedShotSpellId(firstRank->Id);
     }
 
+    bool IsHunterMultiShotSpellId(uint32 spellId)
+    {
+        switch (spellId)
+        {
+            case 2643:  // Multi-Shot rank 1
+            case 14288:
+            case 14289:
+            case 14290:
+            case 25294:
+            case 27021:
+            case 49047:
+            case 49048:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool IsHunterMultiShotSpell(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        if (IsHunterMultiShotSpellId(spellInfo->Id))
+            return true;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        return firstRank && IsHunterMultiShotSpellId(firstRank->Id);
+    }
+
     uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
     {
         if (!spellInfo)
@@ -2187,7 +2217,18 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (IsHunterAimedShotSpell(spellInfo))
             return std::max<uint32>(castTimeMs, 3000);
 
-        return castTimeMs;
+        if (spellInfo->Id == 982)
+            return std::max<uint32>(castTimeMs, 1000);
+
+        // Multi-Shot is short, but it still has a stationary firing delay/cast
+        // window in this branch. It must be protected from stutter movement too;
+        // otherwise the hunter starts Multi-Shot, immediately resumes fleeing,
+        // and clips the shot before it launches. Use a short explicit guard even
+        // when custom DBC data reports zero cast time.
+        if (IsHunterMultiShotSpell(spellInfo))
+            return std::max<uint32>(castTimeMs, 500);
+
+        return castTimeMs > 0 ? castTimeMs : 0;
     }
 
     bool IsActiveHunterStationaryShotSpell(Spell const* spell)
@@ -2199,10 +2240,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (!spellInfo)
             return false;
 
-        // Aimed Shot is the important case here, but treat any hunter cast-time
-        // generic/channel spell as movement-locked. The stutter loop must yield
-        // once the cast has started; otherwise a movement tick can clip the cast.
-        return GetHunterStationaryCastTimeMs(spellInfo) > 0 || IsHunterAimedShotSpell(spellInfo) ||
+        return GetHunterStationaryCastTimeMs(spellInfo) > 0 ||
             (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
     }
 
@@ -2217,11 +2255,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (IsActiveHunterStationaryShotSpell(player->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
             return true;
 
-        // Some branches expose a preparing cast through IsNonMeleeSpellCast()
-        // before CURRENT_GENERIC_SPELL is observable to this AI tick. The third
-        // argument skips auto-repeat, so queued Auto Shot does not look like an
-        // Aimed Shot / cast-time spell.
-        return player->IsNonMeleeSpellCast(false, false, true);
+        // Do not use broad IsNonMeleeSpellCast() here: the explicit
+        // stationarity helper above covers the hunter shots we actually need
+        // to protect (Aimed Shot, Multi-Shot, Revive Pet) without catching
+        // unrelated delayed spell states.
+        return false;
     }
 
     bool HoldHunterStationaryCast(Player* player, Unit* target, char const* reason)

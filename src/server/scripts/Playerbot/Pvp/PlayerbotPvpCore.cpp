@@ -172,6 +172,36 @@ bool IsHunterAimedShotSpell(SpellInfo const* spellInfo)
     return firstRank && IsHunterAimedShotSpellId(firstRank->Id);
 }
 
+bool IsHunterMultiShotSpellId(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 2643:  // Multi-Shot rank 1
+        case 14288:
+        case 14289:
+        case 14290:
+        case 25294:
+        case 27021:
+        case 49047:
+        case 49048:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool IsHunterMultiShotSpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    if (IsHunterMultiShotSpellId(spellInfo->Id))
+        return true;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && IsHunterMultiShotSpellId(firstRank->Id);
+}
+
 uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
@@ -179,14 +209,26 @@ uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
 
     uint32 castTimeMs = uint32(std::max<int32>(0, spellInfo->CalcCastTime()));
 
-    // Some 3.3.5 / custom DBC branches do not report the rank-chain or cast
-    // time consistently for Aimed Shot. Treat every known Aimed Shot rank as
-    // a 3s stationary cast so the selector/lifecycle cannot re-cast it and
-    // cancel the previous Aimed Shot while it is still preparing.
+    // Aimed Shot is the hunter hard-cast this lock primarily exists for. Some
+    // custom DBC/rank data reports it inconsistently, so recognize known ranks
+    // explicitly and give them a real stationary guard.
     if (IsHunterAimedShotSpell(spellInfo))
         return std::max<uint32>(castTimeMs, 3000);
 
-    return castTimeMs;
+    // Revive Pet is also a real cast-time action and should not be clipped by
+    // the stutter/flee loop.
+    if (spellInfo->Id == 982)
+        return std::max<uint32>(castTimeMs, 1000);
+
+    // Multi-Shot is short, but it still has a stationary firing delay/cast
+    // window in this branch. It must be protected from stutter movement too;
+    // otherwise the hunter starts Multi-Shot, immediately resumes fleeing, and
+    // clips the shot before it launches. Use a short explicit guard even when
+    // custom DBC data reports zero cast time.
+    if (IsHunterMultiShotSpell(spellInfo))
+        return std::max<uint32>(castTimeMs, 500);
+
+    return castTimeMs > 0 ? castTimeMs : 0;
 }
 
 bool IsActiveHunterCastTimeSpell(Spell const* spell)
@@ -198,7 +240,7 @@ bool IsActiveHunterCastTimeSpell(Spell const* spell)
     if (!spellInfo)
         return false;
 
-    return GetHunterStationaryCastTimeMs(spellInfo) > 0 || IsHunterAimedShotSpell(spellInfo) ||
+    return GetHunterStationaryCastTimeMs(spellInfo) > 0 ||
         (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
 }
 
@@ -213,9 +255,10 @@ bool IsHunterCastTimeActionLocked(Player const* player)
     if (IsActiveHunterCastTimeSpell(player->GetCurrentSpell(CURRENT_CHANNELED_SPELL)))
         return true;
 
-    if (player->IsNonMeleeSpellCast(false, false, true))
-        return true;
-
+    // Do not use broad IsNonMeleeSpellCast() here: the explicit stationarity
+    // helper above covers the hunter shots we actually need to protect
+    // (Aimed Shot, Multi-Shot, Revive Pet) without catching unrelated delayed
+    // spell states.
     return playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotHunterStationaryCastLockToken);
 }
 
