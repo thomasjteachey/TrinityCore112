@@ -3138,7 +3138,7 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
 
     for (uint32 delayMs : probeDelaysMs)
     {
-        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, spellId, delayMs]()
+        player->m_Events.AddEventAtOffset([hunterGuid, targetGuid, spellId, delayMs, castTimeMs]()
         {
             Player* hunter = ObjectAccessor::FindConnectedPlayer(hunterGuid);
             if (!hunter || !hunter->IsInWorld() || !hunter->IsAlive() || hunter->GetClass() != CLASS_HUNTER)
