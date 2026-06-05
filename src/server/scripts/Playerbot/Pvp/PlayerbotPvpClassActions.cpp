@@ -1183,6 +1183,59 @@ bool IsHunterExactDeadZone(Player const* player, Unit const* target)
     return distance > 5.0f && distance < 8.0f;
 }
 
+bool IsHunterAutoShotBand(Player const* player, Unit const* target)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !player->HasSpell(75))
+        return false;
+
+    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
+    if (!autoShotInfo)
+        return false;
+
+    if (!player->IsWithinLOSInMap(target))
+        return false;
+
+    float const exactDistance = player->GetExactDist(target);
+    float const minAutoShotRange = autoShotInfo->GetMinRange(false);
+    float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
+    return exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
+}
+
+void StopHunterAndStartAutoShot(Player* player, Unit* target, char const* reason)
+{
+    if (!player || !target || !target->IsAlive())
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    MovementGeneratorType const motionBefore = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
+    if (motionMaster)
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+
+    player->StopMoving();
+    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    {
+        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+        player->SendMovementFlagUpdate();
+    }
+
+    player->SetFacingToObject(target);
+    player->SetInFront(target);
+
+    Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
+    if (!autoShotActive && player->HasSpell(75))
+        player->CastSpell(target, 75, false);
+
+    std::ostringstream diag;
+    diag << (reason ? reason : "hunter_auto_shot_hold")
+         << " dist=" << player->GetDistance(target)
+         << " exact=" << player->GetExactDist(target)
+         << " motion_before=" << uint32(motionBefore)
+         << " motion_after=" << (motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0)
+         << " auto_active=" << (autoShotActive ? "yes" : "no");
+    SetLastMovementDebugStatus(player, diag.str());
+}
+
 float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
 {
     if (!player || !target)
@@ -1358,6 +1411,20 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     MovementGeneratorType const initialMotionType = motionMaster->GetCurrentMovementGeneratorType();
     bool const currentlyMoving = player->isMoving();
     bool const strictPathing = RequiresStrictHumanPathing(player);
+
+    // Hunters should not chase inward just because an instant shot is out of its
+    // shorter spell range. If Auto Shot is valid, hold ground and shoot; only
+    // close later when the target is actually beyond ranged-weapon range.
+    if (!forceMovementWhenAlreadyInRange && targetAttackable && IsHunterAutoShotBand(player, target))
+    {
+        StopHunterAndStartAutoShot(player, target, "hunter_ranged_approach_suppressed_autoshot_band");
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = GameTime::GetGameTimeMS();
+        stallState.lastIssuedRange = 0.0f;
+        stallState.lastIssuedMode = 0;
+        return;
+    }
     bool const battleground = player->InBattleground();
     float const verticalDeltaToTarget = player->GetPositionZ() - target->GetPositionZ();
     float const dxToTarget = target->GetPositionX() - player->GetPositionX();
@@ -3237,7 +3304,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
-        if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        // Hunter exception: if ranged weapon Auto Shot is already valid, do not
+        // chase inward just to make Arcane/Concussive/Serpent range metadata happy.
+        if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+            IsHunterAutoShotBand(player, target))
+        {
+            StopHunterAndStartAutoShot(player, target, "hunter_cast_out_of_spell_range_hold_autoshot");
+        }
+        else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             if (shouldMoveBehindForEnemySpell)
                 IssueBehindTargetMeleeMovement(player, target);
@@ -3269,7 +3343,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         // Mirror reference-style spacing control for ranged casts: when too close,
         // immediately re-establish spell distance instead of repeatedly failing.
-        if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
+        {
+            IssueHunterDeadZoneRetreatMovement(player, target, "hunter_cast_too_close_retreat_no_follow");
+        }
+        else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
             float const desiredRange = std::max(1.0f, minRange + 1.0f);
             player->GetMotionMaster()->MoveFollow(target, desiredRange, player->GetFollowAngle());

@@ -255,6 +255,25 @@ float GetHunterDeadZoneMaxRange()
     return std::max(kReferenceHunterSwitchDistance, minRange);
 }
 
+float GetHunterAutoShotMaxRange()
+{
+    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(kHunterAutoShotSpellId);
+    if (!autoShotInfo)
+        return 35.0f;
+
+    float const maxRange = autoShotInfo->GetMaxRange(false);
+    return maxRange > 0.0f ? maxRange : 35.0f;
+}
+
+bool IsHunterWithinAutoShotBand(Player const* player, Unit const* target)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER || !target)
+        return false;
+
+    float const distance = player->GetDistance(target);
+    return distance > std::max(GetHunterDeadZoneMaxRange() + 0.75f, 8.75f) && distance <= GetHunterAutoShotMaxRange();
+}
+
 uint8 IncrementCombatNoTargetTicks(Player const* player)
 {
     if (!player)
@@ -4677,8 +4696,12 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             float const minRange = spellInfo->GetMinRange(false);
             if (maxRange > 0.0f && distance > maxRange)
             {
-                ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
-                    ComputeApproachFollowRange(maxRange), "reach spell", "selected spell out of range", 84.0f);
+                if (!(player->GetClass() == CLASS_HUNTER && context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
+                    IsHunterWithinAutoShotBand(player, spacingTarget)))
+                {
+                    ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
+                        ComputeApproachFollowRange(maxRange), "reach spell", "selected spell out of range", 84.0f);
+                }
                 context.spellId = 0;
                 context.itemEntry = 0;
                 context.targetMode = PvpClassSpellContext::TargetMode::None;
@@ -4729,12 +4752,16 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
                 context.selfCast = false;
             }
             else if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy &&
-                distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer))
+                distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer) &&
+                !IsHunterWithinAutoShotBand(player, spacingTarget))
             {
                 // Some classic spell entries report atypical range metadata,
                 // which can leave ranged bots idling at ~35-40y while still
                 // selecting enemy casts. Keep a config-based engage floor so
-                // they always step in to practical casting distance.
+                // they always step in to practical casting distance. Hunters are
+                // the exception: if they are already in Auto Shot range, do not
+                // pull them back inward while kiting just because an instant shot
+                // would prefer a slightly shorter configured spell distance.
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, spacingTarget->GetGUID(),
                     ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy outside configured cast distance", 82.0f);
                 context.spellId = 0;
@@ -4772,7 +4799,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         if (movementTarget)
         {
             float const distance = player->GetDistance(movementTarget);
-            if (distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer))
+            if (distance > (GetConfiguredSpellRange() + kRangedSpacingEnterOutOfRangeBuffer) &&
+                !IsHunterWithinAutoShotBand(player, movementTarget))
             {
                 ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachSpellRange, movementTarget->GetGUID(),
                     ComputeApproachFollowRange(GetConfiguredSpellRange()), "reach spell", "enemy out of spell range", 70.0f);
