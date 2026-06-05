@@ -91,10 +91,10 @@ namespace
 
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
-    constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 2200;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS = 1250;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS = 475;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS = 875;
+    constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS = 1700;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS = 325;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS = 650;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -1998,7 +1998,10 @@ namespace
 
         float const currentDistance = player->GetDistance(target);
         float const angleAway = target->GetAbsoluteAngle(player);
-        float const moveDistance = std::clamp(desiredExactDistance - currentDistance + 5.0f, 10.0f, 28.0f);
+        // Hunter kiting should be mostly one-way. Pick a point directly away from
+        // the target and keep it for a few seconds. Do not overshoot far past Auto
+        // Shot range, or the bot will bounce/triangle by fleeing out then closing in.
+        float const moveDistance = std::clamp(desiredExactDistance - currentDistance + 2.0f, 5.0f, 20.0f);
         Position destination(player->GetPositionX() + std::cos(angleAway) * moveDistance,
             player->GetPositionY() + std::sin(angleAway) * moveDistance,
             player->GetPositionZ(), player->GetOrientation());
@@ -2069,15 +2072,18 @@ namespace
             bool const targetControlled = HasHunterKiteControl(target);
             uint32& nextPlantMs = g_HunterNextAutoShotPlantMs[hunterGuidRaw];
 
-            bool const timerReady = autoShotTimerMs == 0 || autoShotTimerMs <= 650;
-            bool const forcedPlantWindow = nowMs >= nextPlantMs;
-            bool const shouldPlantForShot = !autoShotActive || timerReady || targetControlled || forcedPlantWindow;
+            bool const timerReady = autoShotTimerMs == 0 || autoShotTimerMs <= 350;
+            bool const forcedPlantWindow = nowMs >= nextPlantMs && autoShotTimerMs <= 900;
+            // Being snared/rooted/stunned is NOT a reason to turret. Wing Clip and
+            // trap control should buy space, not make the hunter park at minimum
+            // ranged distance. Plant only for real shot windows, then resume fleeing.
+            bool const shouldPlantForShot = !autoShotActive || timerReady || forcedPlantWindow;
 
             if (shouldPlantForShot)
             {
-                uint32 const pauseDurationMs = targetControlled
-                    ? std::clamp<uint32>(std::max<uint32>(autoShotTimerMs, PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS), PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS, 1100)
-                    : (timerReady ? 525 : std::clamp<uint32>(autoShotTimerMs + 175, PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS, PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS));
+                uint32 const pauseDurationMs = timerReady
+                    ? 425
+                    : std::clamp<uint32>(autoShotTimerMs + 125, PLAYERBOT_HUNTER_STUTTER_PLANT_MIN_MS, PLAYERBOT_HUNTER_STUTTER_PLANT_MAX_MS);
                 pauseUntilMs = nowMs + pauseDurationMs;
                 nextPlantMs = pauseUntilMs + PLAYERBOT_HUNTER_STUTTER_PLANT_INTERVAL_MS;
                 g_HunterFleeStateByGuid.erase(hunterGuidRaw);
@@ -2091,13 +2097,21 @@ namespace
                 return true;
             }
 
-            // Default hunter state: keep opening distance between shot windows.
-            // Do not orbit/chase back to preferred range; only stop again for a
-            // ranged weapon firing window or an occasional forced stutter plant.
-            if (exactDistance < maxAutoShotRange - 1.5f)
-                return IssueHunterStickyFlee(player, target, maxAutoShotRange - 0.75f, "between-autoshots");
+            // Default hunter state: run. The hunter should not treat the bottom of
+            // Auto Shot range as a parking spot; between shot windows he keeps
+            // opening the gap until the outer edge of Auto Shot range.
+            if (exactDistance < maxAutoShotRange - 0.75f)
+                return IssueHunterStickyFlee(player, target, maxAutoShotRange - 0.25f, "between-autoshots");
 
-            stopFaceAndKeepAutoShot();
+            // At the extreme edge, don't close back in. Keep Auto Shot alive if it
+            // already exists, otherwise plant briefly to restart it.
+            if (!autoShotActive)
+                return StopHunterAndStartAutoShot(player, target, "outer-edge-start-autoshot");
+
+            StopVirtualPlayerbotMovement(player);
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+            StopVirtualPlayerbotMovement(player);
             return true;
         }
 
