@@ -1471,46 +1471,58 @@ private:
 
     void HandleScriptEffect(SpellEffIndex /*effIndex*/)
     {
+        Unit* caster = GetCaster();
+        if (!caster)
+            return;
+
+        Unit* hitUnit = GetHitUnit();
         uint32 spellId2 = SPELL_PALADIN_JUDGEMENT_DAMAGE;
-        // some seals have SPELL_AURA_DUMMY in EFFECT_2
-        Unit::AuraEffectList const& auras = GetCaster()->GetAuraEffectsByType(SPELL_AURA_DUMMY);
+        uint32 sealManaRefund = 0;
+
+        // Some seals have SPELL_AURA_DUMMY in EFFECT_2.  Do not cast or remove
+        // auras while iterating this list: triggered Judgement effects can alter
+        // the caster's seal auras and invalidate the AuraEffectList iterator.
+        Unit::AuraEffectList const& auras = caster->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
         {
-            if ((*i)->GetSpellInfo()->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || (*i)->GetSpellInfo()->Id == 20164)
-            {
-                if ((*i)->GetEffIndex() == EFFECT_2)
-                {
-                    if (sSpellMgr->GetSpellInfo((*i)->GetAmount()))
-                    {
-                        spellId2 = (*i)->GetAmount();
-                        Aura* sanctifiedSeals = GetCaster()->GetAuraOfRankedSpell(SPELL_PALADIN_SANCTIFIED_SEALS);
-                        if (sanctifiedSeals && sanctifiedSeals->GetSpellInfo())
-                        {
-                            if (true)
-                            {
-                                //refund mana of original seal
-                                const SpellInfo* originalSpell = (*i)->GetSpellInfo();
-                                uint32 mana = originalSpell->ManaCost;
-                                uint32 bp = (uint32)(mana * 0.8);
-                                CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
-                                args.AddSpellBP0(bp);
-                                GetCaster()->CastSpell(GetCaster(), SPELL_PALADIN_ILLUMINATION_ENERGIZE, args);
-                            }
-                        }
-                        //found seal remove and break
-                        //GetCaster()->RemoveAurasDueToSpell((*i)->GetSpellInfo()->Id);
-                        GetCaster()->CastSpell(GetHitUnit(), spellId2, true);
-                    }
-                }
-            }
-        }
-        //remove all seal spells.
-        GetCaster()->RemoveAurasDueToSpell(20164);
+            AuraEffect const* auraEffect = *i;
+            if (!auraEffect)
+                continue;
 
-        auto removeRankedSeal = [this](uint32 spellId)
+            SpellInfo const* auraSpellInfo = auraEffect->GetSpellInfo();
+            if (!auraSpellInfo)
+                continue;
+
+            if ((auraSpellInfo->GetSpellSpecific() != SPELL_SPECIFIC_SEAL && auraSpellInfo->Id != 20164) ||
+                auraEffect->GetEffIndex() != EFFECT_2 || !sSpellMgr->GetSpellInfo(auraEffect->GetAmount()))
+                continue;
+
+            spellId2 = auraEffect->GetAmount();
+
+            if (Aura* sanctifiedSeals = caster->GetAuraOfRankedSpell(SPELL_PALADIN_SANCTIFIED_SEALS))
+                if (sanctifiedSeals->GetSpellInfo())
+                    sealManaRefund = auraSpellInfo->ManaCost * 8 / 10;
+
+            break;
+        }
+
+        if (sealManaRefund)
         {
-            if (AuraApplication* seal = GetCaster()->GetAuraApplicationOfRankedSpell(spellId))
-                GetCaster()->RemoveAurasDueToSpell(seal->GetBase()->GetId());
+            CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+            args.AddSpellBP0(sealManaRefund);
+            caster->CastSpell(caster, SPELL_PALADIN_ILLUMINATION_ENERGIZE, args);
+        }
+
+        if (hitUnit)
+            caster->CastSpell(hitUnit, spellId2, true);
+
+        // Remove all seal spells.
+        caster->RemoveAurasDueToSpell(20164);
+
+        auto removeRankedSeal = [caster](uint32 spellId)
+        {
+            if (AuraApplication* seal = caster->GetAuraApplicationOfRankedSpell(spellId))
+                caster->RemoveAurasDueToSpell(seal->GetBase()->GetId());
         };
 
         removeRankedSeal(20154); // Seal of Righteousness
