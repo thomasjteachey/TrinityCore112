@@ -67,6 +67,7 @@
 
 namespace
 {
+    // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
     constexpr uint32 ARENA_REPLAY_V2_VERSION = 2;
@@ -1109,11 +1110,17 @@ namespace
         uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
         uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
 
-        // This is the only new client-packet target rewrite in V23.
+        // V90 crash fix:
+        // Rewrite UNIT_FIELD_TARGET for ANY update-values block, not only blocks whose owner is a replay actor.
         //
-        // The previous v20 attempt rewrote multiple owner/channel fields and crashed the client.
-        // V23 only rewrites UNIT_FIELD_TARGET, using the generated UpdateFields.h value from this branch.
-        // In src(85), UNIT_FIELD_TARGET is OBJECT_END + 0x000C = 0x0012, size 2 LONG fields.
+        // The v79/src(91) code only rewrote target fields inside:
+        //   if (actor) { ... }
+        //
+        // That missed pets, summons, other units, and possibly the viewer/object state when they targeted a replay
+        // participant. Those missed fields could leave the client targeting an ORIGINAL arena player GUID such as
+        // 0x00000000000000BE while the replay system separately creates fake replay player GUIDs. That matches the
+        // crash dump: Locked Target was Tijuana, 00000000000000BE, which is an original actor GUID, not a fake replay
+        // GUID. A stale original target/object pointer can make the 3.3.5 client blow up during object/target cleanup.
         size_t targetLowPos = std::numeric_limits<size_t>::max();
         size_t targetHighPos = std::numeric_limits<size_t>::max();
         uint32 targetLow = 0;
@@ -1138,7 +1145,7 @@ namespace
                     (uint32(payload[pos + 2]) << 16) |
                     (uint32(payload[pos + 3]) << 24);
 
-                // Patch the replay actor's own OBJECT_FIELD_GUID, same as the last known-good versions.
+                // Patch the replay actor's own object fields only when this block is the actor.
                 if (actor)
                 {
                     if (fieldIndex == OBJECT_FIELD_GUID)
@@ -1163,27 +1170,26 @@ namespace
                         uint32 patched = ReplayGreenNamePlayerFlagsForActor(*actor, value);
                         WriteUInt32(payload, pos, patched);
                     }
+                }
 
-                    // Record target pair positions, but don't write until both low/high halves are known.
-                    // This avoids accidentally rewriting a half-present GUID field.
-                    if (fieldIndex == UNIT_FIELD_TARGET)
-                    {
-                        targetLowPos = pos;
-                        targetLow = value;
-                    }
-                    else if (fieldIndex == UNIT_FIELD_TARGET + 1)
-                    {
-                        targetHighPos = pos;
-                        targetHigh = value;
-                    }
+                // Record target pair positions for every unit/object update block, not just replay actor blocks.
+                // Only rewrite after both halves are present, so we never patch a half GUID.
+                if (fieldIndex == UNIT_FIELD_TARGET)
+                {
+                    targetLowPos = pos;
+                    targetLow = value;
+                }
+                else if (fieldIndex == UNIT_FIELD_TARGET + 1)
+                {
+                    targetHighPos = pos;
+                    targetHigh = value;
                 }
 
                 pos += 4;
             }
         }
 
-        if (actor
-            && targetLowPos != std::numeric_limits<size_t>::max()
+        if (targetLowPos != std::numeric_limits<size_t>::max()
             && targetHighPos != std::numeric_limits<size_t>::max())
         {
             ObjectGuid originalTarget(uint64(targetLow) | (uint64(targetHigh) << 32));
@@ -1192,6 +1198,9 @@ namespace
                 uint64 targetFakeRaw = targetActor->FakeGuid.GetRawValue();
                 WriteUInt32(payload, targetLowPos, uint32(targetFakeRaw & 0xFFFFFFFFu));
                 WriteUInt32(payload, targetHighPos, uint32((targetFakeRaw >> 32) & 0xFFFFFFFFu));
+
+                TC_LOG_DEBUG("arena.replay", "Replay target GUID rewrite owner={} originalTarget={} fakeTarget={}",
+                    blockGuid.ToString(), originalTarget.ToString(), targetActor->FakeGuid.ToString());
             }
         }
 
@@ -3486,9 +3495,10 @@ public:
             ++sentThisUpdate;
         }
 
-        if (sentThisUpdate > 0)
-            SendDestroyOriginalActorObjects(viewer, state, "post-playback-batch duplicate cleanup");
-
+        // V90: do not repeatedly destroy original actor GUIDs during playback.
+        // If an original GUID leaked into client target/object state, repeatedly sending SMSG_DESTROY_OBJECT for that
+        // original GUID can turn a bad stale reference into a native client crash. The real fix is to prevent original
+        // actor target GUIDs from leaking by rewriting UNIT_FIELD_TARGET globally above.
         if (state.Cursor > 0)
             MaybeSendReplayGreenNameUpdates(viewer, state, nowMs);
 
