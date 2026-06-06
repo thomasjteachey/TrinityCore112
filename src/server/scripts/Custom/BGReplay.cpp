@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V96: forward declare RewritePackedGuidAt before aura rewrite.
+    // Replay V97: v96 aura/spelllog rewrite plus packet probe logging.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -1899,6 +1899,108 @@ namespace
         return audit;
     }
 
+    uint32 ReplayPacketRawGuidHitCount(WorldPacket const& packet, MatchRecord const& match)
+    {
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        uint32 hits = 0;
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (payload.size() < 8)
+                continue;
+
+            uint64 const originalRaw = actor.OriginalGuid.GetRawValue();
+
+            for (size_t i = 0; i + 8 <= payload.size(); ++i)
+            {
+                uint64 raw = uint64(payload[i]) |
+                    (uint64(payload[i + 1]) << 8) |
+                    (uint64(payload[i + 2]) << 16) |
+                    (uint64(payload[i + 3]) << 24) |
+                    (uint64(payload[i + 4]) << 32) |
+                    (uint64(payload[i + 5]) << 40) |
+                    (uint64(payload[i + 6]) << 48) |
+                    (uint64(payload[i + 7]) << 56);
+
+                if (raw == originalRaw)
+                    ++hits;
+            }
+        }
+
+        return hits;
+    }
+
+    std::string ReplayPacketProbeGuids(WorldPacket const& packet, MatchRecord const& match)
+    {
+        std::ostringstream ss;
+
+        std::vector<uint8> payload(packet.size());
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        uint32 originalPackedHits = 0;
+        uint32 originalRawHits = 0;
+        uint32 fakePackedHits = 0;
+        uint32 fakeRawHits = 0;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            originalPackedHits += CountBytes(payload, ToPackedGuidBytes(actor.OriginalGuid.GetRawValue()));
+            fakePackedHits += CountBytes(payload, ToPackedGuidBytes(actor.FakeGuid.GetRawValue()));
+
+            if (payload.size() >= 8)
+            {
+                uint64 const originalRaw = actor.OriginalGuid.GetRawValue();
+                uint64 const fakeRaw = actor.FakeGuid.GetRawValue();
+
+                for (size_t i = 0; i + 8 <= payload.size(); ++i)
+                {
+                    uint64 raw = uint64(payload[i]) |
+                        (uint64(payload[i + 1]) << 8) |
+                        (uint64(payload[i + 2]) << 16) |
+                        (uint64(payload[i + 3]) << 24) |
+                        (uint64(payload[i + 4]) << 32) |
+                        (uint64(payload[i + 5]) << 40) |
+                        (uint64(payload[i + 6]) << 48) |
+                        (uint64(payload[i + 7]) << 56);
+
+                    if (raw == originalRaw)
+                        ++originalRawHits;
+                    else if (raw == fakeRaw)
+                        ++fakeRawHits;
+                }
+            }
+        }
+
+        ss << "origPacked=" << originalPackedHits
+           << " origRaw=" << originalRawHits
+           << " fakePacked=" << fakePackedHits
+           << " fakeRaw=" << fakeRawHits;
+
+        return ss.str();
+    }
+
+    void LogReplayPacketProbe(Player* viewer, PlaybackState const& state, PacketRecord const& frame, WorldPacket const& packet, size_t cursorBeforeSend, uint32 elapsedMs)
+    {
+        if (!viewer)
+            return;
+
+        // ERROR on purpose so it appears even when debug categories are quiet.
+        TC_LOG_ERROR("arena.replay",
+            "REPLAY_PROBE_V97 about_to_send viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} {}",
+            viewer->GetGUID().GetCounter(),
+            state.BgInstanceId,
+            uint32(cursorBeforeSend),
+            uint32(state.Match.Packets.size()),
+            elapsedMs,
+            frame.TimestampMs,
+            packet.GetOpcode(),
+            uint32(packet.size()),
+            ReplayPacketProbeGuids(packet, state.Match));
+    }
+
     bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
     {
         std::vector<uint8> payload;
@@ -3636,22 +3738,24 @@ public:
             WorldPacket out;
             if (!BuildPlaybackPacket(frame, state.Match, out))
             {
-                TC_LOG_DEBUG("arena.replay", "PLAY skipped unsafe packet viewer={} opcode={} due={} cursor={}/{}",
-                    viewerLowGuid, frame.Packet.GetOpcode(), frame.TimestampMs,
-                    uint32(state.Cursor), uint32(state.Match.Packets.size()));
+                TC_LOG_ERROR("arena.replay",
+                    "REPLAY_PROBE_V97 skipped_build viewer={} bg={} cursor={} total={} frameTs={} opcode={} rawSize={}",
+                    viewerLowGuid,
+                    state.BgInstanceId,
+                    uint32(state.Cursor),
+                    uint32(state.Match.Packets.size()),
+                    frame.TimestampMs,
+                    frame.Packet.GetOpcode(),
+                    uint32(frame.Packet.size()));
 
                 ++state.Cursor;
                 ++sentThisUpdate;
                 continue;
             }
 
+            LogReplayPacketProbe(viewer, state, frame, out, state.Cursor, elapsedMs);
             viewer->GetSession()->SendPacket(&out);
             SendReplayASForPlaybackPacket(viewer, out, state.Match);
-
-            TC_LOG_DEBUG("arena.replay", "PLAY viewer={} opcode={} due={} now={} late={} cursor={}/{} size={}",
-                viewerLowGuid, out.GetOpcode(), frame.TimestampMs, elapsedMs,
-                elapsedMs >= frame.TimestampMs ? elapsedMs - frame.TimestampMs : 0,
-                uint32(state.Cursor), uint32(state.Match.Packets.size()), uint32(out.size()));
 
             ++state.Cursor;
             ++sentThisUpdate;
