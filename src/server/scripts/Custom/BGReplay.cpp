@@ -62,11 +62,15 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <chrono>
+#include <ctime>
+#include <cctype>
 #include <zlib.h>
 #include <DBCStores.h>
 
 namespace
 {
+    // Replay V102: v99 plus timestamped replay probe and in-log command markers.
     // Replay V99: rewrite all raw replay actor GUIDs in SMSG_MONSTER_MOVE.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
@@ -185,6 +189,86 @@ namespace
 
     // Active playback states by viewer low guid.
     std::unordered_map<uint32, PlaybackState> ActiveReplays;
+
+
+    uint64 ReplayUnixMilliseconds()
+    {
+        using namespace std::chrono;
+        return uint64(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
+    }
+
+    std::string ReplayWallClockString()
+    {
+        using namespace std::chrono;
+
+        system_clock::time_point now = system_clock::now();
+        std::time_t nowTime = system_clock::to_time_t(now);
+        std::tm tm{};
+        localtime_r(&nowTime, &tm);
+
+        uint64 ms = uint64(duration_cast<milliseconds>(now.time_since_epoch()).count() % 1000u);
+
+        std::ostringstream ss;
+        ss << std::put_time(&tm, "%Y-%m-%d_%H:%M:%S")
+           << "." << std::setw(3) << std::setfill('0') << ms;
+        return ss.str();
+    }
+
+    std::string ReplaySanitizeLogText(std::string text)
+    {
+        for (char& c : text)
+        {
+            if (c == '\r' || c == '\n' || c == '\t')
+                c = ' ';
+        }
+
+        if (text.size() > 160)
+            text.resize(160);
+
+        return text;
+    }
+
+    void LogReplayManualMarker(Player* player, char const* source, std::string const& text)
+    {
+        if (!player)
+            return;
+
+        uint32 viewerLowGuid = player->GetGUID().GetCounter();
+        auto activeItr = ActiveReplays.find(viewerLowGuid);
+        ObjectGuid selected = player->GetTarget();
+        uint32 nowMs = getMSTime();
+
+        if (activeItr == ActiveReplays.end())
+        {
+            TC_LOG_ERROR("arena.replay",
+                "REPLAY_MARK wall={} unixMs={} source={} viewer={} active=0 map={} pos=({:.3f},{:.3f},{:.3f}) selectedRaw={} selectedLow={} text='{}'",
+                ReplayWallClockString(), ReplayUnixMilliseconds(), source ? source : "unknown", viewerLowGuid,
+                player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+                selected.GetRawValue(), selected.GetCounter(), ReplaySanitizeLogText(text));
+            return;
+        }
+
+        PlaybackState const& state = activeItr->second;
+        uint32 elapsedMs = state.PlaybackClockStarted && nowMs >= state.PlaybackStartMs ? nowMs - state.PlaybackStartMs : 0;
+
+        uint32 nextFrameTs = 0;
+        uint32 nextOpcode = 0;
+        uint32 nextSize = 0;
+        if (state.Cursor < state.Match.Packets.size())
+        {
+            PacketRecord const& next = state.Match.Packets[state.Cursor];
+            nextFrameTs = next.TimestampMs;
+            nextOpcode = next.Packet.GetOpcode();
+            nextSize = uint32(next.Packet.size());
+        }
+
+        TC_LOG_ERROR("arena.replay",
+            "REPLAY_MARK wall={} unixMs={} source={} viewer={} active=1 bg={} map={} pos=({:.3f},{:.3f},{:.3f}) selectedRaw={} selectedLow={} cursor={} total={} elapsed={} nextFrameTs={} nextOpcode={} nextSize={} finished={} text='{}'",
+            ReplayWallClockString(), ReplayUnixMilliseconds(), source ? source : "unknown", viewerLowGuid,
+            state.BgInstanceId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
+            selected.GetRawValue(), selected.GetCounter(), uint32(state.Cursor), uint32(state.Match.Packets.size()), elapsedMs,
+            nextFrameTs, nextOpcode, nextSize, state.Finished ? 1u : 0u, ReplaySanitizeLogText(text));
+    }
 
     bool IsWatchedOpcode(uint16 opcode)
     {
@@ -2045,7 +2129,9 @@ namespace
 
         // ERROR on purpose so it appears even when debug categories are quiet.
         TC_LOG_ERROR("arena.replay",
-            "REPLAY_PROBE_V97 about_to_send viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} {}",
+            "REPLAY_PROBE_V102 wall={} unixMs={} viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} selectedRaw={} selectedLow={} {}",
+            ReplayWallClockString(),
+            ReplayUnixMilliseconds(),
             viewer->GetGUID().GetCounter(),
             state.BgInstanceId,
             uint32(cursorBeforeSend),
@@ -2054,6 +2140,8 @@ namespace
             frame.TimestampMs,
             packet.GetOpcode(),
             uint32(packet.size()),
+            viewer->GetTarget().GetRawValue(),
+            viewer->GetTarget().GetCounter(),
             ReplayPacketProbeGuids(packet, state.Match));
     }
 
@@ -3645,6 +3733,52 @@ std::vector<uint8> payload(packet.size());
     }
 
 
+
+    void TryLogReplayChatCommandMarker(WorldSession* session, WorldPacket const& packet)
+    {
+        if (!session || !session->GetPlayer())
+            return;
+
+        if (packet.GetOpcode() != CMSG_MESSAGECHAT)
+            return;
+
+        WorldPacket copy(packet);
+        copy.rpos(0);
+
+        uint32 type = 0;
+        uint32 lang = 0;
+        copy >> type;
+        copy >> lang;
+
+        if (lang == LANG_ADDON)
+            return;
+
+        std::string text;
+        if (type == CHAT_MSG_WHISPER)
+        {
+            std::string to;
+            copy >> to;
+            text = copy.ReadCString(false);
+        }
+        else
+            text = copy.ReadCString(false);
+
+        if (text.empty() || text[0] != '.')
+            return;
+
+        std::string lowered = text;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+
+        if (lowered.find("cooldown") == std::string::npos &&
+            lowered.find("replaymark") == std::string::npos &&
+            lowered.find("replay mark") == std::string::npos &&
+            lowered.find("replayprobe") == std::string::npos &&
+            lowered.find("replay probe") == std::string::npos)
+            return;
+
+        LogReplayManualMarker(session->GetPlayer(), "chat-command", text);
+    }
+
 class BGReplayServerScript : public ServerScript
 {
 public:
@@ -3712,6 +3846,7 @@ public:
         if (packet.GetOpcode() == CMSG_MESSAGECHAT)
         {
             TryHandleReplayRestartAddonMessage(session, packet);
+            TryLogReplayChatCommandMarker(session, packet);
             return;
         }
 
@@ -3801,7 +3936,9 @@ public:
             if (!BuildPlaybackPacket(frame, state.Match, out))
             {
                 TC_LOG_ERROR("arena.replay",
-                    "REPLAY_PROBE_V97 skipped_build viewer={} bg={} cursor={} total={} frameTs={} opcode={} rawSize={}",
+                    "REPLAY_PROBE_V102 skipped_build wall={} unixMs={} viewer={} bg={} cursor={} total={} frameTs={} opcode={} rawSize={}",
+                    ReplayWallClockString(),
+                    ReplayUnixMilliseconds(),
                     viewerLowGuid,
                     state.BgInstanceId,
                     uint32(state.Cursor),
