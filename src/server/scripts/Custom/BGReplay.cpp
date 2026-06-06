@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V98: rewrite SMSG_MONSTER_MOVE raw actor GUID leak.
+    // Replay V99: rewrite all raw replay actor GUIDs in SMSG_MONSTER_MOVE.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -834,6 +834,44 @@ namespace
         return false;
     }
 
+    void WriteUInt64BytesLE(std::array<uint8, 8>& bytes, uint64 value)
+    {
+        for (uint8 i = 0; i < 8; ++i)
+            bytes[i] = uint8((value >> (i * 8)) & 0xFF);
+    }
+
+    uint32 RewriteAllRawReplayActorGuids(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        // Raw 8-byte GUID rewrite. Use this only on packet layouts that are known/probed to contain raw GUIDs.
+        // V98 showed SMSG_MONSTER_MOVE still had origRaw=1 after offset-0 rewrite, so the raw actor GUID is not
+        // necessarily at byte 0 in this branch's packet layout.
+        uint32 replacements = 0;
+
+        if (payload.size() < 8)
+            return replacements;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            std::array<uint8, 8> originalBytes{};
+            std::array<uint8, 8> fakeBytes{};
+
+            WriteUInt64BytesLE(originalBytes, actor.OriginalGuid.GetRawValue());
+            WriteUInt64BytesLE(fakeBytes, actor.FakeGuid.GetRawValue());
+
+            for (size_t i = 0; i + 8 <= payload.size(); ++i)
+            {
+                if (std::equal(originalBytes.begin(), originalBytes.end(), payload.begin() + i))
+                {
+                    std::copy(fakeBytes.begin(), fakeBytes.end(), payload.begin() + i);
+                    ++replacements;
+                    i += 7;
+                }
+            }
+        }
+
+        return replacements;
+    }
+
     bool IsMovementLikeOpcode(uint16 opcode)
     {
         switch (opcode)
@@ -1102,13 +1140,18 @@ namespace
         // V12 still avoids global replacement, but now rewrites the understood spell/combat packet layouts too.
         if (opcode == SMSG_MONSTER_MOVE)
         {
-            // Probe V97 showed SMSG_MONSTER_MOVE leaking original replay actor GUIDs as a raw GUID at offset 0:
-            //   opcode=221 origPacked=0 origRaw=1
+            // Probe V98 still showed:
+            //   opcode=221 origPacked=0 origRaw=1 fakeRaw=0
             //
-            // Do NOT use raw-first for all movement opcodes; many MSG_MOVE_* packets still use the packed-guid path.
-            // Only monster-move gets this raw rewrite.
-            if (!RewriteFirstRawGuidIfReplayActor(payload, match))
+            // So the raw original actor GUID is not necessarily at offset 0 in this branch's SMSG_MONSTER_MOVE
+            // layout. Rewrite every raw replay actor GUID in this packet. This is safe here because raw GUID
+            // replacement is fixed-width 8 -> 8 bytes, and we only do it for SMSG_MONSTER_MOVE.
+            uint32 rawReplacements = RewriteAllRawReplayActorGuids(payload, match);
+            if (!rawReplacements)
                 RewriteFirstPackedGuidIfReplayActor(payload, match);
+
+            if (rawReplacements)
+                TC_LOG_DEBUG("arena.replay", "Replay rewrote {} raw GUID leak(s) in SMSG_MONSTER_MOVE", rawReplacements);
 
             return;
         }
@@ -2056,7 +2099,7 @@ namespace
 
         if (frame.Packet.GetOpcode() == SMSG_MONSTER_MOVE && PacketPayloadContainsOriginalActorGuid(frame.Packet.GetOpcode(), payload, match))
         {
-            TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v98 SMSG_MONSTER_MOVE rewrite timestamp={} size={}",
+            TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v99 SMSG_MONSTER_MOVE raw rewrite timestamp={} size={}",
                 frame.TimestampMs, uint32(payload.size()));
         }
 
