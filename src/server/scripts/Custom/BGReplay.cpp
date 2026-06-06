@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V93: packet probe logging for deterministic client crash.
+    // Replay V94: rewrite aura caster and spelllog execute packed GUID leaks.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -693,6 +693,111 @@ namespace
         return false;
     }
 
+    uint32 RewriteAllPackedReplayActorGuidByteSequences(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        // Use only packed GUID byte sequences, never raw 8-byte replacement.
+        //
+        // Our fake low-guid generator preserves the same nonzero-byte mask as the original low-guid, so packed
+        // original and packed fake GUIDs are the same length. This makes in-place replacement safe.
+        //
+        // This is intentionally used only on packet types that are known to contain multiple packed GUID fields
+        // and were observed leaking original packed GUIDs in the crash probe.
+        uint32 replacements = 0;
+
+        for (ReplayActor const& actor : match.Actors)
+        {
+            std::vector<uint8> from = ToPackedGuidBytes(actor.OriginalGuid.GetRawValue());
+            std::vector<uint8> to = ToPackedGuidBytes(actor.FakeGuid.GetRawValue());
+
+            if (from.empty() || from.size() != to.size())
+                continue;
+
+            auto it = payload.begin();
+            while (it != payload.end())
+            {
+                it = std::search(it, payload.end(), from.begin(), from.end());
+                if (it == payload.end())
+                    break;
+
+                std::copy(to.begin(), to.end(), it);
+                it += to.size();
+                ++replacements;
+            }
+        }
+
+        return replacements;
+    }
+
+    bool RewriteAuraUpdatePacketGuids(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        // SMSG_AURA_UPDATE / SMSG_AURA_UPDATE_ALL:
+        //   target packed guid
+        //   repeated AuraApplication::BuildUpdatePacket entries:
+        //     uint8  slot
+        //     uint32 spellId      (0 for remove)
+        //     uint8  flags
+        //     uint8  casterLevel
+        //     uint8  charges/stack
+        //     packed caster guid  when !(flags & AFLAG_CASTER)
+        //     uint32 maxDuration  when flags & AFLAG_DURATION
+        //     uint32 duration     when flags & AFLAG_DURATION
+        //
+        // Probe showed SMSG_AURA_UPDATE still had orig=1 right before the crash. The old code only rewrote
+        // the target packed GUID and missed the caster packed GUID inside aura entries.
+        constexpr uint8 REPLAY_AFLAG_CASTER = 0x08;
+        constexpr uint8 REPLAY_AFLAG_DURATION = 0x20;
+
+        size_t pos = 0;
+        if (!RewritePackedGuidAt(payload, pos, match))
+            return false;
+
+        while (pos < payload.size())
+        {
+            uint8 slot = 0;
+            if (!ReadUInt8(payload, pos, slot))
+                return false;
+
+            uint32 spellId = 0;
+            if (!ReadUInt32(payload, pos, spellId))
+                return false;
+
+            // Aura removal entry: slot + zero spell id.
+            if (!spellId)
+                continue;
+
+            uint8 flags = 0;
+            uint8 casterLevel = 0;
+            uint8 charges = 0;
+
+            if (!ReadUInt8(payload, pos, flags))
+                return false;
+            if (!ReadUInt8(payload, pos, casterLevel))
+                return false;
+            if (!ReadUInt8(payload, pos, charges))
+                return false;
+
+            (void)slot;
+            (void)casterLevel;
+            (void)charges;
+
+            if (!(flags & REPLAY_AFLAG_CASTER))
+            {
+                if (!RewritePackedGuidAt(payload, pos, match))
+                    return false;
+            }
+
+            if (flags & REPLAY_AFLAG_DURATION)
+            {
+                if (!HasRemaining(payload, pos, 8))
+                    return false;
+
+                pos += 8;
+            }
+        }
+
+        return true;
+    }
+
     bool FirstRawGuidIsOriginalReplayActor(std::vector<uint8> const& payload, MatchRecord const& match, ObjectGuid* outGuid = nullptr)
     {
         uint64 raw = 0;
@@ -1034,11 +1139,34 @@ namespace
                 RewriteRawGuidPair(payload, match);
                 return;
             case SMSG_SPELLLOGEXECUTE:
+            {
+                RewriteFirstPackedGuidIfReplayActor(payload, match);
+                uint32 replacements = RewriteAllPackedReplayActorGuidByteSequences(payload, match);
+                if (replacements)
+                    TC_LOG_DEBUG("arena.replay", "Replay rewrote {} packed GUID leak(s) in SMSG_SPELLLOGEXECUTE", replacements);
+                return;
+            }
+            case SMSG_AURA_UPDATE:
+            case SMSG_AURA_UPDATE_ALL:
+            {
+                if (!RewriteAuraUpdatePacketGuids(payload, match))
+                {
+                    // Keep playback intact if the aura layout is unexpected, but still try the safe old first-guid path.
+                    RewriteFirstPackedGuidIfReplayActor(payload, match);
+                    TC_LOG_DEBUG("arena.replay", "Replay aura GUID structural rewrite failed; used first-guid fallback opcode={}", opcode);
+                }
+
+                // Belt-and-suspenders: after the structural parse, replace any same-length packed replay actor GUID
+                // that remains in the aura payload. This fixes optional caster GUIDs/layout variants without dropping
+                // the aura packet.
+                uint32 replacements = RewriteAllPackedReplayActorGuidByteSequences(payload, match);
+                if (replacements)
+                    TC_LOG_DEBUG("arena.replay", "Replay rewrote {} packed GUID leak(s) in aura update opcode={}", replacements, opcode);
+                return;
+            }
             case SMSG_SPELL_DELAYED:
             case SMSG_POWER_UPDATE:
             case SMSG_CANCEL_AUTO_REPEAT:
-            case SMSG_AURA_UPDATE:
-            case SMSG_AURA_UPDATE_ALL:
                 RewriteFirstPackedGuidIfReplayActor(payload, match);
                 return;
             case SMSG_EMOTE:
@@ -1769,80 +1897,6 @@ namespace
         return audit;
     }
 
-    std::string ReplayPacketProbeGuids(PacketRecord const& frame, WorldPacket const& packet, MatchRecord const& match)
-    {
-        (void)frame;
-
-        std::ostringstream ss;
-
-        std::vector<uint8> payload;
-        payload.resize(packet.size());
-
-        if (!payload.empty())
-            std::memcpy(payload.data(), packet.contents(), payload.size());
-
-        bool hasOriginal = PacketPayloadContainsOriginalActorGuid(packet.GetOpcode(), payload, match);
-        ss << "orig=" << (hasOriginal ? 1 : 0);
-
-        uint32 hits = 0;
-        for (ReplayActor const& actor : match.Actors)
-        {
-            if (payload.size() < 8)
-                continue;
-
-            uint64 const originalRaw = actor.OriginalGuid.GetRawValue();
-            uint64 const fakeRaw = actor.FakeGuid.GetRawValue();
-
-            for (size_t i = 0; i + 8 <= payload.size(); ++i)
-            {
-                uint64 raw = uint64(payload[i]) |
-                    (uint64(payload[i + 1]) << 8) |
-                    (uint64(payload[i + 2]) << 16) |
-                    (uint64(payload[i + 3]) << 24) |
-                    (uint64(payload[i + 4]) << 32) |
-                    (uint64(payload[i + 5]) << 40) |
-                    (uint64(payload[i + 6]) << 48) |
-                    (uint64(payload[i + 7]) << 56);
-
-                if (raw == originalRaw)
-                {
-                    if (hits < 8)
-                        ss << " originalRawGuid=" << actor.OriginalGuid.GetRawValue() << "/" << actor.Name;
-
-                    ++hits;
-                }
-                else if (raw == fakeRaw)
-                {
-                    if (hits < 8)
-                        ss << " fakeRawGuid=" << actor.FakeGuid.GetRawValue() << "/" << actor.Name;
-
-                    ++hits;
-                }
-            }
-        }
-
-        ss << " hits=" << hits;
-        return ss.str();
-    }
-
-    void LogReplayPacketProbe(Player* viewer, PlaybackState const& state, PacketRecord const& frame, WorldPacket const& packet, size_t cursorBeforeSend, uint32 elapsedMs)
-    {
-        if (!viewer)
-            return;
-
-        TC_LOG_ERROR("arena.replay",
-            "REPLAY_PROBE about_to_send viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} {}",
-            viewer->GetGUID().GetCounter(),
-            state.BgInstanceId,
-            uint32(cursorBeforeSend),
-            uint32(state.Match.Packets.size()),
-            elapsedMs,
-            frame.TimestampMs,
-            packet.GetOpcode(),
-            uint32(packet.size()),
-            ReplayPacketProbeGuids(frame, packet, state.Match));
-    }
-
     bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
     {
         std::vector<uint8> payload;
@@ -1874,6 +1928,13 @@ namespace
                     frame.Packet.GetOpcode(), frame.TimestampMs, uint32(frame.Packet.size()), rewriteOk ? 1u : 0u);
                 return false;
             }
+        }
+
+        if ((frame.Packet.GetOpcode() == SMSG_AURA_UPDATE || frame.Packet.GetOpcode() == SMSG_AURA_UPDATE_ALL || frame.Packet.GetOpcode() == SMSG_SPELLLOGEXECUTE)
+            && PacketPayloadContainsOriginalActorGuid(frame.Packet.GetOpcode(), payload, match))
+        {
+            TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v94 rewrite opcode={} timestamp={} size={}",
+                frame.Packet.GetOpcode(), frame.TimestampMs, uint32(payload.size()));
         }
 
         if (payload.empty() && (frame.Packet.GetOpcode() == SMSG_DESTROY_OBJECT || frame.Packet.GetOpcode() == SMSG_ARENA_UNIT_DESTROYED))
@@ -3573,24 +3634,22 @@ public:
             WorldPacket out;
             if (!BuildPlaybackPacket(frame, state.Match, out))
             {
-                TC_LOG_ERROR("arena.replay",
-                    "REPLAY_PROBE skipped_build viewer={} bg={} cursor={} total={} frameTs={} opcode={} rawSize={}",
-                    viewerLowGuid,
-                    state.BgInstanceId,
-                    uint32(state.Cursor),
-                    uint32(state.Match.Packets.size()),
-                    frame.TimestampMs,
-                    frame.Packet.GetOpcode(),
-                    uint32(frame.Packet.size()));
+                TC_LOG_DEBUG("arena.replay", "PLAY skipped unsafe packet viewer={} opcode={} due={} cursor={}/{}",
+                    viewerLowGuid, frame.Packet.GetOpcode(), frame.TimestampMs,
+                    uint32(state.Cursor), uint32(state.Match.Packets.size()));
 
                 ++state.Cursor;
                 ++sentThisUpdate;
                 continue;
             }
 
-            LogReplayPacketProbe(viewer, state, frame, out, state.Cursor, elapsedMs);
             viewer->GetSession()->SendPacket(&out);
             SendReplayASForPlaybackPacket(viewer, out, state.Match);
+
+            TC_LOG_DEBUG("arena.replay", "PLAY viewer={} opcode={} due={} now={} late={} cursor={}/{} size={}",
+                viewerLowGuid, out.GetOpcode(), frame.TimestampMs, elapsedMs,
+                elapsedMs >= frame.TimestampMs ? elapsedMs - frame.TimestampMs : 0,
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), uint32(out.size()));
 
             ++state.Cursor;
             ++sentThisUpdate;
