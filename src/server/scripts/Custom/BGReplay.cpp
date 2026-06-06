@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V97: v96 aura/spelllog rewrite plus packet probe logging.
+    // Replay V98: rewrite SMSG_MONSTER_MOVE raw actor GUID leak.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -1100,6 +1100,19 @@ namespace
         // which can appear in update masks, field values, timestamps, or padding.
         //
         // V12 still avoids global replacement, but now rewrites the understood spell/combat packet layouts too.
+        if (opcode == SMSG_MONSTER_MOVE)
+        {
+            // Probe V97 showed SMSG_MONSTER_MOVE leaking original replay actor GUIDs as a raw GUID at offset 0:
+            //   opcode=221 origPacked=0 origRaw=1
+            //
+            // Do NOT use raw-first for all movement opcodes; many MSG_MOVE_* packets still use the packed-guid path.
+            // Only monster-move gets this raw rewrite.
+            if (!RewriteFirstRawGuidIfReplayActor(payload, match))
+                RewriteFirstPackedGuidIfReplayActor(payload, match);
+
+            return;
+        }
+
         if (IsMovementLikeOpcode(opcode))
         {
             RewriteFirstPackedGuidIfReplayActor(payload, match);
@@ -2039,6 +2052,12 @@ namespace
         {
             TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v94 rewrite opcode={} timestamp={} size={}",
                 frame.Packet.GetOpcode(), frame.TimestampMs, uint32(payload.size()));
+        }
+
+        if (frame.Packet.GetOpcode() == SMSG_MONSTER_MOVE && PacketPayloadContainsOriginalActorGuid(frame.Packet.GetOpcode(), payload, match))
+        {
+            TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v98 SMSG_MONSTER_MOVE rewrite timestamp={} size={}",
+                frame.TimestampMs, uint32(payload.size()));
         }
 
         if (payload.empty() && (frame.Packet.GetOpcode() == SMSG_DESTROY_OBJECT || frame.Packet.GetOpcode() == SMSG_ARENA_UNIT_DESTROYED))
