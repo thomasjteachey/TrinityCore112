@@ -70,7 +70,7 @@
 
 namespace
 {
-    // Replay V107: dual-layout update-object parser; rewrite only after clean full parse, including low-only VALUES blocks.
+    // Replay V108: filter owner/private update fields from replay actor VALUES blocks., including low-only VALUES blocks.
     // Replay V105: skip/dump deterministic bad converted update-object packet.
     // Replay V104: convert compressed update-object replay packets to uncompressed update-object packets.
     // Replay V103: timestamped probe with pause/step replay packet isolation.
@@ -1479,8 +1479,120 @@ namespace
         return flags;
     }
 
+    bool ReplayUpdateFieldIsSafeForRemoteReplayActor(uint32 fieldIndex)
+    {
+        // The replay recorder can capture OWNER/PRIVATE update fields from a real player.
+        // Replaying those fields onto fake remote Player objects can crash the 3.3.5 client.
+        //
+        // Keep only fields that a normal remote viewer should be allowed to see.
+        // This mirrors the public/safe portions of UpdateFields.h for 3.3.5a.
+
+        // Object fields.
+        if (fieldIndex < OBJECT_END)
+            return fieldIndex != OBJECT_FIELD_PADDING;
+
+        // Unit fields.
+        if (fieldIndex < UNIT_END)
+        {
+            // Private GUID/owner-only fields.
+            if (fieldIndex == UNIT_FIELD_CRITTER || fieldIndex == UNIT_FIELD_CRITTER + 1)
+                return false;
+
+            // Owner/private power regen.
+            if (fieldIndex >= UNIT_FIELD_POWER_REGEN_FLAT_MODIFIER && fieldIndex < UNIT_FIELD_LEVEL)
+                return false;
+
+            if (fieldIndex == UNIT_FIELD_RANGEDATTACKTIME)
+                return false;
+
+            // Owner/private damage fields.
+            if (fieldIndex >= UNIT_FIELD_MINDAMAGE && fieldIndex <= UNIT_FIELD_MAXOFFHANDDAMAGE)
+                return false;
+
+            if (fieldIndex == UNIT_FIELD_PETEXPERIENCE || fieldIndex == UNIT_FIELD_PETNEXTLEVELEXP)
+                return false;
+
+            // Owner/private stats and resistances.
+            if (fieldIndex >= UNIT_FIELD_STAT0 && fieldIndex < UNIT_FIELD_BASE_MANA)
+                return false;
+
+            if (fieldIndex == UNIT_FIELD_BASE_HEALTH)
+                return false;
+
+            // Owner/private attack power, ranged attack power, power cost, modifiers.
+            if (fieldIndex >= UNIT_FIELD_ATTACK_POWER && fieldIndex <= UNIT_FIELD_MAXHEALTHMODIFIER)
+                return false;
+
+            if (fieldIndex == UNIT_FIELD_PADDING)
+                return false;
+
+            return true;
+        }
+
+        // Public player fields visible to remote clients.
+        if (fieldIndex >= PLAYER_DUEL_ARBITER && fieldIndex <= PLAYER_GUILD_TIMESTAMP)
+            return true;
+
+        if (fieldIndex >= PLAYER_VISIBLE_ITEM_1_ENTRYID && fieldIndex <= PLAYER_FAKE_INEBRIATION)
+            return true;
+
+        return false;
+    }
+
+    struct ReplayUpdateFieldValue
+    {
+        uint32 FieldIndex = 0;
+        uint32 Value = 0;
+    };
+
+    void AppendUInt32LE(std::vector<uint8>& out, uint32 value)
+    {
+        out.push_back(uint8(value & 0xFF));
+        out.push_back(uint8((value >> 8) & 0xFF));
+        out.push_back(uint8((value >> 16) & 0xFF));
+        out.push_back(uint8((value >> 24) & 0xFF));
+    }
+
+    void RewriteTargetGuidInKeptValues(std::vector<ReplayUpdateFieldValue>& keptValues, MatchRecord const& match, ObjectGuid blockGuid)
+    {
+        size_t lowIndex = std::numeric_limits<size_t>::max();
+        size_t highIndex = std::numeric_limits<size_t>::max();
+        uint32 low = 0;
+        uint32 high = 0;
+
+        for (size_t i = 0; i < keptValues.size(); ++i)
+        {
+            if (keptValues[i].FieldIndex == UNIT_FIELD_TARGET)
+            {
+                lowIndex = i;
+                low = keptValues[i].Value;
+            }
+            else if (keptValues[i].FieldIndex == UNIT_FIELD_TARGET + 1)
+            {
+                highIndex = i;
+                high = keptValues[i].Value;
+            }
+        }
+
+        if (lowIndex == std::numeric_limits<size_t>::max() || highIndex == std::numeric_limits<size_t>::max())
+            return;
+
+        ObjectGuid originalTarget(uint64(low) | (uint64(high) << 32));
+        if (ReplayActor const* targetActor = FindReplayActorByOriginalGuidOrCounter(match, originalTarget))
+        {
+            uint64 targetFakeRaw = targetActor->FakeGuid.GetRawValue();
+            keptValues[lowIndex].Value = uint32(targetFakeRaw & 0xFFFFFFFFu);
+            keptValues[highIndex].Value = uint32((targetFakeRaw >> 32) & 0xFFFFFFFFu);
+
+            TC_LOG_DEBUG("arena.replay", "Replay target GUID rewrite owner={} originalTarget={} fakeTarget={}",
+                blockGuid.ToString(), originalTarget.ToString(), targetActor->FakeGuid.ToString());
+        }
+    }
+
     bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
     {
+        size_t blockPayloadStart = pos;
+
         uint8 blockCount = 0;
         if (!ReadUInt8(payload, pos, blockCount))
             return false;
@@ -1502,21 +1614,9 @@ namespace
         uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
         uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
 
-        // V90 crash fix:
-        // Rewrite UNIT_FIELD_TARGET for ANY update-values block, not only blocks whose owner is a replay actor.
-        //
-        // The v79/src(91) code only rewrote target fields inside:
-        //   if (actor) { ... }
-        //
-        // That missed pets, summons, other units, and possibly the viewer/object state when they targeted a replay
-        // participant. Those missed fields could leave the client targeting an ORIGINAL arena player GUID such as
-        // 0x00000000000000BE while the replay system separately creates fake replay player GUIDs. That matches the
-        // crash dump: Locked Target was Tijuana, 00000000000000BE, which is an original actor GUID, not a fake replay
-        // GUID. A stale original target/object pointer can make the 3.3.5 client blow up during object/target cleanup.
-        size_t targetLowPos = std::numeric_limits<size_t>::max();
-        size_t targetHighPos = std::numeric_limits<size_t>::max();
-        uint32 targetLow = 0;
-        uint32 targetHigh = 0;
+        std::vector<ReplayUpdateFieldValue> keptValues;
+        keptValues.reserve(32);
+        uint32 removedPrivateFields = 0;
 
         for (uint32 block = 0; block < masks.size(); ++block)
         {
@@ -1537,67 +1637,83 @@ namespace
                     (uint32(payload[pos + 2]) << 16) |
                     (uint32(payload[pos + 3]) << 24);
 
-                // Patch the replay actor's own object fields only when this block is the actor.
+                pos += 4;
+
+                // If this VALUES block belongs to a replay actor, never send owner/private fields to the
+                // replay spectator's client as if they were public remote-player fields.
+                if (actor && !ReplayUpdateFieldIsSafeForRemoteReplayActor(fieldIndex))
+                {
+                    ++removedPrivateFields;
+                    continue;
+                }
+
                 if (actor)
                 {
                     if (fieldIndex == OBJECT_FIELD_GUID)
-                        WriteUInt32(payload, pos, fakeLow);
+                        value = fakeLow;
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
-                        WriteUInt32(payload, pos, fakeHigh);
+                        value = fakeHigh;
                     else if (fieldIndex == UNIT_FIELD_BYTES_2)
                     {
                         uint32 patched = ReplayGreenNameUnitBytes2ForActor(*actor, value);
-                        WriteUInt32(payload, pos, patched);
                         if (patched != value)
                             TC_LOG_DEBUG("arena.replay", "Replay green-name UNIT_FIELD_BYTES_2 rewrite fake={} team={} old={} new={}",
                                 actor->FakeGuid.ToString(), actor->Team, value, patched);
+                        value = patched;
                     }
                     else if (fieldIndex == UNIT_FIELD_FLAGS)
-                    {
-                        uint32 patched = ReplayGreenNameUnitFlagsForActor(*actor, value);
-                        WriteUInt32(payload, pos, patched);
-                    }
+                        value = ReplayGreenNameUnitFlagsForActor(*actor, value);
                     else if (fieldIndex == PLAYER_FLAGS)
-                    {
-                        uint32 patched = ReplayGreenNamePlayerFlagsForActor(*actor, value);
-                        WriteUInt32(payload, pos, patched);
-                    }
+                        value = ReplayGreenNamePlayerFlagsForActor(*actor, value);
                 }
 
-                // Record target pair positions for every unit/object update block, not just replay actor blocks.
-                // Only rewrite after both halves are present, so we never patch a half GUID.
-                if (fieldIndex == UNIT_FIELD_TARGET)
-                {
-                    targetLowPos = pos;
-                    targetLow = value;
-                }
-                else if (fieldIndex == UNIT_FIELD_TARGET + 1)
-                {
-                    targetHighPos = pos;
-                    targetHigh = value;
-                }
-
-                pos += 4;
+                keptValues.push_back({ fieldIndex, value });
             }
         }
 
-        if (targetLowPos != std::numeric_limits<size_t>::max()
-            && targetHighPos != std::numeric_limits<size_t>::max())
-        {
-            ObjectGuid originalTarget(uint64(targetLow) | (uint64(targetHigh) << 32));
-            if (ReplayActor const* targetActor = FindReplayActorByOriginalGuidOrCounter(match, originalTarget))
-            {
-                uint64 targetFakeRaw = targetActor->FakeGuid.GetRawValue();
-                WriteUInt32(payload, targetLowPos, uint32(targetFakeRaw & 0xFFFFFFFFu));
-                WriteUInt32(payload, targetHighPos, uint32((targetFakeRaw >> 32) & 0xFFFFFFFFu));
+        RewriteTargetGuidInKeptValues(keptValues, match, blockGuid);
 
-                TC_LOG_DEBUG("arena.replay", "Replay target GUID rewrite owner={} originalTarget={} fakeTarget={}",
-                    blockGuid.ToString(), originalTarget.ToString(), targetActor->FakeGuid.ToString());
-            }
+        std::vector<uint32> newMasks;
+        if (!keptValues.empty())
+        {
+            uint32 highestField = keptValues.back().FieldIndex;
+            newMasks.assign((highestField / 32) + 1, 0);
+
+            for (ReplayUpdateFieldValue const& kept : keptValues)
+                newMasks[kept.FieldIndex / 32] |= (uint32(1) << (kept.FieldIndex % 32));
+        }
+
+        if (newMasks.size() > 0xFF)
+            return false;
+
+        std::vector<uint8> rebuilt;
+        rebuilt.reserve(1 + newMasks.size() * 4 + keptValues.size() * 4);
+        rebuilt.push_back(uint8(newMasks.size()));
+
+        for (uint32 mask : newMasks)
+            AppendUInt32LE(rebuilt, mask);
+
+        for (ReplayUpdateFieldValue const& kept : keptValues)
+            AppendUInt32LE(rebuilt, kept.Value);
+
+        size_t blockPayloadEnd = pos;
+        payload.erase(payload.begin() + blockPayloadStart, payload.begin() + blockPayloadEnd);
+        payload.insert(payload.begin() + blockPayloadStart, rebuilt.begin(), rebuilt.end());
+        pos = blockPayloadStart + rebuilt.size();
+
+        if (actor && removedPrivateFields)
+        {
+            TC_LOG_ERROR("arena.replay", "REPLAY_V108 stripped {} owner/private update field(s) from replay actor values block originalGuid={} fakeGuid={} keptFields={} newMaskBlocks={}",
+                removedPrivateFields,
+                actor->OriginalGuid.GetRawValue(),
+                actor->FakeGuid.GetRawValue(),
+                uint32(keptValues.size()),
+                uint32(newMasks.size()));
         }
 
         return true;
     }
+
 
     bool SkipMovementCreateData(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid, uint8 objectTypeId = 0xFF)
     {
@@ -1957,17 +2073,17 @@ namespace
         std::vector<uint8> rewritten;
         size_t endPos = 0;
 
-        if (TryRewriteUpdateObjectPayloadLayout(payload, match, true, rewritten, endPos))
-        {
-            payload.swap(rewritten);
-            TC_LOG_DEBUG("arena.replay", "Replay update-object used with-header-byte layout size={}", uint32(payload.size()));
-            return true;
-        }
-
         if (TryRewriteUpdateObjectPayloadLayout(payload, match, false, rewritten, endPos))
         {
             payload.swap(rewritten);
             TC_LOG_DEBUG("arena.replay", "Replay update-object used no-header-byte layout size={}", uint32(payload.size()));
+            return true;
+        }
+
+        if (TryRewriteUpdateObjectPayloadLayout(payload, match, true, rewritten, endPos))
+        {
+            payload.swap(rewritten);
+            TC_LOG_DEBUG("arena.replay", "Replay update-object used with-header-byte layout size={}", uint32(payload.size()));
             return true;
         }
 
@@ -2443,7 +2559,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT && outOpcode == SMSG_UPDATE_OBJECT)
         {
-            TC_LOG_ERROR("arena.replay", "REPLAY_V107 converted compressed update-object timestamp={} rawSize={} rewrittenUncompressedSize={}",
+            TC_LOG_ERROR("arena.replay", "REPLAY_V108 converted compressed update-object timestamp={} rawSize={} rewrittenUncompressedSize={}",
                 frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()));
         }
 
