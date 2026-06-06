@@ -70,7 +70,7 @@
 
 namespace
 {
-    // Replay V106: structurally rewrite update-object packed owner GUIDs, including low-only VALUES blocks.
+    // Replay V107: dual-layout update-object parser; rewrite only after clean full parse, including low-only VALUES blocks.
     // Replay V105: skip/dump deterministic bad converted update-object packet.
     // Replay V104: convert compressed update-object replay packets to uncompressed update-object packets.
     // Replay V103: timestamped probe with pause/step replay packet isolation.
@@ -1814,7 +1814,7 @@ namespace
         return true;
     }
 
-    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
+    bool RewriteUpdateObjectPayloadBlocks(std::vector<uint8>& payload, MatchRecord const& match, size_t pos, uint32 blockCount, char const* layoutName, size_t& endPos)
     {
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
         constexpr uint8 REPLAY_UPDATETYPE_MOVEMENT = 1;
@@ -1823,17 +1823,15 @@ namespace
         constexpr uint8 REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS = 4;
         constexpr uint8 REPLAY_UPDATETYPE_NEAR_OBJECTS = 5;
 
-        size_t pos = 0;
-        uint32 blockCount = 0;
-
-        if (!ReadUInt32(payload, pos, blockCount))
-            return false;
-
         for (uint32 block = 0; block < blockCount; ++block)
         {
             uint8 updateType = 0;
             if (!ReadUInt8(payload, pos, updateType))
+            {
+                TC_LOG_DEBUG("arena.replay", "Replay update-object {} parser failed reading updateType block={}/{} pos={}",
+                    layoutName ? layoutName : "unknown", block, blockCount, uint32(pos));
                 return false;
+            }
 
             if (updateType == REPLAY_UPDATETYPE_OUT_OF_RANGE_OBJECTS || updateType == REPLAY_UPDATETYPE_NEAR_OBJECTS)
             {
@@ -1849,6 +1847,13 @@ namespace
                 }
 
                 continue;
+            }
+
+            if (updateType > REPLAY_UPDATETYPE_NEAR_OBJECTS)
+            {
+                TC_LOG_DEBUG("arena.replay", "Replay update-object {} parser saw invalid updateType={} block={}/{} pos={}",
+                    layoutName ? layoutName : "unknown", uint32(updateType), block, blockCount, uint32(pos));
+                return false;
             }
 
             ObjectGuid blockGuid;
@@ -1887,17 +1892,89 @@ namespace
                     break;
                 }
                 default:
-                    TC_LOG_ERROR("arena.replay", "Replay update-object parser saw unknown updateType={} block={}/{} pos={}",
-                        uint32(updateType), block, blockCount, uint32(pos));
                     return false;
             }
         }
 
-        if (pos > payload.size())
+        endPos = pos;
+        return true;
+    }
+
+    bool TryRewriteUpdateObjectPayloadLayout(std::vector<uint8> const& originalPayload, MatchRecord const& match, bool hasHeaderByte, std::vector<uint8>& rewritten, size_t& endPos)
+    {
+        rewritten = originalPayload;
+        endPos = 0;
+
+        size_t pos = 0;
+        uint32 blockCount = 0;
+
+        if (!ReadUInt32(rewritten, pos, blockCount))
             return false;
+
+        if (hasHeaderByte)
+        {
+            uint8 transportOrMapHeader = 0;
+            if (!ReadUInt8(rewritten, pos, transportOrMapHeader))
+                return false;
+
+            // In 3.3.5 update-object packets this byte is normally 0/1. Be conservative so we don't
+            // accidentally treat a normal no-header VALUES packet as a header-layout packet.
+            if (transportOrMapHeader > 1)
+                return false;
+        }
+
+        char const* layoutName = hasHeaderByte ? "with-header-byte" : "no-header-byte";
+        if (!RewriteUpdateObjectPayloadBlocks(rewritten, match, pos, blockCount, layoutName, endPos))
+            return false;
+
+        if (endPos != rewritten.size())
+        {
+            TC_LOG_DEBUG("arena.replay", "Replay update-object {} parser rejected because endPos={} size={} blockCount={}",
+                layoutName, uint32(endPos), uint32(rewritten.size()), blockCount);
+            return false;
+        }
 
         return true;
     }
+
+    bool RewriteUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        // 3.3.5 update-object payloads are annoyingly easy to misparse across branches:
+        //
+        //   layout A: uint32 blockCount;             blocks...
+        //   layout B: uint32 blockCount; uint8 unk; blocks...
+        //
+        // The deterministic crash packet started:
+        //
+        //   04 00 00 00 00 01 be ...
+        //
+        // Treating byte 4 as UPDATETYPE_VALUES corrupts the stream if it is actually the extra header byte.
+        // Treating byte 5 as the first update type corrupts no-header packets.
+        //
+        // So v107 tries both layouts on copies and only accepts a rewrite that consumes the entire payload.
+        // Prefer the header layout when it parses cleanly, because the crash packet has exactly the ambiguous
+        // 04 00 00 00 00 prefix.
+        std::vector<uint8> rewritten;
+        size_t endPos = 0;
+
+        if (TryRewriteUpdateObjectPayloadLayout(payload, match, true, rewritten, endPos))
+        {
+            payload.swap(rewritten);
+            TC_LOG_DEBUG("arena.replay", "Replay update-object used with-header-byte layout size={}", uint32(payload.size()));
+            return true;
+        }
+
+        if (TryRewriteUpdateObjectPayloadLayout(payload, match, false, rewritten, endPos))
+        {
+            payload.swap(rewritten);
+            TC_LOG_DEBUG("arena.replay", "Replay update-object used no-header-byte layout size={}", uint32(payload.size()));
+            return true;
+        }
+
+        TC_LOG_ERROR("arena.replay", "Replay update-object parser failed both layouts size={}", uint32(payload.size()));
+        return false;
+    }
+
 
     bool RewriteCompressedUpdateObjectPayload(std::vector<uint8>& payload, MatchRecord const& match)
     {
@@ -2366,7 +2443,7 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT && outOpcode == SMSG_UPDATE_OBJECT)
         {
-            TC_LOG_ERROR("arena.replay", "REPLAY_V106 converted compressed update-object timestamp={} rawSize={} rewrittenUncompressedSize={}",
+            TC_LOG_ERROR("arena.replay", "REPLAY_V107 converted compressed update-object timestamp={} rawSize={} rewrittenUncompressedSize={}",
                 frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()));
         }
 
