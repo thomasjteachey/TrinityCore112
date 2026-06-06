@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V94: rewrite aura caster and spelllog execute packed GUID leaks.
+    // Replay V95: compile fix for RewritePackedGuidAt helper.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
