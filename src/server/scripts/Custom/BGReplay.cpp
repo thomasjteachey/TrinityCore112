@@ -70,6 +70,7 @@
 
 namespace
 {
+    // Replay V106: structurally rewrite update-object packed owner GUIDs, including low-only VALUES blocks.
     // Replay V105: skip/dump deterministic bad converted update-object packet.
     // Replay V104: convert compressed update-object replay packets to uncompressed update-object packets.
     // Replay V103: timestamped probe with pause/step replay packet isolation.
@@ -627,9 +628,48 @@ namespace
         return nullptr;
     }
 
+    ReplayActor const* FindReplayActorByOriginalGuidOrCounter(MatchRecord const& match, ObjectGuid guid)
+    {
+        if (!guid)
+            return nullptr;
+
+        uint32 const counter = guid.GetCounter();
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.OriginalGuid == guid)
+                return &actor;
+
+            // Some recorded 3.3.5 update-object VALUES blocks in this branch contain a packed low GUID only
+            // (example: 00 01 be for Tijuana) even though our MatchRecord actor GUID is a Player ObjectGuid.
+            // Match those owner GUIDs by low counter so the update block is rewritten to the fake replay actor.
+            if (counter && actor.OriginalGuid.GetCounter() == counter)
+                return &actor;
+        }
+
+        return nullptr;
+    }
+
+    ReplayActor const* FindReplayActorByGuidOrCounter(MatchRecord const& match, ObjectGuid guid)
+    {
+        if (!guid)
+            return nullptr;
+
+        uint32 const counter = guid.GetCounter();
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (actor.OriginalGuid == guid || actor.FakeGuid == guid)
+                return &actor;
+
+            if (counter && (actor.OriginalGuid.GetCounter() == counter || actor.FakeGuid.GetCounter() == counter))
+                return &actor;
+        }
+
+        return nullptr;
+    }
+
     bool IsReplayActorGuid(MatchRecord const& match, ObjectGuid guid)
     {
-        return FindReplayActorByGuid(match, guid) != nullptr;
+        return FindReplayActorByGuidOrCounter(match, guid) != nullptr;
     }
 
     bool HasRemaining(std::vector<uint8> const& payload, size_t pos, size_t count)
@@ -765,6 +805,46 @@ namespace
             return false;
 
         std::copy(packed.begin(), packed.end(), payload.begin() + start);
+        return true;
+    }
+
+    bool WritePackedGuidResize(std::vector<uint8>& payload, size_t start, size_t end, ObjectGuid guid, size_t* posAfter = nullptr)
+    {
+        if (start > end || end > payload.size())
+            return false;
+
+        std::vector<uint8> packed = ToPackedGuidBytes(guid.GetRawValue());
+        payload.erase(payload.begin() + start, payload.begin() + end);
+        payload.insert(payload.begin() + start, packed.begin(), packed.end());
+
+        if (posAfter)
+            *posAfter = start + packed.size();
+
+        return true;
+    }
+
+    bool RewritePackedGuidAtResize(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid* parsedGuid = nullptr)
+    {
+        size_t const guidStart = pos;
+
+        ObjectGuid guid;
+        if (!ReadPackedGuid(payload, pos, guid))
+            return false;
+
+        size_t const guidEnd = pos;
+        if (parsedGuid)
+            *parsedGuid = guid;
+
+        if (ReplayActor const* actor = FindReplayActorByOriginalGuidOrCounter(match, guid))
+        {
+            if (!WritePackedGuidResize(payload, guidStart, guidEnd, actor->FakeGuid, &pos))
+                return false;
+
+            TC_LOG_DEBUG("arena.replay", "Replay update-object packed GUID owner rewrite original={} fake={} oldSize={} newSize={}",
+                guid.GetRawValue(), actor->FakeGuid.GetRawValue(), uint32(guidEnd - guidStart),
+                uint32(pos - guidStart));
+        }
+
         return true;
     }
 
@@ -1417,7 +1497,7 @@ namespace
             masks.push_back(mask);
         }
 
-        ReplayActor const* actor = FindReplayActorByOriginalGuid(match, blockGuid);
+        ReplayActor const* actor = FindReplayActorByOriginalGuidOrCounter(match, blockGuid);
         uint64 fakeRaw = actor ? actor->FakeGuid.GetRawValue() : 0;
         uint32 fakeLow = uint32(fakeRaw & 0xFFFFFFFFu);
         uint32 fakeHigh = uint32((fakeRaw >> 32) & 0xFFFFFFFFu);
@@ -1505,7 +1585,7 @@ namespace
             && targetHighPos != std::numeric_limits<size_t>::max())
         {
             ObjectGuid originalTarget(uint64(targetLow) | (uint64(targetHigh) << 32));
-            if (ReplayActor const* targetActor = FindReplayActorByOriginalGuid(match, originalTarget))
+            if (ReplayActor const* targetActor = FindReplayActorByOriginalGuidOrCounter(match, originalTarget))
             {
                 uint64 targetFakeRaw = targetActor->FakeGuid.GetRawValue();
                 WriteUInt32(payload, targetLowPos, uint32(targetFakeRaw & 0xFFFFFFFFu));
@@ -1592,7 +1672,7 @@ namespace
 
             if (movementFlags & REPLAY_MOVEMENTFLAG_ONTRANSPORT)
             {
-                if (!SkipPackedGuid(payload, pos))
+                if (!RewritePackedGuidAtResize(payload, pos, match))
                     return false;
 
                 // transport x/y/z/o + transport time + transport seat
@@ -1660,7 +1740,7 @@ namespace
         {
             if (flags & REPLAY_UPDATEFLAG_POSITION)
             {
-                if (!SkipPackedGuid(payload, pos))
+                if (!RewritePackedGuidAtResize(payload, pos, match))
                     return false;
 
                 // position x/y/z + transport-or-absolute x/y/z + orientation + corpse orientation/zero
@@ -1703,7 +1783,7 @@ namespace
 
         if (flags & REPLAY_UPDATEFLAG_HAS_TARGET)
         {
-            if (!SkipPackedGuid(payload, pos))
+            if (!RewritePackedGuidAtResize(payload, pos, match))
                 return false;
         }
 
@@ -1763,27 +1843,17 @@ namespace
 
                 for (uint32 i = 0; i < guidCount; ++i)
                 {
-                    size_t guidStart = pos;
                     ObjectGuid guid;
-                    if (!ReadPackedGuid(payload, pos, guid))
+                    if (!RewritePackedGuidAtResize(payload, pos, match, &guid))
                         return false;
-
-                    size_t guidEnd = pos;
-                    if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, guid))
-                        WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid);
                 }
 
                 continue;
             }
 
-            size_t guidStart = pos;
             ObjectGuid blockGuid;
-            if (!ReadPackedGuid(payload, pos, blockGuid))
+            if (!RewritePackedGuidAtResize(payload, pos, match, &blockGuid))
                 return false;
-
-            size_t guidEnd = pos;
-            if (ReplayActor const* actor = FindReplayActorByOriginalGuid(match, blockGuid))
-                WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid);
 
             switch (updateType)
             {
@@ -2296,15 +2366,8 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT && outOpcode == SMSG_UPDATE_OBJECT)
         {
-            TC_LOG_ERROR("arena.replay", "REPLAY_V104 converted compressed update-object timestamp={} rawSize={} uncompressedSize={}",
+            TC_LOG_ERROR("arena.replay", "REPLAY_V106 converted compressed update-object timestamp={} rawSize={} rewrittenUncompressedSize={}",
                 frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()));
-        }
-
-        if (IsKnownCrashUpdateObjectPacket(frame, outOpcode, payload))
-        {
-            TC_LOG_ERROR("arena.replay", "REPLAY_V105 skipping deterministic bad update-object packet timestamp={} rawSize={} uncompressedSize={} hex={}",
-                frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()), ReplayHexPreview(payload, 512));
-            return false;
         }
 
         out = WorldPacket(outOpcode, payload.size());
