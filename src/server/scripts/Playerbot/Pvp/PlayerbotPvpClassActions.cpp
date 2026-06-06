@@ -3951,11 +3951,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         failureReason = "controlled_cannot_mount";
         return false;
     }
-    if (isMountSpell && !IsStrictlyOutdoorsForMount(player))
+    if (isMountSpell && spellInfo->HasAttribute(SPELL_ATTR0_OUTDOORS_ONLY) && !player->IsOutdoors())
     {
-        // Enforce indoor mount denial server-side for virtual bot casters.
-        // Mount selection already prefers outdoors, but execution must also
-        // gate this so stale context cannot cast mounts while indoors.
+        // Match Spell::CheckCast's outdoors-only rule without adding extra
+        // terrain-status restrictions that can falsely block custom/playerbot
+        // mounts in battleground prep rooms where mounting is otherwise legal.
         failureReason = "indoors_cannot_mount";
         return false;
     }

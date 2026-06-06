@@ -812,10 +812,17 @@ MapDifficulty const* GetMapDifficultyData(uint32 mapId, Difficulty difficulty)
 
 MapDifficulty const* GetDownscaledMapDifficultyData(uint32 mapId, Difficulty &difficulty)
 {
+    Difficulty const originalDifficulty = difficulty;
     uint32 tmpDiff = difficulty;
+    if (tmpDiff >= MAX_DIFFICULTY)
+        return nullptr;
+
     MapDifficulty const* mapDiff = GetMapDifficultyData(mapId, Difficulty(tmpDiff));
     if (!mapDiff)
     {
+        if (tmpDiff == REGULAR_DIFFICULTY)
+            return nullptr;
+
         if (tmpDiff > RAID_DIFFICULTY_25MAN_NORMAL) // heroic, downscale to normal
             tmpDiff -= 2;
         else
@@ -823,14 +830,18 @@ MapDifficulty const* GetDownscaledMapDifficultyData(uint32 mapId, Difficulty &di
 
         // pull new data
         mapDiff = GetMapDifficultyData(mapId, Difficulty(tmpDiff)); // we are 10 normal or 25 normal
-        if (!mapDiff)
+        if (!mapDiff && tmpDiff > REGULAR_DIFFICULTY)
         {
             tmpDiff -= 1;
             mapDiff = GetMapDifficultyData(mapId, Difficulty(tmpDiff)); // 10 normal
         }
     }
 
-    difficulty = Difficulty(tmpDiff);
+    if (mapDiff)
+        difficulty = Difficulty(tmpDiff);
+    else
+        difficulty = originalDifficulty;
+
     return mapDiff;
 }
 

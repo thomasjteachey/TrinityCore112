@@ -23,6 +23,7 @@
 #include "MotionMaster.h"
 #include "Player.h"
 #include "TemporarySummon.h"
+#include "Totem.h"
 #include "Unit.h"
 #include "UnitAI.h"
 #include "UnitDefines.h"
@@ -35,6 +36,44 @@
 #include <boost/heap/fibonacci_heap.hpp>
 
 #include "Hacks/boost_1_74_fibonacci_heap.h"
+
+
+namespace
+{
+bool IsHuntersMark(SpellInfo const* spellInfo)
+{
+    return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER && (spellInfo->SpellFamilyFlags[0] & 0x400) && spellInfo->SpellIconID == 538;
+}
+
+bool IsNoCombatThreatSpell(SpellInfo const* spellInfo, Unit const* threatSource)
+{
+    if (threatSource && threatSource->IsTotem() && !threatSource->ToTotem()->IsFireTotem())
+        return true;
+
+    if (!spellInfo)
+        return false;
+
+    switch (spellInfo->Id)
+    {
+        // Freezing/Frost traps and Earthbind Totem do not put the caster in combat.
+        case 14309:
+        case 14308:
+        case 3355:
+        case 13810:
+        case 63487:
+        case 67035:
+        case 72216:
+        case 19185:
+        case 3600:
+        case 6474:
+            return true;
+        default:
+            break;
+    }
+
+    return IsHuntersMark(spellInfo);
+}
+}
 
 const CompareThreatLessThan ThreatManager::CompareThreat;
 
@@ -361,8 +400,7 @@ void ThreatManager::EvaluateSuppressed(bool canExpire)
 
 void ThreatManager::AddThreat(Unit* target, float amount, SpellInfo const* spell, bool ignoreModifiers, bool ignoreRedirects)
 {
-    bool const noCombatThreatSpell = spell && (spell->Id == 14309 || spell->Id == 14308 || spell->Id == 3355 || spell->Id == 13810 || spell->Id == 63487 || spell->Id == 67035
-        || spell->Id == 72216 || spell->Id == 19185 || spell->Id == 3600 || spell->Id == 6474); // freezing/frost traps and Earthbind Totem don't put you in combat
+    bool const noCombatThreatSpell = IsNoCombatThreatSpell(spell, target);
 
     // step 1: we can shortcut if the spell has one of the NO_THREAT attrs set - nothing will happen
     if (spell)
