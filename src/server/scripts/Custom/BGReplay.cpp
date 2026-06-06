@@ -70,6 +70,7 @@
 
 namespace
 {
+    // Replay V105: skip/dump deterministic bad converted update-object packet.
     // Replay V104: convert compressed update-object replay packets to uncompressed update-object packets.
     // Replay V103: timestamped probe with pause/step replay packet isolation.
     // Replay V102: v99 plus timestamped replay probe and in-log command markers.
@@ -2190,6 +2191,43 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
             ReplayPacketProbeGuids(packet, state.Match));
     }
 
+    std::string ReplayHexPreview(std::vector<uint8> const& payload, size_t maxBytes = 512)
+    {
+        std::ostringstream ss;
+        ss << std::hex << std::setfill('0');
+
+        size_t const count = std::min(payload.size(), maxBytes);
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (i)
+                ss << ' ';
+
+            ss << std::setw(2) << uint32(payload[i]);
+        }
+
+        if (payload.size() > maxBytes)
+            ss << " ...";
+
+        return ss.str();
+    }
+
+    bool IsKnownCrashUpdateObjectPacket(PacketRecord const& frame, uint16 outOpcode, std::vector<uint8> const& payload)
+    {
+        // V104 proved compression itself is not the problem:
+        //   raw SMSG_COMPRESSED_UPDATE_OBJECT at cursor 1514:
+        //     frameTs=29376 rawSize=94
+        //   converted to:
+        //     SMSG_UPDATE_OBJECT size=286
+        // and the client still crashed immediately after that one stepped packet.
+        //
+        // Until we parse the bad update block/field precisely, skip exactly that deterministic replay packet.
+        return frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT
+            && outOpcode == SMSG_UPDATE_OBJECT
+            && frame.TimestampMs == 29376
+            && frame.Packet.size() == 94
+            && payload.size() == 286;
+    }
+
     bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
     {
         std::vector<uint8> payload;
@@ -2260,6 +2298,13 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         {
             TC_LOG_ERROR("arena.replay", "REPLAY_V104 converted compressed update-object timestamp={} rawSize={} uncompressedSize={}",
                 frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()));
+        }
+
+        if (IsKnownCrashUpdateObjectPacket(frame, outOpcode, payload))
+        {
+            TC_LOG_ERROR("arena.replay", "REPLAY_V105 skipping deterministic bad update-object packet timestamp={} rawSize={} uncompressedSize={} hex={}",
+                frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()), ReplayHexPreview(payload, 512));
+            return false;
         }
 
         out = WorldPacket(outOpcode, payload.size());
