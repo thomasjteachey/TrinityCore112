@@ -26,6 +26,7 @@
 #include <cstring>
 #include <thread>
 #include <sstream>
+#include <utility>
 
 /**
     @file Errors.cpp
@@ -48,12 +49,25 @@ extern "C" { TC_COMMON_API char const* TrinityAssertionFailedMessage = nullptr; 
 
 namespace
 {
+    thread_local std::string ThreadCrashContext;
+
     void LogCrashMessage(std::string const& message)
     {
         if (message.empty())
             return;
 
         TC_LOG_FATAL("server.crash", "{}", message);
+    }
+
+    void LogCrashContext()
+    {
+        if (ThreadCrashContext.empty())
+            return;
+
+        std::string formattedMessage = "\nLast crash context:\n  " + ThreadCrashContext + '\n';
+        LogCrashMessage(formattedMessage);
+        fprintf(stderr, "%s", formattedMessage.c_str());
+        fflush(stderr);
     }
 
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
@@ -91,6 +105,7 @@ namespace
         fprintf(stderr, "%s", formattedMessage.c_str());
         fflush(stderr);
 
+        LogCrashContext();
         LogStackTrace();
     }
 #endif
@@ -102,6 +117,7 @@ namespace
         RaiseException(EXCEPTION_ASSERTION_FAILURE, 0, 2, execeptionArgs);
 #else
         TrinityAssertionFailedMessage = strdup(message);
+        LogCrashContext();
         LogStackTrace();
         *((volatile int*)nullptr) = 0;
         exit(1);
@@ -126,6 +142,16 @@ namespace
 
 namespace Trinity
 {
+
+void SetCrashContext(std::string context)
+{
+    ThreadCrashContext = std::move(context);
+}
+
+void ClearCrashContext()
+{
+    ThreadCrashContext.clear();
+}
 
 void Assert(char const* file, int line, char const* function, std::string debugInfo, char const* message)
 {

@@ -35,6 +35,12 @@ namespace Trinity
 
     TC_COMMON_API void Warning(char const* file, int line, char const* function, char const* message);
 
+    // Thread-local breadcrumb printed by the fatal signal/crash logger.
+    // Use this immediately before risky update paths so raw SIGSEGV crashes
+    // still tell us what object/spell/aura was being processed.
+    TC_COMMON_API void SetCrashContext(std::string context);
+    TC_COMMON_API void ClearCrashContext();
+
     [[noreturn]] TC_COMMON_API void AbortHandler(int sigval);
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
     TC_COMMON_API void FatalSignalHandler(int sigval);

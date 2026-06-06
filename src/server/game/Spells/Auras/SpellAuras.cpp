@@ -20,6 +20,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "DynamicObject.h"
+#include "Errors.h"
 #include "GridNotifiersImpl.h"
 #include "Item.h"
 #include "Log.h"
@@ -42,6 +43,48 @@
 #include "WorldSession.h"
 #include <iomanip>
 #include <sstream>
+
+namespace
+{
+    std::string BuildAuraCrashContext(char const* phase, Aura const* aura, WorldObject const* ownerArg = nullptr, Unit const* caster = nullptr, Unit const* target = nullptr, AuraApplication const* aurApp = nullptr)
+    {
+        std::ostringstream sstr;
+        sstr << phase
+            << " auraPtr=" << static_cast<void const*>(aura);
+
+        if (aura)
+        {
+            SpellInfo const* spellInfo = aura->GetSpellInfo();
+            sstr << " spellId=" << (spellInfo ? spellInfo->Id : 0)
+                << " auraOwnerPtr=" << static_cast<void const*>(aura->GetOwner())
+                << " casterGuid=" << aura->GetCasterGUID().ToString()
+                << " removed=" << aura->IsRemoved()
+                << " effectMask=" << uint32(aura->GetEffectMask());
+        }
+
+        if (ownerArg)
+            sstr << " ownerArgPtr=" << static_cast<void const*>(ownerArg)
+                << " ownerArgGuid=" << ownerArg->GetGUID().ToString()
+                << " ownerArgMapId=" << ownerArg->GetMapId();
+
+        if (caster)
+            sstr << " casterPtr=" << static_cast<void const*>(caster)
+                << " casterGuid=" << caster->GetGUID().ToString()
+                << " casterMapId=" << caster->GetMapId();
+
+        if (target)
+            sstr << " targetPtr=" << static_cast<void const*>(target)
+                << " targetGuid=" << target->GetGUID().ToString()
+                << " targetMapId=" << target->GetMapId();
+
+        if (aurApp)
+            sstr << " aurAppPtr=" << static_cast<void const*>(aurApp)
+                << " aurAppEffectMask=" << uint32(aurApp->GetEffectMask())
+                << " aurAppEffectsToApply=" << uint32(aurApp->GetEffectsToApply());
+
+        return sstr.str();
+    }
+}
 
 AuraCreateInfo::AuraCreateInfo(SpellInfo const* spellInfo, uint8 auraEffMask, WorldObject* owner) :
     _spellInfo(spellInfo), _auraEffectMask(auraEffMask), _owner(owner)
@@ -267,8 +310,20 @@ void AuraApplication::ClientUpdate(bool remove)
 std::string AuraApplication::GetDebugInfo() const
 {
     std::stringstream sstr;
-    sstr << "Base: " << (GetBase() ? GetBase()->GetDebugInfo() : "NULL")
-        << "\nTarget: " << (GetTarget() ? GetTarget()->GetDebugInfo() : "NULL");
+    sstr << "AuraApplication ptr: " << static_cast<void const*>(this)
+        << " BasePtr: " << static_cast<void const*>(GetBase())
+        << " TargetPtr: " << static_cast<void const*>(GetTarget());
+
+    if (Aura const* base = GetBase())
+    {
+        // Do not recurse into Aura::GetDebugInfo() here. This function is often
+        // called from assertion / crash paths, and recursive owner/target debug
+        // can hide the real aura corruption by crashing first.
+        sstr << " BaseSpellId: " << (base->GetSpellInfo() ? base->GetSpellInfo()->Id : 0)
+            << " BaseOwnerPtr: " << static_cast<void const*>(base->GetOwner())
+            << " BaseCasterGuid: " << base->GetCasterGUID().ToString();
+    }
+
     return sstr.str();
 }
 
@@ -658,6 +713,7 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
         {
             // needs readding - remove now, will be applied in next update cycle
             // (dbcs do not have auras which apply on same type of targets but have different radius, so this is not really needed)
+            Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap existing target full-immunity check", this, GetOwner(), caster, itr->first, applicationPair.second));
             if (itr->first->IsImmunedToSpell(GetSpellInfo(), caster, true) || !CanBeAppliedOn(itr->first))
             {
                 targetsToRemove.push_back(applicationPair.second->GetTarget());
@@ -666,8 +722,11 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
 
             // check target immunities (for existing targets)
             for (SpellEffectInfo const& spellEffectInfo : GetSpellInfo()->GetEffects())
+            {
+                Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap existing target effect-immunity check", this, GetOwner(), caster, itr->first, applicationPair.second));
                 if (itr->first->IsImmunedToSpellEffect(GetSpellInfo(), spellEffectInfo, caster, true))
                     itr->second &= ~(1 << spellEffectInfo.EffectIndex);
+            }
 
             // needs to add/remove effects from application, don't remove from map so it gets updated
             if (applicationPair.second->GetEffectMask() != itr->second)
@@ -688,9 +747,13 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
         {
             // check target immunities (for new targets)
             for (SpellEffectInfo const& spellEffectInfo : GetSpellInfo()->GetEffects())
+            {
+                Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap new target effect-immunity check", this, GetOwner(), caster, itr->first, nullptr));
                 if (itr->first->IsImmunedToSpellEffect(GetSpellInfo(), spellEffectInfo, caster))
                     itr->second &= ~(1 << spellEffectInfo.EffectIndex);
+            }
 
+            Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateTargetMap new target full-immunity/apply check", this, GetOwner(), caster, itr->first, nullptr));
             if (!itr->second || itr->first->IsImmunedToSpell(GetSpellInfo(), caster) || !CanBeAppliedOn(itr->first))
                 addUnit = false;
         }
@@ -799,9 +862,24 @@ void Aura::_ApplyEffectForTargets(uint8 effIndex)
 }
 void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
 {
-    ASSERT(owner == m_owner);
+    Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner enter", this, owner, nullptr));
+
+    if (owner != m_owner)
+    {
+        std::string context = BuildAuraCrashContext("Aura::UpdateOwner owner mismatch", this, owner, nullptr);
+        Trinity::SetCrashContext(context);
+        TC_LOG_FATAL("server.crash", "{}", context);
+
+        // Do not use ASSERT here. ASSERT calls Aura::GetDebugInfo(), and if the
+        // owner pointer is already stale/corrupt that can segfault before the
+        // useful mismatch is logged.
+        ABORT_MSG("Aura::UpdateOwner owner mismatch: aura=%p spell=%u ownerArg=%p m_owner=%p casterGuid=%s removed=%u",
+            static_cast<void*>(this), m_spellInfo ? m_spellInfo->Id : 0, static_cast<void*>(owner), static_cast<void*>(m_owner),
+            GetCasterGUID().ToString().c_str(), IsRemoved() ? 1u : 0u);
+    }
 
     Unit* caster = GetCaster();
+    Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner before Update", this, owner, caster));
     // Apply spellmods for channeled auras
     // used for example when triggered spell of spell:10 is modded
     Spell* modSpell = nullptr;
@@ -820,14 +898,20 @@ void Aura::UpdateOwner(uint32 diff, WorldObject* owner)
     Update(diff, caster);
 
     if (m_updateTargetMapInterval <= int32(diff))
+    {
+        Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner before UpdateTargetMap", this, owner, caster));
         UpdateTargetMap(caster);
+    }
     else
         m_updateTargetMapInterval -= diff;
 
     // update aura effects
     for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
         if (m_effects[i])
+        {
+            Trinity::SetCrashContext(BuildAuraCrashContext("Aura::UpdateOwner before AuraEffect::Update", this, owner, caster));
             m_effects[i]->Update(diff, caster);
+        }
 
     // remove spellmods after effects update
     if (modSpell)
@@ -2831,8 +2915,16 @@ std::string Aura::GetDebugInfo() const
 {
     std::stringstream sstr;
     sstr << std::boolalpha
-        << "Id: " << GetId() << " Name: '" << GetSpellInfo()->SpellName[sWorld->GetDefaultDbcLocale()] << "' Caster: " << GetCasterGUID().ToString()
-        << "\nOwner: " << (GetOwner() ? GetOwner()->GetDebugInfo() : "NULL");
+        << "Aura ptr: " << static_cast<void const*>(this)
+        << " Id: " << (m_spellInfo ? m_spellInfo->Id : 0)
+        << " Name: '" << (m_spellInfo ? m_spellInfo->SpellName[sWorld->GetDefaultDbcLocale()] : "NULL") << "'"
+        << " Caster: " << GetCasterGUID().ToString()
+        << " OwnerPtr: " << static_cast<void const*>(m_owner)
+        << " Removed: " << IsRemoved();
+
+    // Intentionally do not call GetOwner()->GetDebugInfo() here. Aura debug is
+    // used by ASSERT/ABORT paths, and dereferencing a stale owner pointer masks
+    // the real bug with a secondary segfault.
     return sstr.str();
 }
 

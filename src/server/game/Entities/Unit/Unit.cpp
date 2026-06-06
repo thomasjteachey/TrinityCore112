@@ -36,6 +36,7 @@
 #include "CreatureAI.h"
 #include "CreatureAIImpl.h"
 #include "CreatureGroups.h"
+#include "Errors.h"
 #include "Formulas.h"
 #include "GameClient.h"
 #include "GameObjectAI.h"
@@ -83,6 +84,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include <cmath>
+#include <sstream>
 
 namespace
 {
@@ -3111,6 +3113,18 @@ void Unit::_DeleteRemovedAuras()
 
 void Unit::_UpdateSpells(uint32 time)
 {
+    {
+        std::ostringstream crashContext;
+        crashContext << "Unit::_UpdateSpells enter"
+            << " unitPtr=" << static_cast<void const*>(this)
+            << " unitGuid=" << GetGUID().ToString()
+            << " mapId=" << GetMapId()
+            << " time=" << time
+            << " ownedAuraCount=" << m_ownedAuras.size()
+            << " removedAuraCount=" << m_removedAuras.size();
+        Trinity::SetCrashContext(crashContext.str());
+    }
+
     if (m_currentSpells[CURRENT_AUTOREPEAT_SPELL])
         _UpdateAutoRepeatSpell();
 
@@ -3131,11 +3145,63 @@ void Unit::_UpdateSpells(uint32 time)
         Aura* i_aura = current->second;
         ++m_auraUpdateIterator;                            // need shift to next for allow update if need into aura update
 
+        {
+            std::ostringstream crashContext;
+            crashContext << "Unit::_UpdateSpells owned aura update"
+                << " unitPtr=" << static_cast<void const*>(this)
+                << " unitGuid=" << GetGUID().ToString()
+                << " mapId=" << GetMapId()
+                << " time=" << time
+                << " auraMapKey=" << current->first
+                << " auraPtr=" << static_cast<void const*>(i_aura);
+            Trinity::SetCrashContext(crashContext.str());
+        }
+
         if (!i_aura)
         {
+            TC_LOG_FATAL("server.crash", "Unit::_UpdateSpells: removing null owned aura entry on {} mapId={} auraMapKey={}",
+                GetGUID().ToString(), GetMapId(), current->first);
             TC_LOG_ERROR("entities.unit", "Unit::_UpdateSpells: removing null owned aura entry on {}", GetGUID().ToString());
             m_ownedAuras.erase(current);
             continue;
+        }
+
+        if (i_aura->IsRemoved())
+        {
+            uint32 spellId = i_aura->GetSpellInfo() ? i_aura->GetSpellInfo()->Id : 0;
+            TC_LOG_FATAL("server.crash", "Unit::_UpdateSpells: removing already-removed owned aura entry spell={} auraPtr={} ownerUnit={} mapId={} casterGuid={}",
+                spellId, static_cast<void const*>(i_aura), GetGUID().ToString(), GetMapId(), i_aura->GetCasterGUID().ToString());
+            TC_LOG_ERROR("entities.unit", "Unit::_UpdateSpells: removing already-removed owned aura entry spell={} on {}",
+                spellId, GetGUID().ToString());
+            m_ownedAuras.erase(current);
+            continue;
+        }
+
+        if (i_aura->GetOwner() != this)
+        {
+            uint32 spellId = i_aura->GetSpellInfo() ? i_aura->GetSpellInfo()->Id : 0;
+            TC_LOG_FATAL("server.crash", "Unit::_UpdateSpells: removing wrong-owner owned aura entry spell={} auraPtr={} auraOwnerPtr={} updateOwnerPtr={} updateOwnerGuid={} mapId={} casterGuid={}",
+                spellId, static_cast<void const*>(i_aura), static_cast<void const*>(i_aura->GetOwner()), static_cast<void const*>(this),
+                GetGUID().ToString(), GetMapId(), i_aura->GetCasterGUID().ToString());
+            TC_LOG_ERROR("entities.unit",
+                "Unit::_UpdateSpells: removing wrong-owner owned aura entry spell={} aura={} auraOwner={} updateOwner={} updateOwnerGuid={}",
+                spellId, static_cast<void const*>(i_aura), static_cast<void const*>(i_aura->GetOwner()), static_cast<void const*>(this), GetGUID().ToString());
+            m_ownedAuras.erase(current);
+            continue;
+        }
+
+        {
+            std::ostringstream crashContext;
+            crashContext << "Unit::_UpdateSpells calling Aura::UpdateOwner"
+                << " unitPtr=" << static_cast<void const*>(this)
+                << " unitGuid=" << GetGUID().ToString()
+                << " mapId=" << GetMapId()
+                << " time=" << time
+                << " spellId=" << (i_aura->GetSpellInfo() ? i_aura->GetSpellInfo()->Id : 0)
+                << " auraPtr=" << static_cast<void const*>(i_aura)
+                << " casterGuid=" << i_aura->GetCasterGUID().ToString()
+                << " effectMask=" << uint32(i_aura->GetEffectMask());
+            Trinity::SetCrashContext(crashContext.str());
         }
 
         i_aura->UpdateOwner(time, this);
@@ -3163,6 +3229,16 @@ void Unit::_UpdateSpells(uint32 time)
             itr->second->ClientUpdate();
 
     _DeleteRemovedAuras();
+
+    {
+        std::ostringstream crashContext;
+        crashContext << "Unit::_UpdateSpells after aura updates"
+            << " unitPtr=" << static_cast<void const*>(this)
+            << " unitGuid=" << GetGUID().ToString()
+            << " mapId=" << GetMapId()
+            << " time=" << time;
+        Trinity::SetCrashContext(crashContext.str());
+    }
 
     if (!m_gameObj.empty())
     {
