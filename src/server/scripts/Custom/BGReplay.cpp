@@ -70,6 +70,7 @@
 
 namespace
 {
+    // Replay V104: convert compressed update-object replay packets to uncompressed update-object packets.
     // Replay V103: timestamped probe with pause/step replay packet isolation.
     // Replay V102: v99 plus timestamped replay probe and in-log command markers.
     // Replay V99: rewrite all raw replay actor GUIDs in SMSG_MONSTER_MOVE.
@@ -1893,7 +1894,44 @@ namespace
     }
 
 
-    size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& needle)
+    
+    bool RewriteCompressedUpdateObjectPayloadToUncompressed(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        if (payload.size() < 4)
+            return false;
+
+        uint32 uncompressedSize =
+            uint32(payload[0]) |
+            (uint32(payload[1]) << 8) |
+            (uint32(payload[2]) << 16) |
+            (uint32(payload[3]) << 24);
+
+        if (!uncompressedSize || uncompressedSize > 16 * 1024 * 1024)
+            return false;
+
+        std::vector<uint8> decompressed(uncompressedSize);
+        uLongf actualSize = uncompressedSize;
+
+        int zResult = uncompress(decompressed.data(), &actualSize, payload.data() + 4, uLong(payload.size() - 4));
+        if (zResult != Z_OK || actualSize != uncompressedSize)
+        {
+            TC_LOG_ERROR("arena.replay", "REPLAY_V104 compressed update decompress failed zlib={} expected={} actual={} rawSize={}",
+                zResult, uncompressedSize, uint32(actualSize), uint32(payload.size()));
+            return false;
+        }
+
+        if (!RewriteUpdateObjectPayload(decompressed, match))
+        {
+            TC_LOG_ERROR("arena.replay", "REPLAY_V104 compressed update parser failed after decompress; skipping compressed update rawSize={} uncompressedSize={}",
+                uint32(payload.size()), uncompressedSize);
+            return false;
+        }
+
+        payload.swap(decompressed);
+        return true;
+    }
+
+size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& needle)
     {
         if (needle.empty())
             return 0;
@@ -2161,10 +2199,27 @@ namespace
             std::memcpy(payload.data(), frame.Packet.contents(), payload.size());
 
         bool rewriteOk = true;
+        uint16 outOpcode = frame.Packet.GetOpcode();
 
         if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
         {
-            rewriteOk = RewriteCompressedUpdateObjectPayload(payload, match);
+            // V104: do not replay compressed update-object packets as compressed packets.
+            //
+            // The pause/step probe identified the deterministic crash packet as:
+            //   cursor=1514 frameTs=29376 opcode=502 size=95
+            //
+            // 502 decimal is 0x1F6 / SMSG_COMPRESSED_UPDATE_OBJECT. Convert it to a normal
+            // SMSG_UPDATE_OBJECT after decompressing and applying the same structural GUID rewrite. This removes
+            // the client's compressed-update-object handler from the equation without dropping the update itself.
+            rewriteOk = RewriteCompressedUpdateObjectPayloadToUncompressed(payload, match);
+            if (!rewriteOk)
+            {
+                TC_LOG_ERROR("arena.replay", "REPLAY_V104 skipped compressed update-object timestamp={} rawSize={} because conversion failed",
+                    frame.TimestampMs, uint32(frame.Packet.size()));
+                return false;
+            }
+
+            outOpcode = SMSG_UPDATE_OBJECT;
         }
         else if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT)
         {
@@ -2175,33 +2230,39 @@ namespace
             RewriteNonUpdatePacketGuids(frame.Packet.GetOpcode(), payload, match);
         }
 
-        if (frame.Packet.GetOpcode() == SMSG_UPDATE_OBJECT || frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT)
+        if (outOpcode == SMSG_UPDATE_OBJECT || outOpcode == SMSG_COMPRESSED_UPDATE_OBJECT)
         {
-            if (PacketPayloadContainsOriginalActorGuid(frame.Packet.GetOpcode(), payload, match))
+            if (PacketPayloadContainsOriginalActorGuid(outOpcode, payload, match))
             {
-                TC_LOG_ERROR("arena.replay", "Replay skipped unsafe update-object packet opcode={} timestamp={} size={} rewriteOk={} because original actor GUIDs remained",
-                    frame.Packet.GetOpcode(), frame.TimestampMs, uint32(frame.Packet.size()), rewriteOk ? 1u : 0u);
+                TC_LOG_ERROR("arena.replay", "Replay skipped unsafe update-object packet originalOpcode={} outOpcode={} timestamp={} size={} rewriteOk={} because original actor GUIDs remained",
+                    frame.Packet.GetOpcode(), outOpcode, frame.TimestampMs, uint32(frame.Packet.size()), rewriteOk ? 1u : 0u);
                 return false;
             }
         }
 
-        if ((frame.Packet.GetOpcode() == SMSG_AURA_UPDATE || frame.Packet.GetOpcode() == SMSG_AURA_UPDATE_ALL || frame.Packet.GetOpcode() == SMSG_SPELLLOGEXECUTE)
-            && PacketPayloadContainsOriginalActorGuid(frame.Packet.GetOpcode(), payload, match))
+        if ((outOpcode == SMSG_AURA_UPDATE || outOpcode == SMSG_AURA_UPDATE_ALL || outOpcode == SMSG_SPELLLOGEXECUTE)
+            && PacketPayloadContainsOriginalActorGuid(outOpcode, payload, match))
         {
             TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v94 rewrite opcode={} timestamp={} size={}",
-                frame.Packet.GetOpcode(), frame.TimestampMs, uint32(payload.size()));
+                outOpcode, frame.TimestampMs, uint32(payload.size()));
         }
 
-        if (frame.Packet.GetOpcode() == SMSG_MONSTER_MOVE && PacketPayloadContainsOriginalActorGuid(frame.Packet.GetOpcode(), payload, match))
+        if (outOpcode == SMSG_MONSTER_MOVE && PacketPayloadContainsOriginalActorGuid(outOpcode, payload, match))
         {
             TC_LOG_ERROR("arena.replay", "Replay WARNING original actor GUID still present after v99 SMSG_MONSTER_MOVE raw rewrite timestamp={} size={}",
                 frame.TimestampMs, uint32(payload.size()));
         }
 
-        if (payload.empty() && (frame.Packet.GetOpcode() == SMSG_DESTROY_OBJECT || frame.Packet.GetOpcode() == SMSG_ARENA_UNIT_DESTROYED))
+        if (payload.empty() && (outOpcode == SMSG_DESTROY_OBJECT || outOpcode == SMSG_ARENA_UNIT_DESTROYED))
             return false;
 
-        out = WorldPacket(frame.Packet.GetOpcode(), payload.size());
+        if (frame.Packet.GetOpcode() == SMSG_COMPRESSED_UPDATE_OBJECT && outOpcode == SMSG_UPDATE_OBJECT)
+        {
+            TC_LOG_ERROR("arena.replay", "REPLAY_V104 converted compressed update-object timestamp={} rawSize={} uncompressedSize={}",
+                frame.TimestampMs, uint32(frame.Packet.size()), uint32(payload.size()));
+        }
+
+        out = WorldPacket(outOpcode, payload.size());
         if (!payload.empty())
             out.append(payload.data(), payload.size());
 
