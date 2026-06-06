@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V101: rollback target-clear spam and skip risky movement-control packets.
+    // Replay V99: rewrite all raw replay actor GUIDs in SMSG_MONSTER_MOVE.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -2057,44 +2057,8 @@ namespace
             ReplayPacketProbeGuids(packet, state.Match));
     }
 
-    bool ShouldSkipReplayMovementControlOpcode(uint16 opcode)
-    {
-        // Narrow crash safety test.
-        //
-        // The v100 crash changed to a write-at-0x594 after target-clear spam, so that path is reverted.
-        // The latest clean-GUID probe dies around:
-        //   cursor=2421 opcode=186 size=49
-        // and prior same-stream runs show the next packet as:
-        //   cursor=2422 opcode=184 size=49
-        //
-        // In this 3.3.5 opcode table, 181-187 are movement-control/speed/facing style packets.
-        // These are not the authoritative position stream; SMSG_MONSTER_MOVE / update-object movement remains.
-        //
-        // Do not broadly skip gameplay packets. Do not skip auras/spells/combat.
-        switch (opcode)
-        {
-            case 181:
-            case 182:
-            case 183:
-            case 184:
-            case 185:
-            case 186:
-            case 187:
-                return true;
-            default:
-                return false;
-        }
-    }
-
     bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
     {
-        if (ShouldSkipReplayMovementControlOpcode(frame.Packet.GetOpcode()))
-        {
-            TC_LOG_ERROR("arena.replay", "REPLAY_V101 skipped movement-control opcode={} timestamp={} size={}",
-                frame.Packet.GetOpcode(), frame.TimestampMs, uint32(frame.Packet.size()));
-            return false;
-        }
-
         std::vector<uint8> payload;
         payload.resize(frame.Packet.size());
 
