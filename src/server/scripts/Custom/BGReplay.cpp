@@ -70,6 +70,8 @@
 
 namespace
 {
+    // Replay V111: force-clear stale channel visuals and scrub replay actor visibility fields.
+    // Replay V110: preserve CREATE_OBJECT player fields so replay actors do not disappear.
     // Replay V109: clear stale replay actor channel/cast visual fields to prevent permanent glowing hands.
     // Replay V108: filter owner/private update fields from replay actor VALUES blocks, including low-only VALUES blocks.
     // Replay V105: skip/dump deterministic bad converted update-object packet.
@@ -1617,29 +1619,58 @@ namespace
         if (!actor)
             return;
 
-        // Permanent "glowing hands" is usually stale channel state on the fake unit.
+        // Permanent "glowing hands" means the client has stale channel/cast visual state.
         //
-        // The recorder can capture a nonzero UNIT_FIELD_CHANNEL_OBJECT / UNIT_CHANNEL_SPELL update, then the
-        // matching clear update can be missing, filtered, or addressed to a layout we did not replay. Once the
-        // 3.3.5 client believes a unit is channeling, it can keep the hand visual forever.
+        // v109 tried to preserve explicit nonzero UNIT_CHANNEL_SPELL updates. That was too conservative:
+        // the bad state can itself be an explicit nonzero channel field captured from the original player.
         //
-        // For replay actors, rewrite any channel object GUID that points at an original replay participant, and
-        // aggressively clear channel state on normal VALUES updates unless this exact update explicitly carries a
-        // nonzero UNIT_CHANNEL_SPELL. This preserves explicit channel-start updates while making ordinary later
-        // health/power/flag updates clear stale visuals.
-        RewriteGuidPairInKeptValues(keptValues, match, UNIT_FIELD_CHANNEL_OBJECT, UNIT_FIELD_CHANNEL_OBJECT + 1);
+        // For packet-only fake replay players, spell visuals should come from replayed SPELL_START/SPELL_GO
+        // packets and the addon cast history, not from persistent UNIT_FIELD_CHANNEL_OBJECT / UNIT_CHANNEL_SPELL.
+        // Therefore, always force these fields to zero for replay actors in both CREATE and VALUES blocks.
+        //
+        // This may reduce true channel hand visuals, but it prevents the worse bug: permanent glowing hands for
+        // the rest of the arena.
+        (void)match;
 
-        uint32 channelSpell = 0;
-        bool hasChannelSpell = GetKeptUpdateValue(keptValues, UNIT_CHANNEL_SPELL, channelSpell);
+        UpsertKeptUpdateValue(keptValues, UNIT_FIELD_CHANNEL_OBJECT, 0);
+        UpsertKeptUpdateValue(keptValues, UNIT_FIELD_CHANNEL_OBJECT + 1, 0);
+        UpsertKeptUpdateValue(keptValues, UNIT_CHANNEL_SPELL, 0);
 
-        if (!hasChannelSpell || channelSpell == 0)
-        {
-            UpsertKeptUpdateValue(keptValues, UNIT_FIELD_CHANNEL_OBJECT, 0);
-            UpsertKeptUpdateValue(keptValues, UNIT_FIELD_CHANNEL_OBJECT + 1, 0);
-            UpsertKeptUpdateValue(keptValues, UNIT_CHANNEL_SPELL, 0);
-            TC_LOG_DEBUG("arena.replay", "REPLAY_V109 cleared replay actor channel visual state fakeGuid={}", actor->FakeGuid.GetRawValue());
-        }
+        TC_LOG_DEBUG("arena.replay", "REPLAY_V111 force-cleared replay actor channel visual state fakeGuid={}",
+            actor->FakeGuid.GetRawValue());
     }
+
+    bool ReplayValueWouldHideActor(uint32 fieldIndex, uint32 value)
+    {
+        if (fieldIndex == UNIT_FIELD_DISPLAYID || fieldIndex == UNIT_FIELD_NATIVEDISPLAYID)
+            return value == 0;
+
+        return false;
+    }
+
+    uint32 SanitizeReplayActorUnitFlags(uint32 value)
+    {
+        // Keep stun/combat/etc. Remove only flags that can make a fake replay player unusable/invisible-ish
+        // or not materialize correctly as a normal remote player.
+        value &= ~UNIT_FLAG_UNINTERACTIBLE;
+        value &= ~UNIT_FLAG_NON_ATTACKABLE;
+        value &= ~UNIT_FLAG_NON_ATTACKABLE_2;
+        value &= ~UNIT_FLAG_IMMUNE_TO_PC;
+        value &= ~UNIT_FLAG_IMMUNE;
+        value &= ~UNIT_FLAG_ON_TAXI;
+        value &= ~UNIT_FLAG_POSSESSED;
+        return value;
+    }
+
+    uint32 SanitizeReplayActorUnitFlags2(uint32 value)
+    {
+        // These are the big "where did my actor go?" suspects for fake replay players.
+        value &= ~UNIT_FLAG2_HIDE_BODY;
+        value &= ~UNIT_FLAG2_FEIGN_DEATH;
+        value &= ~UNIT_FLAG2_FORCE_MOVEMENT;
+        return value;
+    }
+
 
     void AppendUInt32LE(std::vector<uint8>& out, uint32 value)
     {
@@ -1685,7 +1716,7 @@ namespace
         }
     }
 
-    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid)
+    bool PatchUpdateValuesBlock(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match, ObjectGuid blockGuid, bool filterOwnerPrivateFields, bool sanitizeChannelFields)
     {
         size_t blockPayloadStart = pos;
 
@@ -1737,7 +1768,7 @@ namespace
 
                 // If this VALUES block belongs to a replay actor, never send owner/private fields to the
                 // replay spectator's client as if they were public remote-player fields.
-                if (actor && !ReplayUpdateFieldIsSafeForRemoteReplayActor(fieldIndex))
+                if (actor && filterOwnerPrivateFields && !ReplayUpdateFieldIsSafeForRemoteReplayActor(fieldIndex))
                 {
                     ++removedPrivateFields;
                     continue;
@@ -1745,6 +1776,13 @@ namespace
 
                 if (actor)
                 {
+                    if (ReplayValueWouldHideActor(fieldIndex, value))
+                    {
+                        TC_LOG_ERROR("arena.replay", "REPLAY_V111 dropped zero display field from replay actor originalGuid={} fakeGuid={} field={}",
+                            actor->OriginalGuid.GetRawValue(), actor->FakeGuid.GetRawValue(), fieldIndex);
+                        continue;
+                    }
+
                     if (fieldIndex == OBJECT_FIELD_GUID)
                         value = fakeLow;
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
@@ -1758,7 +1796,12 @@ namespace
                         value = patched;
                     }
                     else if (fieldIndex == UNIT_FIELD_FLAGS)
+                    {
+                        value = SanitizeReplayActorUnitFlags(value);
                         value = ReplayGreenNameUnitFlagsForActor(*actor, value);
+                    }
+                    else if (fieldIndex == UNIT_FIELD_FLAGS_2)
+                        value = SanitizeReplayActorUnitFlags2(value);
                     else if (fieldIndex == PLAYER_FLAGS)
                         value = ReplayGreenNamePlayerFlagsForActor(*actor, value);
                 }
@@ -1768,7 +1811,9 @@ namespace
         }
 
         RewriteTargetGuidInKeptValues(keptValues, match, blockGuid);
-        SanitizeReplayActorChannelFields(keptValues, match, actor);
+
+        if (sanitizeChannelFields)
+            SanitizeReplayActorChannelFields(keptValues, match, actor);
 
         std::vector<uint32> newMasks;
         if (!keptValues.empty())
@@ -1800,7 +1845,7 @@ namespace
 
         if (actor && removedPrivateFields)
         {
-            TC_LOG_ERROR("arena.replay", "REPLAY_V108 stripped {} owner/private update field(s) from replay actor values block originalGuid={} fakeGuid={} keptFields={} newMaskBlocks={}",
+            TC_LOG_ERROR("arena.replay", "REPLAY_V110 stripped {} owner/private update field(s) from replay actor VALUES block originalGuid={} fakeGuid={} keptFields={} newMaskBlocks={}",
                 removedPrivateFields,
                 actor->OriginalGuid.GetRawValue(),
                 actor->FakeGuid.GetRawValue(),
@@ -2077,7 +2122,7 @@ namespace
             {
                 case REPLAY_UPDATETYPE_VALUES:
                 {
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, true, true))
                         return false;
 
                     break;
@@ -2099,7 +2144,11 @@ namespace
                     if (!SkipMovementCreateData(payload, pos, match, blockGuid, objectTypeId))
                         return false;
 
-                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid))
+                    // CREATE_OBJECT/CREATE_OBJECT2 carries the initial full object state. Do not strip
+                    // owner/private fields here; stripping the create mask can make a replay actor fail to
+                    // materialize client-side. Still force-clear channel fields here, because stale channel
+                    // state can be present in the initial create and cause glowing hands forever.
+                    if (!PatchUpdateValuesBlock(payload, pos, match, blockGuid, false, true))
                         return false;
 
                     break;
