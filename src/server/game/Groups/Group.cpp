@@ -2303,7 +2303,9 @@ InstanceGroupBind* Group::GetBoundInstance(MapEntry const* mapEntry)
 InstanceGroupBind* Group::GetBoundInstance(Difficulty difficulty, uint32 mapId)
 {
     // some instances only have one difficulty
-    GetDownscaledMapDifficultyData(mapId, difficulty);
+    MapDifficulty const* mapDiff = GetDownscaledMapDifficultyData(mapId, difficulty);
+    if (!mapDiff || difficulty >= MAX_DIFFICULTY)
+        return nullptr;
 
     BoundInstancesMap::iterator itr = m_boundInstances[difficulty].find(mapId);
     if (itr != m_boundInstances[difficulty].end())
