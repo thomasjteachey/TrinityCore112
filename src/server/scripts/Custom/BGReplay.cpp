@@ -70,8 +70,7 @@
 
 namespace
 {
-    // Replay V109: clear stale replay actor channel/cast visual fields to prevent permanent glowing hands.
-    // Replay V108: filter owner/private update fields from replay actor VALUES blocks, including low-only VALUES blocks.
+    // Replay V108: filter owner/private update fields from replay actor VALUES blocks., including low-only VALUES blocks.
     // Replay V105: skip/dump deterministic bad converted update-object packet.
     // Replay V104: convert compressed update-object replay packets to uncompressed update-object packets.
     // Replay V103: timestamped probe with pause/step replay packet isolation.
@@ -1546,101 +1545,6 @@ namespace
         uint32 Value = 0;
     };
 
-    ReplayUpdateFieldValue* FindKeptUpdateValue(std::vector<ReplayUpdateFieldValue>& values, uint32 fieldIndex)
-    {
-        for (ReplayUpdateFieldValue& value : values)
-            if (value.FieldIndex == fieldIndex)
-                return &value;
-
-        return nullptr;
-    }
-
-    ReplayUpdateFieldValue const* FindKeptUpdateValue(std::vector<ReplayUpdateFieldValue> const& values, uint32 fieldIndex)
-    {
-        for (ReplayUpdateFieldValue const& value : values)
-            if (value.FieldIndex == fieldIndex)
-                return &value;
-
-        return nullptr;
-    }
-
-    bool GetKeptUpdateValue(std::vector<ReplayUpdateFieldValue> const& values, uint32 fieldIndex, uint32& outValue)
-    {
-        if (ReplayUpdateFieldValue const* value = FindKeptUpdateValue(values, fieldIndex))
-        {
-            outValue = value->Value;
-            return true;
-        }
-
-        return false;
-    }
-
-    void UpsertKeptUpdateValue(std::vector<ReplayUpdateFieldValue>& values, uint32 fieldIndex, uint32 newValue)
-    {
-        auto itr = std::lower_bound(values.begin(), values.end(), fieldIndex,
-            [](ReplayUpdateFieldValue const& lhs, uint32 rhs)
-            {
-                return lhs.FieldIndex < rhs;
-            });
-
-        if (itr != values.end() && itr->FieldIndex == fieldIndex)
-        {
-            itr->Value = newValue;
-            return;
-        }
-
-        values.insert(itr, { fieldIndex, newValue });
-    }
-
-    void RewriteGuidPairInKeptValues(std::vector<ReplayUpdateFieldValue>& keptValues, MatchRecord const& match, uint32 lowField, uint32 highField)
-    {
-        uint32 low = 0;
-        uint32 high = 0;
-
-        bool hasLow = GetKeptUpdateValue(keptValues, lowField, low);
-        bool hasHigh = GetKeptUpdateValue(keptValues, highField, high);
-
-        if (!hasLow && !hasHigh)
-            return;
-
-        ObjectGuid originalGuid(uint64(low) | (uint64(high) << 32));
-        if (ReplayActor const* actor = FindReplayActorByOriginalGuidOrCounter(match, originalGuid))
-        {
-            uint64 fakeRaw = actor->FakeGuid.GetRawValue();
-            UpsertKeptUpdateValue(keptValues, lowField, uint32(fakeRaw & 0xFFFFFFFFu));
-            UpsertKeptUpdateValue(keptValues, highField, uint32((fakeRaw >> 32) & 0xFFFFFFFFu));
-        }
-    }
-
-    void SanitizeReplayActorChannelFields(std::vector<ReplayUpdateFieldValue>& keptValues, MatchRecord const& match, ReplayActor const* actor)
-    {
-        if (!actor)
-            return;
-
-        // Permanent "glowing hands" is usually stale channel state on the fake unit.
-        //
-        // The recorder can capture a nonzero UNIT_FIELD_CHANNEL_OBJECT / UNIT_CHANNEL_SPELL update, then the
-        // matching clear update can be missing, filtered, or addressed to a layout we did not replay. Once the
-        // 3.3.5 client believes a unit is channeling, it can keep the hand visual forever.
-        //
-        // For replay actors, rewrite any channel object GUID that points at an original replay participant, and
-        // aggressively clear channel state on normal VALUES updates unless this exact update explicitly carries a
-        // nonzero UNIT_CHANNEL_SPELL. This preserves explicit channel-start updates while making ordinary later
-        // health/power/flag updates clear stale visuals.
-        RewriteGuidPairInKeptValues(keptValues, match, UNIT_FIELD_CHANNEL_OBJECT, UNIT_FIELD_CHANNEL_OBJECT + 1);
-
-        uint32 channelSpell = 0;
-        bool hasChannelSpell = GetKeptUpdateValue(keptValues, UNIT_CHANNEL_SPELL, channelSpell);
-
-        if (!hasChannelSpell || channelSpell == 0)
-        {
-            UpsertKeptUpdateValue(keptValues, UNIT_FIELD_CHANNEL_OBJECT, 0);
-            UpsertKeptUpdateValue(keptValues, UNIT_FIELD_CHANNEL_OBJECT + 1, 0);
-            UpsertKeptUpdateValue(keptValues, UNIT_CHANNEL_SPELL, 0);
-            TC_LOG_DEBUG("arena.replay", "REPLAY_V109 cleared replay actor channel visual state fakeGuid={}", actor->FakeGuid.GetRawValue());
-        }
-    }
-
     void AppendUInt32LE(std::vector<uint8>& out, uint32 value)
     {
         out.push_back(uint8(value & 0xFF));
@@ -1677,8 +1581,8 @@ namespace
         if (ReplayActor const* targetActor = FindReplayActorByOriginalGuidOrCounter(match, originalTarget))
         {
             uint64 targetFakeRaw = targetActor->FakeGuid.GetRawValue();
-            UpsertKeptUpdateValue(keptValues, UNIT_FIELD_TARGET, uint32(targetFakeRaw & 0xFFFFFFFFu));
-            UpsertKeptUpdateValue(keptValues, UNIT_FIELD_TARGET + 1, uint32((targetFakeRaw >> 32) & 0xFFFFFFFFu));
+            keptValues[lowIndex].Value = uint32(targetFakeRaw & 0xFFFFFFFFu);
+            keptValues[highIndex].Value = uint32((targetFakeRaw >> 32) & 0xFFFFFFFFu);
 
             TC_LOG_DEBUG("arena.replay", "Replay target GUID rewrite owner={} originalTarget={} fakeTarget={}",
                 blockGuid.ToString(), originalTarget.ToString(), targetActor->FakeGuid.ToString());
@@ -1768,7 +1672,6 @@ namespace
         }
 
         RewriteTargetGuidInKeptValues(keptValues, match, blockGuid);
-        SanitizeReplayActorChannelFields(keptValues, match, actor);
 
         std::vector<uint32> newMasks;
         if (!keptValues.empty())
