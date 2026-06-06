@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V95: compile fix for RewritePackedGuidAt helper.
+    // Replay V96: forward declare RewritePackedGuidAt before aura rewrite.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -727,6 +727,8 @@ namespace
 
         return replacements;
     }
+
+    bool RewritePackedGuidAt(std::vector<uint8>& payload, size_t& pos, MatchRecord const& match);
 
     bool RewriteAuraUpdatePacketGuids(std::vector<uint8>& payload, MatchRecord const& match)
     {
