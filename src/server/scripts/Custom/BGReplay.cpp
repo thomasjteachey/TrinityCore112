@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V92: preserve gameplay packets and avoid replay actor destroy lifecycle crashes.
+    // Replay V93: packet probe logging for deterministic client crash.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -1767,6 +1767,80 @@ namespace
         }
 
         return audit;
+    }
+
+    std::string ReplayPacketProbeGuids(PacketRecord const& frame, WorldPacket const& packet, MatchRecord const& match)
+    {
+        (void)frame;
+
+        std::ostringstream ss;
+
+        std::vector<uint8> payload;
+        payload.resize(packet.size());
+
+        if (!payload.empty())
+            std::memcpy(payload.data(), packet.contents(), payload.size());
+
+        bool hasOriginal = PacketPayloadContainsOriginalActorGuid(packet.GetOpcode(), payload, match);
+        ss << "orig=" << (hasOriginal ? 1 : 0);
+
+        uint32 hits = 0;
+        for (ReplayActor const& actor : match.Actors)
+        {
+            if (payload.size() < 8)
+                continue;
+
+            uint64 const originalRaw = actor.OriginalGuid.GetRawValue();
+            uint64 const fakeRaw = actor.FakeGuid.GetRawValue();
+
+            for (size_t i = 0; i + 8 <= payload.size(); ++i)
+            {
+                uint64 raw = uint64(payload[i]) |
+                    (uint64(payload[i + 1]) << 8) |
+                    (uint64(payload[i + 2]) << 16) |
+                    (uint64(payload[i + 3]) << 24) |
+                    (uint64(payload[i + 4]) << 32) |
+                    (uint64(payload[i + 5]) << 40) |
+                    (uint64(payload[i + 6]) << 48) |
+                    (uint64(payload[i + 7]) << 56);
+
+                if (raw == originalRaw)
+                {
+                    if (hits < 8)
+                        ss << " originalRawGuid=" << actor.OriginalGuid.GetRawValue() << "/" << actor.Name;
+
+                    ++hits;
+                }
+                else if (raw == fakeRaw)
+                {
+                    if (hits < 8)
+                        ss << " fakeRawGuid=" << actor.FakeGuid.GetRawValue() << "/" << actor.Name;
+
+                    ++hits;
+                }
+            }
+        }
+
+        ss << " hits=" << hits;
+        return ss.str();
+    }
+
+    void LogReplayPacketProbe(Player* viewer, PlaybackState const& state, PacketRecord const& frame, WorldPacket const& packet, size_t cursorBeforeSend, uint32 elapsedMs)
+    {
+        if (!viewer)
+            return;
+
+        TC_LOG_ERROR("arena.replay",
+            "REPLAY_PROBE about_to_send viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} {}",
+            viewer->GetGUID().GetCounter(),
+            state.BgInstanceId,
+            uint32(cursorBeforeSend),
+            uint32(state.Match.Packets.size()),
+            elapsedMs,
+            frame.TimestampMs,
+            packet.GetOpcode(),
+            uint32(packet.size()),
+            ReplayPacketProbeGuids(frame, packet, state.Match));
     }
 
     bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
@@ -3499,22 +3573,24 @@ public:
             WorldPacket out;
             if (!BuildPlaybackPacket(frame, state.Match, out))
             {
-                TC_LOG_DEBUG("arena.replay", "PLAY skipped unsafe packet viewer={} opcode={} due={} cursor={}/{}",
-                    viewerLowGuid, frame.Packet.GetOpcode(), frame.TimestampMs,
-                    uint32(state.Cursor), uint32(state.Match.Packets.size()));
+                TC_LOG_ERROR("arena.replay",
+                    "REPLAY_PROBE skipped_build viewer={} bg={} cursor={} total={} frameTs={} opcode={} rawSize={}",
+                    viewerLowGuid,
+                    state.BgInstanceId,
+                    uint32(state.Cursor),
+                    uint32(state.Match.Packets.size()),
+                    frame.TimestampMs,
+                    frame.Packet.GetOpcode(),
+                    uint32(frame.Packet.size()));
 
                 ++state.Cursor;
                 ++sentThisUpdate;
                 continue;
             }
 
+            LogReplayPacketProbe(viewer, state, frame, out, state.Cursor, elapsedMs);
             viewer->GetSession()->SendPacket(&out);
             SendReplayASForPlaybackPacket(viewer, out, state.Match);
-
-            TC_LOG_DEBUG("arena.replay", "PLAY viewer={} opcode={} due={} now={} late={} cursor={}/{} size={}",
-                viewerLowGuid, out.GetOpcode(), frame.TimestampMs, elapsedMs,
-                elapsedMs >= frame.TimestampMs ? elapsedMs - frame.TimestampMs : 0,
-                uint32(state.Cursor), uint32(state.Match.Packets.size()), uint32(out.size()));
 
             ++state.Cursor;
             ++sentThisUpdate;
