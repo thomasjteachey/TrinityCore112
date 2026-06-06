@@ -67,7 +67,7 @@
 
 namespace
 {
-    // Replay V100: clear stale original replay targets without dropping gameplay packets.
+    // Replay V101: rollback target-clear spam and skip risky movement-control packets.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
     // Replay V87: Replay restart handled through ServerScript packet receive.
     constexpr uint32 ARENA_REPLAY_V2_MAGIC = 0x32565241; // "ARV2" little-endian
@@ -178,7 +178,6 @@ namespace
         uint32 LastOriginalActorDestroyMs = 0;
         uint32 LastNameColorUpdateMs = 0;
         uint32 NameColorUpdateBursts = 0;
-        uint32 LastTargetClearMs = 0;
     };
 
     // Real arena records by BG instance id.
@@ -2058,8 +2057,44 @@ namespace
             ReplayPacketProbeGuids(packet, state.Match));
     }
 
+    bool ShouldSkipReplayMovementControlOpcode(uint16 opcode)
+    {
+        // Narrow crash safety test.
+        //
+        // The v100 crash changed to a write-at-0x594 after target-clear spam, so that path is reverted.
+        // The latest clean-GUID probe dies around:
+        //   cursor=2421 opcode=186 size=49
+        // and prior same-stream runs show the next packet as:
+        //   cursor=2422 opcode=184 size=49
+        //
+        // In this 3.3.5 opcode table, 181-187 are movement-control/speed/facing style packets.
+        // These are not the authoritative position stream; SMSG_MONSTER_MOVE / update-object movement remains.
+        //
+        // Do not broadly skip gameplay packets. Do not skip auras/spells/combat.
+        switch (opcode)
+        {
+            case 181:
+            case 182:
+            case 183:
+            case 184:
+            case 185:
+            case 186:
+            case 187:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool BuildPlaybackPacket(PacketRecord const& frame, MatchRecord const& match, WorldPacket& out)
     {
+        if (ShouldSkipReplayMovementControlOpcode(frame.Packet.GetOpcode()))
+        {
+            TC_LOG_ERROR("arena.replay", "REPLAY_V101 skipped movement-control opcode={} timestamp={} size={}",
+                frame.Packet.GetOpcode(), frame.TimestampMs, uint32(frame.Packet.size()));
+            return false;
+        }
+
         std::vector<uint8> payload;
         payload.resize(frame.Packet.size());
 
@@ -2129,53 +2164,6 @@ namespace
         data << uint8(actor.Class);
         data << uint8(0);              // declined names disabled
         session->SendPacket(&data);
-    }
-
-    bool IsOriginalReplayActorGuid(MatchRecord const& match, ObjectGuid guid)
-    {
-        return FindReplayActorByOriginalGuid(match, guid) != nullptr;
-    }
-
-    void SendClearTargetToReplayViewer(Player* viewer, ObjectGuid guid, char const* reason)
-    {
-        if (!viewer || !viewer->GetSession() || !guid)
-            return;
-
-        WorldPacket data(SMSG_CLEAR_TARGET, 8);
-        data << uint64(guid.GetRawValue());
-        viewer->GetSession()->SendPacket(&data);
-
-        TC_LOG_DEBUG("arena.replay", "Replay clear-original-target sent viewer={} guid={} reason={}",
-            viewer->GetGUID().GetCounter(), guid.GetRawValue(), reason ? reason : "");
-    }
-
-    void ClearOriginalReplayActorTargets(Player* viewer, MatchRecord const& match, char const* reason)
-    {
-        if (!viewer || !viewer->GetSession())
-            return;
-
-        ObjectGuid selected = viewer->GetTarget();
-        if (selected && IsOriginalReplayActorGuid(match, selected))
-            viewer->SetSelection(ObjectGuid::Empty);
-
-        for (ReplayActor const& actor : match.Actors)
-        {
-            // IMPORTANT:
-            // Only clear ORIGINAL actor GUIDs here. Do not clear fake replay actor GUIDs or the viewer can't
-            // intentionally target/watch a replay participant.
-            SendClearTargetToReplayViewer(viewer, actor.OriginalGuid, reason);
-        }
-    }
-
-    void MaybeClearOriginalReplayActorTargets(Player* viewer, PlaybackState& state, uint32 nowMs, char const* reason)
-    {
-        constexpr uint32 REPLAY_ORIGINAL_TARGET_CLEAR_INTERVAL_MS = 250;
-
-        if (state.LastTargetClearMs && nowMs - state.LastTargetClearMs < REPLAY_ORIGINAL_TARGET_CLEAR_INTERVAL_MS)
-            return;
-
-        state.LastTargetClearMs = nowMs;
-        ClearOriginalReplayActorTargets(viewer, state.Match, reason);
     }
 
     void SendDestroyObjectToReplayViewer(Player* viewer, ObjectGuid guid, char const* reason)
@@ -3510,10 +3498,6 @@ std::vector<uint8> payload(packet.size());
 
         uint32 viewerLowGuid = player->GetGUID().GetCounter();
 
-        // The crash dump showed the client locked onto original replay actor GUID 0xBE while in replay.
-        // Clear old/live-arena original target state before entering playback.
-        ClearOriginalReplayActorTargets(player, record, "replay start original target cleanup");
-
         // Replay entry bypasses the normal battleground queue/join path.
         // Normal BG exit uses Player::GetBattlegroundEntryPoint(), so save the viewer's
         // current world location before teleporting them into the replay instance.
@@ -3557,9 +3541,6 @@ std::vector<uint8> payload(packet.size());
         state.CreatedMs = getMSTime();
 
         ActiveReplays[viewerLowGuid] = std::move(state);
-
-        if (auto activeReplay = ActiveReplays.find(viewerLowGuid); activeReplay != ActiveReplays.end())
-            ClearOriginalReplayActorTargets(player, activeReplay->second.Match, "replay active original target cleanup");
 
         (void)0; // replay system message removed
         return true;
@@ -3832,7 +3813,6 @@ public:
 
             (void)0; // replay system message removed
 
-            ClearOriginalReplayActorTargets(viewer, state.Match, "playback armed original target cleanup");
             SendDestroyOriginalActorObjects(viewer, state, "playback armed duplicate cleanup", true);
         }
 
@@ -3884,10 +3864,7 @@ public:
         // original GUID can turn a bad stale reference into a native client crash. The real fix is to prevent original
         // actor target GUIDs from leaking by rewriting UNIT_FIELD_TARGET globally above.
         if (state.Cursor > 0)
-        {
-            MaybeClearOriginalReplayActorTargets(viewer, state, nowMs, "periodic original target cleanup");
             MaybeSendReplayGreenNameUpdates(viewer, state, nowMs);
-        }
 
         if (sentThisUpdate > 0 && (state.Cursor == sentThisUpdate || (state.Cursor % 100) < sentThisUpdate))
         {
@@ -3940,10 +3917,9 @@ public:
         if (!bg || !bg->IsReplay() || bg->GetInstanceID() != state.BgInstanceId)
             return false;
 
-        // Hide/reset the addon first, then clear stale original target state and destroy fake replay actors so the
-        // replayed CREATE_OBJECT packets at the beginning can recreate clean objects from frame zero.
+        // Hide/reset the addon first, then destroy fake replay actors so the replayed CREATE_OBJECT packets
+        // at the beginning can recreate clean objects from frame zero.
         SendReplayASRaw(viewer, "DISABLE");
-        ClearOriginalReplayActorTargets(viewer, state.Match, "replay restart original target cleanup");
         SendDestroyFakeReplayActorObjects(viewer, state, "replay restart");
         SendDestroyOriginalActorObjects(viewer, state, "replay restart duplicate cleanup", true);
 
@@ -3957,7 +3933,6 @@ public:
         state.LastOriginalActorDestroyMs = 0;
         state.LastNameColorUpdateMs = 0;
         state.NameColorUpdateBursts = 0;
-        state.LastTargetClearMs = 0;
 
         TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
             viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
