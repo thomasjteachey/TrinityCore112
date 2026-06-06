@@ -70,6 +70,7 @@
 
 namespace
 {
+    // Replay V103: timestamped probe with pause/step replay packet isolation.
     // Replay V102: v99 plus timestamped replay probe and in-log command markers.
     // Replay V99: rewrite all raw replay actor GUIDs in SMSG_MONSTER_MOVE.
     // Replay V90: fix leaked original actor target GUIDs and remove repeated original destroy cleanup.
@@ -182,6 +183,10 @@ namespace
         uint32 LastOriginalActorDestroyMs = 0;
         uint32 LastNameColorUpdateMs = 0;
         uint32 NameColorUpdateBursts = 0;
+
+        // V103 diagnostic controls. These are activated by chat markers like .replaymark / .replaystep.
+        bool ProbePaused = false;
+        uint32 ProbeStepBudget = 0;
     };
 
     // Real arena records by BG instance id.
@@ -263,11 +268,11 @@ namespace
         }
 
         TC_LOG_ERROR("arena.replay",
-            "REPLAY_MARK wall={} unixMs={} source={} viewer={} active=1 bg={} map={} pos=({:.3f},{:.3f},{:.3f}) selectedRaw={} selectedLow={} cursor={} total={} elapsed={} nextFrameTs={} nextOpcode={} nextSize={} finished={} text='{}'",
+            "REPLAY_MARK wall={} unixMs={} source={} viewer={} active=1 bg={} map={} pos=({:.3f},{:.3f},{:.3f}) selectedRaw={} selectedLow={} cursor={} total={} elapsed={} nextFrameTs={} nextOpcode={} nextSize={} finished={} paused={} stepBudget={} text='{}'",
             ReplayWallClockString(), ReplayUnixMilliseconds(), source ? source : "unknown", viewerLowGuid,
             state.BgInstanceId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
             selected.GetRawValue(), selected.GetCounter(), uint32(state.Cursor), uint32(state.Match.Packets.size()), elapsedMs,
-            nextFrameTs, nextOpcode, nextSize, state.Finished ? 1u : 0u, ReplaySanitizeLogText(text));
+            nextFrameTs, nextOpcode, nextSize, state.Finished ? 1u : 0u, state.ProbePaused ? 1u : 0u, state.ProbeStepBudget, ReplaySanitizeLogText(text));
     }
 
     bool IsWatchedOpcode(uint16 opcode)
@@ -2129,7 +2134,7 @@ namespace
 
         // ERROR on purpose so it appears even when debug categories are quiet.
         TC_LOG_ERROR("arena.replay",
-            "REPLAY_PROBE_V102 wall={} unixMs={} viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} selectedRaw={} selectedLow={} {}",
+            "REPLAY_PROBE_V103 wall={} unixMs={} viewer={} bg={} cursor={} total={} elapsed={} frameTs={} opcode={} size={} selectedRaw={} selectedLow={} paused={} stepBudget={} {}",
             ReplayWallClockString(),
             ReplayUnixMilliseconds(),
             viewer->GetGUID().GetCounter(),
@@ -2142,6 +2147,8 @@ namespace
             uint32(packet.size()),
             viewer->GetTarget().GetRawValue(),
             viewer->GetTarget().GetCounter(),
+            state.ProbePaused ? 1u : 0u,
+            state.ProbeStepBudget,
             ReplayPacketProbeGuids(packet, state.Match));
     }
 
@@ -3734,7 +3741,7 @@ std::vector<uint8> payload(packet.size());
 
 
 
-    void TryLogReplayChatCommandMarker(WorldSession* session, WorldPacket const& packet)
+    void TryHandleReplayProbeChatCommand(WorldSession* session, WorldPacket const& packet)
     {
         if (!session || !session->GetPlayer())
             return;
@@ -3769,15 +3776,72 @@ std::vector<uint8> payload(packet.size());
         std::string lowered = text;
         std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) { return char(std::tolower(c)); });
 
-        if (lowered.find("cooldown") == std::string::npos &&
-            lowered.find("replaymark") == std::string::npos &&
-            lowered.find("replay mark") == std::string::npos &&
-            lowered.find("replayprobe") == std::string::npos &&
-            lowered.find("replay probe") == std::string::npos)
+        bool isCooldownMarker = lowered.find("cooldown") != std::string::npos;
+        bool isReplayMark = lowered.find("replaymark") != std::string::npos || lowered.find("replay mark") != std::string::npos;
+        bool isReplayProbe = lowered.find("replayprobe") != std::string::npos || lowered.find("replay probe") != std::string::npos;
+        bool isReplayStep = lowered.find("replaystep") != std::string::npos || lowered.find("replay step") != std::string::npos;
+        bool isReplayResume = lowered.find("replayresume") != std::string::npos || lowered.find("replay resume") != std::string::npos;
+        bool isReplayPause = lowered.find("replaypause") != std::string::npos || lowered.find("replay pause") != std::string::npos;
+
+        if (!isCooldownMarker && !isReplayMark && !isReplayProbe && !isReplayStep && !isReplayResume && !isReplayPause)
             return;
 
-        LogReplayManualMarker(session->GetPlayer(), "chat-command", text);
+        Player* player = session->GetPlayer();
+        LogReplayManualMarker(player, "chat-command", text);
+
+        uint32 viewerLowGuid = player->GetGUID().GetCounter();
+        auto activeItr = ActiveReplays.find(viewerLowGuid);
+        if (activeItr == ActiveReplays.end())
+            return;
+
+        PlaybackState& state = activeItr->second;
+
+        // .cooldown is intentionally marker-only. It has real GM-command side effects, so don't overload it
+        // to alter replay playback. Use .replaymark/.replaystep/.replayresume for packet isolation.
+        if (isReplayMark || isReplayProbe || isReplayPause)
+        {
+            state.ProbePaused = true;
+            state.ProbeStepBudget = 0;
+
+            TC_LOG_ERROR("arena.replay",
+                "REPLAY_STEP_CONTROL wall={} unixMs={} action=pause viewer={} cursor={} total={} text='{}'",
+                ReplayWallClockString(), ReplayUnixMilliseconds(), viewerLowGuid,
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), ReplaySanitizeLogText(text));
+        }
+        else if (isReplayStep)
+        {
+            state.ProbePaused = true;
+            ++state.ProbeStepBudget;
+
+            uint32 nextFrameTs = 0;
+            uint32 nextOpcode = 0;
+            uint32 nextSize = 0;
+            if (state.Cursor < state.Match.Packets.size())
+            {
+                PacketRecord const& next = state.Match.Packets[state.Cursor];
+                nextFrameTs = next.TimestampMs;
+                nextOpcode = next.Packet.GetOpcode();
+                nextSize = uint32(next.Packet.size());
+            }
+
+            TC_LOG_ERROR("arena.replay",
+                "REPLAY_STEP_CONTROL wall={} unixMs={} action=step viewer={} cursor={} total={} stepBudget={} nextFrameTs={} nextOpcode={} nextSize={} text='{}'",
+                ReplayWallClockString(), ReplayUnixMilliseconds(), viewerLowGuid,
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), state.ProbeStepBudget,
+                nextFrameTs, nextOpcode, nextSize, ReplaySanitizeLogText(text));
+        }
+        else if (isReplayResume)
+        {
+            state.ProbePaused = false;
+            state.ProbeStepBudget = 0;
+
+            TC_LOG_ERROR("arena.replay",
+                "REPLAY_STEP_CONTROL wall={} unixMs={} action=resume viewer={} cursor={} total={} text='{}'",
+                ReplayWallClockString(), ReplayUnixMilliseconds(), viewerLowGuid,
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), ReplaySanitizeLogText(text));
+        }
     }
+
 
 class BGReplayServerScript : public ServerScript
 {
@@ -3846,7 +3910,7 @@ public:
         if (packet.GetOpcode() == CMSG_MESSAGECHAT)
         {
             TryHandleReplayRestartAddonMessage(session, packet);
-            TryLogReplayChatCommandMarker(session, packet);
+            TryHandleReplayProbeChatCommand(session, packet);
             return;
         }
 
@@ -3925,11 +3989,16 @@ public:
             return true;
 
         uint32 elapsedMs = nowMs - state.PlaybackStartMs;
+
+        if (state.ProbePaused && state.ProbeStepBudget == 0)
+            return true;
+
+        uint32 sendCap = state.ProbePaused ? state.ProbeStepBudget : ARENA_REPLAY_SEND_CAP_PER_UPDATE;
         uint32 sentThisUpdate = 0;
 
         while (state.Cursor < state.Match.Packets.size()
             && state.Match.Packets[state.Cursor].TimestampMs <= elapsedMs
-            && sentThisUpdate < ARENA_REPLAY_SEND_CAP_PER_UPDATE)
+            && sentThisUpdate < sendCap)
         {
             PacketRecord const& frame = state.Match.Packets[state.Cursor];
             WorldPacket out;
@@ -3958,6 +4027,19 @@ public:
 
             ++state.Cursor;
             ++sentThisUpdate;
+        }
+
+        if (state.ProbePaused && sentThisUpdate > 0)
+        {
+            if (state.ProbeStepBudget > sentThisUpdate)
+                state.ProbeStepBudget -= sentThisUpdate;
+            else
+                state.ProbeStepBudget = 0;
+
+            TC_LOG_ERROR("arena.replay",
+                "REPLAY_STEP_CONTROL wall={} unixMs={} action=after_send viewer={} cursor={} total={} sentThisUpdate={} remainingStepBudget={}",
+                ReplayWallClockString(), ReplayUnixMilliseconds(), viewerLowGuid,
+                uint32(state.Cursor), uint32(state.Match.Packets.size()), sentThisUpdate, state.ProbeStepBudget);
         }
 
         // V90: do not repeatedly destroy original actor GUIDs during playback.
@@ -4034,6 +4116,8 @@ public:
         state.LastOriginalActorDestroyMs = 0;
         state.LastNameColorUpdateMs = 0;
         state.NameColorUpdateBursts = 0;
+        state.ProbePaused = false;
+        state.ProbeStepBudget = 0;
 
         TC_LOG_DEBUG("arena.replay", "Replay restarted viewer={} bg={} packets={}",
             viewerLowGuid, state.BgInstanceId, uint32(state.Match.Packets.size()));
