@@ -18,6 +18,7 @@
 #include "Player.h"
 #include <algorithm>
 #include <unordered_set>
+#include <sstream>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
 #include "AchievementMgr.h"
@@ -47,6 +48,7 @@
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
 #include "Duration.h"
+#include "Errors.h"
 #include "Formulas.h"
 #include "GameClient.h"
 #include "GameEventMgr.h"
@@ -21373,6 +21375,30 @@ void Player::StopCastingCharm()
     if (!charm)
         return;
 
+    auto setCharmCrashContext = [this, charm](char const* where)
+    {
+        std::ostringstream context;
+        context << where
+            << " playerPtr=" << this
+            << " playerName=" << GetName()
+            << " playerGuid=" << GetGUID().ToString()
+            << " playerMapId=" << (IsInWorld() ? int32(GetMapId()) : -1)
+            << " playerCharmedGuid=" << GetCharmedGUID().ToString()
+            << " charmPtr=" << charm
+            << " charmGuid=" << charm->GetGUID().ToString()
+            << " charmEntry=" << charm->GetEntry()
+            << " charmTypeId=" << uint32(charm->GetTypeId())
+            << " charmMapId=" << (charm->IsInWorld() ? int32(charm->GetMapId()) : -1)
+            << " charmCharmerGuid=" << charm->GetCharmerGUID().ToString()
+            << " charmOwnerGuid=" << charm->GetOwnerGUID().ToString()
+            << " charmIsVehicle=" << (charm->IsVehicle() ? 1 : 0)
+            << " charmHasControlVehicleAura=" << (charm->HasAuraTypeWithCaster(SPELL_AURA_CONTROL_VEHICLE, GetGUID()) ? 1 : 0);
+        Trinity::SetCrashContext(context.str());
+        TC_LOG_ERROR("entities.player", "{}", context.str());
+    };
+
+    setCharmCrashContext("Player::StopCastingCharm enter");
+
     if (charm->GetTypeId() == TYPEID_UNIT)
     {
         if (charm->ToCreature()->HasUnitTypeMask(UNIT_MASK_PUPPET))
@@ -21384,29 +21410,36 @@ void Player::StopCastingCharm()
             // Temporary for issue https://github.com/TrinityCore/TrinityCore/issues/24876
             if (!GetCharmedGUID().IsEmpty() && !charm->HasAuraTypeWithCaster(SPELL_AURA_CONTROL_VEHICLE, GetGUID()))
             {
-                TC_LOG_FATAL("entities.player", "Player::StopCastingCharm Player '{}' ({}) is not able to uncharm vehicle ({}) because of missing SPELL_AURA_CONTROL_VEHICLE",
+                setCharmCrashContext("Player::StopCastingCharm missing SPELL_AURA_CONTROL_VEHICLE before _ExitVehicle recovery");
+                TC_LOG_ERROR("entities.player", "Player::StopCastingCharm Player '{}' ({}) is recovering vehicle uncharm for ({}) because of missing SPELL_AURA_CONTROL_VEHICLE",
                     GetName(), GetGUID().ToString(), GetCharmedGUID().ToString());
 
                 // attempt to recover from missing HandleAuraControlVehicle unapply handling
-                // THIS IS A HACK, NEED TO FIND HOW IS IT EVEN POSSBLE TO NOT HAVE THE AURA
                 _ExitVehicle();
             }
         }
     }
-    if (GetCharmedGUID())
-        charm->RemoveCharmAuras();
 
     if (GetCharmedGUID())
     {
-        TC_LOG_FATAL("entities.player", "Player::StopCastingCharm: Player '{}' ({}) is not able to uncharm unit ({})", GetName(), GetGUID().ToString(), GetCharmedGUID().ToString());
-        if (!charm->GetCharmerGUID().IsEmpty())
-        {
-            TC_LOG_FATAL("entities.player", "Player::StopCastingCharm: Charmed unit has charmer {}\nPlayer debug info: {}\nCharm debug info: {}",
-                charm->GetCharmerGUID().ToString(), GetDebugInfo(), charm->GetDebugInfo());
-            ABORT();
-        }
+        setCharmCrashContext("Player::StopCastingCharm before RemoveCharmAuras");
+        charm->RemoveCharmAuras();
+    }
 
+    if (GetCharmedGUID())
+    {
+        setCharmCrashContext("Player::StopCastingCharm RemoveCharmAuras left charm active; recovering without abort");
+        TC_LOG_ERROR("entities.player", "Player::StopCastingCharm: Player '{}' ({}) still has charm ({}) after RemoveCharmAuras; attempting direct SetCharm(false) recovery. Charmed unit charmer={}",
+            GetName(), GetGUID().ToString(), GetCharmedGUID().ToString(), charm->GetCharmerGUID().ToString());
+
+        // Do not ABORT here. This path can be reached during death cleanup if a charm/control aura
+        // was already removed or failed to unapply cleanly. Unit::SetCharm(false) is hardened to
+        // clear whichever side of the relationship still matches and log mismatches instead of
+        // crashing the worldserver.
         SetCharm(charm, false);
+
+        if (GetCharmedGUID() || charm->GetCharmerGUID())
+            setCharmCrashContext("Player::StopCastingCharm recovery incomplete after SetCharm(false)");
     }
 }
 

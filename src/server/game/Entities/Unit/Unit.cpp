@@ -6706,6 +6706,30 @@ void Unit::RemoveAllMinionsByEntry(uint32 entry)
 
 void Unit::SetCharm(Unit* charm, bool apply)
 {
+    if (GetTypeId() == TYPEID_PLAYER && charm)
+    {
+        std::ostringstream context;
+        context << "Unit::SetCharm(" << (apply ? "true" : "false") << ") player control edge"
+            << " controllerPtr=" << this
+            << " controllerName=" << ToPlayer()->GetName()
+            << " controllerClass=" << uint32(GetClass())
+            << " controllerGuid=" << GetGUID().ToString()
+            << " controllerMapId=" << (IsInWorld() ? int32(GetMapId()) : -1)
+            << " controllerCurrentCharmedGuid=" << GetCharmedGUID().ToString()
+            << " controlledPtr=" << charm
+            << " controlledGuid=" << charm->GetGUID().ToString()
+            << " controlledEntry=" << charm->GetEntry()
+            << " controlledTypeId=" << uint32(charm->GetTypeId())
+            << " controlledMapId=" << (charm->IsInWorld() ? int32(charm->GetMapId()) : -1)
+            << " controlledCharmerGuid=" << charm->GetCharmerGUID().ToString()
+            << " controlledOwnerGuid=" << charm->GetOwnerGUID().ToString()
+            << " controlledCreatedBySpell=" << charm->GetUInt32Value(UNIT_CREATED_BY_SPELL)
+            << " controlledIsVehicle=" << (charm->IsVehicle() ? 1 : 0)
+            << " controlledHasControlVehicleAura=" << (charm->HasAuraTypeWithCaster(SPELL_AURA_CONTROL_VEHICLE, GetGUID()) ? 1 : 0);
+        Trinity::SetCrashContext(context.str());
+        TC_LOG_ERROR("entities.unit", "{}", context.str());
+    }
+
     if (apply)
     {
         if (GetTypeId() == TYPEID_PLAYER)
@@ -6743,14 +6767,54 @@ void Unit::SetCharm(Unit* charm, bool apply)
 
         if (GetTypeId() == TYPEID_PLAYER)
         {
-            ASSERT_WITH_SIDE_EFFECTS(RemoveGuidValue(UNIT_FIELD_CHARM, charm->GetGUID()),
-                "Player %s is trying to uncharm unit %u, but it has another charmed unit %s", GetName().c_str(), charm->GetEntry(), GetCharmedGUID().ToString().c_str());
-            m_charmed = nullptr;
+            if (!RemoveGuidValue(UNIT_FIELD_CHARM, charm->GetGUID()))
+            {
+                std::ostringstream context;
+                context << "Unit::SetCharm(false): failed to clear PLAYER UNIT_FIELD_CHARM"
+                    << " controllerPtr=" << this
+                    << " controllerGuid=" << GetGUID().ToString()
+                    << " controllerCharmGuid=" << GetCharmedGUID().ToString()
+                    << " controllerMapId=" << (IsInWorld() ? int32(GetMapId()) : -1)
+                    << " charmPtr=" << charm
+                    << " charmGuid=" << charm->GetGUID().ToString()
+                    << " charmCharmerGuid=" << charm->GetCharmerGUID().ToString()
+                    << " charmMapId=" << (charm->IsInWorld() ? int32(charm->GetMapId()) : -1);
+                Trinity::SetCrashContext(context.str());
+                TC_LOG_ERROR("entities.unit", "{}", context.str());
+            }
+
+            if (m_charmed == charm)
+                m_charmed = nullptr;
+            else if (m_charmed)
+            {
+                TC_LOG_ERROR("entities.unit", "Unit::SetCharm(false): player {} m_charmed pointer mismatch. expected {} actual {}",
+                    GetGUID().ToString(), static_cast<void*>(charm), static_cast<void*>(m_charmed));
+            }
         }
 
-        ASSERT_WITH_SIDE_EFFECTS(charm->RemoveGuidValue(UNIT_FIELD_CHARMEDBY, GetGUID()),
-            "Unit %u is being uncharmed, but it has another charmer %s", charm->GetEntry(), charm->GetCharmerGUID().ToString().c_str());
-        charm->m_charmer = nullptr;
+        if (!charm->RemoveGuidValue(UNIT_FIELD_CHARMEDBY, GetGUID()))
+        {
+            std::ostringstream context;
+            context << "Unit::SetCharm(false): failed to clear charm UNIT_FIELD_CHARMEDBY"
+                << " controllerPtr=" << this
+                << " controllerGuid=" << GetGUID().ToString()
+                << " controllerCharmGuid=" << GetCharmedGUID().ToString()
+                << " controllerMapId=" << (IsInWorld() ? int32(GetMapId()) : -1)
+                << " charmPtr=" << charm
+                << " charmGuid=" << charm->GetGUID().ToString()
+                << " charmCharmerGuid=" << charm->GetCharmerGUID().ToString()
+                << " charmMapId=" << (charm->IsInWorld() ? int32(charm->GetMapId()) : -1);
+            Trinity::SetCrashContext(context.str());
+            TC_LOG_ERROR("entities.unit", "{}", context.str());
+        }
+
+        if (charm->m_charmer == this)
+            charm->m_charmer = nullptr;
+        else if (charm->m_charmer)
+        {
+            TC_LOG_ERROR("entities.unit", "Unit::SetCharm(false): charm {} m_charmer pointer mismatch. expected {} actual {}",
+                charm->GetGUID().ToString(), static_cast<void*>(this), static_cast<void*>(charm->m_charmer));
+        }
 
         if (charm->GetTypeId() == TYPEID_PLAYER)
         {
@@ -12401,6 +12465,32 @@ bool Unit::SetCharmedBy(Unit* charmer, CharmType type, AuraApplication const* au
 {
     if (!charmer)
         return false;
+
+    if (charmer->GetTypeId() == TYPEID_PLAYER)
+    {
+        std::ostringstream context;
+        context << "Unit::SetCharmedBy begin with player charmer"
+            << " charmerPtr=" << charmer
+            << " charmerName=" << charmer->ToPlayer()->GetName()
+            << " charmerClass=" << uint32(charmer->GetClass())
+            << " charmerGuid=" << charmer->GetGUID().ToString()
+            << " charmerMapId=" << (charmer->IsInWorld() ? int32(charmer->GetMapId()) : -1)
+            << " charmerCurrentCharmedGuid=" << charmer->GetCharmedGUID().ToString()
+            << " targetPtr=" << this
+            << " targetGuid=" << GetGUID().ToString()
+            << " targetEntry=" << GetEntry()
+            << " targetTypeId=" << uint32(GetTypeId())
+            << " targetMapId=" << (IsInWorld() ? int32(GetMapId()) : -1)
+            << " targetCharmerGuid=" << GetCharmerGUID().ToString()
+            << " targetOwnerGuid=" << GetOwnerGUID().ToString()
+            << " targetCreatedBySpell=" << GetUInt32Value(UNIT_CREATED_BY_SPELL)
+            << " targetIsVehicle=" << (IsVehicle() ? 1 : 0)
+            << " charmType=" << uint32(type)
+            << " auraSpellId=" << (aurApp && aurApp->GetBase() ? aurApp->GetBase()->GetId() : 0)
+            << " auraRemoveMode=" << (aurApp ? uint32(aurApp->GetRemoveMode()) : 0);
+        Trinity::SetCrashContext(context.str());
+        TC_LOG_ERROR("entities.unit", "{}", context.str());
+    }
 
     // dismount players when charmed
     if (GetTypeId() == TYPEID_PLAYER)
