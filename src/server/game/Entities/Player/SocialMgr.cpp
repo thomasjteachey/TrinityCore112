@@ -18,6 +18,7 @@
 #include "SocialMgr.h"
 #include "DatabaseEnv.h"
 #include "Errors.h"
+#include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
