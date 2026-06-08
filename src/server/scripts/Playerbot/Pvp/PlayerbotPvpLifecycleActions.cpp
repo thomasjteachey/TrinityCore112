@@ -517,6 +517,110 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
+
+    float GetMovementProbeZ(Player const* player, Position const& position)
+    {
+        if (!player)
+            return position.GetPositionZ() + 1.0f;
+
+        return position.GetPositionZ() + std::clamp(player->GetCollisionHeight() * 0.45f, 0.75f, 1.65f);
+    }
+
+    bool IsMovementLineClear(Player const* player, Position const& from, Position const& to, float sideOffset = 0.0f)
+    {
+        if (!player)
+            return true;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return true;
+
+        float const dx = to.GetPositionX() - from.GetPositionX();
+        float const dy = to.GetPositionY() - from.GetPositionY();
+        float const planarDistance = std::sqrt(dx * dx + dy * dy);
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        if (std::fabs(sideOffset) > 0.01f && planarDistance > 0.01f)
+        {
+            offsetX = -dy / planarDistance * sideOffset;
+            offsetY = dx / planarDistance * sideOffset;
+        }
+
+        return map->isInLineOfSight(
+            from.GetPositionX() + offsetX, from.GetPositionY() + offsetY, GetMovementProbeZ(player, from),
+            to.GetPositionX() + offsetX, to.GetPositionY() + offsetY, GetMovementProbeZ(player, to),
+            player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+    }
+
+    bool IsMovementDestinationLocallyClear(Player const* player, Position const& destination, float clearance = 2.0f)
+    {
+        if (!player)
+            return true;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return true;
+
+        float const z = GetMovementProbeZ(player, destination);
+        constexpr uint8 probeCount = 8;
+        for (uint8 i = 0; i < probeCount; ++i)
+        {
+            float const angle = float(i) * 6.28318530717958647692f / float(probeCount);
+            float const probeX = destination.GetPositionX() + std::cos(angle) * clearance;
+            float const probeY = destination.GetPositionY() + std::sin(angle) * clearance;
+            if (!map->isInLineOfSight(destination.GetPositionX(), destination.GetPositionY(), z,
+                    probeX, probeY, z, player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+                return false;
+        }
+
+        return true;
+    }
+
+    bool IsRawDirectMoveClear(Player const* player, Position const& destination, float clearance = 2.0f)
+    {
+        if (!player)
+            return true;
+
+        Position const from = player->GetPosition();
+        float const dx = destination.GetPositionX() - from.GetPositionX();
+        float const dy = destination.GetPositionY() - from.GetPositionY();
+        float const planarDistance = std::sqrt(dx * dx + dy * dy);
+        if (planarDistance < 0.25f)
+            return IsMovementDestinationLocallyClear(player, destination, clearance);
+
+        if (!IsMovementDestinationLocallyClear(player, destination, clearance))
+            return false;
+
+        // Raw no-path splines are still allowed for intentional downhill graveyard
+        // drops, but only if the actual chord does not pass through VMAP/dynamic
+        // GO collision. This preserves GY drop shortcuts while rejecting ghost
+        // gates and wall-cut shortcuts.
+        if (!IsMovementLineClear(player, from, destination, 0.0f))
+            return false;
+
+        float const sideProbe = std::min(1.25f, std::max(0.45f, clearance * 0.6f));
+        return IsMovementLineClear(player, from, destination, sideProbe) &&
+            IsMovementLineClear(player, from, destination, -sideProbe);
+    }
+
+    void IssueDirectDropOrPathFallback(Player* player, MotionMaster* motionMaster, Position const& destination, bool& issuedDirect)
+    {
+        issuedDirect = false;
+        if (!player || !motionMaster)
+            return;
+
+        if (IsRawDirectMoveClear(player, destination, 2.0f))
+        {
+            motionMaster->MovePoint(0, destination, false);
+            issuedDirect = true;
+            return;
+        }
+
+        // Do not freeze if the raw shortcut would clip. Ask the normal pathing
+        // generator to walk the same short downhill step instead.
+        motionMaster->MovePoint(0, destination, true);
+    }
+
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
@@ -1106,9 +1210,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                     directDropState.pending = false;
                     directDropState.suppressUntilMs = nowMs + 8000;
                     Position const escapeDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                    motionMaster->MovePoint(0, escapeDestination, false);
+                    bool issuedDirectDrop = false;
+                    IssueDirectDropOrPathFallback(player, motionMaster, escapeDestination, issuedDirectDrop);
                     EmitBattlegroundGmDebug(player,
-                        "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
+                        std::string("movepoint=direct-drop-stalled fallback=") + (issuedDirectDrop ? "direct-drop" : "path-down") +
+                        " fromStart=" + std::to_string(int32(fromStart)) +
                         " toDest=" + std::to_string(int32(toDestination)) +
                         " escapeDist=" + std::to_string(int32(player->GetDistance(escapeDestination))), 0);
 
@@ -1121,9 +1227,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
             {
                 Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, shortcutDestination, false);
+                bool issuedDirectDrop = false;
+                IssueDirectDropOrPathFallback(player, motionMaster, shortcutDestination, issuedDirectDrop);
                 EmitBattlegroundGmDebug(player,
-                    "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                    std::string("movepoint=") + (issuedDirectDrop ? "direct-drop-shortcut" : "direct-drop-blocked-path-down") +
+                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
                     " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination))), 0);
                 directDropState.startPosition = player->GetPosition();
                 directDropState.issueMs = nowMs;
@@ -1159,14 +1267,16 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 // issue a direct movement order so the bot keeps progressing
                 // instead of stalling in place waiting on nav segment recovery.
                 Position const fallbackDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, fallbackDestination, false);
+                bool issuedDirectDrop = false;
+                IssueDirectDropOrPathFallback(player, motionMaster, fallbackDestination, issuedDirectDrop);
                 EmitBattlegroundGmDebug(player,
-                    "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                    std::string("movepoint=blocked-no-nav fallback=") + (issuedDirectDrop ? "direct" : "path-down") +
+                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
                     " stepDist=" + std::to_string(int32(player->GetDistance(fallbackDestination))), 0);
 
                 directDropState.startPosition = player->GetPosition();
                 directDropState.issueMs = nowMs;
-                directDropState.pending = true;
+                directDropState.pending = issuedDirectDrop;
                 directDropState.suppressUntilMs = std::max(directDropState.suppressUntilMs, nowMs + 2500);
 
                 state.lastDestination = destination;

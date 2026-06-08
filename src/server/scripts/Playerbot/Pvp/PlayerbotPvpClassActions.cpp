@@ -429,6 +429,88 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
     return adjustedDestination;
 }
 
+
+float GetMovementProbeZ(Player const* player, Position const& position)
+{
+    if (!player)
+        return position.GetPositionZ() + 1.0f;
+
+    return position.GetPositionZ() + std::clamp(player->GetCollisionHeight() * 0.45f, 0.75f, 1.65f);
+}
+
+bool IsMovementLineClear(Player const* player, Position const& from, Position const& to, float sideOffset = 0.0f)
+{
+    if (!player)
+        return true;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return true;
+
+    float const dx = to.GetPositionX() - from.GetPositionX();
+    float const dy = to.GetPositionY() - from.GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    float offsetX = 0.0f;
+    float offsetY = 0.0f;
+    if (std::fabs(sideOffset) > 0.01f && planarDistance > 0.01f)
+    {
+        offsetX = -dy / planarDistance * sideOffset;
+        offsetY = dx / planarDistance * sideOffset;
+    }
+
+    return map->isInLineOfSight(
+        from.GetPositionX() + offsetX, from.GetPositionY() + offsetY, GetMovementProbeZ(player, from),
+        to.GetPositionX() + offsetX, to.GetPositionY() + offsetY, GetMovementProbeZ(player, to),
+        player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+}
+
+bool IsMovementDestinationLocallyClear(Player const* player, Position const& destination, float clearance = 2.0f)
+{
+    if (!player)
+        return true;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return true;
+
+    float const z = GetMovementProbeZ(player, destination);
+    constexpr uint8 probeCount = 8;
+    for (uint8 i = 0; i < probeCount; ++i)
+    {
+        float const angle = float(i) * 6.28318530717958647692f / float(probeCount);
+        float const probeX = destination.GetPositionX() + std::cos(angle) * clearance;
+        float const probeY = destination.GetPositionY() + std::sin(angle) * clearance;
+        if (!map->isInLineOfSight(destination.GetPositionX(), destination.GetPositionY(), z,
+                probeX, probeY, z, player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
+            return false;
+    }
+
+    return true;
+}
+
+bool IsRawDirectMoveClear(Player const* player, Position const& destination, float clearance = 2.0f)
+{
+    if (!player)
+        return true;
+
+    Position const from = player->GetPosition();
+    float const dx = destination.GetPositionX() - from.GetPositionX();
+    float const dy = destination.GetPositionY() - from.GetPositionY();
+    float const planarDistance = std::sqrt(dx * dx + dy * dy);
+    if (planarDistance < 0.25f)
+        return IsMovementDestinationLocallyClear(player, destination, clearance);
+
+    if (!IsMovementDestinationLocallyClear(player, destination, clearance))
+        return false;
+
+    if (!IsMovementLineClear(player, from, destination, 0.0f))
+        return false;
+
+    float const sideProbe = std::min(1.25f, std::max(0.45f, clearance * 0.6f));
+    return IsMovementLineClear(player, from, destination, sideProbe) &&
+        IsMovementLineClear(player, from, destination, -sideProbe);
+}
+
 Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
 {
     if (!player || !target)
@@ -1749,7 +1831,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
             player->GetOrientation());
         Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
-        motionMaster->MovePoint(0, downhillDestination, false);
+        bool const directDownhillClear = IsRawDirectMoveClear(player, downhillDestination, 2.0f);
+        motionMaster->MovePoint(0, downhillDestination, !directDownhillClear);
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -1759,8 +1842,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = 1;
 
         std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_direct",
-            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "direct")
+        diag << BuildRangedMovementDiag(player, target, directDownhillClear ? "bg_downhill_commit_direct" : "bg_downhill_commit_path",
+            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, directDownhillClear ? "direct" : "path")
              << " vertical_delta=" << verticalDeltaToTarget
              << " planar_delta=" << planarDistanceToTarget
              << " commit_dist=" << player->GetDistance(downhillDestination);
