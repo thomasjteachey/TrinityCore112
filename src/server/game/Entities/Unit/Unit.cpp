@@ -3879,6 +3879,22 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
     ++m_removedAurasCount;
 
+    {
+        std::stringstream crashContext;
+        crashContext << "Unit::_UnapplyAura before GetCaster"
+            << " unitPtr=" << static_cast<void const*>(this)
+            << " unitGuid=" << GetGUID().ToString()
+            << " unitMapId=" << GetMapId()
+            << " unitHasMap=" << (FindMap() ? 1 : 0)
+            << " auraAppPtr=" << static_cast<void const*>(aurApp)
+            << " auraPtr=" << static_cast<void const*>(aura)
+            << " spellId=" << (aura && aura->GetSpellInfo() ? aura->GetSpellInfo()->Id : 0)
+            << " auraOwnerPtr=" << static_cast<void const*>(aura ? aura->GetOwner() : nullptr)
+            << " casterGuid=" << (aura ? aura->GetCasterGUID().ToString() : "none")
+            << " removeMode=" << uint32(removeMode);
+        Trinity::SetCrashContext(crashContext.str());
+    }
+
     Unit* caster = aura->GetCaster();
 
     // Remove all pointers from lists here to prevent possible pointer invalidation on spellcast/auraapply/auraremove
@@ -10316,8 +10332,12 @@ void Unit::RemoveFromWorld()
 
 void Unit::CleanupBeforeRemoveFromMap(bool finalCleanup)
 {
-    // This needs to be before RemoveFromWorld to make GetCaster() return a valid pointer on aura removal
+    // Aura removal can call Aura::GetCaster(), which may use this unit as the
+    // ObjectAccessor context. Do aura cleanup before detaching from the map when
+    // possible. If the unit is already detached, Aura::GetCaster() now returns
+    // nullptr instead of asserting on owner->GetMap().
     InterruptNonMeleeSpells(true);
+    DefensiveCleanupAurasBeforeDelete();
 
     if (IsInWorld())
         RemoveFromWorld();
@@ -10326,7 +10346,6 @@ void Unit::CleanupBeforeRemoveFromMap(bool finalCleanup)
 
     // A unit may be in removelist and not in world, but it is still in grid
     // and may have some references during delete
-    DefensiveCleanupAurasBeforeDelete();
     RemoveAllGameObjects();
 
     if (finalCleanup)

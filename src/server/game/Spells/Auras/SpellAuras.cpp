@@ -607,10 +607,26 @@ Aura::~Aura()
 
 Unit* Aura::GetCaster() const
 {
-    if (GetOwner()->GetGUID() == GetCasterGUID())
-        return GetUnitOwner();
+    WorldObject* owner = GetOwner();
+    if (!owner)
+        return nullptr;
 
-    return ObjectAccessor::GetUnit(*GetOwner(), GetCasterGUID());
+    if (owner->GetGUID() == GetCasterGUID())
+        return GetType() == UNIT_AURA_TYPE ? GetUnitOwner() : nullptr;
+
+    // Aura removal can happen during logout/shutdown cleanup after the owner has
+    // already been detached from its map. ObjectAccessor::GetUnit(*owner, ...)
+    // calls owner.GetMap(), which asserts when m_currMap is null. In cleanup
+    // paths, a null caster is safer and is already handled by aura unapply code.
+    if (!owner->FindMap())
+    {
+        Trinity::SetCrashContext(BuildAuraCrashContext("Aura::GetCaster owner has no map", this, owner, nullptr));
+        TC_LOG_ERROR("server.crash", "Aura::GetCaster: owner has no map; returning null caster. {}",
+            BuildAuraCrashContext("Aura::GetCaster owner has no map", this, owner, nullptr));
+        return nullptr;
+    }
+
+    return ObjectAccessor::GetUnit(*owner, GetCasterGUID());
 }
 
 AuraObjectType Aura::GetType() const

@@ -17,12 +17,15 @@
 
 #include "SocialMgr.h"
 #include "DatabaseEnv.h"
+#include "Errors.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "RBAC.h"
 #include "World.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include <sstream>
+#include <vector>
 
 PlayerSocial::PlayerSocial(): _playerGUID()
 { }
@@ -194,8 +197,40 @@ bool PlayerSocial::HasIgnore(ObjectGuid const& ignoreGuid)
 
 SocialMgr* SocialMgr::instance()
 {
-    static SocialMgr instance;
-    return &instance;
+    // Intentionally allocate the singleton for the lifetime of the process.
+    // This avoids destructor-order problems during shutdown, when player sessions
+    // may still be logging out and touching SocialMgr.
+    static SocialMgr* instance = new SocialMgr();
+    return instance;
+}
+
+void SocialMgr::RemovePlayerSocial(ObjectGuid const& guid)
+{
+    std::ostringstream context;
+    context << "SocialMgr::RemovePlayerSocial before erase"
+            << " guid=" << guid.ToString()
+            << " socialMgrPtr=" << static_cast<void const*>(this);
+    Trinity::SetCrashContext(context.str());
+
+    std::lock_guard<std::mutex> lock(_socialMapMutex);
+
+    SocialMap::iterator itr = _socialMap.find(guid);
+    if (itr == _socialMap.end())
+    {
+        TC_LOG_ERROR("server.crash", "SocialMgr::RemovePlayerSocial: guid {} not present; mapSize={}",
+            guid.ToString(), _socialMap.size());
+        Trinity::ClearCrashContext();
+        return;
+    }
+
+    TC_LOG_ERROR("server.crash", "SocialMgr::RemovePlayerSocial: erasing guid {} mapSizeBefore={} socialPtr={}",
+        guid.ToString(), _socialMap.size(), static_cast<void const*>(&itr->second));
+
+    _socialMap.erase(itr);
+
+    TC_LOG_ERROR("server.crash", "SocialMgr::RemovePlayerSocial: erased guid {} mapSizeAfter={}",
+        guid.ToString(), _socialMap.size());
+    Trinity::ClearCrashContext();
 }
 
 void SocialMgr::GetFriendInfo(Player* player, ObjectGuid const& friendGUID, FriendInfo& friendInfo)
@@ -288,31 +323,49 @@ void SocialMgr::BroadcastToFriendListers(Player* player, WorldPacket const* pack
 {
     ASSERT(player);
 
-    AccountTypes gmSecLevel = AccountTypes(sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST));
-    for (SocialMap::const_iterator itr = _socialMap.begin(); itr != _socialMap.end(); ++itr)
+    std::vector<ObjectGuid> friendListers;
     {
-        PlayerSocial::PlayerSocialMap::const_iterator itr2 = itr->second._playerSocialMap.find(player->GetGUID());
-        if (itr2 != itr->second._playerSocialMap.end() && (itr2->second.Flags & SOCIAL_FLAG_FRIEND) != 0)
+        std::lock_guard<std::mutex> lock(_socialMapMutex);
+        friendListers.reserve(_socialMap.size());
+
+        for (SocialMap::const_iterator itr = _socialMap.begin(); itr != _socialMap.end(); ++itr)
         {
-            Player* target = ObjectAccessor::FindPlayer(itr->first);
-            if (!target)
-                continue;
-
-            WorldSession* session = target->GetSession();
-            if (!session->HasPermission(rbac::RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS) && player->GetSession()->GetSecurity() > gmSecLevel)
-                continue;
-
-            if (target->GetTeam() != player->GetTeam() && !session->HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST))
-                continue;
-
-            if (player->IsVisibleGloballyFor(target))
-                session->SendPacket(packet);
+            PlayerSocial::PlayerSocialMap::const_iterator itr2 = itr->second._playerSocialMap.find(player->GetGUID());
+            if (itr2 != itr->second._playerSocialMap.end() && (itr2->second.Flags & SOCIAL_FLAG_FRIEND) != 0)
+                friendListers.push_back(itr->first);
         }
+    }
+
+    WorldSession* playerSession = player->GetSession();
+    if (!playerSession)
+        return;
+
+    AccountTypes gmSecLevel = AccountTypes(sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST));
+    for (ObjectGuid const& listenerGuid : friendListers)
+    {
+        Player* target = ObjectAccessor::FindPlayer(listenerGuid);
+        if (!target)
+            continue;
+
+        WorldSession* session = target->GetSession();
+        if (!session)
+            continue;
+
+        if (!session->HasPermission(rbac::RBAC_PERM_WHO_SEE_ALL_SEC_LEVELS) && playerSession->GetSecurity() > gmSecLevel)
+            continue;
+
+        if (target->GetTeam() != player->GetTeam() && !session->HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST))
+            continue;
+
+        if (player->IsVisibleGloballyFor(target))
+            session->SendPacket(packet);
     }
 }
 
 PlayerSocial* SocialMgr::LoadFromDB(PreparedQueryResult result, ObjectGuid const& guid)
 {
+    std::lock_guard<std::mutex> lock(_socialMapMutex);
+
     PlayerSocial* social = &_socialMap[guid];
     social->SetPlayerGUID(guid);
 

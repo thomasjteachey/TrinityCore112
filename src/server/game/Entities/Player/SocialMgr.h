@@ -22,6 +22,7 @@
 #include "Common.h"
 #include "ObjectGuid.h"
 #include <map>
+#include <mutex>
 
 class Player;
 class WorldPacket;
@@ -140,7 +141,7 @@ class SocialMgr
         static SocialMgr* instance();
 
         // Misc
-        void RemovePlayerSocial(ObjectGuid const& guid) { _socialMap.erase(guid); }
+        void RemovePlayerSocial(ObjectGuid const& guid);
 
         static void GetFriendInfo(Player* player, ObjectGuid const& friendGUID, FriendInfo& friendInfo);
 
@@ -154,6 +155,7 @@ class SocialMgr
     private:
         typedef std::map<ObjectGuid, PlayerSocial> SocialMap;
         SocialMap _socialMap;
+        mutable std::mutex _socialMapMutex;
 };
 
 #define sSocialMgr SocialMgr::instance()
