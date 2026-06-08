@@ -91,6 +91,8 @@ enum PriestSpells
     SPELL_PRIEST_SPIRITUAL_HEALING_R1               = 14898,
     SPELL_PRIEST_DIVINE_PROVIDENCE_R1               = 47562,
     SPELL_PRIEST_SHADOW_GUARD_DAMAGE_R1             = 28377,
+    SPELL_PRIEST_BLACKOUT_R1                        = 15268,
+    SPELL_PRIEST_BLACKOUT_STUN                      = 15269,
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R1        = 81322,
     SPELL_PRIEST_SPIRIT_DURATION_INCREASE_R2        = 81323,
     SPELL_PRIEST_SPIRIT_OF_REDEMPTION               = 27827,
@@ -1363,9 +1365,16 @@ class spell_pri_shadow_guard : public AuraScript
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& eventInfo)
     {
         PreventDefaultAction();
+
+        Unit* caster = eventInfo.GetActionTarget();
+        Unit* target = eventInfo.GetActor();
         uint32 triggerSpell = sSpellMgr->GetSpellWithRank(SPELL_PRIEST_SHADOW_GUARD_DAMAGE_R1, aurEff->GetSpellInfo()->GetRank());
 
-        eventInfo.GetActionTarget()->CastSpell(eventInfo.GetActor(), triggerSpell, aurEff);
+        caster->CastSpell(target, triggerSpell, aurEff);
+
+        if (Aura const* blackout = caster->GetAuraOfRankedSpell(SPELL_PRIEST_BLACKOUT_R1))
+            if (roll_chance_i(blackout->GetSpellInfo()->GetRank() * 2))
+                caster->CastSpell(target, SPELL_PRIEST_BLACKOUT_STUN, true);
     }
 
     void Register() override
