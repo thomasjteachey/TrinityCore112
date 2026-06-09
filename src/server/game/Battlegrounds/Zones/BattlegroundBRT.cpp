@@ -166,51 +166,51 @@ bool BattlegroundBRT::SetupBattleground()
             1380.52f, -834.296f, -86.6783f, 1.5708f,
             0.0f, 0.0f, 0.707108f, 0.707106f,
             RESPAWN_IMMEDIATELY)
-        || !AddObject(BG_BRT_OBJECT_BUFF1_VARIANT_A, BG_OBJECTID_REGENBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF1_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
             1356.120850f, -726.623169f, -91.981697f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF1_VARIANT_B, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF1_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
             1356.120850f, -726.623169f, -91.981697f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF1_VARIANT_C, BG_OBJECTID_REGENBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF1_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
             1356.120850f, -726.623169f, -91.981697f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_A, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF2_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
             1404.745361f, -726.598328f, -91.981483f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_B, BG_OBJECTID_REGENBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF2_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
             1404.745361f, -726.598328f, -91.981483f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF2_VARIANT_C, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF2_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
             1404.745361f, -726.598328f, -91.981483f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF3_VARIANT_A, BG_OBJECTID_REGENBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF3_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
             1356.383423f, -818.263794f, -91.981094f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF3_VARIANT_B, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF3_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
             1356.383423f, -818.263794f, -91.981094f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF3_VARIANT_C, BG_OBJECTID_REGENBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF3_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
             1356.383423f, -818.263794f, -91.981094f, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_A, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF4_SPEED, BG_OBJECTID_SPEEDBUFF_ENTRY,
             1404.938232f, -818.510925f, -91.981621f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_B, BG_OBJECTID_REGENBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF4_REGEN, BG_OBJECTID_REGENBUFF_ENTRY,
             1404.938232f, -818.510925f, -91.981621f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
-        || !AddObject(BG_BRT_OBJECT_BUFF4_VARIANT_C, BG_OBJECTID_BERSERKERBUFF_ENTRY,
+        || !AddObject(BG_BRT_OBJECT_BUFF4_BERSERK, BG_OBJECTID_BERSERKERBUFF_ENTRY,
             1404.938232f, -818.510925f, -91.981621f, 3.14159f,
             0.0f, 0.0f, 1.0f, 0.0f,
             BG_BRT_BUFF_RESPAWN_TIME)
@@ -277,14 +277,14 @@ void BattlegroundBRT::ApplyNonInteractableObjectFlags()
         ghostWall->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
-void BattlegroundBRT::SpawnRandomBuffSet(uint32 variantAIndex)
+void BattlegroundBRT::SpawnRandomBuffSet(uint32 speedTypeIndex)
 {
-    SpawnBGObject(variantAIndex + 0, RESPAWN_ONE_DAY);
-    SpawnBGObject(variantAIndex + 1, RESPAWN_ONE_DAY);
-    SpawnBGObject(variantAIndex + 2, RESPAWN_ONE_DAY);
+    SpawnBGObject(speedTypeIndex + 0, RESPAWN_ONE_DAY);
+    SpawnBGObject(speedTypeIndex + 1, RESPAWN_ONE_DAY);
+    SpawnBGObject(speedTypeIndex + 2, RESPAWN_ONE_DAY);
 
     uint8 const buff = urand(0, 2);
-    SpawnBGObject(variantAIndex + buff, RESPAWN_IMMEDIATELY);
+    SpawnBGObject(speedTypeIndex + buff, RESPAWN_IMMEDIATELY);
 }
 
 void BattlegroundBRT::StartingEventCloseDoors()
@@ -303,7 +303,7 @@ void BattlegroundBRT::StartingEventCloseDoors()
     SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_3, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_BRT_OBJECT_TRAMPOLINE_4, RESPAWN_IMMEDIATELY);
 
-    for (uint32 type = BG_BRT_OBJECT_BUFF1_VARIANT_A; type <= BG_BRT_OBJECT_BUFF4_VARIANT_C; ++type)
+    for (uint32 type = BG_BRT_OBJECT_BUFF1_SPEED; type <= BG_BRT_OBJECT_BUFF4_BERSERK; ++type)
         SpawnBGObject(type, RESPAWN_ONE_DAY);
 
     ApplyNonInteractableObjectFlags();
@@ -315,10 +315,10 @@ void BattlegroundBRT::StartingEventOpenDoors()
     DoorOpen(BG_BRT_OBJECT_ALLIANCE_GATE_RIGHT);
     DoorOpen(BG_BRT_OBJECT_HORDE_GATE);
 
-    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF1_VARIANT_A);
-    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF2_VARIANT_A);
-    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF3_VARIANT_A);
-    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF4_VARIANT_A);
+    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF1_SPEED);
+    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF2_SPEED);
+    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF3_SPEED);
+    SpawnRandomBuffSet(BG_BRT_OBJECT_BUFF4_SPEED);
 
     ApplyNonInteractableObjectFlags();
 }
