@@ -167,8 +167,11 @@ enum TriggerCastFlags : uint32
     TRIGGERED_DONT_REPORT_CAST_ERROR                = 0x00040000,   //! Will return SPELL_FAILED_DONT_REPORT in CheckCast functions
     TRIGGERED_FULL_MASK                             = 0x0007FFFF,   //! Used when doing CastSpell with triggered == true
 
+    // flags outside TRIGGERED_FULL_MASK do not make Spell::IsTriggered return true
+    TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER = 0x00080000,//! Will ignore power and reagent cost without treating the spell as triggered
+
     // debug flags (used with .cast triggered commands)
-    TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT      = 0x00080000,   //! Will ignore equipped item requirements
+    TRIGGERED_IGNORE_EQUIPPED_ITEM_REQUIREMENT      = 0x00100000,   //! Will ignore equipped item requirements
     TRIGGERED_FULL_DEBUG_MASK                       = 0xFFFFFFFF
 };
 

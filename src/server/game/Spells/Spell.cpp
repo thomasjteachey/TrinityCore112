@@ -3742,7 +3742,7 @@ void Spell::_cast(bool skipCheck)
         player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL, m_spellInfo->Id);
     }
 
-    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST))
+    if (!(_triggeredCastFlags & (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER)))
     {
         // Powers have to be taken before SendSpellGo
         TakePower();
@@ -4637,7 +4637,7 @@ void Spell::SendSpellGo()
         && (m_caster->ToPlayer()->GetClass() == CLASS_DEATH_KNIGHT)
         && m_spellInfo->RuneCostID
         && m_spellInfo->PowerType == POWER_RUNE
-        && !(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST))
+        && !(_triggeredCastFlags & (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER)))
     {
         castFlags |= CAST_FLAG_NO_GCD; // not needed, but Blizzard sends it
         castFlags |= CAST_FLAG_RUNE_LIST; // rune cooldowns list
@@ -5832,7 +5832,7 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     if (castResult != SPELL_CAST_OK)
         return castResult;
 
-    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST))
+    if (!(_triggeredCastFlags & (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER)))
     {
         castResult = CheckPower();
         if (castResult != SPELL_CAST_OK)
@@ -6658,10 +6658,13 @@ SpellCastResult Spell::CheckPetCast(Unit* target)
 
     // check power requirement
     // this would be zero until ::prepare normally, we set it here (it gets reset in ::prepare)
-    m_powerCost = m_spellInfo->CalcPowerCost(m_caster, m_spellSchoolMask);
-    SpellCastResult failReason = CheckPower();
-    if (failReason != SPELL_CAST_OK)
-        return failReason;
+    if (!(_triggeredCastFlags & (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER)))
+    {
+        m_powerCost = m_spellInfo->CalcPowerCost(m_caster, m_spellSchoolMask);
+        SpellCastResult failReason = CheckPower();
+        if (failReason != SPELL_CAST_OK)
+            return failReason;
+    }
 
     // check cooldown
     if (Creature* creatureCaster = m_caster->ToCreature())
@@ -7245,7 +7248,7 @@ SpellCastResult Spell::CheckItems(uint32* param1 /*= nullptr*/, uint32* param2 /
     // do not take reagents for these item casts
     if (!(m_CastItem && m_CastItem->GetTemplate()->HasFlag(ITEM_FLAG_NO_REAGENT_COST)))
     {
-        bool checkReagents = !(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST) && !player->CanNoReagentCast(m_spellInfo);
+        bool checkReagents = !(_triggeredCastFlags & (TRIGGERED_IGNORE_POWER_AND_REAGENT_COST | TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER)) && !player->CanNoReagentCast(m_spellInfo);
         // Not own traded item (in trader trade slot) requires reagents even if triggered spell
         if (!checkReagents)
             if (Item* targetItem = m_targets.GetItemTarget())
