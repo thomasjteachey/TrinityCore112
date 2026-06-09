@@ -517,6 +517,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
+    bool PositionTouchesBrtMovementBarrier(Player const* player, Position const& position, float clearance);
+    bool SegmentTouchesBrtMovementBarrier(Player const* player, Position const& from, Position const& to, float clearance);
 
     float GetMovementProbeZ(Player const* player, Position const& position)
     {
