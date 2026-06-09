@@ -271,7 +271,7 @@ void PetAI::UpdateAI(uint32 diff)
                         continue;
                 }
 
-                Spell* spell = new Spell(me, spellInfo, useCreatureSpells ? TRIGGERED_IGNORE_POWER_AND_REAGENT_COST : TRIGGERED_NONE);
+                Spell* spell = new Spell(me, spellInfo, useCreatureSpells ? TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER : TRIGGERED_NONE);
                 bool spellUsed = false;
 
                 // Some spells can target enemy or friendly (DK Ghoul's Leap)
@@ -325,7 +325,7 @@ void PetAI::UpdateAI(uint32 diff)
             }
             else if (me->GetVictim() && CanAttack(me->GetVictim()) && spellInfo->CanBeUsedInCombat())
             {
-                Spell* spell = new Spell(me, spellInfo, useCreatureSpells ? TRIGGERED_IGNORE_POWER_AND_REAGENT_COST : TRIGGERED_NONE);
+                Spell* spell = new Spell(me, spellInfo, useCreatureSpells ? TRIGGERED_IGNORE_POWER_AND_REAGENT_COST_NO_TRIGGER : TRIGGERED_NONE);
                 if (spell->CanAutoCast(me->GetVictim()))
                     targetSpellStore.push_back(std::make_pair(me->GetVictim(), spell));
                 else
