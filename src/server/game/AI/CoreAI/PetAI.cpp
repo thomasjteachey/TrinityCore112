@@ -31,14 +31,33 @@
 #include "SpellMgr.h"
 #include "Util.h"
 
+namespace
+{
+    bool HasCreatureSpells(Creature const* creature)
+    {
+        for (uint32 spellId : creature->m_spells)
+            if (spellId)
+                return true;
+
+        return false;
+    }
+}
+
 int32 PetAI::Permissible(Creature const* creature)
 {
     if (creature->HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN))
     {
-        if (reinterpret_cast<Guardian const*>(creature)->GetOwner()->GetTypeId() == TYPEID_PLAYER)
-            return PERMIT_BASE_PROACTIVE;
+        if (Unit const* owner = reinterpret_cast<Guardian const*>(creature)->GetOwner())
+            if (owner->GetTypeId() == TYPEID_PLAYER)
+                return PERMIT_BASE_PROACTIVE;
+
         return PERMIT_BASE_REACTIVE;
     }
+
+    if (creature->IsGuardian() && const_cast<Creature*>(creature)->GetCharmInfo() && HasCreatureSpells(creature))
+        if (Unit const* owner = reinterpret_cast<Guardian const*>(creature)->GetOwner())
+            if (owner->GetTypeId() == TYPEID_PLAYER)
+                return PERMIT_BASE_PROACTIVE;
 
     return PERMIT_BASE_NO;
 }

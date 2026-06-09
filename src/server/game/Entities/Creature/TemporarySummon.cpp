@@ -391,8 +391,21 @@ void Guardian::InitStats(uint32 duration)
 
     InitStatsForLevel(GetOwner()->GetLevel());
 
-    if (GetOwner()->GetTypeId() == TYPEID_PLAYER && HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN))
-        m_charmInfo->InitCharmCreateSpells();
+    if (GetOwner()->GetTypeId() == TYPEID_PLAYER)
+    {
+        bool hasCreatureSpells = false;
+        for (uint32 spellId : m_spells)
+        {
+            if (spellId)
+            {
+                hasCreatureSpells = true;
+                break;
+            }
+        }
+
+        if (HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN) || hasCreatureSpells)
+            InitCharmInfo()->InitCharmCreateSpells();
+    }
 
     SetReactState(REACT_AGGRESSIVE);
 }
