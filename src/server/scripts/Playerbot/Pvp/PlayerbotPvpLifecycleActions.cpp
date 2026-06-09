@@ -517,115 +517,6 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
-    bool PositionTouchesBrtMovementBarrier(Player const* player, Position const& position, float clearance);
-    bool SegmentTouchesBrtMovementBarrier(Player const* player, Position const& from, Position const& to, float clearance);
-
-    float GetMovementProbeZ(Player const* player, Position const& position)
-    {
-        if (!player)
-            return position.GetPositionZ() + 1.0f;
-
-        return position.GetPositionZ() + std::clamp(player->GetCollisionHeight() * 0.45f, 0.75f, 1.65f);
-    }
-
-    bool IsMovementLineClear(Player const* player, Position const& from, Position const& to, float sideOffset = 0.0f)
-    {
-        if (!player)
-            return true;
-
-        Map const* map = player->FindMap();
-        if (!map)
-            return true;
-
-        float const dx = to.GetPositionX() - from.GetPositionX();
-        float const dy = to.GetPositionY() - from.GetPositionY();
-        float const planarDistance = std::sqrt(dx * dx + dy * dy);
-        float offsetX = 0.0f;
-        float offsetY = 0.0f;
-        if (std::fabs(sideOffset) > 0.01f && planarDistance > 0.01f)
-        {
-            offsetX = -dy / planarDistance * sideOffset;
-            offsetY = dx / planarDistance * sideOffset;
-        }
-
-        return map->isInLineOfSight(
-            from.GetPositionX() + offsetX, from.GetPositionY() + offsetY, GetMovementProbeZ(player, from),
-            to.GetPositionX() + offsetX, to.GetPositionY() + offsetY, GetMovementProbeZ(player, to),
-            player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-    }
-
-    bool IsMovementDestinationLocallyClear(Player const* player, Position const& destination, float clearance = 2.0f)
-    {
-        if (!player)
-            return true;
-
-        Map const* map = player->FindMap();
-        if (!map)
-            return true;
-
-        float const z = GetMovementProbeZ(player, destination);
-        constexpr uint8 probeCount = 8;
-        for (uint8 i = 0; i < probeCount; ++i)
-        {
-            float const angle = float(i) * 6.28318530717958647692f / float(probeCount);
-            float const probeX = destination.GetPositionX() + std::cos(angle) * clearance;
-            float const probeY = destination.GetPositionY() + std::sin(angle) * clearance;
-            if (!map->isInLineOfSight(destination.GetPositionX(), destination.GetPositionY(), z,
-                    probeX, probeY, z, player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
-                return false;
-        }
-
-        return true;
-    }
-
-    bool IsRawDirectMoveClear(Player const* player, Position const& destination, float clearance = 2.0f)
-    {
-        if (!player)
-            return true;
-
-        Position const from = player->GetPosition();
-        float const dx = destination.GetPositionX() - from.GetPositionX();
-        float const dy = destination.GetPositionY() - from.GetPositionY();
-        float const planarDistance = std::sqrt(dx * dx + dy * dy);
-        if (planarDistance < 0.25f)
-            return IsMovementDestinationLocallyClear(player, destination, clearance) && !PositionTouchesBrtMovementBarrier(player, destination, clearance);
-
-        if (SegmentTouchesBrtMovementBarrier(player, from, destination, clearance) || PositionTouchesBrtMovementBarrier(player, destination, clearance))
-            return false;
-
-        if (!IsMovementDestinationLocallyClear(player, destination, clearance))
-            return false;
-
-        // Raw no-path splines are still allowed for intentional downhill graveyard
-        // drops, but only if the actual chord does not pass through VMAP/dynamic
-        // GO collision. This preserves GY drop shortcuts while rejecting ghost
-        // gates and wall-cut shortcuts.
-        if (!IsMovementLineClear(player, from, destination, 0.0f))
-            return false;
-
-        float const sideProbe = std::min(1.25f, std::max(0.45f, clearance * 0.6f));
-        return IsMovementLineClear(player, from, destination, sideProbe) &&
-            IsMovementLineClear(player, from, destination, -sideProbe);
-    }
-
-    void IssueDirectDropOrPathFallback(Player* player, MotionMaster* motionMaster, Position const& destination, bool& issuedDirect)
-    {
-        issuedDirect = false;
-        if (!player || !motionMaster)
-            return;
-
-        if (IsRawDirectMoveClear(player, destination, 2.0f))
-        {
-            motionMaster->MovePoint(0, destination, false);
-            issuedDirect = true;
-            return;
-        }
-
-        // Do not freeze if the raw shortcut would clip. Ask the normal pathing
-        // generator to walk the same short downhill step instead.
-        motionMaster->MovePoint(0, destination, true);
-    }
-
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
@@ -840,157 +731,6 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return true;
     }
 
-
-    struct ExplicitBrtMovementBarrier
-    {
-        float x1;
-        float y1;
-        float x2;
-        float y2;
-        float halfWidth;
-        float zMin;
-        float zMax;
-    };
-
-    bool IsBlackrockThroneMovementMap(Player const* player)
-    {
-        if (!player || player->GetMapId() != 1230)
-            return false;
-
-        return player->InBattleground() || player->GetZoneId() == 30230 || player->GetAreaId() == 30230;
-    }
-
-    float DistancePointToSegment2D(float px, float py, float ax, float ay, float bx, float by)
-    {
-        float const abx = bx - ax;
-        float const aby = by - ay;
-        float const abLenSq = abx * abx + aby * aby;
-        if (abLenSq <= 0.0001f)
-        {
-            float const dx = px - ax;
-            float const dy = py - ay;
-            return std::sqrt(dx * dx + dy * dy);
-        }
-
-        float const t = std::clamp(((px - ax) * abx + (py - ay) * aby) / abLenSq, 0.0f, 1.0f);
-        float const cx = ax + abx * t;
-        float const cy = ay + aby * t;
-        float const dx = px - cx;
-        float const dy = py - cy;
-        return std::sqrt(dx * dx + dy * dy);
-    }
-
-    float Orientation2D(float ax, float ay, float bx, float by, float cx, float cy)
-    {
-        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    }
-
-    bool SegmentsIntersect2D(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy)
-    {
-        float const o1 = Orientation2D(ax, ay, bx, by, cx, cy);
-        float const o2 = Orientation2D(ax, ay, bx, by, dx, dy);
-        float const o3 = Orientation2D(cx, cy, dx, dy, ax, ay);
-        float const o4 = Orientation2D(cx, cy, dx, dy, bx, by);
-        return (o1 == 0.0f || o2 == 0.0f || (o1 > 0.0f) != (o2 > 0.0f)) &&
-            (o3 == 0.0f || o4 == 0.0f || (o3 > 0.0f) != (o4 > 0.0f));
-    }
-
-    float DistanceSegmentToSegment2D(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy)
-    {
-        if (SegmentsIntersect2D(ax, ay, bx, by, cx, cy, dx, dy))
-            return 0.0f;
-
-        return std::min({
-            DistancePointToSegment2D(ax, ay, cx, cy, dx, dy),
-            DistancePointToSegment2D(bx, by, cx, cy, dx, dy),
-            DistancePointToSegment2D(cx, cy, ax, ay, bx, by),
-            DistancePointToSegment2D(dx, dy, ax, ay, bx, by)});
-    }
-
-    std::array<ExplicitBrtMovementBarrier, 1> const& GetBlackrockThroneMovementBarriers()
-    {
-        static std::array<ExplicitBrtMovementBarrier, 1> const barriers = {{
-            // Only block the fixed Blackrock Throne ghost wall band. The normal start gates
-            // are intentionally not listed here; their existing gameobject/gate behavior is fine.
-            // VMAP/dynamic GO LOS can miss this ghost wall for playerbot MovePoint/path segments,
-            // so keep bots two yards away from this scripted barrier explicitly.
-            // The invalid clipped side is north of the wall around Y=-671; the barrier line sits just south of that.
-            {1355.0f, -675.50f, 1407.0f, -675.50f, 3.00f, -100.0f, -82.0f} // Center ghost wall; blocks north-side invalid positions around Y=-671 without blocking gates
-        }};
-        return barriers;
-    }
-
-    bool PositionTouchesBrtMovementBarrier(Player const* player, Position const& position, float clearance = 2.0f)
-    {
-        if (!IsBlackrockThroneMovementMap(player))
-            return false;
-
-        for (ExplicitBrtMovementBarrier const& barrier : GetBlackrockThroneMovementBarriers())
-        {
-            if (position.GetPositionZ() < barrier.zMin || position.GetPositionZ() > barrier.zMax)
-                continue;
-
-            if (DistancePointToSegment2D(position.GetPositionX(), position.GetPositionY(), barrier.x1, barrier.y1, barrier.x2, barrier.y2) <= barrier.halfWidth + clearance)
-                return true;
-        }
-
-        return false;
-    }
-
-    bool SegmentTouchesBrtMovementBarrier(Player const* player, Position const& from, Position const& to, float clearance = 2.0f)
-    {
-        if (!IsBlackrockThroneMovementMap(player))
-            return false;
-
-        float const minZ = std::min(from.GetPositionZ(), to.GetPositionZ());
-        float const maxZ = std::max(from.GetPositionZ(), to.GetPositionZ());
-        for (ExplicitBrtMovementBarrier const& barrier : GetBlackrockThroneMovementBarriers())
-        {
-            if (maxZ < barrier.zMin || minZ > barrier.zMax)
-                continue;
-
-            float const distance = DistanceSegmentToSegment2D(from.GetPositionX(), from.GetPositionY(), to.GetPositionX(), to.GetPositionY(),
-                barrier.x1, barrier.y1, barrier.x2, barrier.y2);
-            if (distance <= barrier.halfWidth + clearance)
-                return true;
-        }
-
-        return false;
-    }
-
-    Position ClampDestinationBeforeBrtMovementBarrier(Player const* player, Position const& destination, float clearance = 2.0f)
-    {
-        if (!IsBlackrockThroneMovementMap(player))
-            return destination;
-
-        Position const from = player->GetPosition();
-        if (!SegmentTouchesBrtMovementBarrier(player, from, destination, clearance) && !PositionTouchesBrtMovementBarrier(player, destination, clearance))
-            return destination;
-
-        // Walk forward from the current position and stop at the last point that still has explicit
-        // Blackrock Throne ghost-wall clearance. This prevents a MovePoint/path request from being aimed
-        // through a ghost wall while preserving downhill/direct-drop movement elsewhere.
-        Position best = from;
-        float const dx = destination.GetPositionX() - from.GetPositionX();
-        float const dy = destination.GetPositionY() - from.GetPositionY();
-        float const dz = destination.GetPositionZ() - from.GetPositionZ();
-        constexpr uint8 samples = 32;
-        for (uint8 i = 1; i <= samples; ++i)
-        {
-            float const t = float(i) / float(samples);
-            Position probe(from.GetPositionX() + dx * t, from.GetPositionY() + dy * t, from.GetPositionZ() + dz * t, destination.GetOrientation());
-            if (PositionTouchesBrtMovementBarrier(player, probe, clearance) || SegmentTouchesBrtMovementBarrier(player, from, probe, clearance))
-                break;
-
-            best = probe;
-        }
-
-        if (player->GetExactDist2d(best.GetPositionX(), best.GetPositionY()) < 0.75f)
-            return from;
-
-        return best;
-    }
-
     Position BuildCollisionSafeDestination(Player const* player, Position const& destination)
     {
         if (!player)
@@ -1015,7 +755,6 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         }
 
         adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
-        adjustedDestination = ClampDestinationBeforeBrtMovementBarrier(player, adjustedDestination, 2.0f);
         return adjustedDestination;
     }
 
@@ -1367,11 +1106,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                     directDropState.pending = false;
                     directDropState.suppressUntilMs = nowMs + 8000;
                     Position const escapeDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                    bool issuedDirectDrop = false;
-                    IssueDirectDropOrPathFallback(player, motionMaster, escapeDestination, issuedDirectDrop);
+                    motionMaster->MovePoint(0, escapeDestination, false);
                     EmitBattlegroundGmDebug(player,
-                        std::string("movepoint=direct-drop-stalled fallback=") + (issuedDirectDrop ? "direct-drop" : "path-down") +
-                        " fromStart=" + std::to_string(int32(fromStart)) +
+                        "movepoint=direct-drop-stalled fallback=nav-segment fromStart=" + std::to_string(int32(fromStart)) +
                         " toDest=" + std::to_string(int32(toDestination)) +
                         " escapeDist=" + std::to_string(int32(player->GetDistance(escapeDestination))), 0);
 
@@ -1384,11 +1121,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
             {
                 Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                bool issuedDirectDrop = false;
-                IssueDirectDropOrPathFallback(player, motionMaster, shortcutDestination, issuedDirectDrop);
+                motionMaster->MovePoint(0, shortcutDestination, false);
                 EmitBattlegroundGmDebug(player,
-                    std::string("movepoint=") + (issuedDirectDrop ? "direct-drop-shortcut" : "direct-drop-blocked-path-down") +
-                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                    "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
                     " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination))), 0);
                 directDropState.startPosition = player->GetPosition();
                 directDropState.issueMs = nowMs;
@@ -1424,16 +1159,14 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 // issue a direct movement order so the bot keeps progressing
                 // instead of stalling in place waiting on nav segment recovery.
                 Position const fallbackDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                bool issuedDirectDrop = false;
-                IssueDirectDropOrPathFallback(player, motionMaster, fallbackDestination, issuedDirectDrop);
+                motionMaster->MovePoint(0, fallbackDestination, false);
                 EmitBattlegroundGmDebug(player,
-                    std::string("movepoint=blocked-no-nav fallback=") + (issuedDirectDrop ? "direct" : "path-down") +
-                    " destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
+                    "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
                     " stepDist=" + std::to_string(int32(player->GetDistance(fallbackDestination))), 0);
 
                 directDropState.startPosition = player->GetPosition();
                 directDropState.issueMs = nowMs;
-                directDropState.pending = issuedDirectDrop;
+                directDropState.pending = true;
                 directDropState.suppressUntilMs = std::max(directDropState.suppressUntilMs, nowMs + 2500);
 
                 state.lastDestination = destination;
@@ -2210,10 +1943,44 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         char const* label = "default";
     };
 
+    bool IsDruidFeralMeleePositioning(Player const* player)
+    {
+        if (!player || player->GetClass() != CLASS_DRUID)
+            return false;
+
+        // Prowl is cat-only in normal 3.3.5, but checking the form/aura makes
+        // this robust against custom aura state oddities and delayed form sync.
+        switch (player->GetShapeshiftForm())
+        {
+        case FORM_CAT:
+        case FORM_BEAR:
+        case FORM_DIREBEAR:
+            return true;
+        default:
+            break;
+        }
+
+        return player->HasAura(768) ||   // Cat Form
+               player->HasAura(5487) ||  // Bear Form
+               player->HasAura(9634) ||  // Dire Bear Form
+               player->HasAura(9913);    // Prowl
+    }
+
+    bool IsStealthedMeleeOpener(Player const* player)
+    {
+        if (!player || !player->HasStealthAura())
+            return false;
+
+        return player->GetClass() == CLASS_ROGUE || IsDruidFeralMeleePositioning(player);
+    }
+
     CombatPositioningProfile GetCombatPositioningProfile(Player const* player)
     {
         if (!player)
             return {};
+
+        if (IsDruidFeralMeleePositioning(player))
+            return { 0.0f, 1.5f, 5.0f, false, false, true, "druid-feral-melee" };
 
         if (Trinity::Helpers::Entity::IsPlayerHealer(player))
         {
@@ -3670,21 +3437,27 @@ namespace playerbot
 
         if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
         {
-            bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
-            if (!isStealthedRogue && !CanIssueMovementCommand(player, 500))
+            bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
+            if (!isStealthedMeleeOpener && !CanIssueMovementCommand(player, 500))
                 return true;
 
             ClearEatDrinkAurasForMovement(player);
 
-            if (isStealthedRogue)
+            if (isStealthedMeleeOpener)
             {
                 // Stealth openers intentionally run without a committed victim for
                 // part of the engage. MoveChase can pause when victim linkage is
                 // absent, so use follow semantics to keep continuous closing.
-                player->GetMotionMaster()->MoveFollow(target, 0.1f, player->GetFollowAngle());
+                // Feral druids get a small follow range instead of rogue's near-zero
+                // range; the tiny range can cause visible pause/repath in BG maps.
+                float const stealthFollowRange = player->GetClass() == CLASS_DRUID
+                    ? (distance > 8.0f ? 3.0f : 1.5f)
+                    : 0.1f;
+
+                player->GetMotionMaster()->MoveFollow(target, stealthFollowRange, player->GetFollowAngle());
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-                    "Playerbot PvP distance band: bot={} profile={} decision=stealth-melee-close-follow distance={} max={}.",
-                    player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange);
+                    "Playerbot PvP distance band: bot={} profile={} decision=stealth-melee-close-follow distance={} max={} followRange={}.",
+                    player->GetGUID().ToString(), profile.label, distance, profile.preferredMaxPressureRange, stealthFollowRange);
                 return true;
             }
 
@@ -3733,11 +3506,11 @@ namespace playerbot
 
         CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
         bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
-        bool const isStealthedRogue = player->GetClass() == CLASS_ROGUE && player->HasStealthAura();
+        bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
         bool const targetInBreakableCrowdControl = target->HasBreakableByDamageCrowdControlAura();
         bool const alreadyAttackingTarget = player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID();
         bool const meleeAutoAttackActive = player->HasUnitState(UNIT_STATE_MELEE_ATTACKING);
-        if (isStealthedRogue)
+        if (isStealthedMeleeOpener)
             player->AttackStop();
         else if (targetInBreakableCrowdControl)
         {

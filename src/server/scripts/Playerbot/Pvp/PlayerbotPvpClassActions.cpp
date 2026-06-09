@@ -78,6 +78,35 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool IsDruidFeralMeleePositioning(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_DRUID)
+        return false;
+
+    switch (player->GetShapeshiftForm())
+    {
+    case FORM_CAT:
+    case FORM_BEAR:
+    case FORM_DIREBEAR:
+        return true;
+    default:
+        break;
+    }
+
+    return player->HasAura(768) ||   // Cat Form
+           player->HasAura(5487) ||  // Bear Form
+           player->HasAura(9634) ||  // Dire Bear Form
+           player->HasAura(9913);    // Prowl
+}
+
+bool IsStealthedMeleeOpener(Player const* player)
+{
+    if (!player || !player->HasStealthAura())
+        return false;
+
+    return player->GetClass() == CLASS_ROGUE || IsDruidFeralMeleePositioning(player);
+}
+
 bool IsHunterAimedShotSpellId(uint32 spellId)
 {
     switch (spellId)
@@ -404,157 +433,6 @@ bool RequiresStrictHumanPathing(Player const* player)
     return player && player->InBattleground();
 }
 
-
-    struct ExplicitBrtMovementBarrier
-    {
-        float x1;
-        float y1;
-        float x2;
-        float y2;
-        float halfWidth;
-        float zMin;
-        float zMax;
-    };
-
-    bool IsBlackrockThroneMovementMap(Player const* player)
-    {
-        if (!player || player->GetMapId() != 1230)
-            return false;
-
-        return player->InBattleground() || player->GetZoneId() == 30230 || player->GetAreaId() == 30230;
-    }
-
-    float DistancePointToSegment2D(float px, float py, float ax, float ay, float bx, float by)
-    {
-        float const abx = bx - ax;
-        float const aby = by - ay;
-        float const abLenSq = abx * abx + aby * aby;
-        if (abLenSq <= 0.0001f)
-        {
-            float const dx = px - ax;
-            float const dy = py - ay;
-            return std::sqrt(dx * dx + dy * dy);
-        }
-
-        float const t = std::clamp(((px - ax) * abx + (py - ay) * aby) / abLenSq, 0.0f, 1.0f);
-        float const cx = ax + abx * t;
-        float const cy = ay + aby * t;
-        float const dx = px - cx;
-        float const dy = py - cy;
-        return std::sqrt(dx * dx + dy * dy);
-    }
-
-    float Orientation2D(float ax, float ay, float bx, float by, float cx, float cy)
-    {
-        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-    }
-
-    bool SegmentsIntersect2D(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy)
-    {
-        float const o1 = Orientation2D(ax, ay, bx, by, cx, cy);
-        float const o2 = Orientation2D(ax, ay, bx, by, dx, dy);
-        float const o3 = Orientation2D(cx, cy, dx, dy, ax, ay);
-        float const o4 = Orientation2D(cx, cy, dx, dy, bx, by);
-        return (o1 == 0.0f || o2 == 0.0f || (o1 > 0.0f) != (o2 > 0.0f)) &&
-            (o3 == 0.0f || o4 == 0.0f || (o3 > 0.0f) != (o4 > 0.0f));
-    }
-
-    float DistanceSegmentToSegment2D(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy)
-    {
-        if (SegmentsIntersect2D(ax, ay, bx, by, cx, cy, dx, dy))
-            return 0.0f;
-
-        return std::min({
-            DistancePointToSegment2D(ax, ay, cx, cy, dx, dy),
-            DistancePointToSegment2D(bx, by, cx, cy, dx, dy),
-            DistancePointToSegment2D(cx, cy, ax, ay, bx, by),
-            DistancePointToSegment2D(dx, dy, ax, ay, bx, by)});
-    }
-
-    std::array<ExplicitBrtMovementBarrier, 1> const& GetBlackrockThroneMovementBarriers()
-    {
-        static std::array<ExplicitBrtMovementBarrier, 1> const barriers = {{
-            // Only block the fixed Blackrock Throne ghost wall band. The normal start gates
-            // are intentionally not listed here; their existing gameobject/gate behavior is fine.
-            // VMAP/dynamic GO LOS can miss this ghost wall for playerbot MovePoint/path segments,
-            // so keep bots two yards away from this scripted barrier explicitly.
-            // The invalid clipped side is north of the wall around Y=-671; the barrier line sits just south of that.
-            {1355.0f, -675.50f, 1407.0f, -675.50f, 3.00f, -100.0f, -82.0f} // Center ghost wall; blocks north-side invalid positions around Y=-671 without blocking gates
-        }};
-        return barriers;
-    }
-
-    bool PositionTouchesBrtMovementBarrier(Player const* player, Position const& position, float clearance = 2.0f)
-    {
-        if (!IsBlackrockThroneMovementMap(player))
-            return false;
-
-        for (ExplicitBrtMovementBarrier const& barrier : GetBlackrockThroneMovementBarriers())
-        {
-            if (position.GetPositionZ() < barrier.zMin || position.GetPositionZ() > barrier.zMax)
-                continue;
-
-            if (DistancePointToSegment2D(position.GetPositionX(), position.GetPositionY(), barrier.x1, barrier.y1, barrier.x2, barrier.y2) <= barrier.halfWidth + clearance)
-                return true;
-        }
-
-        return false;
-    }
-
-    bool SegmentTouchesBrtMovementBarrier(Player const* player, Position const& from, Position const& to, float clearance = 2.0f)
-    {
-        if (!IsBlackrockThroneMovementMap(player))
-            return false;
-
-        float const minZ = std::min(from.GetPositionZ(), to.GetPositionZ());
-        float const maxZ = std::max(from.GetPositionZ(), to.GetPositionZ());
-        for (ExplicitBrtMovementBarrier const& barrier : GetBlackrockThroneMovementBarriers())
-        {
-            if (maxZ < barrier.zMin || minZ > barrier.zMax)
-                continue;
-
-            float const distance = DistanceSegmentToSegment2D(from.GetPositionX(), from.GetPositionY(), to.GetPositionX(), to.GetPositionY(),
-                barrier.x1, barrier.y1, barrier.x2, barrier.y2);
-            if (distance <= barrier.halfWidth + clearance)
-                return true;
-        }
-
-        return false;
-    }
-
-    Position ClampDestinationBeforeBrtMovementBarrier(Player const* player, Position const& destination, float clearance = 2.0f)
-    {
-        if (!IsBlackrockThroneMovementMap(player))
-            return destination;
-
-        Position const from = player->GetPosition();
-        if (!SegmentTouchesBrtMovementBarrier(player, from, destination, clearance) && !PositionTouchesBrtMovementBarrier(player, destination, clearance))
-            return destination;
-
-        // Walk forward from the current position and stop at the last point that still has explicit
-        // Blackrock Throne ghost-wall clearance. This prevents a MovePoint/path request from being aimed
-        // through a ghost wall while preserving downhill/direct-drop movement elsewhere.
-        Position best = from;
-        float const dx = destination.GetPositionX() - from.GetPositionX();
-        float const dy = destination.GetPositionY() - from.GetPositionY();
-        float const dz = destination.GetPositionZ() - from.GetPositionZ();
-        constexpr uint8 samples = 32;
-        for (uint8 i = 1; i <= samples; ++i)
-        {
-            float const t = float(i) / float(samples);
-            Position probe(from.GetPositionX() + dx * t, from.GetPositionY() + dy * t, from.GetPositionZ() + dz * t, destination.GetOrientation());
-            if (PositionTouchesBrtMovementBarrier(player, probe, clearance) || SegmentTouchesBrtMovementBarrier(player, from, probe, clearance))
-                break;
-
-            best = probe;
-        }
-
-        if (player->GetExactDist2d(best.GetPositionX(), best.GetPositionY()) < 0.75f)
-            return from;
-
-        return best;
-    }
-
 Position BuildCollisionSafeDestination(Player* player, Position const& destination)
 {
     if (!player)
@@ -577,93 +455,7 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
     }
 
     adjustedDestination.Relocate(adjustedDestination.GetPositionX(), adjustedDestination.GetPositionY(), adjustedZ, adjustedDestination.GetOrientation());
-    adjustedDestination = ClampDestinationBeforeBrtMovementBarrier(player, adjustedDestination, 2.0f);
     return adjustedDestination;
-}
-
-
-float GetMovementProbeZ(Player const* player, Position const& position)
-{
-    if (!player)
-        return position.GetPositionZ() + 1.0f;
-
-    return position.GetPositionZ() + std::clamp(player->GetCollisionHeight() * 0.45f, 0.75f, 1.65f);
-}
-
-bool IsMovementLineClear(Player const* player, Position const& from, Position const& to, float sideOffset = 0.0f)
-{
-    if (!player)
-        return true;
-
-    Map const* map = player->FindMap();
-    if (!map)
-        return true;
-
-    float const dx = to.GetPositionX() - from.GetPositionX();
-    float const dy = to.GetPositionY() - from.GetPositionY();
-    float const planarDistance = std::sqrt(dx * dx + dy * dy);
-    float offsetX = 0.0f;
-    float offsetY = 0.0f;
-    if (std::fabs(sideOffset) > 0.01f && planarDistance > 0.01f)
-    {
-        offsetX = -dy / planarDistance * sideOffset;
-        offsetY = dx / planarDistance * sideOffset;
-    }
-
-    return map->isInLineOfSight(
-        from.GetPositionX() + offsetX, from.GetPositionY() + offsetY, GetMovementProbeZ(player, from),
-        to.GetPositionX() + offsetX, to.GetPositionY() + offsetY, GetMovementProbeZ(player, to),
-        player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-}
-
-bool IsMovementDestinationLocallyClear(Player const* player, Position const& destination, float clearance = 2.0f)
-{
-    if (!player)
-        return true;
-
-    Map const* map = player->FindMap();
-    if (!map)
-        return true;
-
-    float const z = GetMovementProbeZ(player, destination);
-    constexpr uint8 probeCount = 8;
-    for (uint8 i = 0; i < probeCount; ++i)
-    {
-        float const angle = float(i) * 6.28318530717958647692f / float(probeCount);
-        float const probeX = destination.GetPositionX() + std::cos(angle) * clearance;
-        float const probeY = destination.GetPositionY() + std::sin(angle) * clearance;
-        if (!map->isInLineOfSight(destination.GetPositionX(), destination.GetPositionY(), z,
-                probeX, probeY, z, player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing))
-            return false;
-    }
-
-    return true;
-}
-
-bool IsRawDirectMoveClear(Player const* player, Position const& destination, float clearance = 2.0f)
-{
-    if (!player)
-        return true;
-
-    Position const from = player->GetPosition();
-    float const dx = destination.GetPositionX() - from.GetPositionX();
-    float const dy = destination.GetPositionY() - from.GetPositionY();
-    float const planarDistance = std::sqrt(dx * dx + dy * dy);
-    if (planarDistance < 0.25f)
-        return IsMovementDestinationLocallyClear(player, destination, clearance) && !PositionTouchesBrtMovementBarrier(player, destination, clearance);
-
-    if (SegmentTouchesBrtMovementBarrier(player, from, destination, clearance) || PositionTouchesBrtMovementBarrier(player, destination, clearance))
-        return false;
-
-    if (!IsMovementDestinationLocallyClear(player, destination, clearance))
-        return false;
-
-    if (!IsMovementLineClear(player, from, destination, 0.0f))
-        return false;
-
-    float const sideProbe = std::min(1.25f, std::max(0.45f, clearance * 0.6f));
-    return IsMovementLineClear(player, from, destination, sideProbe) &&
-        IsMovementLineClear(player, from, destination, -sideProbe);
 }
 
 Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance)
@@ -1986,8 +1778,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
             player->GetOrientation());
         Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
-        bool const directDownhillClear = IsRawDirectMoveClear(player, downhillDestination, 2.0f);
-        motionMaster->MovePoint(0, downhillDestination, !directDownhillClear);
+        motionMaster->MovePoint(0, downhillDestination, false);
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -1997,8 +1788,8 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = 1;
 
         std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, directDownhillClear ? "bg_downhill_commit_direct" : "bg_downhill_commit_path",
-            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, directDownhillClear ? "direct" : "path")
+        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_direct",
+            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "direct")
              << " vertical_delta=" << verticalDeltaToTarget
              << " planar_delta=" << planarDistanceToTarget
              << " commit_dist=" << player->GetDistance(downhillDestination);
@@ -4936,8 +4727,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 // while stealthed, but stealth opener movement should use the
                 // deterministic melee chase path. Routing this through ranged
                 // approach caused repeated slow/stale reissues in BG starts.
-                if (player->GetClass() == CLASS_ROGUE && player->HasStealthAura() &&
-                    movementTarget && player->IsValidAttackTarget(movementTarget))
+                if (IsStealthedMeleeOpener(player) && movementTarget && player->IsValidAttackTarget(movementTarget))
                 {
                     IssueMeleeApproachMovement(player, movementTarget);
                     break;
