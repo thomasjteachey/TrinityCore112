@@ -44,11 +44,24 @@ namespace
 
     bool IsPlayerOwnedSpellGuardian(Creature const* creature)
     {
-        if (!creature->IsGuardian() || creature->HasUnitTypeMask(UNIT_MASK_CONTROLABLE_GUARDIAN) || !HasCreatureSpells(creature))
+        if (!creature->IsGuardian() || !HasCreatureSpells(creature))
             return false;
 
         Unit* owner = reinterpret_cast<Guardian const*>(creature)->GetOwner();
         return owner && owner->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    bool ShouldUseCreatureSpellAutocast(Creature const* creature)
+    {
+        return IsPlayerOwnedSpellGuardian(creature) && !creature->IsPet();
+    }
+
+    bool IsHealingSpell(SpellInfo const* spellInfo)
+    {
+        return std::any_of(spellInfo->GetEffects().begin(), spellInfo->GetEffects().end(), [](SpellEffectInfo const& effect)
+        {
+            return effect.IsEffect(SPELL_EFFECT_HEAL);
+        });
     }
 }
 
@@ -229,7 +242,7 @@ void PetAI::UpdateAI(uint32 diff)
     {
         TargetSpellList targetSpellStore;
 
-        bool const useCreatureSpells = IsPlayerOwnedSpellGuardian(me);
+        bool const useCreatureSpells = ShouldUseCreatureSpellAutocast(me);
         uint8 const spellCount = useCreatureSpells ? MAX_CREATURE_SPELLS : me->GetPetAutoSpellSize();
 
         for (uint8 i = 0; i < spellCount; ++i)
@@ -239,7 +252,7 @@ void PetAI::UpdateAI(uint32 diff)
                 continue;
 
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellID);
-            if (!spellInfo || spellInfo->IsPassive())
+            if (!spellInfo || spellInfo->IsPassive() || (useCreatureSpells && !spellInfo->IsAutocastable()))
                 continue;
 
             if (me->GetSpellHistory()->HasGlobalCooldown(spellInfo))
@@ -258,7 +271,7 @@ void PetAI::UpdateAI(uint32 diff)
                         continue;
                 }
 
-                Spell* spell = new Spell(me, spellInfo, TRIGGERED_NONE);
+                Spell* spell = new Spell(me, spellInfo, useCreatureSpells ? TRIGGERED_IGNORE_POWER_AND_REAGENT_COST : TRIGGERED_NONE);
                 bool spellUsed = false;
 
                 // Some spells can target enemy or friendly (DK Ghoul's Leap)
@@ -294,6 +307,9 @@ void PetAI::UpdateAI(uint32 diff)
                         if (!ally)
                             continue;
 
+                        if (useCreatureSpells && IsHealingSpell(spellInfo) && ally->IsFullHealth())
+                            continue;
+
                         if (spell->CanAutoCast(ally))
                         {
                             targetSpellStore.push_back(std::make_pair(ally, spell));
@@ -309,7 +325,7 @@ void PetAI::UpdateAI(uint32 diff)
             }
             else if (me->GetVictim() && CanAttack(me->GetVictim()) && spellInfo->CanBeUsedInCombat())
             {
-                Spell* spell = new Spell(me, spellInfo, TRIGGERED_NONE);
+                Spell* spell = new Spell(me, spellInfo, useCreatureSpells ? TRIGGERED_IGNORE_POWER_AND_REAGENT_COST : TRIGGERED_NONE);
                 if (spell->CanAutoCast(me->GetVictim()))
                     targetSpellStore.push_back(std::make_pair(me->GetVictim(), spell));
                 else
