@@ -7063,6 +7063,26 @@ void Unit::RemovePlayerFromVision(Player* player)
     }
 }
 
+void Unit::RemoveAllPlayersFromVision()
+{
+    while (!m_sharedVision.empty())
+    {
+        Player* player = m_sharedVision.front();
+
+        if (player && player->GetViewpoint() == this)
+            player->SetViewpoint(this, false);
+
+        // SetViewpoint(false) normally removes the player through
+        // RemovePlayerFromVision. If the farsight update is already
+        // inconsistent, remove the stale entry here so despawning units cannot
+        // reach the destructor with shared vision still attached.
+        m_sharedVision.remove(player);
+    }
+
+    setActive(false);
+    SetWorldObject(false);
+}
+
 void Unit::RemoveBindSightAuras()
 {
     RemoveAurasByType(SPELL_AURA_BIND_SIGHT);
@@ -10361,6 +10381,7 @@ void Unit::RemoveFromWorld()
 
         RemoveCharmAuras();
         RemoveBindSightAuras();
+        RemoveAllPlayersFromVision();
         RemoveNotOwnSingleTargetAuras();
 
         RemoveAllGameObjects();
