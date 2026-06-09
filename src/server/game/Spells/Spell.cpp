@@ -6658,10 +6658,13 @@ SpellCastResult Spell::CheckPetCast(Unit* target)
 
     // check power requirement
     // this would be zero until ::prepare normally, we set it here (it gets reset in ::prepare)
-    m_powerCost = m_spellInfo->CalcPowerCost(m_caster, m_spellSchoolMask);
-    SpellCastResult failReason = CheckPower();
-    if (failReason != SPELL_CAST_OK)
-        return failReason;
+    if (!(_triggeredCastFlags & TRIGGERED_IGNORE_POWER_AND_REAGENT_COST))
+    {
+        m_powerCost = m_spellInfo->CalcPowerCost(m_caster, m_spellSchoolMask);
+        SpellCastResult failReason = CheckPower();
+        if (failReason != SPELL_CAST_OK)
+            return failReason;
+    }
 
     // check cooldown
     if (Creature* creatureCaster = m_caster->ToCreature())
