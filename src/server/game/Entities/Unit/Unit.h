@@ -1319,6 +1319,7 @@ class TC_GAME_API Unit : public WorldObject
         SharedVisionList const& GetSharedVisionList() { return m_sharedVision; }
         void AddPlayerToVision(Player* player);
         void RemovePlayerFromVision(Player* player);
+        void RemoveAllPlayersFromVision();
         bool HasSharedVision() const { return !m_sharedVision.empty(); }
         void RemoveBindSightAuras();
         void RemoveCharmAuras();
