@@ -47,25 +47,25 @@ enum BG_BRT_Objects
     BG_BRT_OBJECT_GHOST_WALL_CENTER,
     BG_BRT_OBJECT_IMPERIAL_THRONE,
 
-    // Buff group 1 must stay contiguous for Battleground buff respawn logic.
-    BG_BRT_OBJECT_BUFF1_VARIANT_A,
-    BG_BRT_OBJECT_BUFF1_VARIANT_B,
-    BG_BRT_OBJECT_BUFF1_VARIANT_C,
+    // Buff group 1 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_BRT_OBJECT_BUFF1_SPEED,
+    BG_BRT_OBJECT_BUFF1_REGEN,
+    BG_BRT_OBJECT_BUFF1_BERSERK,
 
-    // Buff group 2 must stay contiguous for Battleground buff respawn logic.
-    BG_BRT_OBJECT_BUFF2_VARIANT_A,
-    BG_BRT_OBJECT_BUFF2_VARIANT_B,
-    BG_BRT_OBJECT_BUFF2_VARIANT_C,
+    // Buff group 2 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_BRT_OBJECT_BUFF2_SPEED,
+    BG_BRT_OBJECT_BUFF2_REGEN,
+    BG_BRT_OBJECT_BUFF2_BERSERK,
 
-    // Buff group 3 must stay contiguous for Battleground buff respawn logic.
-    BG_BRT_OBJECT_BUFF3_VARIANT_A,
-    BG_BRT_OBJECT_BUFF3_VARIANT_B,
-    BG_BRT_OBJECT_BUFF3_VARIANT_C,
+    // Buff group 3 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_BRT_OBJECT_BUFF3_SPEED,
+    BG_BRT_OBJECT_BUFF3_REGEN,
+    BG_BRT_OBJECT_BUFF3_BERSERK,
 
-    // Buff group 4 must stay contiguous for Battleground buff respawn logic.
-    BG_BRT_OBJECT_BUFF4_VARIANT_A,
-    BG_BRT_OBJECT_BUFF4_VARIANT_B,
-    BG_BRT_OBJECT_BUFF4_VARIANT_C,
+    // Buff group 4 must stay contiguous in Speed/Regen/Berserk order for m_BuffChange logic.
+    BG_BRT_OBJECT_BUFF4_SPEED,
+    BG_BRT_OBJECT_BUFF4_REGEN,
+    BG_BRT_OBJECT_BUFF4_BERSERK,
 
     BG_BRT_OBJECT_TRAMPOLINE_1,
     BG_BRT_OBJECT_TRAMPOLINE_2,
@@ -138,7 +138,7 @@ private:
     void TrackHumanParticipantRemoved(Player const* player, uint32 team);
     void UpdateHumanFaceoffState();
     void ApplyNonInteractableObjectFlags();
-    void SpawnRandomBuffSet(uint32 variantAIndex);
+    void SpawnRandomBuffSet(uint32 speedTypeIndex);
 
     uint32 _allianceKills;
     uint32 _hordeKills;
