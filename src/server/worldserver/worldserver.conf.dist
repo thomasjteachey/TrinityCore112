@@ -4359,3 +4359,98 @@ PvPTitles.Rank_11 = 12500
 PvPTitles.Rank_12 = 15000
 PvPTitles.Rank_13 = 20000
 PvPTitles.Rank_14 = 25000
+
+
+###################################################################################################
+# CHALLENGE MODES
+#
+# ChallengeModes.Enable
+#     Description: Enable the challenge-mode shrine and mode restrictions.
+#     Default:     1 - Enabled
+#
+# Modes:
+#     Hardcore           - Death marks the character permanently dead.
+#     SemiHardcore       - Death destroys equipped gear and removes carried gold.
+#     SelfCrafted        - Only self-crafted equipment can be equipped.
+#     ItemQualityLevel   - Only poor/normal-quality gear can be equipped.
+#     SlowXpGain         - XP multiplier defaults to 0.50.
+#     VerySlowXpGain     - XP multiplier defaults to 0.25.
+#     QuestXpOnly        - Creature-kill XP is suppressed.
+#     IronMan            - Normal/poor gear only, no enchants, no potions/elixirs/flasks, no professions, no grouping.
+#
+# Reward strings use pairs of "level rewardId", separated by commas. Example: "60 143, 80 145"
+#
+###################################################################################################
+
+ChallengeModes.Enable = 1
+
+Hardcore.Enable = 1
+Hardcore.TitleRewards = ""
+Hardcore.XPMultiplier = 1
+Hardcore.TalentRewards = ""
+Hardcore.ItemRewards = ""
+Hardcore.ItemRewardAmount = 1
+Hardcore.DisableLevel = 0
+Hardcore.AchievementReward = ""
+
+SemiHardcore.Enable = 1
+SemiHardcore.TitleRewards = ""
+SemiHardcore.XPMultiplier = 1
+SemiHardcore.TalentRewards = ""
+SemiHardcore.ItemRewards = ""
+SemiHardcore.ItemRewardAmount = 1
+SemiHardcore.DisableLevel = 0
+SemiHardcore.AchievementReward = ""
+
+SelfCrafted.Enable = 1
+SelfCrafted.TitleRewards = ""
+SelfCrafted.XPMultiplier = 1
+SelfCrafted.TalentRewards = ""
+SelfCrafted.ItemRewards = ""
+SelfCrafted.ItemRewardAmount = 1
+SelfCrafted.DisableLevel = 0
+SelfCrafted.AchievementReward = ""
+
+ItemQualityLevel.Enable = 1
+ItemQualityLevel.TitleRewards = ""
+ItemQualityLevel.XPMultiplier = 1
+ItemQualityLevel.ItemRewards = ""
+ItemQualityLevel.ItemRewardAmount = 1
+ItemQualityLevel.DisableLevel = 0
+ItemQualityLevel.AchievementReward = ""
+
+SlowXpGain.Enable = 1
+SlowXpGain.TitleRewards = ""
+SlowXpGain.XPMultiplier = 0.50
+SlowXpGain.TalentRewards = ""
+SlowXpGain.ItemRewards = ""
+SlowXpGain.ItemRewardAmount = 1
+SlowXpGain.DisableLevel = 0
+SlowXpGain.AchievementReward = ""
+
+VerySlowXpGain.Enable = 1
+VerySlowXpGain.TitleRewards = ""
+VerySlowXpGain.XPMultiplier = 0.25
+VerySlowXpGain.TalentRewards = ""
+VerySlowXpGain.ItemRewards = ""
+VerySlowXpGain.ItemRewardAmount = 1
+VerySlowXpGain.DisableLevel = 0
+VerySlowXpGain.AchievementReward = ""
+
+QuestXpOnly.Enable = 1
+QuestXpOnly.TitleRewards = ""
+QuestXpOnly.XPMultiplier = 1
+QuestXpOnly.TalentRewards = ""
+QuestXpOnly.ItemRewards = ""
+QuestXpOnly.ItemRewardAmount = 1
+QuestXpOnly.DisableLevel = 0
+QuestXpOnly.AchievementReward = ""
+
+IronMan.Enable = 1
+IronMan.TitleRewards = ""
+IronMan.XPMultiplier = 1
+IronMan.TalentRewards = ""
+IronMan.ItemRewards = ""
+IronMan.ItemRewardAmount = 1
+IronMan.DisableLevel = 0
+IronMan.AchievementReward = ""

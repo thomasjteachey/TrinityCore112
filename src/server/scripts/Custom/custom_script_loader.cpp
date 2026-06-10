@@ -23,6 +23,7 @@
 
 void AddAutoBalanceScripts();
 void LoadHiddenItemsetBonuses();
+void AddSC_mod_challenge_modes();
 void AddSC_custom_hidden_itemset_bonus();
 void AddSC_custom_zone_group_rules();
 void AddSC_mod_pvp_titles();
@@ -36,6 +37,7 @@ void AddSC_go_lplus_jump_pad();
 
 void AddCustomScripts()
 {
+    AddSC_mod_challenge_modes();
     AddAutoBalanceScripts();
     LoadHiddenItemsetBonuses();
     AddSC_custom_hidden_itemset_bonus();

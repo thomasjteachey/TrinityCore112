@@ -1879,6 +1879,56 @@ void ScriptMgr::OnGivePlayerXP(Player* player, uint32& amount, Unit* victim)
     FOREACH_SCRIPT(PlayerScript)->OnGiveXP(player, amount, victim);
 }
 
+bool ScriptMgr::OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* item, bool swap, bool notLoading)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (!itr->second->OnCanEquipItem(player, slot, dest, item, swap, notLoading))
+            return false;
+
+    return true;
+}
+
+bool ScriptMgr::OnPlayerCanUseItem(Player* player, ItemTemplate const* proto, InventoryResult& result)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (!itr->second->OnCanUseItem(player, proto, result))
+            return false;
+
+    return true;
+}
+
+bool ScriptMgr::OnPlayerCanApplyEnchantment(Player* player, Item* item, EnchantmentSlot slot, bool apply, bool applyDur, bool ignoreCondition)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (!itr->second->OnCanApplyEnchantment(player, item, slot, apply, applyDur, ignoreCondition))
+            return false;
+
+    return true;
+}
+
+void ScriptMgr::OnPlayerLearnSpell(Player* player, uint32 spellId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnLearnSpell(player, spellId);
+}
+
+bool ScriptMgr::OnPlayerCanGroupInvite(Player* player, std::string& memberName)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (!itr->second->OnCanGroupInvite(player, memberName))
+            return false;
+
+    return true;
+}
+
+bool ScriptMgr::OnPlayerCanGroupAccept(Player* player, Group* group)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+        if (!itr->second->OnCanGroupAccept(player, group))
+            return false;
+
+    return true;
+}
+
 void ScriptMgr::OnPlayerReputationChange(Player* player, uint32 factionID, int32& standing, bool incremental)
 {
     FOREACH_SCRIPT(PlayerScript)->OnReputationChange(player, factionID, standing, incremental);
@@ -2682,6 +2732,35 @@ void PlayerScript::OnMoneyLimit(Player* /*player*/, int32 /*amount*/)
 
 void PlayerScript::OnGiveXP(Player* /*player*/, uint32& /*amount*/, Unit* /*victim*/)
 {
+}
+
+bool PlayerScript::OnCanEquipItem(Player* /*player*/, uint8 /*slot*/, uint16& /*dest*/, Item* /*item*/, bool /*swap*/, bool /*notLoading*/)
+{
+    return true;
+}
+
+bool PlayerScript::OnCanUseItem(Player* /*player*/, ItemTemplate const* /*proto*/, InventoryResult& /*result*/)
+{
+    return true;
+}
+
+bool PlayerScript::OnCanApplyEnchantment(Player* /*player*/, Item* /*item*/, EnchantmentSlot /*slot*/, bool /*apply*/, bool /*applyDur*/, bool /*ignoreCondition*/)
+{
+    return true;
+}
+
+void PlayerScript::OnLearnSpell(Player* /*player*/, uint32 /*spellId*/)
+{
+}
+
+bool PlayerScript::OnCanGroupInvite(Player* /*player*/, std::string& /*memberName*/)
+{
+    return true;
+}
+
+bool PlayerScript::OnCanGroupAccept(Player* /*player*/, Group* /*group*/)
+{
+    return true;
 }
 
 void PlayerScript::OnReputationChange(Player* /*player*/, uint32 /*factionId*/, int32& /*standing*/, bool /*incremental*/)

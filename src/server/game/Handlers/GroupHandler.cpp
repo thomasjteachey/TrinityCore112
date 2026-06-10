@@ -27,6 +27,7 @@
 #include "ObjectMgr.h"
 #include "Pet.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "SpellAuras.h"
 #include "Util.h"
@@ -84,6 +85,12 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     }
 
     Player* invitingPlayer = GetPlayer();
+    if (!sScriptMgr->OnPlayerCanGroupInvite(invitingPlayer, membername))
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
+        return;
+    }
+
     if (IsPlayerInsideStockades(invitingPlayer))
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
@@ -246,6 +253,12 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
         return;
 
     if (IsPlayerInsideStockades(GetPlayer()))
+    {
+        SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
+        return;
+    }
+
+    if (!sScriptMgr->OnPlayerCanGroupAccept(GetPlayer(), group))
     {
         SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
         return;

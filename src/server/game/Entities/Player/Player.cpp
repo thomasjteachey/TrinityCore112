@@ -3689,7 +3689,10 @@ void Player::LearnSpell(uint32 spell_id, bool dependent, uint32 fromSkill /*= 0*
     }
 
     if (learning)
+    {
         PolearmStaffInnerAuras::OnKnownSpellChanged(this, spell_id);
+        sScriptMgr->OnPlayerLearnSpell(this, spell_id);
+    }
 
     // learn all disabled higher ranks and required spells (recursive)
     if (disabled)
@@ -11861,6 +11864,9 @@ InventoryResult Player::CanEquipItem(uint8 slot, uint16& dest, Item* pItem, bool
             if (res != EQUIP_ERR_OK)
                 return res;
 
+            if (!sScriptMgr->OnPlayerCanEquipItem(const_cast<Player*>(this), slot, dest, pItem, swap, not_loading))
+                return EQUIP_ERR_ITEM_CANT_BE_EQUIPPED;
+
             if (!swap && GetItemByPos(INVENTORY_SLOT_BAG_0, eslot))
                 return EQUIP_ERR_NO_EQUIPMENT_SLOT_AVAILABLE;
 
@@ -12319,6 +12325,10 @@ InventoryResult Player::CanUseItem(ItemTemplate const* proto) const
     if (proto->Spells[0].SpellId == 483 || proto->Spells[0].SpellId == 55884)
         if (HasSpell(proto->Spells[1].SpellId))
             return EQUIP_ERR_NONE;
+
+    InventoryResult scriptResult = EQUIP_ERR_OK;
+    if (!sScriptMgr->OnPlayerCanUseItem(const_cast<Player*>(this), proto, scriptResult))
+        return scriptResult;
 
     return EQUIP_ERR_OK;
 }
@@ -14287,6 +14297,9 @@ void Player::ApplyEnchantment(Item* item, EnchantmentSlot slot, bool apply, bool
         return;
 
     if (pEnchant->RequiredSkillID > 0 && pEnchant->RequiredSkillRank > GetSkillValue(pEnchant->RequiredSkillID))
+        return;
+
+    if (!sScriptMgr->OnPlayerCanApplyEnchantment(this, item, slot, apply, apply_dur, ignore_condition))
         return;
 
     // If we're dealing with a gem inside a prismatic socket we need to check the prismatic socket requirements

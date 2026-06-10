@@ -81,6 +81,8 @@ enum ContentLevels : uint8;
 enum Difficulty : uint8;
 enum DuelCompleteType : uint8;
 enum Emote : uint32;
+enum EnchantmentSlot : uint16;
+enum InventoryResult : uint8;
 enum QuestStatus : uint8;
 enum RemoveMethod : uint8;
 enum ShutdownExitCode : uint32;
@@ -674,6 +676,24 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player gains XP (before anything is given)
         virtual void OnGiveXP(Player* player, uint32& amount, Unit* victim);
 
+        // Called before a player equips an item. Return false to block the equip.
+        virtual bool OnCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* item, bool swap, bool notLoading);
+
+        // Called before a player uses an item template. Return false to block use and set result.
+        virtual bool OnCanUseItem(Player* player, ItemTemplate const* proto, InventoryResult& result);
+
+        // Called before item enchantment effects are applied or removed. Return false to block.
+        virtual bool OnCanApplyEnchantment(Player* player, Item* item, EnchantmentSlot slot, bool apply, bool applyDur, bool ignoreCondition);
+
+        // Called after a spell has been learned.
+        virtual void OnLearnSpell(Player* player, uint32 spellId);
+
+        // Called before a player sends a group invite. Return false to block it.
+        virtual bool OnCanGroupInvite(Player* player, std::string& memberName);
+
+        // Called before a player accepts a group invite. Return false to block it.
+        virtual bool OnCanGroupAccept(Player* player, Group* group);
+
         // Called when a player's reputation changes (before it is actually changed)
         virtual void OnReputationChange(Player* player, uint32 factionId, int32& standing, bool incremental);
 
@@ -1043,6 +1063,12 @@ class TC_GAME_API ScriptMgr
         void OnPlayerMoneyChanged(Player* player, int32& amount);
         void OnPlayerMoneyLimit(Player* player, int32 amount);
         void OnGivePlayerXP(Player* player, uint32& amount, Unit* victim);
+        bool OnPlayerCanEquipItem(Player* player, uint8 slot, uint16& dest, Item* item, bool swap, bool notLoading);
+        bool OnPlayerCanUseItem(Player* player, ItemTemplate const* proto, InventoryResult& result);
+        bool OnPlayerCanApplyEnchantment(Player* player, Item* item, EnchantmentSlot slot, bool apply, bool applyDur, bool ignoreCondition);
+        void OnPlayerLearnSpell(Player* player, uint32 spellId);
+        bool OnPlayerCanGroupInvite(Player* player, std::string& memberName);
+        bool OnPlayerCanGroupAccept(Player* player, Group* group);
         void OnPlayerReputationChange(Player* player, uint32 factionID, int32& standing, bool incremental);
         void OnPlayerDuelRequest(Player* target, Player* challenger);
         void OnPlayerDuelStart(Player* player1, Player* player2);
