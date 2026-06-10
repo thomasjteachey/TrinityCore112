@@ -3366,8 +3366,8 @@ namespace
     constexpr uint32 WarchiefNpcEntry = 31412;
     constexpr uint32 WarchiefRunnerUpEntry = 110017;
     constexpr uint32 WarchiefSpellId = 58553;
-    constexpr uint32 WarchiefTitleId = 9009;
-    constexpr uint32 FormerWarchiefTitleId = 9010;
+    constexpr uint32 WarchiefTitleId = 208;
+    constexpr uint32 FormerWarchiefTitleId = 209;
     constexpr uint32 WarchiefMailSenderEntry = 2784;
     constexpr uint32 WarchiefMailItemEntry = 8586;
     constexpr uint32 WarchiefMailSpellCheck = 16084;
