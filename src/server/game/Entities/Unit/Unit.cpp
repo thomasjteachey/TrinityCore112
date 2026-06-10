@@ -8598,9 +8598,32 @@ bool Unit::IsImmunedToSpellEffect(SpellInfo const* spellInfo, SpellEffectInfo co
         });
     };
 
+    bool const isAttackMeEffect = spellEffectInfo.IsEffect(SPELL_EFFECT_ATTACK_ME);
+    bool const isAttackMeFearSpell = spellInfo->HasEffect(SPELL_EFFECT_ATTACK_ME) &&
+        spellInfo->HasAura(SPELL_AURA_MOD_FEAR);
+    bool const isAttackMeFearAura = spellEffectInfo.ApplyAuraName == SPELL_AURA_MOD_FEAR &&
+        isAttackMeFearSpell;
+    bool const isRegularTauntEffect = spellEffectInfo.ApplyAuraName == SPELL_AURA_MOD_TAUNT ||
+        (isAttackMeEffect && !isAttackMeFearSpell);
+
+    // Players cannot be affected by regular taunts. ATTACK_ME + FEAR spells are
+    // player-targeted forced-taunts, so do not reject those here.
+    if (GetTypeId() == TYPEID_PLAYER && isRegularTauntEffect)
+        return true;
+
     // If m_immuneToEffect type contain this effect type, IMMUNE effect.
     SpellImmuneContainer const& effectList = m_spellImmune[IMMUNITY_EFFECT];
     if (hasImmunity(effectList, spellEffectInfo.Effect))
+        return true;
+
+    bool const usePveAttackMeFearTauntImmunity = GetTypeId() != TYPEID_PLAYER && isAttackMeFearSpell;
+    if (isAttackMeFearAura && usePveAttackMeFearTauntImmunity &&
+        hasImmunity(effectList, SPELL_EFFECT_ATTACK_ME))
+        return true;
+
+    SpellImmuneContainer const& stateList = m_spellImmune[IMMUNITY_STATE];
+    if ((isRegularTauntEffect || (usePveAttackMeFearTauntImmunity && isAttackMeEffect)) &&
+        hasImmunity(stateList, SPELL_AURA_MOD_TAUNT))
         return true;
 
     if (uint32 mechanic = spellEffectInfo.Mechanic)
@@ -8614,8 +8637,11 @@ bool Unit::IsImmunedToSpellEffect(SpellInfo const* spellInfo, SpellEffectInfo co
     {
         if (!spellInfo->HasAttribute(SPELL_ATTR3_IGNORE_HIT_RESULT))
         {
-            SpellImmuneContainer const& list = m_spellImmune[IMMUNITY_STATE];
-            if (hasImmunity(list, aura))
+            if (hasImmunity(stateList, aura))
+                return true;
+
+            if (isAttackMeFearAura && usePveAttackMeFearTauntImmunity &&
+                hasImmunity(stateList, SPELL_AURA_MOD_TAUNT))
                 return true;
         }
 
