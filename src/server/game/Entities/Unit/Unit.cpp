@@ -9317,9 +9317,9 @@ int32 GetPlainsrunningMountSpeedMod(Player const* player)
         return 100;
 
     if (ridingSkill >= 75)
-        return 40;
+        return 60;
 
-    return 20;
+    return 30;
 }
 }
 
