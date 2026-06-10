@@ -17,6 +17,7 @@
 
 #ifndef TRINITYCORE_CREATURE_H
 #define TRINITYCORE_CREATURE_H
+#include "AutoBalance/AutoBalanceCreatureInfo.h"
 
 #include "Unit.h"
 #include "Common.h"
@@ -62,6 +63,19 @@ typedef std::unordered_map<uint8, CreatureTextRepeatIds> CreatureTextRepeatGroup
 class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public MapObject
 {
     public:
+        struct CustomData
+        {
+            struct AutoBalanceData
+            {
+                AutoBalance::AutoBalanceCreatureInfo CreatureInfo;
+            };
+
+            AutoBalanceData AutoBalance;
+        };
+
+        CustomData& GetCustomData() { return _customData; }
+        CustomData const& GetCustomData() const { return _customData; }
+
         explicit Creature(bool isWorldObject = false);
 
         void AddToWorld() override;
@@ -476,6 +490,7 @@ class TC_GAME_API Creature : public Unit, public GridObject<Creature>, public Ma
         CreaturePlayerBytes _playerAppearance;
         std::array<uint32, CreaturePlayerBytes::VisibleItemSlotCount> _playerVisibleItemDisplayIds{};
         uint32 _playerGuildId = 0;
+        CustomData _customData;
 };
 
 class TC_GAME_API AssistDelayEvent : public BasicEvent

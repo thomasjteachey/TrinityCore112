@@ -26,6 +26,7 @@
 #include <boost/dynamic_bitset.hpp>
 
 class Transport;
+class Player;
 struct TransportCreatureProto;
 
 class TC_GAME_API MapManager
@@ -133,6 +134,12 @@ class TC_GAME_API MapManager
 
         template<typename Worker>
         void DoForAllMapsWithMapId(uint32 mapId, Worker&& worker);
+
+        void HandleMapCreated(Map* map);
+        void HandleMapDestroyed(Map* map);
+        void HandlePlayerEnterMap(Map* map, Player* player);
+        void HandlePlayerLeaveMap(Map* map, Player* player);
+        void HandleInstanceCombatState(Map* map, bool locked, Player* player = nullptr);
 
         void IncreaseScheduledScriptsCount() { ++_scheduledScripts; }
         void DecreaseScheduledScriptCount() { --_scheduledScripts; }

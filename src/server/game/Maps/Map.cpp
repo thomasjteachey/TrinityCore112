@@ -92,6 +92,7 @@ Map::~Map()
 {
     // UnloadAll must be called before deleting the map
 
+    sMapMgr->HandleMapDestroyed(this);
     sScriptMgr->OnDestroyMap(this);
 
     // Delete all waiting spawns, else there will be a memory leak
@@ -304,6 +305,7 @@ i_scriptLock(false), _respawnTimes(std::make_unique<RespawnListContainer>()), _r
     _weatherUpdateTimer.SetInterval(time_t(1 * IN_MILLISECONDS));
 
     sScriptMgr->OnCreateMap(this);
+    sMapMgr->HandleMapCreated(this);
 }
 
 void Map::InitVisibilityDistance()
@@ -621,6 +623,7 @@ bool Map::AddPlayerToMap(Player* player)
         ConvertCorpseToBones(player->GetGUID());
 
     sScriptMgr->OnPlayerEnterMap(this, player);
+    sMapMgr->HandlePlayerEnterMap(this, player);
     return true;
 }
 
@@ -1017,6 +1020,7 @@ void Map::RemovePlayerFromMap(Player* player, bool remove)
     // Before leaving map, update zone/area for stats
     player->UpdateZone(MAP_INVALID_ZONE, 0);
     sScriptMgr->OnPlayerLeaveMap(this, player);
+    sMapMgr->HandlePlayerLeaveMap(this, player);
 
     player->CombatStop();
 
@@ -3871,8 +3875,21 @@ Map::EnterState InstanceMap::CannotEnter(Player* player)
     }
 
     // cannot enter while an encounter is in progress (unless this is a relog, in which case it is permitted)
-    if (!player->IsLoading() && IsRaid() && GetInstanceScript() && GetInstanceScript()->IsEncounterInProgress())
-        return CANNOT_ENTER_ZONE_IN_COMBAT;
+    if (!player->IsLoading() && IsRaid())
+    {
+        if (InstanceScript* instanceScript = GetInstanceScript())
+        {
+            if (instanceScript->IsEncounterInProgress())
+            {
+                sMapMgr->HandleInstanceCombatState(this, true, player);
+                return CANNOT_ENTER_ZONE_IN_COMBAT;
+            }
+
+            sMapMgr->HandleInstanceCombatState(this, false, player);
+        }
+        else
+            sMapMgr->HandleInstanceCombatState(this, false, player);
+    }
 
     // cannot enter if player is permanent saved to a different instance id
     if (InstancePlayerBind* playerBind = player->GetBoundInstance(GetId(), GetDifficulty()))

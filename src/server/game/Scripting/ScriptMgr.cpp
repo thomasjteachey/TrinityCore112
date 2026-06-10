@@ -2154,6 +2154,31 @@ void ScriptMgr::ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& dama
     FOREACH_SCRIPT(UnitScript)->ModifySpellDamageTaken(target, attacker, damage);
 }
 
+void ScriptMgr::OnBeforeCreatureSelectLevel(Creature* creature, uint8& level)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnBeforeCreatureSelectLevel(creature, level);
+}
+
+void ScriptMgr::Creature_SelectLevel(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->Creature_SelectLevel(creature);
+}
+
+void ScriptMgr::OnCreatureAddWorld(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureAddWorld(creature);
+}
+
+void ScriptMgr::OnCreatureRemoveWorld(Creature* creature)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnCreatureRemoveWorld(creature);
+}
+
+void ScriptMgr::OnAllCreatureUpdate(Creature* creature, uint32 diff)
+{
+    FOREACH_SCRIPT(AllCreatureScript)->OnAllCreatureUpdate(creature, diff);
+}
+
 SpellScriptLoader::SpellScriptLoader(char const* name)
     : ScriptObject(name)
 {
@@ -2414,6 +2439,32 @@ CreatureScript::CreatureScript(char const* name)
     : ScriptObject(name)
 {
     ScriptRegistry<CreatureScript>::Instance()->AddScript(this);
+}
+
+AllCreatureScript::AllCreatureScript(char const* name)
+    : ScriptObject(name)
+{
+    ScriptRegistry<AllCreatureScript>::Instance()->AddScript(this);
+}
+
+void AllCreatureScript::OnBeforeCreatureSelectLevel(Creature* /*creature*/, uint8& /*level*/)
+{
+}
+
+void AllCreatureScript::Creature_SelectLevel(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnCreatureAddWorld(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnCreatureRemoveWorld(Creature* /*creature*/)
+{
+}
+
+void AllCreatureScript::OnAllCreatureUpdate(Creature* /*creature*/, uint32 /*diff*/)
+{
 }
 
 GameObjectScript::GameObjectScript(char const* name)
@@ -2855,6 +2906,7 @@ template class TC_GAME_API ScriptRegistry<InstanceMapScript>;
 template class TC_GAME_API ScriptRegistry<BattlegroundMapScript>;
 template class TC_GAME_API ScriptRegistry<ItemScript>;
 template class TC_GAME_API ScriptRegistry<CreatureScript>;
+template class TC_GAME_API ScriptRegistry<AllCreatureScript>;
 template class TC_GAME_API ScriptRegistry<GameObjectScript>;
 template class TC_GAME_API ScriptRegistry<AreaTriggerScript>;
 template class TC_GAME_API ScriptRegistry<BattlefieldScript>;

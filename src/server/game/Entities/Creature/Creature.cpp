@@ -16,6 +16,7 @@
  */
 
 #include "Creature.h"
+#include "AutoBalance/AutoBalanceCreature.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
 #include "Common.h"
@@ -58,6 +59,7 @@
 #include "QueryPackets.h"
 #include "QuestDef.h"
 #include "ScriptedGossip.h"
+#include "ScriptMgr.h"
 #include "SpellAuraEffects.h"
 #include "SpellMgr.h"
 #include "TemporarySummon.h"
@@ -305,6 +307,8 @@ void Creature::AddToWorld()
         TC_LOG_DEBUG("entities.unit", "Adding creature {} with DBGUID {} to world in map {}", GetGUID().ToString(), m_spawnId, GetMap()->GetId());
 
         Unit::AddToWorld();
+
+        sScriptMgr->OnCreatureAddWorld(this);
         SearchFormation();
         AIM_Initialize();
         if (IsVehicle())
@@ -324,6 +328,8 @@ void Creature::RemoveFromWorld()
 
         if (m_formation)
             sFormationMgr->RemoveCreatureFromGroup(m_formation, this);
+
+        sScriptMgr->OnCreatureRemoveWorld(this);
 
         Unit::RemoveFromWorld();
 
@@ -707,6 +713,8 @@ void Creature::Update(uint32 diff)
     }
 
     UpdateMovementFlags();
+
+    sScriptMgr->OnAllCreatureUpdate(this, diff);
 
     switch (m_deathState)
     {
@@ -1559,7 +1567,12 @@ void Creature::SelectLevel()
     uint8 minlevel = std::min(cInfo->maxlevel, cInfo->minlevel);
     uint8 maxlevel = std::max(cInfo->maxlevel, cInfo->minlevel);
     uint8 level = minlevel == maxlevel ? minlevel : urand(minlevel, maxlevel);
+
+    sScriptMgr->OnBeforeCreatureSelectLevel(this, level);
+
     SetLevel(level);
+
+    sScriptMgr->Creature_SelectLevel(this);
 }
 
 void Creature::UpdateLevelDependantStats()
@@ -1616,6 +1629,8 @@ void Creature::UpdateLevelDependantStats()
 
     float armor = (float)stats->GenerateArmor(cInfo); /// @todo Why is this treated as uint32 when it's a float?
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, armor);
+
+    AutoBalance::ScaleCreature(this);
 }
 
 float Creature::_GetHealthMod(int32 Rank)

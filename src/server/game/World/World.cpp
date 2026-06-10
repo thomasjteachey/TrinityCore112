@@ -20,6 +20,7 @@
 */
 
 #include "World.h"
+#include "AutoBalance/AutoBalanceConfig.h"
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
 #include "AddonMgr.h"
@@ -494,9 +495,12 @@ void World::LoadConfigSettings(bool reload)
 
             return;
         }
+        AutoBalance::LoadConfig(true);
         sLog->LoadFromConfig();
         sMetric->LoadFromConfigs();
     }
+    else
+        AutoBalance::LoadConfig(false);
 
     ///- Read the player limit and the Message of the day from the config file
     SetPlayerAmountLimit(sConfigMgr->GetIntDefault("PlayerLimit", 100));

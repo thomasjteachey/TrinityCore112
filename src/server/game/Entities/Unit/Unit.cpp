@@ -16,6 +16,7 @@
  */
 
 #include "Unit.h"
+#include "AutoBalance/AutoBalanceCreature.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -85,6 +86,7 @@
 #include "WorldSession.h"
 #include <cmath>
 #include <sstream>
+#include <limits>
 
 namespace
 {
@@ -7159,12 +7161,25 @@ void Unit::EnergizeBySpell(Unit* victim, SpellInfo const* spellInfo, int32 damag
 
 uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uint32 pdamage, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, Optional<float> const& donePctTotal, uint32 stack /*= 1*/) const
 {
-    if (!spellProto || !victim || damagetype == DIRECT_DAMAGE)
-        return pdamage;
+    Optional<float> const damageMultiplier = AutoBalance::GetDamageHealingMultiplier(this);
+    auto const applyModifier = [&](uint32 value) -> uint32
+    {
+        if (!value || !damageMultiplier)
+            return value;
+
+        double const scaled = std::clamp(static_cast<double>(value) * static_cast<double>(*damageMultiplier), 0.0, static_cast<double>(std::numeric_limits<uint32>::max()));
+        return static_cast<uint32>(std::round(scaled));
+    };
+
+    if (!spellProto || !victim)
+        return applyModifier(pdamage);
+
+    if (damagetype == DIRECT_DAMAGE)
+        return applyModifier(pdamage);
 
     // Some spells don't benefit from done mods
     if (spellProto->HasAttribute(SPELL_ATTR3_NO_DONE_BONUS))
-        return pdamage;
+        return applyModifier(pdamage);
 
     // For totems get damage bonus from owner
     if (GetTypeId() == TYPEID_UNIT && IsTotem())
@@ -7268,7 +7283,7 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
     {
         // No bonus damage for SPELL_DAMAGE_CLASS_NONE class spells by default
         if (spellProto->DmgClass == SPELL_DAMAGE_CLASS_NONE)
-            return uint32(std::max(pdamage * DoneTotalMod, 0.0f));
+            return applyModifier(uint32(std::max(pdamage * DoneTotalMod, 0.0f)));
     }
 
     // Default calculation
@@ -7294,7 +7309,8 @@ uint32 Unit::SpellDamageBonusDone(Unit* victim, SpellInfo const* spellProto, uin
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, tmpDamage);
 
-    return uint32(std::max(tmpDamage, 0.0f));
+    uint32 const scaledDamage = uint32(std::max(tmpDamage, 0.0f));
+    return applyModifier(scaledDamage);
 }
 
 float Unit::SpellDamagePctDone(Unit* victim, SpellInfo const* spellProto, DamageEffectType damagetype) const
@@ -8053,6 +8069,16 @@ float Unit::SpellCritChanceTaken(Unit const* caster, SpellInfo const* spellInfo,
 
 uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, uint32 healamount, DamageEffectType damagetype, SpellEffectInfo const& spellEffectInfo, Optional<float> const& donePctTotal, uint32 stack /*= 1*/) const
 {
+    Optional<float> const healingMultiplier = AutoBalance::GetDamageHealingMultiplier(this);
+    auto const applyModifier = [&](uint32 value) -> uint32
+    {
+        if (!value || !healingMultiplier)
+            return value;
+
+        double const scaled = std::clamp(static_cast<double>(value) * static_cast<double>(*healingMultiplier), 0.0, static_cast<double>(std::numeric_limits<uint32>::max()));
+        return static_cast<uint32>(std::round(scaled));
+    };
+
     // For totems get healing bonus from owner (statue isn't totem in fact)
     if (GetTypeId() == TYPEID_UNIT && IsTotem())
         if (Unit* owner = GetOwner())
@@ -8060,7 +8086,7 @@ uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, ui
 
     // No bonus healing for potion spells
     if (spellProto->SpellFamilyName == SPELLFAMILY_POTION)
-        return healamount;
+        return applyModifier(healamount);
 
     float ApCoeffMod = 1.0f;
     int32 DoneTotal = 0;
@@ -8168,7 +8194,7 @@ uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, ui
     {
         // No bonus healing for SPELL_DAMAGE_CLASS_NONE class spells by default
         if (spellProto->DmgClass == SPELL_DAMAGE_CLASS_NONE)
-            return uint32(std::max(healamount * DoneTotalMod, 0.0f));
+            return applyModifier(uint32(std::max(healamount * DoneTotalMod, 0.0f)));
     }
 
     // Default calculation
@@ -8210,7 +8236,8 @@ uint32 Unit::SpellHealingBonusDone(Unit* victim, SpellInfo const* spellProto, ui
     if (Player* modOwner = GetSpellModOwner())
         modOwner->ApplySpellMod(spellProto->Id, damagetype == DOT ? SPELLMOD_DOT : SPELLMOD_DAMAGE, heal);
 
-    return uint32(std::max(heal, 0.0f));
+    uint32 const scaledHeal = uint32(std::max(heal, 0.0f));
+    return applyModifier(scaledHeal);
 }
 
 float Unit::SpellHealingPctDone(Unit* victim, SpellInfo const* spellProto) const

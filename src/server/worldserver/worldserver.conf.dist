@@ -3173,6 +3173,15 @@ CharDelete.KeepDays = 30
 ###################################################################################################
 # CUSTOM SERVER OPTIONS
 #
+#    AutoBalance.Conf
+#        Description: Path to the AutoBalance module configuration file. Leave empty to disable loading
+#                     the module configuration file and use worldserver.conf/default values only.
+#        Default:     "conf/AutoBalance.conf"
+#
+
+AutoBalance.Conf = "conf/AutoBalance.conf"
+
+#
 #    DireMaulBeads.ItemId
 #        Description: Item entry that represents the Dire Maul ogre beads.
 #                     Set to 0 to disable bead tracking/loot distribution.

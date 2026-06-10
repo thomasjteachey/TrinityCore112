@@ -412,6 +412,29 @@ class TC_GAME_API CreatureScript : public ScriptObject
         virtual CreatureAI* GetAI(Creature* creature) const = 0;
 };
 
+class TC_GAME_API AllCreatureScript : public ScriptObject
+{
+    protected:
+
+        explicit AllCreatureScript(char const* name);
+
+    public:
+        // Called before a creature selects its spawn level
+        virtual void OnBeforeCreatureSelectLevel(Creature* creature, uint8& level);
+
+        // Called after a creature has selected its spawn level
+        virtual void Creature_SelectLevel(Creature* creature);
+
+        // Called when a creature is added to the world
+        virtual void OnCreatureAddWorld(Creature* creature);
+
+        // Called when a creature is removed from the world
+        virtual void OnCreatureRemoveWorld(Creature* creature);
+
+        // Called every update tick for creatures
+        virtual void OnAllCreatureUpdate(Creature* creature, uint32 diff);
+};
+
 class TC_GAME_API GameObjectScript : public ScriptObject
 {
     protected:
@@ -1086,6 +1109,14 @@ class TC_GAME_API ScriptMgr
         void ModifyPeriodicDamageAurasTick(Unit* target, Unit* attacker, uint32& damage);
         void ModifyMeleeDamage(Unit* target, Unit* attacker, uint32& damage);
         void ModifySpellDamageTaken(Unit* target, Unit* attacker, int32& damage);
+
+    public: /* AllCreatureScript */
+
+        void OnBeforeCreatureSelectLevel(Creature* creature, uint8& level);
+        void Creature_SelectLevel(Creature* creature);
+        void OnCreatureAddWorld(Creature* creature);
+        void OnCreatureRemoveWorld(Creature* creature);
+        void OnAllCreatureUpdate(Creature* creature, uint32 diff);
 
     private:
         uint32 _scriptCount;

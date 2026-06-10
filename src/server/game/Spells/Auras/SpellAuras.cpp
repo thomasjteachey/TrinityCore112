@@ -16,6 +16,7 @@
  */
 
 #include "Common.h"
+#include "AutoBalance/AutoBalanceCreature.h"
 #include "CellImpl.h"
 #include "Chat.h"
 #include "Config.h"
@@ -30,6 +31,7 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include <array>
+#include <algorithm>
 #include "Spell.h"
 #include "SpellAuraEffects.h"
 #include "SpellHistory.h"
@@ -43,9 +45,49 @@
 #include "WorldSession.h"
 #include <iomanip>
 #include <sstream>
+#include <limits>
+#include <cmath>
 
 namespace
 {
+    bool IsCrowdControlAura(AuraType auraType)
+    {
+        switch (auraType)
+        {
+            case SPELL_AURA_MOD_CHARM:
+            case SPELL_AURA_MOD_CONFUSE:
+            case SPELL_AURA_MOD_DISARM:
+            case SPELL_AURA_MOD_FEAR:
+            case SPELL_AURA_MOD_PACIFY:
+            case SPELL_AURA_MOD_POSSESS:
+            case SPELL_AURA_MOD_SILENCE:
+            case SPELL_AURA_MOD_STUN:
+            case SPELL_AURA_MOD_SPEED_SLOW_ALL:
+                return true;
+            default:
+                break;
+        }
+
+        return false;
+    }
+
+    bool SpellHasCrowdControlAura(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if (!effect.IsAura())
+                continue;
+
+            if (IsCrowdControlAura(static_cast<AuraType>(effect.ApplyAuraName)))
+                return true;
+        }
+
+        return false;
+    }
+
     std::string BuildAuraCrashContext(char const* phase, Aura const* aura, WorldObject const* ownerArg = nullptr, Unit const* caster = nullptr, Unit const* target = nullptr, AuraApplication const* aurApp = nullptr)
     {
         std::ostringstream sstr;
@@ -1001,6 +1043,18 @@ int32 Aura::CalcMaxDuration(Unit* caster) const
     // IsPermanent() checks max duration (which we are supposed to calculate here)
     if (maxDuration != -1 && modOwner)
         modOwner->ApplySpellMod(spellInfo->Id, SPELLMOD_DURATION, maxDuration);
+
+    if (maxDuration > 0 && caster && SpellHasCrowdControlAura(spellInfo))
+    {
+        if (Unit const* unitCaster = caster->ToUnit())
+        {
+            if (Optional<float> const ccModifier = AutoBalance::GetCrowdControlDurationMultiplier(unitCaster))
+            {
+                double const scaled = std::clamp(static_cast<double>(maxDuration) * static_cast<double>(*ccModifier), 0.0, static_cast<double>(std::numeric_limits<int32>::max()));
+                maxDuration = static_cast<int32>(std::round(scaled));
+            }
+        }
+    }
 
     return maxDuration;
 }

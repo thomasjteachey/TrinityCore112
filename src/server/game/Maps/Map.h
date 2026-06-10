@@ -324,6 +324,32 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
 {
     friend class MapReference;
     public:
+        struct CustomData
+        {
+            struct AutoBalanceData
+            {
+                uint32 PlayerCount = 0;
+                uint32 EffectivePlayerCount = 0;
+                int32 QueueOffset = 0;
+                uint8 HighestPlayerLevel = 0;
+                uint32 CombatLockMinPlayers = 0;
+                uint32 LastPlayerJoinTimeMS = 0;
+                uint32 LastPlayerLeaveTimeMS = 0;
+                uint32 LastPlayerCountUpdateTimeMS = 0;
+                uint32 LastCombatStartTimeMS = 0;
+                uint32 LastCombatEndTimeMS = 0;
+                uint32 LastCombatStateChangeTimeMS = 0;
+                bool CombatLocked = false;
+                bool CombatStateDirty = false;
+                bool CombatLockTripped = false;
+            };
+
+            AutoBalanceData AutoBalance;
+        };
+
+        CustomData& GetCustomData() { return _customData; }
+        CustomData const& GetCustomData() const { return _customData; }
+
         Map(uint32 id, time_t, uint32 InstanceId, uint8 SpawnMode, Map* _parent = nullptr);
         virtual ~Map();
 
@@ -762,6 +788,8 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
 
         typedef std::multimap<time_t, ScriptAction> ScriptScheduleMap;
         ScriptScheduleMap m_scriptSchedule;
+
+        CustomData _customData;
 
     public:
         void ProcessRespawns();

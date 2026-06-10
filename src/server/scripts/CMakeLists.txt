@@ -106,6 +106,12 @@ endif()
 
 GroupSources(${CMAKE_CURRENT_SOURCE_DIR})
 
+set(CUSTOM_AUTOBALANCE_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/AutoBalance.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/AutoBalanceCommands.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/AutoBalanceLoader.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance/Message.cpp)
+
 # Configures the scriptloader with the given name and stores the output in the LOADER_OUT variable.
 # It is possible to expose multiple subdirectories from the same scriptloader through passing
 # it to the variable arguments
@@ -157,12 +163,20 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
       list(APPEND STATIC_SCRIPT_MODULES ${SCRIPT_MODULE})
       # Add the module content to the whole static module
       CollectSourceFiles(${SCRIPT_MODULE_PATH} PRIVATE_SOURCES)
+      if(${SCRIPT_MODULE} STREQUAL "Custom")
+        list(APPEND PRIVATE_SOURCES ${CUSTOM_AUTOBALANCE_SOURCES})
+        list(REMOVE_DUPLICATES PRIVATE_SOURCES)
+      endif()
     endif()
   elseif(${SCRIPT_MODULE_VARIABLE} STREQUAL "dynamic")
     # Generate an own dynamic module which is loadable on runtime
     # Add the module content to the whole static module
     unset(SCRIPT_MODULE_PRIVATE_SOURCES)
     CollectSourceFiles(${SCRIPT_MODULE_PATH} SCRIPT_MODULE_PRIVATE_SOURCES)
+    if(${SCRIPT_MODULE} STREQUAL "Custom")
+      list(APPEND SCRIPT_MODULE_PRIVATE_SOURCES ${CUSTOM_AUTOBALANCE_SOURCES})
+      list(REMOVE_DUPLICATES SCRIPT_MODULE_PRIVATE_SOURCES)
+    endif()
     # Configure the scriptloader
     ConfigureScriptLoader(${SCRIPT_MODULE} SCRIPT_MODULE_PRIVATE_SCRIPTLOADER ON ${SCRIPT_MODULE})
     GetProjectNameOfScriptModule(${SCRIPT_MODULE} SCRIPT_MODULE_PROJECT_NAME)
@@ -180,7 +194,8 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
 
     target_include_directories(${SCRIPT_MODULE_PROJECT_NAME}
       PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR})
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance)
 
     set_target_properties(${SCRIPT_MODULE_PROJECT_NAME}
       PROPERTIES
@@ -227,7 +242,8 @@ target_link_libraries(scripts
 
 target_include_directories(scripts
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/Custom/AutoBalance)
 
 set_target_properties(scripts
   PROPERTIES

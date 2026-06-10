@@ -21,6 +21,7 @@
 // void Add${NameOfDirectory}Scripts()
 #include "BGReplay.cpp"
 
+void AddAutoBalanceScripts();
 void LoadHiddenItemsetBonuses();
 void AddSC_custom_hidden_itemset_bonus();
 void AddSC_custom_zone_group_rules();
@@ -35,6 +36,7 @@ void AddSC_go_lplus_jump_pad();
 
 void AddCustomScripts()
 {
+    AddAutoBalanceScripts();
     LoadHiddenItemsetBonuses();
     AddSC_custom_hidden_itemset_bonus();
     AddBGReplayScripts();
