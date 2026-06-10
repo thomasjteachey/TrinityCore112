@@ -9291,6 +9291,38 @@ void Unit::SetVisible(bool x)
     UpdateObjectVisibility();
 }
 
+namespace
+{
+uint32 constexpr SPELL_PLAINSRUNNING_MOUNT = 89153;
+
+uint16 GetHighestRidingSkillValue(Player const* player)
+{
+    uint16 ridingSkill = player->GetBaseSkillValue(SKILL_RIDING);
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_HORSE));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_WOLF));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_TIGER));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_RAM));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_RAPTOR));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_MECHANOSTRIDER));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_UNDEAD_HORSE));
+    ridingSkill = std::max(ridingSkill, player->GetBaseSkillValue(SKILL_RIDING_KODO));
+    return ridingSkill;
+}
+
+int32 GetPlainsrunningMountSpeedMod(Player const* player)
+{
+    uint16 const ridingSkill = GetHighestRidingSkillValue(player);
+
+    if (ridingSkill >= 100)
+        return 100;
+
+    if (ridingSkill >= 75)
+        return 40;
+
+    return 20;
+}
+}
+
 void Unit::UpdateSpeed(UnitMoveType mtype)
 {
     int32 main_speed_mod  = 0;
@@ -9311,6 +9343,11 @@ void Unit::UpdateSpeed(UnitMoveType mtype)
             if (IsMounted()) // Use on mount auras
             {
                 main_speed_mod  = GetMaxPositiveAuraModifier(SPELL_AURA_MOD_INCREASE_MOUNTED_SPEED);
+
+                if (Player const* player = ToPlayer())
+                    if (player->HasAura(SPELL_PLAINSRUNNING_MOUNT))
+                        main_speed_mod = GetPlainsrunningMountSpeedMod(player);
+
                 stack_bonus     = GetTotalAuraMultiplier(SPELL_AURA_MOD_MOUNTED_SPEED_ALWAYS);
                 non_stack_bonus += GetMaxPositiveAuraModifier(SPELL_AURA_MOD_MOUNTED_SPEED_NOT_STACK) / 100.0f;
             }
