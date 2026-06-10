@@ -16870,12 +16870,12 @@ void Player::GroupEventHappens(uint32 questId, WorldObject const* pEventObject)
         AreaExploredOrEventHappens(questId);
 }
 
-void Player::ItemAddedQuestCheck(uint32 entry, uint32 count)
+void Player::ItemAddedQuestCheck(uint32 entry, uint32 /*count*/)
 {
-    RefreshQuestItemCounts(entry, count);
+    RefreshQuestItemCounts(entry);
 }
 
-void Player::RefreshQuestItemCounts(uint32 entry, uint32 addedCount /*= 0*/)
+void Player::RefreshQuestItemCounts(uint32 entry, uint32 /*addedCount = 0*/)
 {
     for (uint8 i = 0; i < MAX_QUEST_LOG_SIZE; ++i)
     {
@@ -16912,14 +16912,11 @@ void Player::RefreshQuestItemCounts(uint32 entry, uint32 addedCount /*= 0*/)
 
                 curitemcount = q_status.ItemCount[j];
 
-                // If we were called from ItemAddedQuestCheck directly, maintain the legacy increment
-                // behavior so partial updates still work when the resync already matches.
-                if (addedCount && curitemcount < reqitemcount)
-                    q_status.ItemCount[j] = std::min<uint16>(uint16(curitemcount + addedCount), reqitemcount);
+                // The quest objective counter is derived from the actual inventory count above.
+                // Do not add the just-looted count again here, or deliver objectives can complete
+                // one item early while the player still has fewer items than the quest requires.
                 if (curitemcount < reqitemcount)
-                {
                     m_QuestStatusSave[questid] = QUEST_DEFAULT_SAVE_TYPE;
-                }
                 if (CanCompleteQuest(questid))
                     CompleteQuest(questid);
             }
