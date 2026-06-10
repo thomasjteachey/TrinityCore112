@@ -6214,6 +6214,30 @@ void Player::UpdateWeaponsSkillsToMaxSkillsForLevel()
     }
 }
 
+namespace
+{
+uint32 constexpr SPELL_PLAINSRUNNING_MOUNT = 89153;
+
+bool IsRidingSkillForPlainsrunning(uint32 skill)
+{
+    switch (skill)
+    {
+        case SKILL_RIDING:
+        case SKILL_RIDING_HORSE:
+        case SKILL_RIDING_WOLF:
+        case SKILL_RIDING_TIGER:
+        case SKILL_RIDING_RAM:
+        case SKILL_RIDING_RAPTOR:
+        case SKILL_RIDING_MECHANOSTRIDER:
+        case SKILL_RIDING_UNDEAD_HORSE:
+        case SKILL_RIDING_KODO:
+            return true;
+        default:
+            return false;
+    }
+}
+}
+
 // This functions sets a skill line value (and adds if doesn't exist yet)
 // To "remove" a skill line, set it's values to zero
 void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
@@ -6245,6 +6269,9 @@ void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
                 UpdateSkillEnchantments(id, currVal, newVal);
             UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL, id);
             UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LEARN_SKILL_LEVEL, id);
+
+            if (IsRidingSkillForPlainsrunning(id) && HasAura(SPELL_PLAINSRUNNING_MOUNT))
+                UpdateSpeed(MOVE_RUN);
         }
         else                                                //remove
         {
@@ -6265,6 +6292,9 @@ void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
             if (std::vector<SkillLineAbilityEntry const*> const* skillLineAbilities = GetSkillLineAbilitiesBySkill(id))
                 for (SkillLineAbilityEntry const* skillLineAbility : *skillLineAbilities)
                     RemoveSpell(sSpellMgr->GetFirstSpellInChain(skillLineAbility->Spell));
+
+            if (IsRidingSkillForPlainsrunning(id) && HasAura(SPELL_PLAINSRUNNING_MOUNT))
+                UpdateSpeed(MOVE_RUN);
         }
     }
     else if (newVal)                                        //add
@@ -6314,6 +6344,10 @@ void Player::SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal)
                 LearnSkillRewardedSpells(id, newVal);
                 UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL, id);
                 UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_LEARN_SKILL_LEVEL, id);
+
+                if (IsRidingSkillForPlainsrunning(id) && HasAura(SPELL_PLAINSRUNNING_MOUNT))
+                    UpdateSpeed(MOVE_RUN);
+
                 return;
             }
         }
