@@ -11,6 +11,7 @@
 #include "Group.h"
 #include "Item.h"
 #include "ItemTemplate.h"
+#include "Log.h"
 #include "Pet.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -275,7 +276,7 @@ bool ChallengeModes::CanActivate(Player const* player) const
     if (!_enabled || !player)
         return false;
 
-    if (player->getClass() == CLASS_DEATH_KNIGHT)
+    if (player->GetClass() == CLASS_DEATH_KNIGHT)
         return player->GetLevel() <= 55;
 
     return player->GetLevel() <= 1;
@@ -654,7 +655,7 @@ public:
             AddChallengeOption(player, SETTING_QUEST_XP_ONLY, "Enable Quest XP Only");
             AddChallengeOption(player, SETTING_IRON_MAN, "Enable Iron Man");
 
-            SendGossipMenuFor(player, 12669, me);
+            SendGossipMenuFor(player, 12669, me->GetGUID());
             return true;
         }
 
