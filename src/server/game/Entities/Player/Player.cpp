@@ -16901,10 +16901,13 @@ void Player::RefreshQuestItemCounts(uint32 entry, uint32 addedCount /*= 0*/)
                 uint16 curitemcount = q_status.ItemCount[j];
                 uint32 const totalCount = GetItemCount(entry, true);
                 uint16 const expectedCount = std::min<uint16>(totalCount, reqitemcount);
+                bool const syncedFromInventory = curitemcount != expectedCount;
 
                 // When the item was added through an alternate path (or the quest counter drifted),
-                // re-sync the quest's objective counter to the player's actual inventory.
-                if (curitemcount != expectedCount)
+                // re-sync the quest's objective counter to the player's actual inventory.  In the
+                // normal loot path the item has already been stored by the time this function runs,
+                // so applying addedCount after this resync would double-count the newly looted item.
+                if (syncedFromInventory)
                 {
                     q_status.ItemCount[j] = expectedCount;
                     m_QuestStatusSave[questid] = QUEST_DEFAULT_SAVE_TYPE;
@@ -16912,12 +16915,12 @@ void Player::RefreshQuestItemCounts(uint32 entry, uint32 addedCount /*= 0*/)
 
                 curitemcount = q_status.ItemCount[j];
 
-                // If we were called from ItemAddedQuestCheck directly, maintain the legacy increment
-                // behavior so partial updates still work when the resync already matches.
-                if (addedCount && curitemcount < reqitemcount)
-                    q_status.ItemCount[j] = std::min<uint16>(uint16(curitemcount + addedCount), reqitemcount);
-                if (curitemcount < reqitemcount)
+                // Some callers may still notify before the item is visible in inventory.  Preserve
+                // that legacy fallback only when the inventory resync did not already account for
+                // the added items.
+                if (addedCount && !syncedFromInventory && curitemcount < reqitemcount)
                 {
+                    q_status.ItemCount[j] = uint16(std::min<uint32>(uint32(curitemcount) + addedCount, reqitemcount));
                     m_QuestStatusSave[questid] = QUEST_DEFAULT_SAVE_TYPE;
                 }
                 if (CanCompleteQuest(questid))
