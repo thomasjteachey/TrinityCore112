@@ -219,18 +219,19 @@ namespace Trinity
                 {
                     case 0:
                     case 1:
-                    case 2:
                         rate = 1.0f;
+                    case 2:
+                        rate = 1.25f;
                         break;
                     case 3:
-                        rate = 1.166f;
+                        rate = 1.5f;
                         break;
                     case 4:
-                        rate = 1.3f;
+                        rate = 1.75f;
                         break;
                     case 5:
                     default:
-                        rate = 1.4f;
+                        rate = 2.0f;
                 }
             }
 
