@@ -2,6 +2,7 @@
 #include "AutoBalance/AutoBalanceConfig.h"
 #include "AutoBalance/AutoBalanceMapData.h"
 #include "Creature.h"
+#include "Player.h"
 #include "Log.h"
 #include "Map.h"
 #include "ObjectMgr.h"
