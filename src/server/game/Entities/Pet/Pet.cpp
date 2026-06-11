@@ -2014,7 +2014,7 @@ void Pet::TeachOwnerClassicPetTrainingFromKnownSpell(uint32 taughtSpellId)
         return;
 
     Player* owner = GetOwner();
-    if (!owner || owner->getClass() != CLASS_HUNTER)
+    if (!owner || owner->GetClass() != CLASS_HUNTER)
         return;
 
     if (!IsClassicPetTrainingTaughtSpell(taughtSpellId))
