@@ -2969,8 +2969,17 @@ void Spell::EffectTradeSkill()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT)
         return;
 
-    if (m_caster->GetTypeId() != TYPEID_PLAYER)
+    Player* player = m_caster->ToPlayer();
+    if (!player)
         return;
+
+    // Beast Training (5149) opens the client trade-skill UI using SkillLine 261.
+    // Refresh SkillLine 261 immediately before the client opens it so the top
+    // rank bar shows current pet training points instead of the saved dummy
+    // character skill value.
+    if (m_spellInfo->Id == 5149)
+        player->UpdateClassicPetTrainingSkillPoints();
+
     // uint32 skillid =  effectInfo->MiscValue;
     // uint16 skillmax = unitTarget->ToPlayer()->(skillid);
     // m_caster->ToPlayer()->SetSkill(skillid, skillval?skillval:1, skillmax+75);
@@ -3404,6 +3413,7 @@ void Spell::EffectLearnPetSpell()
 
     pet->SavePetToDB(PET_SAVE_AS_CURRENT);
     pet->GetOwner()->PetSpellInitialize();
+    pet->GetOwner()->UpdateClassicPetTrainingSkillPoints();
 }
 
 void Spell::EffectTaunt()

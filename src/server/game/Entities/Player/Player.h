@@ -1786,6 +1786,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void UpdateCombatSkills(Unit* victim, WeaponAttackType attType, bool defense);
 
         void SetSkill(uint32 id, uint16 step, uint16 newVal, uint16 maxVal);
+        void UpdateClassicPetTrainingSkillPoints();
         uint16 GetMaxSkillValue(uint32 skill) const;        // max + perm. bonus + temp bonus
         uint16 GetPureMaxSkillValue(uint32 skill) const;    // max
         uint16 GetSkillValue(uint32 skill) const;           // skill value + perm. bonus + temp bonus
