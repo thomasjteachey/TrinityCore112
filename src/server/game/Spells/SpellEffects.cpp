@@ -3390,6 +3390,7 @@ void Spell::EffectLearnPetSpell()
         EffectLearnSpell();
         return;
     }
+
     Pet* pet = unitTarget->ToPet();
     if (!pet)
         return;
@@ -3398,7 +3399,9 @@ void Spell::EffectLearnPetSpell()
     if (!learn_spellproto)
         return;
 
-    pet->learnSpell(learn_spellproto->Id);
+    if (!pet->LearnClassicPetSpell(learn_spellproto->Id))
+        return;
+
     pet->SavePetToDB(PET_SAVE_AS_CURRENT);
     pet->GetOwner()->PetSpellInitialize();
 }
