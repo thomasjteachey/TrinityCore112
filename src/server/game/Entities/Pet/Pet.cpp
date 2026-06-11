@@ -411,6 +411,7 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             GetSpellHistory()->LoadFromDB<Pet>(holder.GetPreparedResult(PetLoadQueryHolder::COOLDOWNS));
             LearnPetPassives();
             InitLevelupSpellsForLevel();
+            TeachOwnerClassicPetTrainingFromDefaultSpells();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -1727,6 +1728,50 @@ namespace
         // Growl is free at every rank, so cost alone cannot distinguish ranks.
         return knownInfo->SpellLevel > newInfo->SpellLevel;
     }
+
+    void GetClassicPetTrainingSourceSpellsUpToKnownRank(uint32 knownTaughtSpellId, std::vector<uint32>& sourceSpells)
+    {
+        sourceSpells.clear();
+
+        if (!knownTaughtSpellId)
+            return;
+
+        for (uint32 i = 0; i < sSkillLineAbilityStore.GetNumRows(); ++i)
+        {
+            SkillLineAbilityEntry const* ability = sSkillLineAbilityStore.LookupEntry(i);
+            if (!ability || ability->SkillLine != 261 || ability->Spell == 5149)
+                continue;
+
+            uint32 candidateTaughtSpell = GetClassicPetTrainingTaughtSpell(ability->Spell);
+            if (!candidateTaughtSpell)
+                continue;
+
+            if (!IsSameClassicPetTrainingFamily(candidateTaughtSpell, knownTaughtSpellId))
+                continue;
+
+            // If the candidate taught spell is a higher rank than the pet's
+            // known native spell, do not grant it yet.  This intentionally
+            // teaches all previous ranks plus the exact native rank.
+            if (IsKnownClassicPetRankHigher(candidateTaughtSpell, knownTaughtSpellId))
+                continue;
+
+            if (std::find(sourceSpells.begin(), sourceSpells.end(), ability->Spell) == sourceSpells.end())
+                sourceSpells.push_back(ability->Spell);
+        }
+
+        std::sort(sourceSpells.begin(), sourceSpells.end(), [](uint32 left, uint32 right)
+        {
+            SpellInfo const* leftInfo = sSpellMgr->GetSpellInfo(left);
+            SpellInfo const* rightInfo = sSpellMgr->GetSpellInfo(right);
+
+            uint32 leftLevel = leftInfo ? leftInfo->SpellLevel : 0;
+            uint32 rightLevel = rightInfo ? rightInfo->SpellLevel : 0;
+            if (leftLevel != rightLevel)
+                return leftLevel < rightLevel;
+
+            return left < right;
+        });
+    }
 }
 
 uint32 Pet::GetClassicMaxTrainingPoints() const
@@ -1937,8 +1982,13 @@ bool Pet::LearnClassicPetSpell(uint32 spellId)
 
 void Pet::CheckLearning(uint32 spellId)
 {
+    // BarracksPlus Classic pet learning is intentionally immediate on tame/load.
+    // Keep this hook as a safety net for older m_teachspells state, but do not
+    // require the pet to repeatedly use the ability.
     if (getPetType() != HUNTER_PET)
         return;
+
+    TeachOwnerClassicPetTrainingFromKnownSpell(spellId);
 
     if (m_teachspells.empty())
         return;
@@ -1952,17 +2002,89 @@ void Pet::CheckLearning(uint32 spellId)
         return;
 
     uint32 sourceSpellId = itr->second;
-    if (!sourceSpellId || owner->HasSpell(sourceSpellId))
-    {
-        m_teachspells.erase(itr);
+    if (sourceSpellId && !owner->HasSpell(sourceSpellId))
+        owner->LearnSpell(sourceSpellId, false);
+
+    m_teachspells.erase(itr);
+}
+
+void Pet::TeachOwnerClassicPetTrainingFromKnownSpell(uint32 taughtSpellId)
+{
+    if (getPetType() != HUNTER_PET)
         return;
+
+    Player* owner = GetOwner();
+    if (!owner || owner->getClass() != CLASS_HUNTER)
+        return;
+
+    if (!IsClassicPetTrainingTaughtSpell(taughtSpellId))
+        return;
+
+    std::vector<uint32> sourceSpells;
+    GetClassicPetTrainingSourceSpellsUpToKnownRank(taughtSpellId, sourceSpells);
+
+    for (uint32 sourceSpellId : sourceSpells)
+    {
+        if (!sourceSpellId || owner->HasSpell(sourceSpellId))
+            continue;
+
+        owner->LearnSpell(sourceSpellId, false);
+    }
+}
+
+void Pet::TeachOwnerClassicPetTrainingFromKnownSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    std::vector<uint32> knownPetSpells;
+    knownPetSpells.reserve(m_spells.size());
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        knownPetSpells.push_back(itr->first);
     }
 
-    // ClassicMangos uses a 10% chance when the pet uses the ability.
-    if (urand(0, 100) < 10)
+    for (uint32 spellId : knownPetSpells)
+        TeachOwnerClassicPetTrainingFromKnownSpell(spellId);
+}
+
+void Pet::TeachOwnerClassicPetTrainingFromDefaultSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    CreatureTemplate const* creatureTemplate = GetCreatureTemplate();
+    if (!creatureTemplate)
+        return;
+
+    int32 petSpellsId = creatureTemplate->PetSpellDataId ? -(int32)creatureTemplate->PetSpellDataId : GetEntry();
+    PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId);
+    if (!defSpells)
+        return;
+
+    for (uint32 createSpellId : defSpells->spellid)
     {
-        owner->LearnSpell(sourceSpellId, false);
-        m_teachspells.erase(itr);
+        if (!createSpellId)
+            continue;
+
+        uint32 petSpellId = createSpellId;
+        if (SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId))
+        {
+            for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
+            {
+                if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                {
+                    petSpellId = effect.TriggerSpell;
+                    break;
+                }
+            }
+        }
+
+        TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
     }
 }
 
@@ -2000,8 +2122,6 @@ void Pet::InitPetCreateSpells()
         // the source spell later when the pet uses the ability.
         if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
         {
-            Player* owner = GetOwner();
-
             for (uint32 createSpellId : defSpells->spellid)
             {
                 if (!createSpellId)
@@ -2028,16 +2148,14 @@ void Pet::InitPetCreateSpells()
                 if (!petSpellInfo)
                     continue;
 
-                if (sourceTeachesPetSpell && owner && !owner->HasSpell(createSpellId))
-                {
-                    // Passive pet training spells are learned immediately in ClassicMangos.
-                    if (petSpellInfo->IsPassive())
-                        owner->LearnSpell(createSpellId, false);
-                    else
-                        AddTeachSpell(petSpellId, createSpellId);
-                }
-
+                // Classic 1.12 normally taught many wild abilities by observing
+                // the pet use them.  BarracksPlus teaches immediately when the pet
+                // is tamed/loaded: if the native pet knows rank N, the hunter learns
+                // the Beast Training source spell for rank N and every previous rank.
                 addSpell(petSpellId);
+
+                if (sourceTeachesPetSpell)
+                    TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
             }
         }
     }

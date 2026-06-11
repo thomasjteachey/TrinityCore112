@@ -143,6 +143,9 @@ class TC_GAME_API Pet : public Guardian
         bool CanTakeMoreActiveSpells(uint32 spellId) const;
         bool LearnClassicPetSpell(uint32 spellId);
         void CheckLearning(uint32 spellId);
+        void TeachOwnerClassicPetTrainingFromKnownSpell(uint32 taughtSpellId);
+        void TeachOwnerClassicPetTrainingFromKnownSpells();
+        void TeachOwnerClassicPetTrainingFromDefaultSpells();
         void AddTeachSpell(uint32 learnedId, uint32 sourceId) { m_teachspells[learnedId] = sourceId; }
 
         bool resetTalents();
