@@ -1933,7 +1933,10 @@ bool Pet::resetTalents()
             if (itr->second.state == PETSPELL_REMOVED)
                 continue;
 
-            if (GetClassicPetTrainingCost(itr->first) > 0)
+            // Remove Classic Beast Training abilities with a TP cost and any
+            // leftover Wrath pet talent spells from old saves.  Growl/free native
+            // pet skills stay unless they were Wrath talent spells.
+            if (GetClassicPetTrainingCost(itr->first) > 0 || sPetTalentSpells.find(itr->first) != sPetTalentSpells.end())
                 spellsToRemove.push_back(itr->first);
         }
 
