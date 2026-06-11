@@ -9943,11 +9943,13 @@ void Player::SendTalentWipeConfirm(ObjectGuid guid) const
 
 void Player::ResetPetTalents()
 {
-    // This needs another gossip option + NPC text as a confirmation.
-    // The confirmation gossip listid has the text: "Yes, please do."
+    // In BarracksPlus Classic mode, pet trainers use this gossip option to
+    // untrain the current hunter pet's Beast Training abilities, not Wrath pet
+    // talent trees.  Do not require m_usedTalentCount here; Classic-trained pet
+    // skills spend training points, not Wrath talent points.
     Pet* pet = GetPet();
 
-    if (!pet || pet->getPetType() != HUNTER_PET || pet->m_usedTalentCount == 0)
+    if (!pet || pet->getPetType() != HUNTER_PET)
         return;
 
     CharmInfo* charmInfo = pet->GetCharmInfo();
@@ -9956,8 +9958,14 @@ void Player::ResetPetTalents()
         TC_LOG_ERROR("entities.player", "Object {} is considered pet-like, but doesn't have charm info!", pet->GetGUID().ToString());
         return;
     }
+
     pet->resetTalents();
+    pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+    PetSpellInitialize();
     UpdateClassicPetTrainingSkillPoints();
+
+    // Keep the Wrath pet talent packet empty/stale-safe.  BuildPetTalentsInfoData
+    // now suppresses hunter-pet talent data below.
     SendTalentsInfoData(true);
 }
 
@@ -14808,7 +14816,11 @@ void Player::PrepareGossipMenu(WorldObject* source, uint32 menuId /*= 0*/, bool 
                     */
                 break;
             case GOSSIP_OPTION_UNLEARNPETTALENTS:
-                if (!GetPet() || GetPet()->getPetType() != HUNTER_PET || GetPet()->m_spells.size() <= 1 || !creature->CanResetTalents(this, true))
+                // Classic pet training reset.  Show this for hunters with a current
+                // hunter pet that has spent Beast Training points.  Do not use the
+                // Wrath CanResetTalents/m_usedTalentCount checks; those hide the
+                // option for Classic-trained pets.
+                if (!GetPet() || GetPet()->getPetType() != HUNTER_PET || GetPet()->GetClassicSpentTrainingPoints() == 0)
                     canTalk = false;
                 break;
             case GOSSIP_OPTION_TAXIVENDOR:
@@ -26567,6 +26579,11 @@ void Player::LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRa
     if (petGuid != pet->GetGUID())
         return;
 
+    // Classic hunter pets use Beast Training points, not Wrath pet talents.
+    // Block client attempts to spend pet talents even if an old UI leaks through.
+    if (pet->getPetType() == HUNTER_PET)
+        return;
+
     uint32 CurTalentPoints = pet->GetFreeTalentPoints();
 
     if (CurTalentPoints == 0)
@@ -26937,6 +26954,15 @@ void Player::BuildPetTalentsInfoData(WorldPacket* data)
     Pet* pet = GetPet();
     if (!pet)
         return;
+
+    // Classic hunter pets should not expose the Wrath pet talent frame.
+    // Send zero points and zero learned pet talents for hunter pets.
+    if (pet->getPetType() == HUNTER_PET)
+    {
+        data->put<uint32>(pointsPos, uint32(0));
+        data->put<uint8>(countPos, uint8(0));
+        return;
+    }
 
     unspentTalentPoints = pet->GetFreeTalentPoints();
 
