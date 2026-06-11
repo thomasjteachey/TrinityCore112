@@ -6329,6 +6329,42 @@ bool Player::HasSkill(uint32 skill) const
     return (itr != mSkillStatus.end() && itr->second.uState != SKILL_DELETED);
 }
 
+
+void Player::UpdateClassicPetTrainingSkillPoints()
+{
+    if (GetClass() != CLASS_HUNTER)
+        return;
+
+    // The 3.3.5 client gets the number shown in the Beast Training top bar
+    // from the player's SkillLine 261 rank/max. For Classic Beast Training,
+    // make that SkillLine reflect the currently summoned hunter pet instead
+    // of the placeholder character skill value.
+    Pet* pet = GetPet();
+    if (!pet || pet->getPetType() != HUNTER_PET)
+        return;
+
+    uint16 maxPoints = uint16(std::min<uint32>(pet->GetClassicMaxTrainingPoints(), 65535));
+    uint16 availablePoints = uint16(std::min<uint32>(uint32(std::max<int32>(pet->GetClassicAvailableTrainingPoints(), 0)), maxPoints));
+
+    SkillStatusMap::iterator itr = mSkillStatus.find(SKIL_BEAST_TRAINING);
+    if (itr == mSkillStatus.end() || itr->second.uState == SKILL_DELETED)
+    {
+        // SetSkill treats newVal == 0 as delete, so create the skill with 1
+        // first and then overwrite the value field below if the pet truly has
+        // 0 available points. Hunters should normally already have this skill.
+        SetSkill(SKIL_BEAST_TRAINING, 0, 1, maxPoints ? maxPoints : 1);
+        itr = mSkillStatus.find(SKIL_BEAST_TRAINING);
+        if (itr == mSkillStatus.end() || itr->second.uState == SKILL_DELETED)
+            return;
+    }
+
+    SetUInt32Value(PLAYER_SKILL_INDEX(itr->second.pos), MAKE_PAIR32(SKIL_BEAST_TRAINING, 0));
+    SetUInt32Value(PLAYER_SKILL_VALUE_INDEX(itr->second.pos), MAKE_SKILL_VALUE(availablePoints, maxPoints));
+
+    if (itr->second.uState != SKILL_NEW)
+        itr->second.uState = SKILL_CHANGED;
+}
+
 uint16 Player::GetSkillStep(uint32 skill) const
 {
     if (!skill)
@@ -9921,6 +9957,7 @@ void Player::ResetPetTalents()
         return;
     }
     pet->resetTalents();
+    UpdateClassicPetTrainingSkillPoints();
     SendTalentsInfoData(true);
 }
 

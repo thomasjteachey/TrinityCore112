@@ -419,6 +419,7 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
         TC_LOG_DEBUG("entities.pet", "New Pet has {}", GetGUID().ToString());
 
         owner->PetSpellInitialize();
+        owner->UpdateClassicPetTrainingSkillPoints();
 
         if (owner->GetGroup())
             owner->SetGroupUpdateFlag(GROUP_UPDATE_PET);
@@ -1799,7 +1800,13 @@ bool Pet::LearnClassicPetSpell(uint32 spellId)
     if (!HasTPForSpell(spellId))
         return false;
 
-    return learnSpell(spellId);
+    if (!learnSpell(spellId))
+        return false;
+
+    if (Player* owner = GetOwner())
+        owner->UpdateClassicPetTrainingSkillPoints();
+
+    return true;
 }
 
 void Pet::CheckLearning(uint32 spellId)
@@ -1936,7 +1943,10 @@ bool Pet::resetTalents()
         SetFreeTalentPoints(0);
 
         if (!m_loading)
+        {
             player->PetSpellInitialize();
+            player->UpdateClassicPetTrainingSkillPoints();
+        }
 
         return !spellsToRemove.empty();
     }
