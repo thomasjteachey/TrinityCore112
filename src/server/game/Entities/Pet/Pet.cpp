@@ -17,6 +17,7 @@
 
 #include "Pet.h"
 #include "Common.h"
+#include "DBCStores.h"
 #include "DatabaseEnv.h"
 #include "Formulas.h"
 #include "Group.h"
@@ -37,6 +38,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "ZoneScript.h"
+#include <algorithm>
 #include <map>
 #include <vector>
 
@@ -1632,55 +1634,6 @@ namespace
 {
     constexpr uint8 CLASSIC_PET_ACTIVE_SPELLS_MAX = 4;
 
-    bool IsClassicPetFamilySkillLine(uint32 skillLine)
-    {
-        switch (skillLine)
-        {
-            // Classic hunter pet family skill lines plus pet resistance.
-            // This list intentionally mirrors the SkillLineAbility cleanup
-            // used by the Classic pet-training DBC build.
-            case 203:
-            case 208:
-            case 209:
-            case 210:
-            case 211:
-            case 212:
-            case 213:
-            case 214:
-            case 215:
-            case 217:
-            case 218:
-            case 236:
-            case 251:
-            case 270:
-            case 653:
-            case 654:
-            case 655:
-            case 656:
-            case 758:
-            case 761:
-            case 763:
-            case 764:
-            case 765:
-            case 766:
-            case 767:
-            case 768:
-            case 775:
-            case 780:
-            case 781:
-            case 782:
-            case 783:
-            case 784:
-            case 785:
-            case 786:
-            case 787:
-            case 788:
-                return true;
-            default:
-                return false;
-        }
-    }
-
     uint32 GetClassicPetTrainingCost(uint32 spellId)
     {
         uint32 trainPoints = 0;
@@ -1691,27 +1644,43 @@ namespace
         return trainPoints;
     }
 
-    bool IsClassicPetTrainingSpell(uint32 spellId)
+    uint32 GetClassicPetTrainingTaughtSpell(uint32 sourceSpellId)
     {
-        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
-        for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+        SpellInfo const* sourceInfo = sSpellMgr->GetSpellInfo(sourceSpellId);
+        if (!sourceInfo)
+            return 0;
+
+        for (SpellEffectInfo const& effect : sourceInfo->GetEffects())
+            if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                return effect.TriggerSpell;
+
+        return 0;
+    }
+
+    void GetClassicPetTrainingTaughtSpells(std::vector<uint32>& spells)
+    {
+        spells.clear();
+
+        for (uint32 i = 0; i < sSkillLineAbilityStore.GetNumRows(); ++i)
         {
-            SkillLineAbilityEntry const* ability = itr->second;
-            if (!ability)
+            SkillLineAbilityEntry const* ability = sSkillLineAbilityStore.LookupEntry(i);
+            if (!ability || ability->SkillLine != 261 || ability->Spell == 5149)
                 continue;
 
-            // Costed Classic pet abilities: Bite, Charge, resistances, etc.
-            if (ability->NumSkillUps > 0)
-                return true;
+            uint32 taughtSpell = GetClassicPetTrainingTaughtSpell(ability->Spell);
+            if (!taughtSpell)
+                continue;
 
-            // Free Classic pet-training abilities such as Growl still need to
-            // be removed by the pet trainer's untrain option.  They have zero
-            // TP cost, so cost-only cleanup leaves them behind.
-            if (IsClassicPetFamilySkillLine(ability->SkillLine))
-                return true;
+            if (std::find(spells.begin(), spells.end(), taughtSpell) == spells.end())
+                spells.push_back(taughtSpell);
         }
+    }
 
-        return false;
+    bool IsClassicPetTrainingTaughtSpell(uint32 spellId)
+    {
+        std::vector<uint32> taughtSpells;
+        GetClassicPetTrainingTaughtSpells(taughtSpells);
+        return std::find(taughtSpells.begin(), taughtSpells.end(), spellId) != taughtSpells.end();
     }
 
     bool IsSameClassicPetTrainingFamily(uint32 leftSpellId, uint32 rightSpellId)
@@ -2090,10 +2059,12 @@ bool Pet::resetTalents()
             if (itr->second.state == PETSPELL_REMOVED)
                 continue;
 
-            // Remove all Classic Beast Training abilities, including free
-            // abilities such as Growl.  The previous cost-only check left
-            // Growl Rank 7 behind because Growl costs 0 TP in Classic.
-            if (IsClassicPetTrainingSpell(itr->first) || sPetTalentSpells.find(itr->first) != sPetTalentSpells.end())
+            // Classic pet untraining must only remove Beast Training abilities:
+            // the actual taught pet spells triggered by SkillLine 261 source
+            // spells.  Do not remove generic/system pet passives such as
+            // "Tamed Pet Passive (DND)" just because they are passive, free,
+            // have a SkillLineAbility row, or appear in pet talent DBC data.
+            if (IsClassicPetTrainingTaughtSpell(itr->first))
                 spellsToRemove.push_back(itr->first);
         }
 
@@ -2227,10 +2198,15 @@ void Pet::resetTalentsForAllPetsOf(Player* owner, Pet* onlinePet /*= nullptr*/)
         need_comma = true;
     }
 
+    std::vector<uint32> classicPetTrainingTaughtSpells;
+    GetClassicPetTrainingTaughtSpells(classicPetTrainingTaughtSpells);
+    if (classicPetTrainingTaughtSpells.empty())
+        return;
+
     ss << ") AND spell IN (";
 
     need_comma = false;
-    for (uint32 spell : sPetTalentSpells)
+    for (uint32 spell : classicPetTrainingTaughtSpells)
     {
         if (need_comma)
             ss << ',';
