@@ -412,6 +412,7 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             LearnPetPassives();
             InitLevelupSpellsForLevel();
             TeachOwnerClassicPetTrainingFromDefaultSpells();
+            TeachOwnerClassicPetTrainingFromKnownSpells();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -2114,53 +2115,93 @@ void Pet::InitPetCreateSpells()
 
     if (getPetType() == HUNTER_PET)
     {
-        int32 petSpellsId = GetCreatureTemplate()->PetSpellDataId ? -(int32)GetCreatureTemplate()->PetSpellDataId : GetEntry();
-
-        // Classic pet create data stores training/source spells.  Those spells
-        // usually trigger the real pet spell through LEARN_SPELL or
-        // LEARN_PET_SPELL.  The pet gets the triggered spell; the owner learns
-        // the source spell later when the pet uses the ability.
-        if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
+        auto addClassicNativePetSpell = [this](uint32 createSpellId)
         {
-            for (uint32 createSpellId : defSpells->spellid)
+            if (!createSpellId)
+                return;
+
+            SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId);
+            if (!createSpellInfo)
+                return;
+
+            uint32 petSpellId = createSpellId;
+
+            // Classic CreatureSpellData can contain either the actual pet spell
+            // directly (example: 7371 Charge Rank 1) or a Beast Training source
+            // spell that triggers the actual pet spell.  Normalize both forms to
+            // the actual taught pet spell before adding/teaching.
+            for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
             {
-                if (!createSpellId)
-                    continue;
-
-                SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId);
-                if (!createSpellInfo)
-                    continue;
-
-                uint32 petSpellId = createSpellId;
-                bool sourceTeachesPetSpell = false;
-
-                for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
+                if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
                 {
-                    if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
-                    {
-                        petSpellId = effect.TriggerSpell;
-                        sourceTeachesPetSpell = true;
-                        break;
-                    }
+                    petSpellId = effect.TriggerSpell;
+                    break;
+                }
+            }
+
+            SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
+            if (!petSpellInfo)
+                return;
+
+            if (petSpellInfo->SpellLevel > GetLevel())
+                return;
+
+            std::vector<uint32> lowerRanksToRemove;
+
+            for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+            {
+                if (itr->second.state == PETSPELL_REMOVED)
+                    continue;
+
+                if (itr->first == petSpellId)
+                {
+                    TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+                    return;
                 }
 
-                SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
-                if (!petSpellInfo)
+                if (!IsSameClassicPetTrainingFamily(itr->first, petSpellId))
                     continue;
 
-                // Classic 1.12 normally taught many wild abilities by observing
-                // the pet use them.  BarracksPlus teaches immediately when the pet
-                // is tamed/loaded: if the native pet knows rank N, the hunter learns
-                // the Beast Training source spell for rank N and every previous rank.
-                addSpell(petSpellId);
+                // If a higher native rank is already present, keep it and teach
+                // from that higher rank instead of adding a lower duplicate.
+                if (IsKnownClassicPetRankHigher(itr->first, petSpellId))
+                {
+                    TeachOwnerClassicPetTrainingFromKnownSpell(itr->first);
+                    return;
+                }
 
-                // Learn-on-tame/backfill must inspect the actual native pet spell too.
-                // Classic CreatureSpellData may already contain the taught spell directly
-                // (for example boar Charge Rank 1 = 7371), not only a source spell
-                // that triggers the taught spell.
-                TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+                lowerRanksToRemove.push_back(itr->first);
             }
-        }
+
+            bool added = addSpell(petSpellId);
+
+            // Native family/level-up data can overlap with PetSpellDataId data.
+            // Collapse lower ranks immediately so a freshly tamed pet does not
+            // show duplicate Charge/Claw/Bite ranks until relog.
+            if (added)
+                for (uint32 oldSpellId : lowerRanksToRemove)
+                    removeSpell(oldSpellId, false, false);
+
+            TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+        };
+
+        int32 petSpellsId = GetCreatureTemplate()->PetSpellDataId ? -(int32)GetCreatureTemplate()->PetSpellDataId : GetEntry();
+
+        // First apply native/default spells from CreatureSpellData/PetSpellDataId.
+        if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
+            for (uint32 createSpellId : defSpells->spellid)
+                addClassicNativePetSpell(createSpellId);
+
+        // Then apply family level-up spells immediately on tame.  The stock load
+        // path already does this after relog; doing it here fixes the Classic pet
+        // behavior where a newly tamed raptor should immediately know Claw and
+        // teach it to the hunter, instead of only acquiring it after relog.
+        if (PetLevelupSpellSet const* levelupSpells = GetCreatureTemplate()->family ? sSpellMgr->GetPetLevelupSpellList(GetCreatureTemplate()->family) : nullptr)
+            for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
+                if (itr->first <= GetLevel())
+                    addClassicNativePetSpell(itr->second);
+
+        TeachOwnerClassicPetTrainingFromKnownSpells();
     }
     else
         InitLevelupSpellsForLevel();
