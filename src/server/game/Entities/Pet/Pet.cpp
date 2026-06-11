@@ -37,6 +37,7 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "ZoneScript.h"
+#include <map>
 
 #define PET_XP_FACTOR 0.05f
 
@@ -1624,6 +1625,214 @@ bool Pet::removeSpell(uint32 spell_id, bool learn_prev, bool clear_ab)
     return true;
 }
 
+
+namespace
+{
+    constexpr uint8 CLASSIC_PET_ACTIVE_SPELLS_MAX = 4;
+
+    uint32 GetClassicPetTrainingCost(uint32 spellId)
+    {
+        uint32 trainPoints = 0;
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+            trainPoints = std::max(trainPoints, itr->second->NumSkillUps);
+
+        return trainPoints;
+    }
+}
+
+uint32 Pet::GetClassicMaxTrainingPoints() const
+{
+    if (getPetType() != HUNTER_PET)
+        return 0;
+
+    // Classic formula: level * (loyalty - 1).  We intentionally force max
+    // loyalty and skip the friendship system, so loyalty is always 6.
+    return uint32(GetLevel()) * 5;
+}
+
+uint32 Pet::GetClassicSpentTrainingPoints() const
+{
+    if (getPetType() != HUNTER_PET)
+        return 0;
+
+    // Count only the highest trained rank per spell chain, matching Classic's
+    // rank-upgrade behavior where higher ranks charge only the delta.
+    std::map<uint32, uint32> chainCosts;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        uint32 cost = GetClassicPetTrainingCost(itr->first);
+        if (!cost)
+            continue;
+
+        uint32 chainStart = sSpellMgr->GetFirstSpellInChain(itr->first);
+        if (!chainStart)
+            chainStart = itr->first;
+
+        uint32& current = chainCosts[chainStart];
+        if (cost > current)
+            current = cost;
+    }
+
+    uint32 spent = 0;
+    for (std::map<uint32, uint32>::const_iterator itr = chainCosts.begin(); itr != chainCosts.end(); ++itr)
+        spent += itr->second;
+
+    return spent;
+}
+
+int32 Pet::GetClassicAvailableTrainingPoints() const
+{
+    uint32 max = GetClassicMaxTrainingPoints();
+    uint32 spent = GetClassicSpentTrainingPoints();
+
+    return spent >= max ? 0 : int32(max - spent);
+}
+
+int32 Pet::GetTPForSpell(uint32 spellId) const
+{
+    uint32 baseTrainPoints = GetClassicPetTrainingCost(spellId);
+    if (!baseTrainPoints)
+        return 0;
+
+    uint32 spentTrainPoints = 0;
+    uint32 chainStart = sSpellMgr->GetFirstSpellInChain(spellId);
+    if (!chainStart)
+        chainStart = spellId;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        uint32 knownChainStart = sSpellMgr->GetFirstSpellInChain(itr->first);
+        if (!knownChainStart)
+            knownChainStart = itr->first;
+
+        if (knownChainStart != chainStart)
+            continue;
+
+        uint32 knownCost = GetClassicPetTrainingCost(itr->first);
+        if (knownCost > spentTrainPoints)
+            spentTrainPoints = knownCost;
+    }
+
+    return int32(baseTrainPoints) - int32(spentTrainPoints);
+}
+
+bool Pet::HasTPForSpell(uint32 spellId) const
+{
+    int32 neededTrainPoints = GetTPForSpell(spellId);
+    if (neededTrainPoints <= 0)
+        return neededTrainPoints == 0;
+
+    return GetClassicAvailableTrainingPoints() >= neededTrainPoints;
+}
+
+bool Pet::CanTakeMoreActiveSpells(uint32 spellId) const
+{
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->IsPassive())
+        return true;
+
+    uint32 chainStartStore[CLASSIC_PET_ACTIVE_SPELLS_MAX];
+    uint8 activeCount = 0;
+
+    uint32 newChainStart = sSpellMgr->GetFirstSpellInChain(spellId);
+    if (!newChainStart)
+        newChainStart = spellId;
+
+    chainStartStore[activeCount++] = newChainStart;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        SpellInfo const* knownSpellInfo = sSpellMgr->GetSpellInfo(itr->first);
+        if (!knownSpellInfo || knownSpellInfo->IsPassive())
+            continue;
+
+        uint32 chainStart = sSpellMgr->GetFirstSpellInChain(itr->first);
+        if (!chainStart)
+            chainStart = itr->first;
+
+        uint8 x;
+        for (x = 0; x < activeCount; ++x)
+            if (chainStart == chainStartStore[x])
+                break;
+
+        if (x == activeCount)
+        {
+            if (activeCount >= CLASSIC_PET_ACTIVE_SPELLS_MAX)
+                return false;
+
+            chainStartStore[activeCount++] = chainStart;
+        }
+    }
+
+    return true;
+}
+
+bool Pet::LearnClassicPetSpell(uint32 spellId)
+{
+    if (getPetType() != HUNTER_PET)
+        return learnSpell(spellId);
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    if (!CanTakeMoreActiveSpells(spellId))
+        return false;
+
+    if (spellInfo->SpellLevel > GetLevel())
+        return false;
+
+    if (!HasTPForSpell(spellId))
+        return false;
+
+    return learnSpell(spellId);
+}
+
+void Pet::CheckLearning(uint32 spellId)
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    if (m_teachspells.empty())
+        return;
+
+    Player* owner = GetOwner();
+    if (!owner)
+        return;
+
+    TeachSpellMap::iterator itr = m_teachspells.find(spellId);
+    if (itr == m_teachspells.end())
+        return;
+
+    uint32 sourceSpellId = itr->second;
+    if (!sourceSpellId || owner->HasSpell(sourceSpellId))
+    {
+        m_teachspells.erase(itr);
+        return;
+    }
+
+    // ClassicMangos uses a 10% chance when the pet uses the ability.
+    if (urand(0, 100) < 10)
+    {
+        owner->LearnSpell(sourceSpellId, false);
+        m_teachspells.erase(itr);
+    }
+}
+
 void Pet::CleanupActionBar()
 {
     for (uint8 i = 0; i < MAX_UNIT_ACTION_BAR_INDEX; ++i)
@@ -1644,9 +1853,63 @@ void Pet::InitPetCreateSpells()
 {
     m_charmInfo->InitPetActionBar();
     m_spells.clear();
+    m_teachspells.clear();
 
     LearnPetPassives();
-    InitLevelupSpellsForLevel();
+
+    if (getPetType() == HUNTER_PET)
+    {
+        int32 petSpellsId = GetCreatureTemplate()->PetSpellDataId ? -(int32)GetCreatureTemplate()->PetSpellDataId : GetEntry();
+
+        // Classic pet create data stores training/source spells.  Those spells
+        // usually trigger the real pet spell through LEARN_SPELL or
+        // LEARN_PET_SPELL.  The pet gets the triggered spell; the owner learns
+        // the source spell later when the pet uses the ability.
+        if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
+        {
+            Player* owner = GetOwner();
+
+            for (uint32 createSpellId : defSpells->spellid)
+            {
+                if (!createSpellId)
+                    continue;
+
+                SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId);
+                if (!createSpellInfo)
+                    continue;
+
+                uint32 petSpellId = createSpellId;
+                bool sourceTeachesPetSpell = false;
+
+                for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
+                {
+                    if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                    {
+                        petSpellId = effect.TriggerSpell;
+                        sourceTeachesPetSpell = true;
+                        break;
+                    }
+                }
+
+                SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
+                if (!petSpellInfo)
+                    continue;
+
+                if (sourceTeachesPetSpell && owner && !owner->HasSpell(createSpellId))
+                {
+                    // Passive pet training spells are learned immediately in ClassicMangos.
+                    if (petSpellInfo->IsPassive())
+                        owner->LearnSpell(createSpellId, false);
+                    else
+                        AddTeachSpell(petSpellId, createSpellId);
+                }
+
+                addSpell(petSpellId);
+            }
+        }
+    }
+    else
+        InitLevelupSpellsForLevel();
 
     CastPetAuras(false);
 }
@@ -1654,6 +1917,29 @@ void Pet::InitPetCreateSpells()
 bool Pet::resetTalents()
 {
     Player* player = GetOwner();
+
+    if (getPetType() == HUNTER_PET)
+    {
+        std::vector<uint32> spellsToRemove;
+        for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+        {
+            if (itr->second.state == PETSPELL_REMOVED)
+                continue;
+
+            if (GetClassicPetTrainingCost(itr->first) > 0)
+                spellsToRemove.push_back(itr->first);
+        }
+
+        for (uint32 spellId : spellsToRemove)
+            unlearnSpell(spellId, false);
+
+        SetFreeTalentPoints(0);
+
+        if (!m_loading)
+            player->PetSpellInitialize();
+
+        return !spellsToRemove.empty();
+    }
 
     // not need after this call
     if (player->HasAtLoginFlag(AT_LOGIN_RESET_PET_TALENTS))
@@ -1791,6 +2077,17 @@ void Pet::resetTalentsForAllPetsOf(Player* owner, Pet* onlinePet /*= nullptr*/)
 
 void Pet::InitTalentForLevel()
 {
+    if (getPetType() == HUNTER_PET)
+    {
+        m_usedTalentCount = 0;
+        SetFreeTalentPoints(0);
+
+        if (!m_loading)
+            GetOwner()->SendTalentsInfoData(true);
+
+        return;
+    }
+
     uint8 level = GetLevel();
     uint32 talentPointsForLevel = GetMaxTalentPointsForLevel(level);
     // Reset talents in case low level (on level down) or wrong points for level (hunter can unlearn TP increase talent)
@@ -1805,6 +2102,9 @@ void Pet::InitTalentForLevel()
 
 uint8 Pet::GetMaxTalentPointsForLevel(uint8 level) const
 {
+    if (getPetType() == HUNTER_PET)
+        return 0;
+
     uint8 points = (level >= 20) ? ((level - 16) / 4) : 0;
     // Mod points from owner SPELL_AURA_MOD_PET_TALENT_POINTS
     points += GetOwner()->GetTotalAuraModifier(SPELL_AURA_MOD_PET_TALENT_POINTS);

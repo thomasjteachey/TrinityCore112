@@ -1345,6 +1345,7 @@ struct SkillLineAbilityEntry
     uint32 TrivialSkillLineRankHigh;                        // 10
     uint32 TrivialSkillLineRankLow;                         // 11
     //uint32 CharacterPoints[2];                            // 12-13
+    uint32 NumSkillUps;                                     // 14 - Classic pet training points
 };
 
 /*
