@@ -2154,8 +2154,11 @@ void Pet::InitPetCreateSpells()
                 // the Beast Training source spell for rank N and every previous rank.
                 addSpell(petSpellId);
 
-                if (sourceTeachesPetSpell)
-                    TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+                // Learn-on-tame/backfill must inspect the actual native pet spell too.
+                // Classic CreatureSpellData may already contain the taught spell directly
+                // (for example boar Charge Rank 1 = 7371), not only a source spell
+                // that triggers the taught spell.
+                TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
             }
         }
     }
