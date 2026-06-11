@@ -38,6 +38,7 @@
 #include "WorldSession.h"
 #include "ZoneScript.h"
 #include <map>
+#include <vector>
 
 #define PET_XP_FACTOR 0.05f
 
@@ -1640,6 +1641,51 @@ namespace
 
         return trainPoints;
     }
+
+    bool IsSameClassicPetTrainingFamily(uint32 leftSpellId, uint32 rightSpellId)
+    {
+        if (!leftSpellId || !rightSpellId)
+            return false;
+
+        if (leftSpellId == rightSpellId)
+            return true;
+
+        SpellInfo const* leftInfo = sSpellMgr->GetSpellInfo(leftSpellId);
+        SpellInfo const* rightInfo = sSpellMgr->GetSpellInfo(rightSpellId);
+        if (!leftInfo || !rightInfo)
+            return false;
+
+        // Primary path for the Classic Beast Training port: all ranks of the
+        // same pet ability have been normalized to the same SpellClassSet and
+        // SpellClassMask in Spell.dbc.  This catches Charge, Bite, Claw,
+        // resistances, Stamina, Armor, etc. even if spell_ranks is incomplete.
+        if (leftInfo->SpellFamilyName == rightInfo->SpellFamilyName
+            && !leftInfo->SpellFamilyFlags.IsEqual(0, 0, 0)
+            && leftInfo->SpellFamilyFlags == rightInfo->SpellFamilyFlags)
+            return true;
+
+        // Fallback for entries that still have real rank-chain data.
+        uint32 leftFirst = sSpellMgr->GetFirstSpellInChain(leftSpellId);
+        uint32 rightFirst = sSpellMgr->GetFirstSpellInChain(rightSpellId);
+        return leftFirst && rightFirst && leftFirst == rightFirst;
+    }
+
+    bool IsKnownClassicPetRankHigher(uint32 knownSpellId, uint32 newSpellId)
+    {
+        SpellInfo const* knownInfo = sSpellMgr->GetSpellInfo(knownSpellId);
+        SpellInfo const* newInfo = sSpellMgr->GetSpellInfo(newSpellId);
+        if (!knownInfo || !newInfo)
+            return false;
+
+        uint32 knownCost = GetClassicPetTrainingCost(knownSpellId);
+        uint32 newCost = GetClassicPetTrainingCost(newSpellId);
+
+        if (knownCost && newCost && knownCost > newCost)
+            return true;
+
+        // Growl is free at every rank, so cost alone cannot distinguish ranks.
+        return knownInfo->SpellLevel > newInfo->SpellLevel;
+    }
 }
 
 uint32 Pet::GetClassicMaxTrainingPoints() const
@@ -1657,9 +1703,16 @@ uint32 Pet::GetClassicSpentTrainingPoints() const
     if (getPetType() != HUNTER_PET)
         return 0;
 
-    // Count only the highest trained rank per spell chain, matching Classic's
-    // rank-upgrade behavior where higher ranks charge only the delta.
-    std::map<uint32, uint32> chainCosts;
+    // Count only the highest trained rank per Classic pet ability family.
+    // Do not rely only on spell_ranks here: the Classic pet data is carried by
+    // SpellClassSet/SpellClassMask in Spell.dbc for many pet abilities.
+    struct FamilyCost
+    {
+        uint32 representativeSpell;
+        uint32 cost;
+    };
+
+    std::vector<FamilyCost> familyCosts;
 
     for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
     {
@@ -1670,18 +1723,34 @@ uint32 Pet::GetClassicSpentTrainingPoints() const
         if (!cost)
             continue;
 
-        uint32 chainStart = sSpellMgr->GetFirstSpellInChain(itr->first);
-        if (!chainStart)
-            chainStart = itr->first;
+        bool merged = false;
+        for (FamilyCost& family : familyCosts)
+        {
+            if (!IsSameClassicPetTrainingFamily(family.representativeSpell, itr->first))
+                continue;
 
-        uint32& current = chainCosts[chainStart];
-        if (cost > current)
-            current = cost;
+            if (cost > family.cost)
+            {
+                family.representativeSpell = itr->first;
+                family.cost = cost;
+            }
+
+            merged = true;
+            break;
+        }
+
+        if (!merged)
+        {
+            FamilyCost familyCost;
+            familyCost.representativeSpell = itr->first;
+            familyCost.cost = cost;
+            familyCosts.push_back(familyCost);
+        }
     }
 
     uint32 spent = 0;
-    for (std::map<uint32, uint32>::const_iterator itr = chainCosts.begin(); itr != chainCosts.end(); ++itr)
-        spent += itr->second;
+    for (FamilyCost const& family : familyCosts)
+        spent += family.cost;
 
     return spent;
 }
@@ -1701,20 +1770,13 @@ int32 Pet::GetTPForSpell(uint32 spellId) const
         return 0;
 
     uint32 spentTrainPoints = 0;
-    uint32 chainStart = sSpellMgr->GetFirstSpellInChain(spellId);
-    if (!chainStart)
-        chainStart = spellId;
 
     for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
     {
         if (itr->second.state == PETSPELL_REMOVED)
             continue;
 
-        uint32 knownChainStart = sSpellMgr->GetFirstSpellInChain(itr->first);
-        if (!knownChainStart)
-            knownChainStart = itr->first;
-
-        if (knownChainStart != chainStart)
+        if (!IsSameClassicPetTrainingFamily(itr->first, spellId))
             continue;
 
         uint32 knownCost = GetClassicPetTrainingCost(itr->first);
@@ -1743,14 +1805,10 @@ bool Pet::CanTakeMoreActiveSpells(uint32 spellId) const
     if (spellInfo->IsPassive())
         return true;
 
-    uint32 chainStartStore[CLASSIC_PET_ACTIVE_SPELLS_MAX];
+    uint32 activeSpellStore[CLASSIC_PET_ACTIVE_SPELLS_MAX];
     uint8 activeCount = 0;
 
-    uint32 newChainStart = sSpellMgr->GetFirstSpellInChain(spellId);
-    if (!newChainStart)
-        newChainStart = spellId;
-
-    chainStartStore[activeCount++] = newChainStart;
+    activeSpellStore[activeCount++] = spellId;
 
     for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
     {
@@ -1761,21 +1819,19 @@ bool Pet::CanTakeMoreActiveSpells(uint32 spellId) const
         if (!knownSpellInfo || knownSpellInfo->IsPassive())
             continue;
 
-        uint32 chainStart = sSpellMgr->GetFirstSpellInChain(itr->first);
-        if (!chainStart)
-            chainStart = itr->first;
-
         uint8 x;
         for (x = 0; x < activeCount; ++x)
-            if (chainStart == chainStartStore[x])
+        {
+            if (IsSameClassicPetTrainingFamily(itr->first, activeSpellStore[x]))
                 break;
+        }
 
         if (x == activeCount)
         {
             if (activeCount >= CLASSIC_PET_ACTIVE_SPELLS_MAX)
                 return false;
 
-            chainStartStore[activeCount++] = chainStart;
+            activeSpellStore[activeCount++] = itr->first;
         }
     }
 
@@ -1797,14 +1853,43 @@ bool Pet::LearnClassicPetSpell(uint32 spellId)
     if (spellInfo->SpellLevel > GetLevel())
         return false;
 
+    std::vector<uint32> lowerRanksToRemove;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        if (!IsSameClassicPetTrainingFamily(itr->first, spellId))
+            continue;
+
+        if (itr->first == spellId)
+            return true;
+
+        // Do not let training a lower rank replace a higher rank already known.
+        if (IsKnownClassicPetRankHigher(itr->first, spellId))
+            return false;
+
+        lowerRanksToRemove.push_back(itr->first);
+    }
+
     if (!HasTPForSpell(spellId))
         return false;
 
     if (!learnSpell(spellId))
         return false;
 
+    // Classic pet training rank-up behavior: the newly trained rank replaces
+    // lower ranks of the same ability.  This prevents duplicate Charge/Growl/
+    // resistance/etc. buttons in the pet spellbook and pet action bar.
+    for (uint32 oldSpellId : lowerRanksToRemove)
+        unlearnSpell(oldSpellId, false);
+
     if (Player* owner = GetOwner())
+    {
+        owner->PetSpellInitialize();
         owner->UpdateClassicPetTrainingSkillPoints();
+    }
 
     return true;
 }
