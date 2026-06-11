@@ -17,6 +17,7 @@
 
 #include "Pet.h"
 #include "Common.h"
+#include "DBCStores.h"
 #include "DatabaseEnv.h"
 #include "Formulas.h"
 #include "Group.h"
@@ -37,6 +38,9 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 #include "ZoneScript.h"
+#include <algorithm>
+#include <map>
+#include <vector>
 
 #define PET_XP_FACTOR 0.05f
 
@@ -406,7 +410,17 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             InitTalentForLevel();                               // re-init to check talent count
             GetSpellHistory()->LoadFromDB<Pet>(holder.GetPreparedResult(PetLoadQueryHolder::COOLDOWNS));
             LearnPetPassives();
-            InitLevelupSpellsForLevel();
+            if (getPetType() == HUNTER_PET)
+            {
+                // Remove Wrath family/level-up pet spells that may have been saved
+                // before the Classic tame path was corrected, then backfill only
+                // legitimate Classic learn-on-tame source spells.
+                CleanupClassicHunterPetLevelupSpells();
+                TeachOwnerClassicPetTrainingFromKnownSpells();
+                TeachOwnerClassicPetTrainingFromDefaultSpells();
+            }
+            else
+                InitLevelupSpellsForLevel();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -418,6 +432,7 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
         TC_LOG_DEBUG("entities.pet", "New Pet has {}", GetGUID().ToString());
 
         owner->PetSpellInitialize();
+        owner->UpdateClassicPetTrainingSkillPoints();
 
         if (owner->GetGroup())
             owner->SetGroupUpdateFlag(GROUP_UPDATE_PET);
@@ -793,7 +808,8 @@ void Pet::GivePetLevel(uint8 level)
     }
 
     InitStatsForLevel(level);
-    InitLevelupSpellsForLevel();
+    if (getPetType() != HUNTER_PET)
+        InitLevelupSpellsForLevel();
     InitTalentForLevel();
 }
 
@@ -864,6 +880,15 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map, uint32 phas
         SetGender(GENDER_NONE);
         SetSheath(SHEATH_STATE_MELEE);
         ReplaceAllPetFlags(UNIT_PET_FLAG_CAN_BE_RENAMED | UNIT_PET_FLAG_CAN_BE_ABANDONED);
+
+        // The wild creature's creature_template spell slots are NPC combat AI
+        // spells, not Classic hunter pet spellbook entries. A raptor can know
+        // an enemy-only spell like Rushing Charge as a mob; after tame those
+        // slots must not survive as pet abilities or autocast candidates. The
+        // actual pet spellbook is rebuilt below from Classic-filtered native
+        // tame data and Beast Training.
+        for (uint8 i = 0; i < MAX_CREATURE_SPELLS; ++i)
+            Creature::m_spells[i] = 0;
     }
 
     return true;
@@ -905,9 +930,9 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
 
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(petlevel * 50));
 
-    SetAttackTime(BASE_ATTACK, BASE_ATTACK_TIME); //ttopper: hardcode broken tooth
-    SetAttackTime(OFF_ATTACK, BASE_ATTACK_TIME);
-    SetAttackTime(RANGED_ATTACK, BASE_ATTACK_TIME);
+    SetAttackTime(BASE_ATTACK, cinfo->BaseAttackTime);
+    SetAttackTime(OFF_ATTACK, cinfo->BaseAttackTime);
+    SetAttackTime(RANGED_ATTACK, cinfo->RangeAttackTime);
 
     SetModCastingSpeed(1.0f);
 
@@ -1135,6 +1160,19 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     }
 
     UpdateAllStats();
+
+    if (petType == HUNTER_PET)
+    {
+        if (ClassicPetTemplateStats const* classicStats = sObjectMgr->GetClassicPetTemplateStats(GetEntry()))
+        {
+            SetAttackTime(BASE_ATTACK, classicStats->MeleeBaseAttackTime);
+            SetAttackTime(OFF_ATTACK, classicStats->MeleeBaseAttackTime);
+            SetAttackTime(RANGED_ATTACK, classicStats->RangedBaseAttackTime);
+
+            TC_LOG_DEBUG("entities.pet", "Applied classic pet attack speed override: entry {} melee {} ranged {}",
+                GetEntry(), classicStats->MeleeBaseAttackTime, classicStats->RangedBaseAttackTime);
+        }
+    }
 
     SetFullHealth();
     SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
@@ -1526,6 +1564,12 @@ bool Pet::learnSpell(uint32 spell_id)
 
 void Pet::InitLevelupSpellsForLevel()
 {
+    // Classic hunter pets do not auto-learn family/level-up spells.
+    // Native tame spells come from PetSpellDataId/creature default spells, and
+    // additional abilities must be taught through Beast Training.
+    if (getPetType() == HUNTER_PET)
+        return;
+
     uint8 level = GetLevel();
 
     if (PetLevelupSpellSet const* levelupSpells = GetCreatureTemplate()->family ? sSpellMgr->GetPetLevelupSpellList(GetCreatureTemplate()->family) : nullptr)
@@ -1624,6 +1668,775 @@ bool Pet::removeSpell(uint32 spell_id, bool learn_prev, bool clear_ab)
     return true;
 }
 
+
+namespace
+{
+    constexpr uint8 CLASSIC_PET_ACTIVE_SPELLS_MAX = 4;
+
+    struct ClassicPetTrainingTemplateRow
+    {
+        uint32 SourceSpell = 0;
+        uint32 TaughtSpell = 0;
+        bool TrainerTaught = false;
+        bool WildLearned = false;
+        bool Enabled = false;
+    };
+
+    std::vector<ClassicPetTrainingTemplateRow> const& GetClassicPetTrainingTemplateRows()
+    {
+        static bool loaded = false;
+        static std::vector<ClassicPetTrainingTemplateRow> rows;
+
+        if (loaded)
+            return rows;
+
+        loaded = true;
+        rows.clear();
+
+        QueryResult result = WorldDatabase.PQuery("SELECT source_spell, taught_spell, trainer_taught, wild_learned, enabled FROM classic_pet_training_template");
+        if (!result)
+            return rows;
+
+        do
+        {
+            Field* fields = result->Fetch();
+
+            ClassicPetTrainingTemplateRow row;
+            row.SourceSpell = fields[0].GetUInt32();
+            row.TaughtSpell = fields[1].GetUInt32();
+            row.TrainerTaught = fields[2].GetUInt8() != 0;
+            row.WildLearned = fields[3].GetUInt8() != 0;
+            row.Enabled = fields[4].GetUInt8() != 0;
+            rows.push_back(row);
+        }
+        while (result->NextRow());
+
+        TC_LOG_INFO("server.loading", "Loaded {} Classic pet training template rows for pet learning filters.", uint32(rows.size()));
+        return rows;
+    }
+
+    bool HasClassicPetTrainingTemplateRow(uint32 sourceSpell, uint32 taughtSpell)
+    {
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+        {
+            if (sourceSpell && row.SourceSpell != sourceSpell)
+                continue;
+
+            if (taughtSpell && row.TaughtSpell != taughtSpell)
+                continue;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    bool IsClassicPetTrainingTemplateEnabled(uint32 sourceSpell, uint32 taughtSpell, bool requireWildLearned = false, bool requireTrainerTaught = false)
+    {
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+        {
+            if (sourceSpell && row.SourceSpell != sourceSpell)
+                continue;
+
+            if (taughtSpell && row.TaughtSpell != taughtSpell)
+                continue;
+
+            if (!row.Enabled)
+                continue;
+
+            if (requireWildLearned && !row.WildLearned)
+                continue;
+
+            if (requireTrainerTaught && !row.TrainerTaught)
+                continue;
+
+            return true;
+        }
+
+        return false;
+    }
+
+    uint32 GetClassicPetTrainingCost(uint32 spellId)
+    {
+        uint32 trainPoints = 0;
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+            trainPoints = std::max(trainPoints, itr->second->NumSkillUps);
+
+        return trainPoints;
+    }
+
+    uint32 GetClassicPetTrainingTaughtSpell(uint32 sourceSpellId)
+    {
+        SpellInfo const* sourceInfo = sSpellMgr->GetSpellInfo(sourceSpellId);
+        if (!sourceInfo)
+            return 0;
+
+        for (SpellEffectInfo const& effect : sourceInfo->GetEffects())
+            if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                return effect.TriggerSpell;
+
+        return 0;
+    }
+
+    uint32 ResolveClassicPetCreateSpell(uint32 createSpellId)
+    {
+        if (!createSpellId)
+            return 0;
+
+        if (SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId))
+        {
+            for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
+                if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                    return effect.TriggerSpell;
+        }
+
+        return createSpellId;
+    }
+
+    template<typename... Args>
+    void SendClassicPetDiagnostic(Player*, Args&&...)
+    {
+        // Diagnostics disabled. Keep this no-op wrapper so the Classic pet
+        // logic can stay clean without sending in-game system messages.
+    }
+
+    bool IsClassicHunterPetNativeCreateSpellAllowed(uint32 createSpellId, uint32 petSpellId)
+    {
+        if (!createSpellId || !petSpellId)
+            return false;
+
+        // A wild creature can have combat-only NPC spells in creature_template
+        // or CreatureSpellData. Those are not automatically Classic hunter pet
+        // abilities. For hunter pets, the authoritative allow-list is the
+        // Classic Beast Training template: the resolved taught pet spell must be
+        // an enabled wild-learned pet ability. This rejects enemy-only spells
+        // such as Rushing Charge while still accepting real native pet spells
+        // stored either directly (16828) or as source/teach spells (2981 -> 16828).
+        if (!IsClassicPetTrainingTemplateEnabled(0, petSpellId, true, false))
+            return false;
+
+        // If the default slot contains a source spell, require that exact source
+        // row to also be enabled/wild-learned. If the default slot already
+        // contains the taught pet spell directly, the taught-spell check above is
+        // sufficient.
+        if (createSpellId != petSpellId
+            && HasClassicPetTrainingTemplateRow(createSpellId, petSpellId)
+            && !IsClassicPetTrainingTemplateEnabled(createSpellId, petSpellId, true, false))
+            return false;
+
+        return true;
+    }
+
+    void GetClassicHunterPetNativeCreateSpells(CreatureTemplate const* creatureTemplate, std::vector<std::pair<uint32, uint32>>& nativeCreateSpells, Player* diagnosticPlayer = nullptr)
+    {
+        nativeCreateSpells.clear();
+
+        if (!creatureTemplate)
+            return;
+
+        auto addNativeCreateSpell = [&nativeCreateSpells, creatureTemplate, diagnosticPlayer](uint32 createSpellId, char const* sourceName)
+        {
+            if (!createSpellId)
+                return;
+
+            SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId);
+            if (!createSpellInfo)
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} references missing create spell {}.", sourceName, creatureTemplate->Entry, createSpellId);
+                return;
+            }
+
+            uint32 petSpellId = ResolveClassicPetCreateSpell(createSpellId);
+            if (!petSpellId)
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} create spell {} resolved to 0.", sourceName, creatureTemplate->Entry, createSpellId);
+                return;
+            }
+
+            SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
+            if (!petSpellInfo)
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} create spell {} resolved to missing pet spell {}.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
+                return;
+            }
+
+            if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, petSpellId))
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} rejected create spell {} -> pet spell {}: not enabled/wild-learned in classic_pet_training_template.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
+                return;
+            }
+
+            for (std::pair<uint32, uint32> const& existing : nativeCreateSpells)
+                if (existing.second == petSpellId)
+                    return;
+
+            nativeCreateSpells.emplace_back(createSpellId, petSpellId);
+            SendClassicPetDiagnostic(diagnosticPlayer, "|cff00ff00[ClassicPetDiag]|r {} entry {} accepted create spell {} -> pet spell {}.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
+        };
+
+        // Classic hunter-pet native tame abilities must come from the raw
+        // per-creature PetSpellDataId -> CreatureSpellData.dbc row only.
+        // Do NOT fall back to SpellMgr's PetDefaultSpells cache here: that cache
+        // may contain creature_template combat slots from the wild NPC, such as
+        // raptor enemy-only Rushing Charge (6268). Those spells are valid for the
+        // wild mob, but they are not hunter-pet native abilities.
+        SendClassicPetDiagnostic(diagnosticPlayer, "|cff99ccff[ClassicPetDiag]|r native lookup for entry {}: PetSpellDataId={}, family={}, type={}, type_flags={}.", creatureTemplate->Entry, creatureTemplate->PetSpellDataId, creatureTemplate->family, creatureTemplate->type, creatureTemplate->type_flags);
+
+        if (!creatureTemplate->PetSpellDataId)
+        {
+            SendClassicPetDiagnostic(diagnosticPlayer, "|cffff2020[ClassicPetDiag]|r entry {} has PetSpellDataId 0, so no Classic native tame spell can be read from CreatureSpellData.dbc. Refusing PetDefaultSpellsCache fallback to avoid enemy/NPC spells.", creatureTemplate->Entry);
+            return;
+        }
+
+        CreatureSpellDataEntry const* spellDataEntry = sCreatureSpellDataStore.LookupEntry(creatureTemplate->PetSpellDataId);
+        if (!spellDataEntry)
+        {
+            SendClassicPetDiagnostic(diagnosticPlayer, "|cffff2020[ClassicPetDiag]|r entry {} has PetSpellDataId {} but CreatureSpellData.dbc has no loaded row. Refusing PetDefaultSpellsCache fallback to avoid enemy/NPC spells.", creatureTemplate->Entry, creatureTemplate->PetSpellDataId);
+            return;
+        }
+
+        SendClassicPetDiagnostic(diagnosticPlayer, "|cff99ccff[ClassicPetDiag]|r CreatureSpellData.dbc row {} spells: {}, {}, {}, {}.", creatureTemplate->PetSpellDataId, spellDataEntry->Spells[0], spellDataEntry->Spells[1], spellDataEntry->Spells[2], spellDataEntry->Spells[3]);
+
+        for (uint8 i = 0; i < MAX_CREATURE_SPELL_DATA_SLOT; ++i)
+            addNativeCreateSpell(spellDataEntry->Spells[i], "CreatureSpellData.dbc");
+    }
+
+    bool IsClassicPetNativeDefaultSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
+    {
+        if (!creatureTemplate || !petSpellId)
+            return false;
+
+        std::vector<std::pair<uint32, uint32>> nativeCreateSpells;
+        GetClassicHunterPetNativeCreateSpells(creatureTemplate, nativeCreateSpells);
+
+        for (std::pair<uint32, uint32> const& nativeCreateSpell : nativeCreateSpells)
+            if (nativeCreateSpell.second == petSpellId)
+                return true;
+
+        return false;
+    }
+
+    bool IsClassicPetFamilyLevelupSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
+    {
+        if (!creatureTemplate || !creatureTemplate->family || !petSpellId)
+            return false;
+
+        PetLevelupSpellSet const* levelupSpells = sSpellMgr->GetPetLevelupSpellList(creatureTemplate->family);
+        if (!levelupSpells)
+            return false;
+
+        for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
+            if (itr->second == petSpellId)
+                return true;
+
+        return false;
+    }
+
+    bool OwnerKnowsClassicPetTrainingSourceFor(Player* owner, uint32 taughtSpellId)
+    {
+        if (!owner || !taughtSpellId)
+            return false;
+
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+        {
+            if (!row.Enabled || !row.SourceSpell || row.TaughtSpell != taughtSpellId)
+                continue;
+
+            if (owner->HasSpell(row.SourceSpell))
+                return true;
+        }
+
+        return false;
+    }
+
+    void GetClassicPetTrainingTaughtSpells(std::vector<uint32>& spells)
+    {
+        spells.clear();
+
+        // Use the authoritative DB template, not raw SkillLineAbility.dbc.
+        // The DBC can still contain stale/disabled source rows, and some
+        // newly corrected teachability rows may not be represented the way the
+        // learn-on-tame code expects.
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+        {
+            if (!row.Enabled || !row.TaughtSpell)
+                continue;
+
+            if (std::find(spells.begin(), spells.end(), row.TaughtSpell) == spells.end())
+                spells.push_back(row.TaughtSpell);
+        }
+    }
+
+    bool IsClassicPetTrainingTaughtSpell(uint32 spellId)
+    {
+        // Disabled rows such as Cobra Reflexes must be rejected even if the pet
+        // has the taught spell natively.
+        return IsClassicPetTrainingTemplateEnabled(0, spellId);
+    }
+
+    bool IsSameClassicPetTrainingFamily(uint32 leftSpellId, uint32 rightSpellId)
+    {
+        if (!leftSpellId || !rightSpellId)
+            return false;
+
+        if (leftSpellId == rightSpellId)
+            return true;
+
+        SpellInfo const* leftInfo = sSpellMgr->GetSpellInfo(leftSpellId);
+        SpellInfo const* rightInfo = sSpellMgr->GetSpellInfo(rightSpellId);
+        if (!leftInfo || !rightInfo)
+            return false;
+
+        // Primary path for the Classic Beast Training port: all ranks of the
+        // same pet ability have been normalized to the same SpellClassSet and
+        // SpellClassMask in Spell.dbc.  This catches Charge, Bite, Claw,
+        // resistances, Stamina, Armor, etc. even if spell_ranks is incomplete.
+        if (leftInfo->SpellFamilyName == rightInfo->SpellFamilyName
+            && !leftInfo->SpellFamilyFlags.IsEqual(0, 0, 0)
+            && leftInfo->SpellFamilyFlags == rightInfo->SpellFamilyFlags)
+            return true;
+
+        // Fallback for entries that still have real rank-chain data.
+        uint32 leftFirst = sSpellMgr->GetFirstSpellInChain(leftSpellId);
+        uint32 rightFirst = sSpellMgr->GetFirstSpellInChain(rightSpellId);
+        return leftFirst && rightFirst && leftFirst == rightFirst;
+    }
+
+    bool IsKnownClassicPetRankHigher(uint32 knownSpellId, uint32 newSpellId)
+    {
+        SpellInfo const* knownInfo = sSpellMgr->GetSpellInfo(knownSpellId);
+        SpellInfo const* newInfo = sSpellMgr->GetSpellInfo(newSpellId);
+        if (!knownInfo || !newInfo)
+            return false;
+
+        uint32 knownCost = GetClassicPetTrainingCost(knownSpellId);
+        uint32 newCost = GetClassicPetTrainingCost(newSpellId);
+
+        if (knownCost && newCost && knownCost > newCost)
+            return true;
+
+        // Growl is free at every rank, so cost alone cannot distinguish ranks.
+        return knownInfo->SpellLevel > newInfo->SpellLevel;
+    }
+
+    void GetClassicPetTrainingSourceSpellsUpToKnownRank(uint32 knownTaughtSpellId, std::vector<uint32>& sourceSpells)
+    {
+        sourceSpells.clear();
+
+        if (!knownTaughtSpellId)
+            return;
+
+        // Template-driven learn-on-tame.  Do not discover source spells by
+        // walking SkillLineAbility.dbc here.  The DB template is the authority
+        // for enabled/wild-learned state and for corrected family/rank rows.
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+        {
+            if (!row.Enabled || !row.WildLearned || !row.SourceSpell || !row.TaughtSpell)
+                continue;
+
+            if (!IsSameClassicPetTrainingFamily(row.TaughtSpell, knownTaughtSpellId))
+                continue;
+
+            // If the candidate taught spell is a higher rank than the pet's
+            // known native spell, do not grant it yet.  This intentionally
+            // teaches all previous ranks plus the exact native rank.
+            if (IsKnownClassicPetRankHigher(row.TaughtSpell, knownTaughtSpellId))
+                continue;
+
+            if (std::find(sourceSpells.begin(), sourceSpells.end(), row.SourceSpell) == sourceSpells.end())
+                sourceSpells.push_back(row.SourceSpell);
+        }
+
+        std::sort(sourceSpells.begin(), sourceSpells.end(), [](uint32 left, uint32 right)
+        {
+            SpellInfo const* leftInfo = sSpellMgr->GetSpellInfo(left);
+            SpellInfo const* rightInfo = sSpellMgr->GetSpellInfo(right);
+
+            uint32 leftLevel = leftInfo ? leftInfo->SpellLevel : 0;
+            uint32 rightLevel = rightInfo ? rightInfo->SpellLevel : 0;
+            if (leftLevel != rightLevel)
+                return leftLevel < rightLevel;
+
+            return left < right;
+        });
+    }
+}
+
+uint32 Pet::GetClassicMaxTrainingPoints() const
+{
+    if (getPetType() != HUNTER_PET)
+        return 0;
+
+    // Classic formula: level * (loyalty - 1).  We intentionally force max
+    // loyalty and skip the friendship system, so loyalty is always 6.
+    return uint32(GetLevel()) * 5;
+}
+
+uint32 Pet::GetClassicSpentTrainingPoints() const
+{
+    if (getPetType() != HUNTER_PET)
+        return 0;
+
+    // Count only the highest trained rank per Classic pet ability family.
+    // Do not rely only on spell_ranks here: the Classic pet data is carried by
+    // SpellClassSet/SpellClassMask in Spell.dbc for many pet abilities.
+    struct FamilyCost
+    {
+        uint32 representativeSpell;
+        uint32 cost;
+    };
+
+    std::vector<FamilyCost> familyCosts;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        uint32 cost = GetClassicPetTrainingCost(itr->first);
+        if (!cost)
+            continue;
+
+        bool merged = false;
+        for (FamilyCost& family : familyCosts)
+        {
+            if (!IsSameClassicPetTrainingFamily(family.representativeSpell, itr->first))
+                continue;
+
+            if (cost > family.cost)
+            {
+                family.representativeSpell = itr->first;
+                family.cost = cost;
+            }
+
+            merged = true;
+            break;
+        }
+
+        if (!merged)
+        {
+            FamilyCost familyCost;
+            familyCost.representativeSpell = itr->first;
+            familyCost.cost = cost;
+            familyCosts.push_back(familyCost);
+        }
+    }
+
+    uint32 spent = 0;
+    for (FamilyCost const& family : familyCosts)
+        spent += family.cost;
+
+    return spent;
+}
+
+int32 Pet::GetClassicAvailableTrainingPoints() const
+{
+    uint32 max = GetClassicMaxTrainingPoints();
+    uint32 spent = GetClassicSpentTrainingPoints();
+
+    return spent >= max ? 0 : int32(max - spent);
+}
+
+int32 Pet::GetTPForSpell(uint32 spellId) const
+{
+    uint32 baseTrainPoints = GetClassicPetTrainingCost(spellId);
+    if (!baseTrainPoints)
+        return 0;
+
+    uint32 spentTrainPoints = 0;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        if (!IsSameClassicPetTrainingFamily(itr->first, spellId))
+            continue;
+
+        uint32 knownCost = GetClassicPetTrainingCost(itr->first);
+        if (knownCost > spentTrainPoints)
+            spentTrainPoints = knownCost;
+    }
+
+    return int32(baseTrainPoints) - int32(spentTrainPoints);
+}
+
+bool Pet::HasTPForSpell(uint32 spellId) const
+{
+    int32 neededTrainPoints = GetTPForSpell(spellId);
+    if (neededTrainPoints <= 0)
+        return neededTrainPoints == 0;
+
+    return GetClassicAvailableTrainingPoints() >= neededTrainPoints;
+}
+
+bool Pet::CanTakeMoreActiveSpells(uint32 spellId) const
+{
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    if (spellInfo->IsPassive())
+        return true;
+
+    uint32 activeSpellStore[CLASSIC_PET_ACTIVE_SPELLS_MAX];
+    uint8 activeCount = 0;
+
+    activeSpellStore[activeCount++] = spellId;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        SpellInfo const* knownSpellInfo = sSpellMgr->GetSpellInfo(itr->first);
+        if (!knownSpellInfo || knownSpellInfo->IsPassive())
+            continue;
+
+        uint8 x;
+        for (x = 0; x < activeCount; ++x)
+        {
+            if (IsSameClassicPetTrainingFamily(itr->first, activeSpellStore[x]))
+                break;
+        }
+
+        if (x == activeCount)
+        {
+            if (activeCount >= CLASSIC_PET_ACTIVE_SPELLS_MAX)
+                return false;
+
+            activeSpellStore[activeCount++] = itr->first;
+        }
+    }
+
+    return true;
+}
+
+bool Pet::LearnClassicPetSpell(uint32 spellId)
+{
+    if (getPetType() != HUNTER_PET)
+        return learnSpell(spellId);
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    // If this taught spell exists in the Classic Beast Training template but is
+    // disabled there, reject it even if DBC still contains a stale source row.
+    if (HasClassicPetTrainingTemplateRow(0, spellId) && !IsClassicPetTrainingTemplateEnabled(0, spellId))
+        return false;
+
+    if (!CanTakeMoreActiveSpells(spellId))
+        return false;
+
+    if (spellInfo->SpellLevel > GetLevel())
+        return false;
+
+    std::vector<uint32> lowerRanksToRemove;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        if (!IsSameClassicPetTrainingFamily(itr->first, spellId))
+            continue;
+
+        if (itr->first == spellId)
+            return true;
+
+        // Do not let training a lower rank replace a higher rank already known.
+        if (IsKnownClassicPetRankHigher(itr->first, spellId))
+            return false;
+
+        lowerRanksToRemove.push_back(itr->first);
+    }
+
+    if (!HasTPForSpell(spellId))
+        return false;
+
+    if (!learnSpell(spellId))
+        return false;
+
+    // Classic pet training rank-up behavior: the newly trained rank replaces
+    // lower ranks of the same ability.  This prevents duplicate Charge/Growl/
+    // resistance/etc. buttons in the pet spellbook and pet action bar.
+    for (uint32 oldSpellId : lowerRanksToRemove)
+        unlearnSpell(oldSpellId, false);
+
+    if (Player* owner = GetOwner())
+    {
+        owner->PetSpellInitialize();
+        owner->UpdateClassicPetTrainingSkillPoints();
+    }
+
+    return true;
+}
+
+void Pet::CheckLearning(uint32 spellId)
+{
+    // BarracksPlus Classic pet learning is intentionally immediate on tame/load.
+    // Keep this hook as a safety net for older m_teachspells state, but do not
+    // require the pet to repeatedly use the ability.
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    TeachOwnerClassicPetTrainingFromKnownSpell(spellId);
+
+    if (m_teachspells.empty())
+        return;
+
+    Player* owner = GetOwner();
+    if (!owner)
+        return;
+
+    TeachSpellMap::iterator itr = m_teachspells.find(spellId);
+    if (itr == m_teachspells.end())
+        return;
+
+    uint32 sourceSpellId = itr->second;
+    if (sourceSpellId
+        && IsClassicPetTrainingTemplateEnabled(sourceSpellId, spellId, true, false)
+        && !owner->HasSpell(sourceSpellId))
+        owner->LearnSpell(sourceSpellId, false);
+
+    m_teachspells.erase(itr);
+}
+
+void Pet::TeachOwnerClassicPetTrainingFromKnownSpell(uint32 taughtSpellId)
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    Player* owner = GetOwner();
+    if (!owner || owner->GetClass() != CLASS_HUNTER)
+        return;
+
+    if (!IsClassicPetTrainingTaughtSpell(taughtSpellId))
+        return;
+
+    // Taming/backfill only teaches hunter catalog entries for enabled
+    // wild-learned rows.  Trainer-taught-only or disabled rows must not be
+    // learned from native pet spells.
+    if (!IsClassicPetTrainingTemplateEnabled(0, taughtSpellId, true, false))
+        return;
+
+    std::vector<uint32> sourceSpells;
+    GetClassicPetTrainingSourceSpellsUpToKnownRank(taughtSpellId, sourceSpells);
+
+    for (uint32 sourceSpellId : sourceSpells)
+    {
+        if (!sourceSpellId || owner->HasSpell(sourceSpellId))
+            continue;
+
+        owner->LearnSpell(sourceSpellId, false);
+        SendClassicPetDiagnostic(owner, "|cff00ff00[ClassicPetDiag]|r hunter learned Beast Training source spell {} from pet spell {}.", sourceSpellId, taughtSpellId);
+    }
+}
+
+void Pet::TeachOwnerClassicPetTrainingFromKnownSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    std::vector<uint32> knownPetSpells;
+    knownPetSpells.reserve(m_spells.size());
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        knownPetSpells.push_back(itr->first);
+    }
+
+    for (uint32 spellId : knownPetSpells)
+        TeachOwnerClassicPetTrainingFromKnownSpell(spellId);
+}
+
+void Pet::TeachOwnerClassicPetTrainingFromDefaultSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    CreatureTemplate const* creatureTemplate = GetCreatureTemplate();
+    if (!creatureTemplate)
+        return;
+
+    std::vector<std::pair<uint32, uint32>> nativeCreateSpells;
+    GetClassicHunterPetNativeCreateSpells(creatureTemplate, nativeCreateSpells, GetOwner());
+
+    for (std::pair<uint32, uint32> const& nativeCreateSpell : nativeCreateSpells)
+    {
+        // This method is also called during pet load as a backfill step. If an
+        // earlier broken tame saved the pet without its real native ability, add
+        // that native spell now as long as it still passes the Classic allow-list.
+        if (!HasSpell(nativeCreateSpell.second))
+            addSpell(nativeCreateSpell.second);
+
+        TeachOwnerClassicPetTrainingFromKnownSpell(nativeCreateSpell.second);
+    }
+}
+
+void Pet::CleanupClassicHunterPetLevelupSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    Player* owner = GetOwner();
+    CreatureTemplate const* creatureTemplate = GetCreatureTemplate();
+    if (!creatureTemplate)
+        return;
+
+    std::vector<uint32> spellsToRemove;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        uint32 spellId = itr->first;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+        {
+            spellsToRemove.push_back(spellId);
+            continue;
+        }
+
+        // Enemy-only active creature spells must never persist in a Classic
+        // hunter pet spellbook. Keep generic/system passives, but remove
+        // disabled Classic pet-template rows and non-template active spells.
+        if (!IsClassicPetTrainingTaughtSpell(spellId))
+        {
+            if (HasClassicPetTrainingTemplateRow(0, spellId) || !spellInfo->IsPassive())
+                spellsToRemove.push_back(spellId);
+
+            continue;
+        }
+
+        if (!IsClassicPetFamilyLevelupSpell(creatureTemplate, spellId))
+            continue;
+
+        if (IsClassicPetNativeDefaultSpell(creatureTemplate, spellId))
+            continue;
+
+        // If the hunter actually knows the matching Beast Training source spell,
+        // the pet may legally know this ability because the player trained it.
+        if (OwnerKnowsClassicPetTrainingSourceFor(owner, spellId))
+            continue;
+
+        spellsToRemove.push_back(spellId);
+    }
+
+    for (uint32 spellId : spellsToRemove)
+        unlearnSpell(spellId, false, true);
+
+    if (!spellsToRemove.empty())
+        SendClassicPetDiagnostic(owner, "|cffffcc00[ClassicPetDiag]|r removed {} invalid/Wrath family spell(s) from hunter pet {} ({}) during Classic pet cleanup.", uint32(spellsToRemove.size()), GetName(), GetEntry());
+}
+
 void Pet::CleanupActionBar()
 {
     for (uint8 i = 0; i < MAX_UNIT_ACTION_BAR_INDEX; ++i)
@@ -1644,9 +2457,41 @@ void Pet::InitPetCreateSpells()
 {
     m_charmInfo->InitPetActionBar();
     m_spells.clear();
+    m_teachspells.clear();
 
     LearnPetPassives();
-    InitLevelupSpellsForLevel();
+
+    if (getPetType() == HUNTER_PET)
+    {
+        CreatureTemplate const* creatureTemplate = GetCreatureTemplate();
+
+        std::vector<std::pair<uint32, uint32>> nativeCreateSpells;
+        GetClassicHunterPetNativeCreateSpells(creatureTemplate, nativeCreateSpells, GetOwner());
+
+        for (std::pair<uint32, uint32> const& nativeCreateSpell : nativeCreateSpells)
+        {
+            uint32 createSpellId = nativeCreateSpell.first;
+            uint32 petSpellId = nativeCreateSpell.second;
+
+            // Classic 1.12 native pet abilities come from per-creature native
+            // spell data, then are filtered through classic_pet_training_template.
+            // This allows Claw/Bite/etc. where Classic data says the beast has
+            // them, but rejects enemy-only mob abilities such as Rushing Charge.
+            addSpell(petSpellId);
+
+            // BarracksPlus teaches immediately on tame/load: if the native pet
+            // knows rank N, the hunter learns the corresponding Beast Training
+            // source spell for rank N and prior ranks.
+            TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+
+            SendClassicPetDiagnostic(GetOwner(), "|cff00ff00[ClassicPetDiag]|r added native pet spell {} from create/default spell {} for pet entry {}.", petSpellId, createSpellId, GetEntry());
+        }
+
+        if (nativeCreateSpells.empty() && creatureTemplate && creatureTemplate->PetSpellDataId)
+            SendClassicPetDiagnostic(GetOwner(), "|cffff2020[ClassicPetDiag]|r hunter pet entry {} has PetSpellDataId {} but no enabled wild-learned Classic pet ability passed the native-spell filter.", GetEntry(), creatureTemplate->PetSpellDataId);
+    }
+    else
+        InitLevelupSpellsForLevel();
 
     CastPetAuras(false);
 }
@@ -1654,6 +2499,37 @@ void Pet::InitPetCreateSpells()
 bool Pet::resetTalents()
 {
     Player* player = GetOwner();
+
+    if (getPetType() == HUNTER_PET)
+    {
+        std::vector<uint32> spellsToRemove;
+        for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+        {
+            if (itr->second.state == PETSPELL_REMOVED)
+                continue;
+
+            // Classic pet untraining must only remove Beast Training abilities:
+            // the actual taught pet spells triggered by SkillLine 261 source
+            // spells.  Do not remove generic/system pet passives such as
+            // "Tamed Pet Passive (DND)" just because they are passive, free,
+            // have a SkillLineAbility row, or appear in pet talent DBC data.
+            if (IsClassicPetTrainingTaughtSpell(itr->first))
+                spellsToRemove.push_back(itr->first);
+        }
+
+        for (uint32 spellId : spellsToRemove)
+            unlearnSpell(spellId, false);
+
+        SetFreeTalentPoints(0);
+
+        if (!m_loading)
+        {
+            player->PetSpellInitialize();
+            player->UpdateClassicPetTrainingSkillPoints();
+        }
+
+        return !spellsToRemove.empty();
+    }
 
     // not need after this call
     if (player->HasAtLoginFlag(AT_LOGIN_RESET_PET_TALENTS))
@@ -1771,10 +2647,15 @@ void Pet::resetTalentsForAllPetsOf(Player* owner, Pet* onlinePet /*= nullptr*/)
         need_comma = true;
     }
 
+    std::vector<uint32> classicPetTrainingTaughtSpells;
+    GetClassicPetTrainingTaughtSpells(classicPetTrainingTaughtSpells);
+    if (classicPetTrainingTaughtSpells.empty())
+        return;
+
     ss << ") AND spell IN (";
 
     need_comma = false;
-    for (uint32 spell : sPetTalentSpells)
+    for (uint32 spell : classicPetTrainingTaughtSpells)
     {
         if (need_comma)
             ss << ',';
@@ -1791,6 +2672,17 @@ void Pet::resetTalentsForAllPetsOf(Player* owner, Pet* onlinePet /*= nullptr*/)
 
 void Pet::InitTalentForLevel()
 {
+    if (getPetType() == HUNTER_PET)
+    {
+        m_usedTalentCount = 0;
+        SetFreeTalentPoints(0);
+
+        if (!m_loading)
+            GetOwner()->SendTalentsInfoData(true);
+
+        return;
+    }
+
     uint8 level = GetLevel();
     uint32 talentPointsForLevel = GetMaxTalentPointsForLevel(level);
     // Reset talents in case low level (on level down) or wrong points for level (hunter can unlearn TP increase talent)
@@ -1805,6 +2697,9 @@ void Pet::InitTalentForLevel()
 
 uint8 Pet::GetMaxTalentPointsForLevel(uint8 level) const
 {
+    if (getPetType() == HUNTER_PET)
+        return 0;
+
     uint8 points = (level >= 20) ? ((level - 16) / 4) : 0;
     // Mod points from owner SPELL_AURA_MOD_PET_TALENT_POINTS
     points += GetOwner()->GetTotalAuraModifier(SPELL_AURA_MOD_PET_TALENT_POINTS);

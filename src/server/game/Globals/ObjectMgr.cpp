@@ -3994,6 +3994,52 @@ void ObjectMgr::LoadPetLevelInfo()
     TC_LOG_INFO("server.loading", ">> Loaded {} level pet stats definitions in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
 }
 
+void ObjectMgr::LoadClassicPetTemplateStats()
+{
+    uint32 oldMSTime = getMSTime();
+
+    _classicPetTemplateStatsStore.clear();
+
+    //                                           0      1                       2
+    QueryResult result = WorldDatabase.Query("SELECT entry, melee_base_attack_time, ranged_base_attack_time FROM classic_pet_template_stats");
+
+    if (!result)
+    {
+        TC_LOG_INFO("server.loading", ">> Loaded 0 classic pet template stat overrides. DB table `classic_pet_template_stats` is empty.");
+        return;
+    }
+
+    uint32 count = 0;
+
+    do
+    {
+        Field* fields = result->Fetch();
+
+        ClassicPetTemplateStats stats;
+        stats.Entry = fields[0].GetUInt32();
+        stats.MeleeBaseAttackTime = fields[1].GetUInt32();
+        stats.RangedBaseAttackTime = fields[2].GetUInt32();
+
+        if (!stats.MeleeBaseAttackTime)
+            stats.MeleeBaseAttackTime = BASE_ATTACK_TIME;
+
+        if (!stats.RangedBaseAttackTime)
+            stats.RangedBaseAttackTime = BASE_ATTACK_TIME;
+
+        if (!GetCreatureTemplate(stats.Entry))
+        {
+            TC_LOG_ERROR("sql.sql", "Creature {} in `classic_pet_template_stats` does not exist in `creature_template`, ignoring.", stats.Entry);
+            continue;
+        }
+
+        _classicPetTemplateStatsStore[stats.Entry] = stats;
+        ++count;
+    }
+    while (result->NextRow());
+
+    TC_LOG_INFO("server.loading", ">> Loaded {} classic pet template stat overrides in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
+}
+
 PetLevelInfo const* ObjectMgr::GetPetLevelInfo(uint32 creature_id, uint8 level) const
 {
     if (level > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
@@ -4004,6 +4050,15 @@ PetLevelInfo const* ObjectMgr::GetPetLevelInfo(uint32 creature_id, uint8 level) 
         return nullptr;
 
     return &itr->second[level - 1];                         // data for level 1 stored in [0] array element, ...
+}
+
+ClassicPetTemplateStats const* ObjectMgr::GetClassicPetTemplateStats(uint32 entry) const
+{
+    auto itr = _classicPetTemplateStatsStore.find(entry);
+    if (itr == _classicPetTemplateStatsStore.end())
+        return nullptr;
+
+    return &itr->second;
 }
 
 void ObjectMgr::PlayerCreateInfoAddItemHelper(uint32 race_, uint32 class_, uint32 itemId, int32 count)

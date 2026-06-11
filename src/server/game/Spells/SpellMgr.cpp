@@ -2287,7 +2287,7 @@ void SpellMgr::LoadPetLevelupSpellMap()
     TC_LOG_INFO("server.loading", ">> Loaded {} pet levelup and default spells for {} families in {} ms", count, family_count, GetMSTimeDiffToNow(oldMSTime));
 }
 
-bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpellsEntry& petDefSpells)
+bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpellsEntry& petDefSpells, bool removeLevelupDuplicates = true)
 {
     // skip empty list;
     bool have_spell = false;
@@ -2302,20 +2302,25 @@ bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpells
     if (!have_spell)
         return false;
 
-    // remove duplicates with levelupSpells if any
-    if (PetLevelupSpellSet const* levelupSpells = cInfo->family ? sSpellMgr->GetPetLevelupSpellList(cInfo->family) : nullptr)
+    // remove duplicates with levelupSpells if any.  Classic hunter pets must
+    // keep their native tame/default spells even when Wrath's family level-up
+    // map contains the same spell.
+    if (removeLevelupDuplicates)
     {
-        for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
+        if (PetLevelupSpellSet const* levelupSpells = cInfo->family ? sSpellMgr->GetPetLevelupSpellList(cInfo->family) : nullptr)
         {
-            if (!petDefSpells.spellid[j])
-                continue;
-
-            for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
+            for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
             {
-                if (itr->second == petDefSpells.spellid[j])
+                if (!petDefSpells.spellid[j])
+                    continue;
+
+                for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
                 {
-                    petDefSpells.spellid[j] = 0;
-                    break;
+                    if (itr->second == petDefSpells.spellid[j])
+                    {
+                        petDefSpells.spellid[j] = 0;
+                        break;
+                    }
                 }
             }
         }
@@ -2360,7 +2365,8 @@ void SpellMgr::LoadPetDefaultSpells()
         for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
             petDefSpells.spellid[j] = spellDataEntry->Spells[j];
 
-        if (LoadPetDefaultSpells_helper(&creatureTemplatePair.second, petDefSpells))
+        bool const keepNativeHunterPetSpells = creatureTemplatePair.second.IsTameable(true);
+        if (LoadPetDefaultSpells_helper(&creatureTemplatePair.second, petDefSpells, !keepNativeHunterPetSpells))
         {
             mPetDefaultSpellsMap[petSpellsId] = petDefSpells;
             ++countData;
@@ -2401,7 +2407,8 @@ void SpellMgr::LoadPetDefaultSpells()
                 for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
                     petDefSpells.spellid[j] = cInfo->spells[j];
 
-                if (LoadPetDefaultSpells_helper(cInfo, petDefSpells))
+                bool const keepNativeHunterPetSpells = cInfo->IsTameable(true);
+                if (LoadPetDefaultSpells_helper(cInfo, petDefSpells, !keepNativeHunterPetSpells))
                 {
                     mPetDefaultSpellsMap[petSpellsId] = petDefSpells;
                     ++countCreature;

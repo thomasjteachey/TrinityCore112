@@ -874,6 +874,15 @@ void WorldSession::HandlePetLearnTalent(WorldPacket& recvData)
     uint32 talentId, requestedRank;
     recvData >> guid >> talentId >> requestedRank;
 
+    if (Pet* pet = _player->GetPet())
+    {
+        if (pet->getPetType() == HUNTER_PET)
+        {
+            _player->SendTalentsInfoData(true);
+            return;
+        }
+    }
+
     _player->LearnPetTalent(guid, talentId, requestedRank);
     _player->SendTalentsInfoData(true);
 }
@@ -896,6 +905,10 @@ void WorldSession::HandleLearnPreviewTalentsPet(WorldPacket& recvData)
     for (uint32 i = 0; i < talentsCount && i < MaxTalentsCount; ++i)
     {
         recvData >> talentId >> talentRank;
+
+        if (Pet* pet = _player->GetPet())
+            if (pet->getPetType() == HUNTER_PET)
+                continue;
 
         _player->LearnPetTalent(guid, talentId, talentRank);
     }

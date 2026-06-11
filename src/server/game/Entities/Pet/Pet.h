@@ -32,6 +32,7 @@ struct PetSpell
 
 typedef std::unordered_map<uint32, PetSpell> PetSpellMap;
 typedef std::vector<uint32> AutoSpellList;
+typedef std::unordered_map<uint32, uint32> TeachSpellMap;
 
 class Player;
 class PetAura;
@@ -127,8 +128,26 @@ class TC_GAME_API Pet : public Guardian
 
         PetSpellMap     m_spells;
         AutoSpellList   m_autospells;
+        TeachSpellMap   m_teachspells;
 
         void InitPetCreateSpells();
+
+        // Classic pet training support. Training points are derived from max loyalty
+        // (forced to level * 5) minus the current trained spell cost, so no loyalty
+        // progression or extra pet-training DB state is required.
+        uint32 GetClassicMaxTrainingPoints() const;
+        uint32 GetClassicSpentTrainingPoints() const;
+        int32 GetClassicAvailableTrainingPoints() const;
+        int32 GetTPForSpell(uint32 spellId) const;
+        bool HasTPForSpell(uint32 spellId) const;
+        bool CanTakeMoreActiveSpells(uint32 spellId) const;
+        bool LearnClassicPetSpell(uint32 spellId);
+        void CheckLearning(uint32 spellId);
+        void TeachOwnerClassicPetTrainingFromKnownSpell(uint32 taughtSpellId);
+        void TeachOwnerClassicPetTrainingFromKnownSpells();
+        void TeachOwnerClassicPetTrainingFromDefaultSpells();
+        void CleanupClassicHunterPetLevelupSpells();
+        void AddTeachSpell(uint32 learnedId, uint32 sourceId) { m_teachspells[learnedId] = sourceId; }
 
         bool resetTalents();
         static void resetTalentsForAllPetsOf(Player* owner, Pet* online_pet = nullptr);

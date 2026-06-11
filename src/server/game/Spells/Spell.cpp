@@ -4294,6 +4294,9 @@ void Spell::finish(bool ok)
             unitCaster->ToPlayer()->UpdatePotionCooldown(this);
     }
 
+    if (Pet* petCaster = unitCaster->ToPet())
+        petCaster->CheckLearning(m_spellInfo->Id);
+
     // Stop Attack for some spells
     if (m_spellInfo->HasAttribute(SPELL_ATTR0_STOP_ATTACK_TARGET))
         unitCaster->AttackStop();
@@ -5934,8 +5937,14 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                 if (!learn_spellproto)
                     return SPELL_FAILED_NOT_KNOWN;
 
-                if (m_spellInfo->SpellLevel > pet->GetLevel())
+                if (!pet->CanTakeMoreActiveSpells(learn_spellproto->Id))
+                    return SPELL_FAILED_ERROR;
+
+                if (learn_spellproto->SpellLevel > pet->GetLevel())
                     return SPELL_FAILED_LOWLEVEL;
+
+                if (!pet->HasTPForSpell(learn_spellproto->Id))
+                    return SPELL_FAILED_NO_POWER;
 
                 break;
             }
@@ -5956,8 +5965,14 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
                     if (!learn_spellproto)
                         return SPELL_FAILED_NOT_KNOWN;
 
-                    if (m_spellInfo->SpellLevel > pet->GetLevel())
+                    if (!pet->CanTakeMoreActiveSpells(learn_spellproto->Id))
+                        return SPELL_FAILED_ERROR;
+
+                    if (learn_spellproto->SpellLevel > pet->GetLevel())
                         return SPELL_FAILED_LOWLEVEL;
+
+                    if (!pet->HasTPForSpell(learn_spellproto->Id))
+                        return SPELL_FAILED_NO_POWER;
                 }
                 break;
             }

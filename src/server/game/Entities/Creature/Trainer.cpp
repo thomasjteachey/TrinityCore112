@@ -17,6 +17,7 @@
 
 #include "Trainer.h"
 #include "Creature.h"
+#include "DatabaseEnv.h"
 #include "NPCPackets.h"
 #include "Player.h"
 #include "SpellInfo.h"
@@ -24,6 +25,91 @@
 
 namespace Trainer
 {
+namespace
+{
+    struct ClassicPetTrainerTemplateRow
+    {
+        uint32 SourceSpell = 0;
+        bool TrainerTaught = false;
+        bool Enabled = false;
+    };
+
+    std::vector<ClassicPetTrainerTemplateRow> const& GetClassicPetTrainerTemplateRows()
+    {
+        static bool loaded = false;
+        static std::vector<ClassicPetTrainerTemplateRow> rows;
+
+        if (loaded)
+            return rows;
+
+        loaded = true;
+        rows.clear();
+
+        QueryResult result = WorldDatabase.PQuery("SELECT source_spell, trainer_taught, enabled FROM classic_pet_training_template");
+        if (!result)
+            return rows;
+
+        do
+        {
+            Field* fields = result->Fetch();
+
+            ClassicPetTrainerTemplateRow row;
+            row.SourceSpell = fields[0].GetUInt32();
+            row.TrainerTaught = fields[1].GetUInt8() != 0;
+            row.Enabled = fields[2].GetUInt8() != 0;
+            rows.push_back(row);
+        }
+        while (result->NextRow());
+
+        return rows;
+    }
+
+    bool IsClassicPetTrainingSourceSpellEnabledForTrainer(uint32 spellId)
+    {
+        for (ClassicPetTrainerTemplateRow const& row : GetClassicPetTrainerTemplateRows())
+            if (row.SourceSpell == spellId && row.Enabled && row.TrainerTaught)
+                return true;
+
+        return false;
+    }
+
+    bool IsClassicPetTrainingSourceSpell(uint32 spellId)
+    {
+        if (spellId == 5149) // Beast Training opener itself, not a trainer-taught recipe.
+            return false;
+
+        // Pet trainers may only use source spells that are explicitly enabled
+        // and trainer_taught in classic_pet_training_template.  Disabled rows
+        // must fall through as non-Classic trainer spells.
+        if (!IsClassicPetTrainingSourceSpellEnabledForTrainer(spellId))
+            return false;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+            return false;
+
+        bool teachesPetSpell = false;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+            {
+                teachesPetSpell = true;
+                break;
+            }
+        }
+
+        if (!teachesPetSpell)
+            return false;
+
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+            if (itr->second && itr->second->SkillLine == 261)
+                return true;
+
+        return false;
+    }
+}
+
     bool Spell::IsCastable() const
     {
         return sSpellMgr->AssertSpellInfo(SpellId)->HasEffect(SPELL_EFFECT_LEARN_SPELL);
@@ -108,8 +194,15 @@ namespace Trainer
         npc->SendPlaySpellVisual(179);
         npc->SendPlaySpellImpact(player->GetGUID(), 362);
 
+        // Classic Beast Training trainer rows are source/teaching spells.
+        // Buying them should only add the source spell to the hunter's known
+        // Beast Training catalog.  Do NOT cast the source spell here, because
+        // its LEARN_SPELL / LEARN_PET_SPELL effect would immediately teach
+        // the current pet and skip the Beast Training frame step.
+        if (IsClassicPetTrainingSourceSpell(trainerSpell->SpellId))
+            player->LearnSpell(trainerSpell->SpellId, false);
         // learn explicitly or cast explicitly
-        if (trainerSpell->IsCastable())
+        else if (trainerSpell->IsCastable())
             player->CastSpell(player, trainerSpell->SpellId, true);
         else
             player->LearnSpell(trainerSpell->SpellId, false);
