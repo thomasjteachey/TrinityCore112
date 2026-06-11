@@ -1632,6 +1632,55 @@ namespace
 {
     constexpr uint8 CLASSIC_PET_ACTIVE_SPELLS_MAX = 4;
 
+    bool IsClassicPetFamilySkillLine(uint32 skillLine)
+    {
+        switch (skillLine)
+        {
+            // Classic hunter pet family skill lines plus pet resistance.
+            // This list intentionally mirrors the SkillLineAbility cleanup
+            // used by the Classic pet-training DBC build.
+            case 203:
+            case 208:
+            case 209:
+            case 210:
+            case 211:
+            case 212:
+            case 213:
+            case 214:
+            case 215:
+            case 217:
+            case 218:
+            case 236:
+            case 251:
+            case 270:
+            case 653:
+            case 654:
+            case 655:
+            case 656:
+            case 758:
+            case 761:
+            case 763:
+            case 764:
+            case 765:
+            case 766:
+            case 767:
+            case 768:
+            case 775:
+            case 780:
+            case 781:
+            case 782:
+            case 783:
+            case 784:
+            case 785:
+            case 786:
+            case 787:
+            case 788:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     uint32 GetClassicPetTrainingCost(uint32 spellId)
     {
         uint32 trainPoints = 0;
@@ -1640,6 +1689,29 @@ namespace
             trainPoints = std::max(trainPoints, itr->second->NumSkillUps);
 
         return trainPoints;
+    }
+
+    bool IsClassicPetTrainingSpell(uint32 spellId)
+    {
+        SkillLineAbilityMapBounds bounds = sSpellMgr->GetSkillLineAbilityMapBounds(spellId);
+        for (SkillLineAbilityMap::const_iterator itr = bounds.first; itr != bounds.second; ++itr)
+        {
+            SkillLineAbilityEntry const* ability = itr->second;
+            if (!ability)
+                continue;
+
+            // Costed Classic pet abilities: Bite, Charge, resistances, etc.
+            if (ability->NumSkillUps > 0)
+                return true;
+
+            // Free Classic pet-training abilities such as Growl still need to
+            // be removed by the pet trainer's untrain option.  They have zero
+            // TP cost, so cost-only cleanup leaves them behind.
+            if (IsClassicPetFamilySkillLine(ability->SkillLine))
+                return true;
+        }
+
+        return false;
     }
 
     bool IsSameClassicPetTrainingFamily(uint32 leftSpellId, uint32 rightSpellId)
@@ -2018,10 +2090,10 @@ bool Pet::resetTalents()
             if (itr->second.state == PETSPELL_REMOVED)
                 continue;
 
-            // Remove Classic Beast Training abilities with a TP cost and any
-            // leftover Wrath pet talent spells from old saves.  Growl/free native
-            // pet skills stay unless they were Wrath talent spells.
-            if (GetClassicPetTrainingCost(itr->first) > 0 || sPetTalentSpells.find(itr->first) != sPetTalentSpells.end())
+            // Remove all Classic Beast Training abilities, including free
+            // abilities such as Growl.  The previous cost-only check left
+            // Growl Rank 7 behind because Growl costs 0 TP in Classic.
+            if (IsClassicPetTrainingSpell(itr->first) || sPetTalentSpells.find(itr->first) != sPetTalentSpells.end())
                 spellsToRemove.push_back(itr->first);
         }
 
