@@ -1745,32 +1745,25 @@ namespace
     {
         spells.clear();
 
-        for (uint32 i = 0; i < sSkillLineAbilityStore.GetNumRows(); ++i)
+        // Use the authoritative DB template, not raw SkillLineAbility.dbc.
+        // The DBC can still contain stale/disabled source rows, and some
+        // newly corrected teachability rows may not be represented the way the
+        // learn-on-tame code expects.
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
         {
-            SkillLineAbilityEntry const* ability = sSkillLineAbilityStore.LookupEntry(i);
-            if (!ability || ability->SkillLine != 261 || ability->Spell == 5149)
+            if (!row.Enabled || !row.TaughtSpell)
                 continue;
 
-            uint32 taughtSpell = GetClassicPetTrainingTaughtSpell(ability->Spell);
-            if (!taughtSpell)
-                continue;
-
-            // Respect classic_pet_training_template.enabled.  Disabled rows such
-            // as Cobra Reflexes may still exist in DBC/native pet data, but they
-            // must not count as trainable Classic Beast Training spells.
-            if (!IsClassicPetTrainingTemplateEnabled(ability->Spell, taughtSpell))
-                continue;
-
-            if (std::find(spells.begin(), spells.end(), taughtSpell) == spells.end())
-                spells.push_back(taughtSpell);
+            if (std::find(spells.begin(), spells.end(), row.TaughtSpell) == spells.end())
+                spells.push_back(row.TaughtSpell);
         }
     }
 
     bool IsClassicPetTrainingTaughtSpell(uint32 spellId)
     {
-        std::vector<uint32> taughtSpells;
-        GetClassicPetTrainingTaughtSpells(taughtSpells);
-        return std::find(taughtSpells.begin(), taughtSpells.end(), spellId) != taughtSpells.end();
+        // Disabled rows such as Cobra Reflexes must be rejected even if the pet
+        // has the taught spell natively.
+        return IsClassicPetTrainingTemplateEnabled(0, spellId);
     }
 
     bool IsSameClassicPetTrainingFamily(uint32 leftSpellId, uint32 rightSpellId)
@@ -1825,34 +1818,25 @@ namespace
         if (!knownTaughtSpellId)
             return;
 
-        for (uint32 i = 0; i < sSkillLineAbilityStore.GetNumRows(); ++i)
+        // Template-driven learn-on-tame.  Do not discover source spells by
+        // walking SkillLineAbility.dbc here.  The DB template is the authority
+        // for enabled/wild-learned state and for corrected family/rank rows.
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
         {
-            SkillLineAbilityEntry const* ability = sSkillLineAbilityStore.LookupEntry(i);
-            if (!ability || ability->SkillLine != 261 || ability->Spell == 5149)
+            if (!row.Enabled || !row.WildLearned || !row.SourceSpell || !row.TaughtSpell)
                 continue;
 
-            uint32 candidateTaughtSpell = GetClassicPetTrainingTaughtSpell(ability->Spell);
-            if (!candidateTaughtSpell)
-                continue;
-
-            // Learn-on-tame / learn-on-use may only grant rows that are enabled
-            // and wild-learned in classic_pet_training_template.  This prevents
-            // native disabled abilities like Cobra Reflexes from teaching their
-            // source spell to the hunter.
-            if (!IsClassicPetTrainingTemplateEnabled(ability->Spell, candidateTaughtSpell, true, false))
-                continue;
-
-            if (!IsSameClassicPetTrainingFamily(candidateTaughtSpell, knownTaughtSpellId))
+            if (!IsSameClassicPetTrainingFamily(row.TaughtSpell, knownTaughtSpellId))
                 continue;
 
             // If the candidate taught spell is a higher rank than the pet's
             // known native spell, do not grant it yet.  This intentionally
             // teaches all previous ranks plus the exact native rank.
-            if (IsKnownClassicPetRankHigher(candidateTaughtSpell, knownTaughtSpellId))
+            if (IsKnownClassicPetRankHigher(row.TaughtSpell, knownTaughtSpellId))
                 continue;
 
-            if (std::find(sourceSpells.begin(), sourceSpells.end(), ability->Spell) == sourceSpells.end())
-                sourceSpells.push_back(ability->Spell);
+            if (std::find(sourceSpells.begin(), sourceSpells.end(), row.SourceSpell) == sourceSpells.end())
+                sourceSpells.push_back(row.SourceSpell);
         }
 
         std::sort(sourceSpells.begin(), sourceSpells.end(), [](uint32 left, uint32 right)
