@@ -1894,7 +1894,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                         for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
                         {
                             Powers powerType = Powers(i);
-                            if (pet->GetMaxPower(powerType))
+                            if (powerType != POWER_HAPPINESS && pet->GetMaxPower(powerType))
                                 pet->SetPower(powerType, pet->GetMaxPower(powerType));
                         }
                     }
@@ -26859,7 +26859,7 @@ void Player::ResummonPetTemporaryUnSummonedIfAny()
                 for (uint8 i = POWER_MANA; i < MAX_POWERS; ++i)
                 {
                     Powers powerType = Powers(i);
-                    if (pet->GetMaxPower(powerType))
+                    if (powerType != POWER_HAPPINESS && pet->GetMaxPower(powerType))
                         pet->SetPower(powerType, pet->GetMaxPower(powerType));
                 }
 
