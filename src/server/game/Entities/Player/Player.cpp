@@ -8393,6 +8393,75 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo)
     }
 }
 
+
+namespace
+{
+constexpr uint32 BPLUS_SPELL_SHAMAN_FLAMETONGUE_ATTACK = 10444;
+
+bool BPlusIsClassicFlametonguePassiveSpell(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 10400:
+        case 15567:
+        case 15568:
+        case 15569:
+        case 16311:
+        case 16312:
+        case 16313:
+        case 58784:
+        case 58791:
+        case 58792:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void BPlusCastClassicFlametongueWeaponProc(Player* player, DamageInfo const& damageInfo, Item* item, ItemTemplate const* proto, SpellInfo const* flametonguePassive)
+{
+    if (!player || !item || !proto || !flametonguePassive)
+        return;
+
+    Unit* target = damageInfo.GetVictim();
+    if (!target)
+        return;
+
+    WeaponAttackType const attackType = Player::GetAttackBySlot(item->GetSlot());
+    if (attackType != BASE_ATTACK && attackType != OFF_ATTACK)
+        return;
+
+    if (attackType != damageInfo.GetAttackType())
+        return;
+
+    if ((damageInfo.GetHitMask() & (PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB)) == 0)
+        return;
+
+    float attackSpeed = float(player->GetAttackTime(attackType)) / float(IN_MILLISECONDS);
+    if (attackSpeed <= 0.0f)
+        attackSpeed = proto->Delay ? float(proto->Delay) / float(IN_MILLISECONDS) : 2.0f;
+
+    // Classic/Vanilla Flametongue passive ranks are dummy/aura shaped in the 1.12 DBC.
+    // They never reach the WotLK AuraScript reliably when ported as weapon enchant spells,
+    // so calculate the hit here from the passive rank stored on the enchant row.
+    float const basePoints = float(flametonguePassive->GetEffect(EFFECT_0).CalcValue(player));
+    if (basePoints <= 0.0f)
+        return;
+
+    // Same math used by the Trinity AuraScript, but called directly from the enchanted weapon hit.
+    float fireDamage = (basePoints / 100.0f) * attackSpeed;
+    fireDamage = std::max(basePoints / 77.0f, std::min(fireDamage, basePoints / 25.0f));
+
+    float spellPowerBonus = float(player->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE));
+    spellPowerBonus += float(target->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_FIRE));
+    spellPowerBonus *= 0.03811f * attackSpeed * player->CalculateSpellpowerCoefficientLevelPenalty(flametonguePassive);
+
+    CastSpellExtraArgs args(item);
+    args.AddSpellBP0(int32(fireDamage + spellPowerBonus));
+    player->CastSpell(target, BPLUS_SPELL_SHAMAN_FLAMETONGUE_ATTACK, args);
+}
+}
+
 void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemTemplate const* proto)
 {
     // Can do effect if any damage done to target
@@ -8437,6 +8506,39 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 && sScriptMgr->OnCastItemCombatSpell(this, damageInfo.GetVictim(), spellInfo, item)
                 )
                 CastSpell(damageInfo.GetVictim(), spellInfo->Id, item);
+        }
+    }
+
+    // Classic/MaNGOS shaped Flametongue Weapon is stored as an equip spell on the temp enchant.
+    // WotLK expects the passive aura script to proc it, but the ported 1.12 dummy/aura data can miss that path.
+    // Trigger it directly from the weapon hit so the enchant works regardless of spell_script_names/rank-chain shape.
+    if (canTrigger)
+    {
+        for (uint8 e_slot = 0; e_slot < MAX_ENCHANTMENT_SLOT; ++e_slot)
+        {
+            uint32 enchant_id = item->GetEnchantmentId(EnchantmentSlot(e_slot));
+            SpellItemEnchantmentEntry const* pEnchant = sSpellItemEnchantmentStore.LookupEntry(enchant_id);
+            if (!pEnchant)
+                continue;
+
+            for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
+            {
+                if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL)
+                    continue;
+
+                if (!BPlusIsClassicFlametonguePassiveSpell(pEnchant->EffectArg[s]))
+                    continue;
+
+                SpellInfo const* flametonguePassive = sSpellMgr->GetSpellInfo(pEnchant->EffectArg[s]);
+                if (!flametonguePassive)
+                {
+                    TC_LOG_ERROR("entities.player.items", "Player::CastItemCombatSpell: Player '{}' ({}) has Flametongue enchant {} with unknown passive spell {}, ignoring",
+                        GetName(), GetGUID().ToString(), pEnchant->ID, pEnchant->EffectArg[s]);
+                    continue;
+                }
+
+                BPlusCastClassicFlametongueWeaponProc(this, damageInfo, item, proto, flametonguePassive);
+            }
         }
     }
 
