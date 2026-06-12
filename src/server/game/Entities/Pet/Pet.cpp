@@ -880,6 +880,15 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map, uint32 phas
         SetGender(GENDER_NONE);
         SetSheath(SHEATH_STATE_MELEE);
         ReplaceAllPetFlags(UNIT_PET_FLAG_CAN_BE_RENAMED | UNIT_PET_FLAG_CAN_BE_ABANDONED);
+
+        // The wild creature's creature_template spell slots are NPC combat AI
+        // spells, not Classic hunter pet spellbook entries. A raptor can know
+        // an enemy-only spell like Rushing Charge as a mob; after tame those
+        // slots must not survive as pet abilities or autocast candidates. The
+        // actual pet spellbook is rebuilt below from Classic-filtered native
+        // tame data and Beast Training.
+        for (uint8 i = 0; i < MAX_CREATURE_SPELLS; ++i)
+            m_spells[i] = 0;
     }
 
     return true;
@@ -1785,6 +1794,33 @@ namespace
         return createSpellId;
     }
 
+    bool IsClassicHunterPetNativeCreateSpellAllowed(uint32 createSpellId, uint32 petSpellId)
+    {
+        if (!createSpellId || !petSpellId)
+            return false;
+
+        // A wild creature can have combat-only NPC spells in creature_template
+        // or CreatureSpellData. Those are not automatically Classic hunter pet
+        // abilities. For hunter pets, the authoritative allow-list is the
+        // Classic Beast Training template: the resolved taught pet spell must be
+        // an enabled wild-learned pet ability. This rejects enemy-only spells
+        // such as Rushing Charge while still accepting real native pet spells
+        // stored either directly (16828) or as source/teach spells (2981 -> 16828).
+        if (!IsClassicPetTrainingTemplateEnabled(0, petSpellId, true, false))
+            return false;
+
+        // If the default slot contains a source spell, require that exact source
+        // row to also be enabled/wild-learned. If the default slot already
+        // contains the taught pet spell directly, the taught-spell check above is
+        // sufficient.
+        if (createSpellId != petSpellId
+            && HasClassicPetTrainingTemplateRow(createSpellId, petSpellId)
+            && !IsClassicPetTrainingTemplateEnabled(createSpellId, petSpellId, true, false))
+            return false;
+
+        return true;
+    }
+
     bool IsClassicPetNativeDefaultSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
     {
         if (!creatureTemplate || !petSpellId)
@@ -1796,8 +1832,16 @@ namespace
             return false;
 
         for (uint32 createSpellId : defSpells->spellid)
-            if (ResolveClassicPetCreateSpell(createSpellId) == petSpellId)
-                return true;
+        {
+            uint32 resolvedPetSpellId = ResolveClassicPetCreateSpell(createSpellId);
+            if (resolvedPetSpellId != petSpellId)
+                continue;
+
+            if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, resolvedPetSpellId))
+                continue;
+
+            return true;
+        }
 
         return false;
     }
@@ -2258,7 +2302,11 @@ void Pet::TeachOwnerClassicPetTrainingFromDefaultSpells()
         if (!createSpellId)
             continue;
 
-        TeachOwnerClassicPetTrainingFromKnownSpell(ResolveClassicPetCreateSpell(createSpellId));
+        uint32 petSpellId = ResolveClassicPetCreateSpell(createSpellId);
+        if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, petSpellId))
+            continue;
+
+        TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
     }
 }
 
@@ -2356,6 +2404,15 @@ void Pet::InitPetCreateSpells()
                 SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
                 if (!petSpellInfo)
                     continue;
+
+                // Only Classic Beast Training wild-learned abilities can become
+                // native hunter pet spells. Enemy-only NPC abilities from the wild
+                // creature template/DBC, such as Rushing Charge, are rejected here.
+                if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, petSpellId))
+                {
+                    TC_LOG_DEBUG("entities.pet", "Skipping non-Classic hunter pet native spell {} resolved from {} for pet entry {}.", petSpellId, createSpellId, GetEntry());
+                    continue;
+                }
 
                 // Classic 1.12 normally taught many wild abilities by observing
                 // the pet use them.  BarracksPlus teaches immediately when the pet
