@@ -959,39 +959,66 @@ void Spell::MangosDummyPort()
         case SPELLFAMILY_PALADIN:
             break;
         case SPELLFAMILY_SHAMAN:
-            
-            if (m_spellInfo->SpellFamilyFlags & flag96(0x0000000000200000)) // Flametongue Weapon Proc, Ranks
+        {
+            Unit* unitCaster = m_caster->ToUnit();
+            if (!unitCaster)
+                return;
+
+            auto getMainHandSpeedSeconds = [&]() -> float
             {
                 if (m_CastItem)
-                {
-                    //int32 bonusDamage = caster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY);
-                    // found spelldamage coefficients of 0.381% per 0.1 speed and 15.244 per 4.0 speed
-                    // but own calculation say 0.385 gives at most one point difference to published values
-                    int32 bonusDamage = m_caster->ToUnit()->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
-                    // Does Amplify Magic/Dampen Magic influence flametongue? If not, the above addition must be removed.
-                    float weaponSpeed = float(m_CastItem->GetTemplate()->Delay) / IN_MILLISECONDS;
-                    bonusDamage /= 10; //flametongue coefficient
-                    int32 totalDamage = (damage * 0.01 * weaponSpeed) + bonusDamage;
+                    if (ItemTemplate const* castItemTemplate = m_CastItem->GetTemplate())
+                        if (castItemTemplate->Delay)
+                            return float(castItemTemplate->Delay) / float(IN_MILLISECONDS);
 
-                    m_caster->CastSpell(unitTarget, 10444, &totalDamage);
-                }
+                if (Player* player = unitCaster->ToPlayer())
+                    if (Item* mainHand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+                        if (ItemTemplate const* mainHandTemplate = mainHand->GetTemplate())
+                            if (mainHandTemplate->Delay)
+                                return float(mainHandTemplate->Delay) / float(IN_MILLISECONDS);
 
+                if (uint32 attackTime = unitCaster->GetAttackTime(BASE_ATTACK))
+                    return float(attackTime) / float(IN_MILLISECONDS);
+
+                return 2.0f;
+            };
+
+            if (m_spellInfo->SpellFamilyFlags & flag96(0x0000000000200000)) // Flametongue Weapon Proc, Ranks
+            {
+                if (!unitTarget)
+                    return;
+
+                float const weaponSpeed = getMainHandSpeedSeconds();
+
+                int32 bonusDamage = unitCaster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
+                bonusDamage /= 10; // Flametongue coefficient from the MaNGOS port.
+
+                int32 const totalDamage = int32(float(damage) * 0.01f * weaponSpeed) + bonusDamage;
+
+                CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                args.AddSpellBP0(totalDamage);
+
+                unitCaster->CastSpell(unitTarget, 10444, args);
                 return;
             }
 
             if (m_spellInfo->SpellFamilyFlags & flag96(0x0000000400000000)) // Flametongue Totem Proc, Ranks
             {
-                if (m_CastItem) // Does not scale with gear
-                {
-                    float weaponSpeed = float(m_CastItem->GetTemplate()->Delay) / IN_MILLISECONDS;
-                    int32 totalDamage = (damage * 0.01f * weaponSpeed);
-                    m_caster->CastSpell(unitTarget, 16368, &totalDamage);
-                }
+                if (!unitTarget)
+                    return;
 
+                float const weaponSpeed = getMainHandSpeedSeconds();
+                int32 const totalDamage = int32(float(damage) * 0.01f * weaponSpeed);
+
+                CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
+                args.AddSpellBP0(totalDamage);
+
+                unitCaster->CastSpell(unitTarget, 16368, args);
                 return;
             }
-            
+
             break;
+        }
     }
 }
 
