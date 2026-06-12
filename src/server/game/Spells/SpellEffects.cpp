@@ -3275,7 +3275,10 @@ void Spell::EffectTameCreature()
     // "kill" original creature
     creatureTarget->DespawnOrUnsummon();
 
-    uint8 level = (creatureTarget->GetLevel() < (unitCaster->GetLevel() - 5)) ? (unitCaster->GetLevel() - 5) : creatureTarget->GetLevel();
+    // Classic BarracksPlus rule: the pet is normalized to the hunter's
+    // current level on tame. Keep the visual level update in sync with
+    // Unit::CreateTamedPetFrom().
+    uint8 level = uint8(unitCaster->GetLevel());
 
     // prepare visual effect for levelup
     pet->SetUInt32Value(UNIT_FIELD_LEVEL, level - 1);
