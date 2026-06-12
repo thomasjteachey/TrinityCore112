@@ -410,8 +410,17 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
             InitTalentForLevel();                               // re-init to check talent count
             GetSpellHistory()->LoadFromDB<Pet>(holder.GetPreparedResult(PetLoadQueryHolder::COOLDOWNS));
             LearnPetPassives();
-            InitLevelupSpellsForLevel();
-            TeachOwnerClassicPetTrainingFromDefaultSpells();
+            if (getPetType() == HUNTER_PET)
+            {
+                // Remove Wrath family/level-up pet spells that may have been saved
+                // before the Classic tame path was corrected, then backfill only
+                // legitimate Classic learn-on-tame source spells.
+                CleanupClassicHunterPetLevelupSpells();
+                TeachOwnerClassicPetTrainingFromKnownSpells();
+                TeachOwnerClassicPetTrainingFromDefaultSpells();
+            }
+            else
+                InitLevelupSpellsForLevel();
             if (GetMap()->IsBattleArena())
                 RemoveArenaAuras();
 
@@ -799,7 +808,8 @@ void Pet::GivePetLevel(uint8 level)
     }
 
     InitStatsForLevel(level);
-    InitLevelupSpellsForLevel();
+    if (getPetType() != HUNTER_PET)
+        InitLevelupSpellsForLevel();
     InitTalentForLevel();
 }
 
@@ -1532,6 +1542,12 @@ bool Pet::learnSpell(uint32 spell_id)
 
 void Pet::InitLevelupSpellsForLevel()
 {
+    // Classic hunter pets do not auto-learn family/level-up spells.
+    // Native tame spells come from PetSpellDataId/creature default spells, and
+    // additional abilities must be taught through Beast Training.
+    if (getPetType() == HUNTER_PET)
+        return;
+
     uint8 level = GetLevel();
 
     if (PetLevelupSpellSet const* levelupSpells = GetCreatureTemplate()->family ? sSpellMgr->GetPetLevelupSpellList(GetCreatureTemplate()->family) : nullptr)
@@ -1559,36 +1575,12 @@ void Pet::InitLevelupSpellsForLevel()
             if (!spellInfo)
                 continue;
 
-            uint32 learnedSpellId = spellInfo->Id;
-            SpellInfo const* learnedSpellInfo = spellInfo;
-
-            // Classic hunter pet native spell data can store the Beast Training
-            // source/teach spell instead of the actual pet ability.  The create
-            // path already resolves that to the triggered pet spell; do the same
-            // here so pet load/level-sync does not leave Bite/Claw missing or add
-            // the source spell itself to the pet spellbook.
-            if (getPetType() == HUNTER_PET)
-            {
-                for (SpellEffectInfo const& effect : spellInfo->GetEffects())
-                {
-                    if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
-                    {
-                        if (SpellInfo const* triggeredSpellInfo = sSpellMgr->GetSpellInfo(effect.TriggerSpell))
-                        {
-                            learnedSpellId = triggeredSpellInfo->Id;
-                            learnedSpellInfo = triggeredSpellInfo;
-                        }
-                        break;
-                    }
-                }
-            }
-
             // will called first if level down
-            if (learnedSpellInfo->SpellLevel > level)
-                unlearnSpell(learnedSpellId, true);
+            if (spellInfo->SpellLevel > level)
+                unlearnSpell(spellInfo->Id, true);
             // will called if level up
-            else if (learnSpell(learnedSpellId) && getPetType() == HUNTER_PET)
-                TeachOwnerClassicPetTrainingFromKnownSpell(learnedSpellId);
+            else
+                learnSpell(spellInfo->Id);
         }
     }
 }
@@ -1763,6 +1755,71 @@ namespace
                 return effect.TriggerSpell;
 
         return 0;
+    }
+
+    uint32 ResolveClassicPetCreateSpell(uint32 createSpellId)
+    {
+        if (!createSpellId)
+            return 0;
+
+        if (SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId))
+        {
+            for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
+                if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                    return effect.TriggerSpell;
+        }
+
+        return createSpellId;
+    }
+
+    bool IsClassicPetNativeDefaultSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
+    {
+        if (!creatureTemplate || !petSpellId)
+            return false;
+
+        int32 petSpellsId = creatureTemplate->PetSpellDataId ? -(int32)creatureTemplate->PetSpellDataId : creatureTemplate->Entry;
+        PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId);
+        if (!defSpells)
+            return false;
+
+        for (uint32 createSpellId : defSpells->spellid)
+            if (ResolveClassicPetCreateSpell(createSpellId) == petSpellId)
+                return true;
+
+        return false;
+    }
+
+    bool IsClassicPetFamilyLevelupSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
+    {
+        if (!creatureTemplate || !creatureTemplate->family || !petSpellId)
+            return false;
+
+        PetLevelupSpellSet const* levelupSpells = sSpellMgr->GetPetLevelupSpellList(creatureTemplate->family);
+        if (!levelupSpells)
+            return false;
+
+        for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
+            if (itr->second == petSpellId)
+                return true;
+
+        return false;
+    }
+
+    bool OwnerKnowsClassicPetTrainingSourceFor(Player* owner, uint32 taughtSpellId)
+    {
+        if (!owner || !taughtSpellId)
+            return false;
+
+        for (ClassicPetTrainingTemplateRow const& row : GetClassicPetTrainingTemplateRows())
+        {
+            if (!row.Enabled || !row.SourceSpell || row.TaughtSpell != taughtSpellId)
+                continue;
+
+            if (owner->HasSpell(row.SourceSpell))
+                return true;
+        }
+
+        return false;
     }
 
     void GetClassicPetTrainingTaughtSpells(std::vector<uint32>& spells)
@@ -2188,21 +2245,54 @@ void Pet::TeachOwnerClassicPetTrainingFromDefaultSpells()
         if (!createSpellId)
             continue;
 
-        uint32 petSpellId = createSpellId;
-        if (SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId))
-        {
-            for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
-            {
-                if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
-                {
-                    petSpellId = effect.TriggerSpell;
-                    break;
-                }
-            }
-        }
-
-        TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+        TeachOwnerClassicPetTrainingFromKnownSpell(ResolveClassicPetCreateSpell(createSpellId));
     }
+}
+
+void Pet::CleanupClassicHunterPetLevelupSpells()
+{
+    if (getPetType() != HUNTER_PET)
+        return;
+
+    Player* owner = GetOwner();
+    CreatureTemplate const* creatureTemplate = GetCreatureTemplate();
+    if (!creatureTemplate)
+        return;
+
+    std::vector<uint32> spellsToRemove;
+
+    for (PetSpellMap::const_iterator itr = m_spells.begin(); itr != m_spells.end(); ++itr)
+    {
+        if (itr->second.state == PETSPELL_REMOVED)
+            continue;
+
+        uint32 spellId = itr->first;
+
+        // Only police Classic Beast Training pet abilities that also exist in
+        // Wrath's family level-up map.  Generic passives and real native tame
+        // spells are not touched.
+        if (!IsClassicPetTrainingTaughtSpell(spellId))
+            continue;
+
+        if (!IsClassicPetFamilyLevelupSpell(creatureTemplate, spellId))
+            continue;
+
+        if (IsClassicPetNativeDefaultSpell(creatureTemplate, spellId))
+            continue;
+
+        // If the hunter actually knows the matching Beast Training source spell,
+        // the pet may legally know this ability because the player trained it.
+        if (OwnerKnowsClassicPetTrainingSourceFor(owner, spellId))
+            continue;
+
+        spellsToRemove.push_back(spellId);
+    }
+
+    for (uint32 spellId : spellsToRemove)
+        unlearnSpell(spellId, false, true);
+
+    if (!spellsToRemove.empty())
+        TC_LOG_INFO("entities.pet", "Removed {} Wrath family level-up spell(s) from hunter pet {} ({}) during Classic pet load cleanup.", uint32(spellsToRemove.size()), GetName(), GetEntry());
 }
 
 void Pet::CleanupActionBar()
@@ -2248,18 +2338,7 @@ void Pet::InitPetCreateSpells()
                 if (!createSpellInfo)
                     continue;
 
-                uint32 petSpellId = createSpellId;
-                bool sourceTeachesPetSpell = false;
-
-                for (SpellEffectInfo const& effect : createSpellInfo->GetEffects())
-                {
-                    if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
-                    {
-                        petSpellId = effect.TriggerSpell;
-                        sourceTeachesPetSpell = true;
-                        break;
-                    }
-                }
+                uint32 petSpellId = ResolveClassicPetCreateSpell(createSpellId);
 
                 SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
                 if (!petSpellInfo)

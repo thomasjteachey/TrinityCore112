@@ -3295,13 +3295,11 @@ void Spell::EffectTameCreature()
     {
         Player* player = unitCaster->ToPlayer();
 
-        // Learn the hunter's Classic Beast Training source spells from the pet's
-        // finished spellbook now that the tame is fully owned and initialized.
         pet->TeachOwnerClassicPetTrainingFromKnownSpells();
         pet->TeachOwnerClassicPetTrainingFromDefaultSpells();
 
-        player->UpdateClassicPetTrainingSkillPoints();
         pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+        player->UpdateClassicPetTrainingSkillPoints();
         player->PetSpellInitialize();
     }
 }

@@ -2302,10 +2302,9 @@ bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpells
     if (!have_spell)
         return false;
 
-    // remove duplicates with levelupSpells if any
-    // For tameable hunter pets, callers can keep native/default spells intact so
-    // the tame path learns from the creature's own data instead of waiting for a
-    // later pet reload/level-up initialization pass.
+    // remove duplicates with levelupSpells if any.  Classic hunter pets must
+    // keep their native tame/default spells even when Wrath's family level-up
+    // map contains the same spell.
     if (removeLevelupDuplicates)
     {
         if (PetLevelupSpellSet const* levelupSpells = cInfo->family ? sSpellMgr->GetPetLevelupSpellList(cInfo->family) : nullptr)
@@ -2376,37 +2375,6 @@ void SpellMgr::LoadPetDefaultSpells()
 
     TC_LOG_INFO("server.loading", ">> Loaded addition spells for {} pet spell data entries in {} ms", countData, GetMSTimeDiffToNow(oldMSTime));
 
-    TC_LOG_INFO("server.loading", "Loading tameable hunter creature template spells...");
-    oldMSTime = getMSTime();
-
-    uint32 countTameableCreature = 0;
-    for (auto const& creatureTemplatePair : ctc)
-    {
-        CreatureTemplate const& creatureTemplate = creatureTemplatePair.second;
-
-        if (creatureTemplate.PetSpellDataId)
-            continue;
-
-        if (!creatureTemplate.IsTameable(true))
-            continue;
-
-        int32 petSpellsId = creatureTemplate.Entry;
-        if (mPetDefaultSpellsMap.find(petSpellsId) != mPetDefaultSpellsMap.end())
-            continue;
-
-        PetDefaultSpellsEntry petDefSpells;
-        for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
-            petDefSpells.spellid[j] = creatureTemplate.spells[j];
-
-        if (LoadPetDefaultSpells_helper(&creatureTemplate, petDefSpells, false))
-        {
-            mPetDefaultSpellsMap[petSpellsId] = petDefSpells;
-            ++countTameableCreature;
-        }
-    }
-
-    TC_LOG_INFO("server.loading", ">> Loaded native spells for {} tameable hunter creature templates in {} ms", countTameableCreature, GetMSTimeDiffToNow(oldMSTime));
-
     TC_LOG_INFO("server.loading", "Loading summonable creature templates...");
     oldMSTime = getMSTime();
 
@@ -2439,7 +2407,8 @@ void SpellMgr::LoadPetDefaultSpells()
                 for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
                     petDefSpells.spellid[j] = cInfo->spells[j];
 
-                if (LoadPetDefaultSpells_helper(cInfo, petDefSpells))
+                bool const keepNativeHunterPetSpells = cInfo->IsTameable(true);
+                if (LoadPetDefaultSpells_helper(cInfo, petDefSpells, !keepNativeHunterPetSpells))
                 {
                     mPetDefaultSpellsMap[petSpellsId] = petDefSpells;
                     ++countCreature;
