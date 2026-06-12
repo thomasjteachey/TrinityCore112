@@ -8396,12 +8396,39 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo)
 
 namespace
 {
-constexpr uint32 BPLUS_SPELL_SHAMAN_FLAMETONGUE_ATTACK = 10444;
+bool BPlusIsFlametongueEnchantForDiag(uint32 enchantId)
+{
+    switch (enchantId)
+    {
+        case 3:
+        case 4:
+        case 5:
+        case 523:
+        case 1665:
+        case 1666:
+        case 2634:
+        case 3779:
+        case 3780:
+        case 3781:
+            return true;
+        default:
+            return false;
+    }
+}
 
-bool BPlusIsClassicFlametonguePassiveSpell(uint32 spellId)
+bool BPlusIsFlametongueProcSpellForDiag(uint32 spellId)
 {
     switch (spellId)
     {
+        // Classic combat-spell enchant proc ranks
+        case 8026:
+        case 8028:
+        case 8029:
+        case 10445:
+        case 16343:
+        case 16344:
+        case 16345:
+        // Passive/equip-spell shaped ranks seen in mixed client data
         case 10400:
         case 15567:
         case 15568:
@@ -8412,53 +8439,12 @@ bool BPlusIsClassicFlametonguePassiveSpell(uint32 spellId)
         case 58784:
         case 58791:
         case 58792:
+        // Final damage spell
+        case 10444:
             return true;
         default:
             return false;
     }
-}
-
-void BPlusCastClassicFlametongueWeaponProc(Player* player, DamageInfo const& damageInfo, Item* item, ItemTemplate const* proto, SpellInfo const* flametonguePassive)
-{
-    if (!player || !item || !proto || !flametonguePassive)
-        return;
-
-    Unit* target = damageInfo.GetVictim();
-    if (!target)
-        return;
-
-    WeaponAttackType const attackType = Player::GetAttackBySlot(item->GetSlot());
-    if (attackType != BASE_ATTACK && attackType != OFF_ATTACK)
-        return;
-
-    if (attackType != damageInfo.GetAttackType())
-        return;
-
-    if ((damageInfo.GetHitMask() & (PROC_HIT_NORMAL | PROC_HIT_CRITICAL | PROC_HIT_ABSORB)) == 0)
-        return;
-
-    float attackSpeed = float(player->GetAttackTime(attackType)) / float(IN_MILLISECONDS);
-    if (attackSpeed <= 0.0f)
-        attackSpeed = proto->Delay ? float(proto->Delay) / float(IN_MILLISECONDS) : 2.0f;
-
-    // Classic/Vanilla Flametongue passive ranks are dummy/aura shaped in the 1.12 DBC.
-    // They never reach the WotLK AuraScript reliably when ported as weapon enchant spells,
-    // so calculate the hit here from the passive rank stored on the enchant row.
-    float const basePoints = float(flametonguePassive->GetEffect(EFFECT_0).CalcValue(player));
-    if (basePoints <= 0.0f)
-        return;
-
-    // Same math used by the Trinity AuraScript, but called directly from the enchanted weapon hit.
-    float fireDamage = (basePoints / 100.0f) * attackSpeed;
-    fireDamage = std::max(basePoints / 77.0f, std::min(fireDamage, basePoints / 25.0f));
-
-    float spellPowerBonus = float(player->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE));
-    spellPowerBonus += float(target->GetTotalAuraModifierByMiscMask(SPELL_AURA_MOD_DAMAGE_TAKEN, SPELL_SCHOOL_MASK_FIRE));
-    spellPowerBonus *= 0.03811f * attackSpeed * player->CalculateSpellpowerCoefficientLevelPenalty(flametonguePassive);
-
-    CastSpellExtraArgs args(item);
-    args.AddSpellBP0(int32(fireDamage + spellPowerBonus));
-    player->CastSpell(target, BPLUS_SPELL_SHAMAN_FLAMETONGUE_ATTACK, args);
 }
 }
 
@@ -8509,39 +8495,6 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         }
     }
 
-    // Classic/MaNGOS shaped Flametongue Weapon is stored as an equip spell on the temp enchant.
-    // WotLK expects the passive aura script to proc it, but the ported 1.12 dummy/aura data can miss that path.
-    // Trigger it directly from the weapon hit so the enchant works regardless of spell_script_names/rank-chain shape.
-    if (canTrigger)
-    {
-        for (uint8 e_slot = 0; e_slot < MAX_ENCHANTMENT_SLOT; ++e_slot)
-        {
-            uint32 enchant_id = item->GetEnchantmentId(EnchantmentSlot(e_slot));
-            SpellItemEnchantmentEntry const* pEnchant = sSpellItemEnchantmentStore.LookupEntry(enchant_id);
-            if (!pEnchant)
-                continue;
-
-            for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
-            {
-                if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_EQUIP_SPELL)
-                    continue;
-
-                if (!BPlusIsClassicFlametonguePassiveSpell(pEnchant->EffectArg[s]))
-                    continue;
-
-                SpellInfo const* flametonguePassive = sSpellMgr->GetSpellInfo(pEnchant->EffectArg[s]);
-                if (!flametonguePassive)
-                {
-                    TC_LOG_ERROR("entities.player.items", "Player::CastItemCombatSpell: Player '{}' ({}) has Flametongue enchant {} with unknown passive spell {}, ignoring",
-                        GetName(), GetGUID().ToString(), pEnchant->ID, pEnchant->EffectArg[s]);
-                    continue;
-                }
-
-                BPlusCastClassicFlametongueWeaponProc(this, damageInfo, item, proto, flametonguePassive);
-            }
-        }
-    }
-
     // item combat enchantments
     for (uint8 e_slot = 0; e_slot < MAX_ENCHANTMENT_SLOT; ++e_slot)
     {
@@ -8550,37 +8503,94 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         if (!pEnchant)
             continue;
 
+        bool const bplusFtEnchantDiag = BPlusIsFlametongueEnchantForDiag(enchant_id);
+        if (bplusFtEnchantDiag)
+        {
+            GetSession()->SendAreaTriggerMessage(
+                "FT DIAG ITEM: item=%u itemSlot=%u atk=%u hitMask=0x%X enchantSlot=%u enchant=%u effects=%u/%u/%u args=%u/%u/%u",
+                item ? item->GetEntry() : 0,
+                item ? uint32(item->GetSlot()) : 0,
+                uint32(damageInfo.GetAttackType()),
+                uint32(damageInfo.GetHitMask()),
+                uint32(e_slot),
+                enchant_id,
+                uint32(pEnchant->Effect[0]), uint32(pEnchant->Effect[1]), uint32(pEnchant->Effect[2]),
+                uint32(pEnchant->EffectArg[0]), uint32(pEnchant->EffectArg[1]), uint32(pEnchant->EffectArg[2]));
+        }
+
         for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
         {
             if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
+            {
+                if (bplusFtEnchantDiag && pEnchant->Effect[s])
+                    GetSession()->SendAreaTriggerMessage(
+                        "FT DIAG SKIP: enchant=%u effectIndex=%u effectType=%u arg=%u not COMBAT_SPELL(%u)",
+                        enchant_id, uint32(s), uint32(pEnchant->Effect[s]), uint32(pEnchant->EffectArg[s]), uint32(ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL));
                 continue;
+            }
 
             SpellEnchantProcEntry const* entry = sSpellMgr->GetSpellEnchantProcEvent(enchant_id);
+            if (bplusFtEnchantDiag)
+                GetSession()->SendAreaTriggerMessage(
+                    "FT DIAG PROCENTRY: enchant=%u hasEntry=%u entryHitMask=0x%X dmgHitMask=0x%X attr=0x%X canTrigger=%u",
+                    enchant_id, entry ? 1u : 0u, entry ? uint32(entry->HitMask) : 0u, uint32(damageInfo.GetHitMask()),
+                    entry ? uint32(entry->AttributesMask) : 0u, canTrigger ? 1u : 0u);
+
             if (entry && entry->HitMask)
             {
                 // Check hit/crit/dodge/parry requirement
                 if ((entry->HitMask & damageInfo.GetHitMask()) == 0)
+                {
+                    if (bplusFtEnchantDiag)
+                        GetSession()->SendAreaTriggerMessage(
+                            "FT DIAG BLOCK: enchant=%u spell=%u blocked by entry HitMask 0x%X vs dmg 0x%X",
+                            enchant_id, uint32(pEnchant->EffectArg[s]), uint32(entry->HitMask), uint32(damageInfo.GetHitMask()));
                     continue;
+                }
             }
             else
             {
                 // Can do effect if any damage done to target
                 // for done procs allow normal + critical + absorbs by default
                 if (!canTrigger)
+                {
+                    if (bplusFtEnchantDiag)
+                        GetSession()->SendAreaTriggerMessage(
+                            "FT DIAG BLOCK: enchant=%u spell=%u canTrigger=false hitMask=0x%X",
+                            enchant_id, uint32(pEnchant->EffectArg[s]), uint32(damageInfo.GetHitMask()));
                     continue;
+                }
             }
 
             // check if enchant procs only on white hits
             if (entry && (entry->AttributesMask & ENCHANT_PROC_ATTR_WHITE_HIT) && damageInfo.GetSpellInfo())
+            {
+                if (bplusFtEnchantDiag)
+                    GetSession()->SendAreaTriggerMessage(
+                        "FT DIAG BLOCK: enchant=%u spell=%u requires white hit but dmg spell=%u",
+                        enchant_id, uint32(pEnchant->EffectArg[s]), damageInfo.GetSpellInfo() ? damageInfo.GetSpellInfo()->Id : 0u);
                 continue;
+            }
 
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(pEnchant->EffectArg[s]);
             if (!spellInfo)
             {
                 TC_LOG_ERROR("entities.player.items", "Player::CastItemCombatSpell: Player '{}' ({}) cast unknown spell (EnchantID: {}, SpellID: {}), ignoring",
                     GetName(), GetGUID().ToString(), pEnchant->ID, pEnchant->EffectArg[s]);
+                if (bplusFtEnchantDiag)
+                    GetSession()->SendAreaTriggerMessage(
+                        "FT DIAG BLOCK: enchant=%u arg=%u missing SpellInfo",
+                        enchant_id, uint32(pEnchant->EffectArg[s]));
                 continue;
             }
+
+            bool const bplusFtProcDiag = bplusFtEnchantDiag || BPlusIsFlametongueProcSpellForDiag(spellInfo->Id);
+            if (bplusFtProcDiag)
+                GetSession()->SendAreaTriggerMessage(
+                    "FT DIAG SPELL: enchant=%u effectIndex=%u spell=%u family=%u ftFlag=%u positive=%u baseChance=%u pointsMin=%d",
+                    enchant_id, uint32(s), spellInfo->Id, uint32(spellInfo->SpellFamilyName),
+                    spellInfo->SpellFamilyFlags.HasFlag(0x00200000) ? 1u : 0u, spellInfo->IsPositive() ? 1u : 0u,
+                    spellInfo->ProcChance, pEnchant->EffectPointsMin[s]);
 
             float chance = pEnchant->EffectPointsMin[s] != 0 ? float(pEnchant->EffectPointsMin[s]) : GetWeaponProcChance();
             if (entry)
@@ -8598,9 +8608,22 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (FindCurrentSpellBySpellId(5938) && e_slot == TEMP_ENCHANTMENT_SLOT)
                 chance = 100.0f;
 
-            if (roll_chance_f(chance))
+            bool const bplusFtRollPassed = roll_chance_f(chance);
+            if (bplusFtProcDiag)
+                GetSession()->SendAreaTriggerMessage(
+                    "FT DIAG ROLL: enchant=%u spell=%u chance=%.2f result=%u",
+                    enchant_id, spellInfo->Id, double(chance), bplusFtRollPassed ? 1u : 0u);
+
+            if (bplusFtRollPassed)
             {
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
+
+                if (bplusFtProcDiag)
+                    GetSession()->SendAreaTriggerMessage(
+                        "FT DIAG CAST: enchant=%u spell=%u isPositive=%u target=%s victim=%s",
+                        enchant_id, spellInfo->Id, spellInfo->IsPositive() ? 1u : 0u,
+                        target ? target->GetName().c_str() : "null",
+                        damageInfo.GetVictim() ? damageInfo.GetVictim()->GetName().c_str() : "null");
 
                 CastSpellExtraArgs args(item);
                 // reduce effect values if enchant is limited
