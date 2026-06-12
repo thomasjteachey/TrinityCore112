@@ -8393,34 +8393,12 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo)
     }
 }
 
-
 namespace
 {
-bool BPlusIsFlametongueEnchantForDiag(uint32 enchantId)
-{
-    switch (enchantId)
-    {
-        case 3:
-        case 4:
-        case 5:
-        case 523:
-        case 1665:
-        case 1666:
-        case 2634:
-        case 3779:
-        case 3780:
-        case 3781:
-            return true;
-        default:
-            return false;
-    }
-}
-
-bool BPlusIsFlametongueProcSpellForDiag(uint32 spellId)
+bool BPlusIsFlametongueWeaponProcSpell(uint32 spellId)
 {
     switch (spellId)
     {
-        // Classic combat-spell enchant proc ranks
         case 8026:
         case 8028:
         case 8029:
@@ -8428,19 +8406,6 @@ bool BPlusIsFlametongueProcSpellForDiag(uint32 spellId)
         case 16343:
         case 16344:
         case 16345:
-        // Passive/equip-spell shaped ranks seen in mixed client data
-        case 10400:
-        case 15567:
-        case 15568:
-        case 15569:
-        case 16311:
-        case 16312:
-        case 16313:
-        case 58784:
-        case 58791:
-        case 58792:
-        // Final damage spell
-        case 10444:
             return true;
         default:
             return false;
@@ -8503,94 +8468,37 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         if (!pEnchant)
             continue;
 
-        bool const bplusFtEnchantDiag = BPlusIsFlametongueEnchantForDiag(enchant_id);
-        if (bplusFtEnchantDiag)
-        {
-            ChatHandler(GetSession()).PSendSysMessage(
-                "FT DIAG ITEM: item=%u itemSlot=%u atk=%u hitMask=0x%X enchantSlot=%u enchant=%u effects=%u/%u/%u args=%u/%u/%u",
-                item ? item->GetEntry() : 0,
-                item ? uint32(item->GetSlot()) : 0,
-                uint32(damageInfo.GetAttackType()),
-                uint32(damageInfo.GetHitMask()),
-                uint32(e_slot),
-                enchant_id,
-                uint32(pEnchant->Effect[0]), uint32(pEnchant->Effect[1]), uint32(pEnchant->Effect[2]),
-                uint32(pEnchant->EffectArg[0]), uint32(pEnchant->EffectArg[1]), uint32(pEnchant->EffectArg[2]));
-        }
-
         for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
         {
             if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
-            {
-                if (bplusFtEnchantDiag && pEnchant->Effect[s])
-                    ChatHandler(GetSession()).PSendSysMessage(
-                        "FT DIAG SKIP: enchant=%u effectIndex=%u effectType=%u arg=%u not COMBAT_SPELL(%u)",
-                        enchant_id, uint32(s), uint32(pEnchant->Effect[s]), uint32(pEnchant->EffectArg[s]), uint32(ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL));
                 continue;
-            }
 
             SpellEnchantProcEntry const* entry = sSpellMgr->GetSpellEnchantProcEvent(enchant_id);
-            if (bplusFtEnchantDiag)
-                ChatHandler(GetSession()).PSendSysMessage(
-                    "FT DIAG PROCENTRY: enchant=%u hasEntry=%u entryHitMask=0x%X dmgHitMask=0x%X attr=0x%X canTrigger=%u",
-                    enchant_id, entry ? 1u : 0u, entry ? uint32(entry->HitMask) : 0u, uint32(damageInfo.GetHitMask()),
-                    entry ? uint32(entry->AttributesMask) : 0u, canTrigger ? 1u : 0u);
-
             if (entry && entry->HitMask)
             {
                 // Check hit/crit/dodge/parry requirement
                 if ((entry->HitMask & damageInfo.GetHitMask()) == 0)
-                {
-                    if (bplusFtEnchantDiag)
-                        ChatHandler(GetSession()).PSendSysMessage(
-                            "FT DIAG BLOCK: enchant=%u spell=%u blocked by entry HitMask 0x%X vs dmg 0x%X",
-                            enchant_id, uint32(pEnchant->EffectArg[s]), uint32(entry->HitMask), uint32(damageInfo.GetHitMask()));
                     continue;
-                }
             }
             else
             {
                 // Can do effect if any damage done to target
                 // for done procs allow normal + critical + absorbs by default
                 if (!canTrigger)
-                {
-                    if (bplusFtEnchantDiag)
-                        ChatHandler(GetSession()).PSendSysMessage(
-                            "FT DIAG BLOCK: enchant=%u spell=%u canTrigger=false hitMask=0x%X",
-                            enchant_id, uint32(pEnchant->EffectArg[s]), uint32(damageInfo.GetHitMask()));
                     continue;
-                }
             }
 
             // check if enchant procs only on white hits
             if (entry && (entry->AttributesMask & ENCHANT_PROC_ATTR_WHITE_HIT) && damageInfo.GetSpellInfo())
-            {
-                if (bplusFtEnchantDiag)
-                    ChatHandler(GetSession()).PSendSysMessage(
-                        "FT DIAG BLOCK: enchant=%u spell=%u requires white hit but dmg spell=%u",
-                        enchant_id, uint32(pEnchant->EffectArg[s]), damageInfo.GetSpellInfo() ? damageInfo.GetSpellInfo()->Id : 0u);
                 continue;
-            }
 
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(pEnchant->EffectArg[s]);
             if (!spellInfo)
             {
                 TC_LOG_ERROR("entities.player.items", "Player::CastItemCombatSpell: Player '{}' ({}) cast unknown spell (EnchantID: {}, SpellID: {}), ignoring",
                     GetName(), GetGUID().ToString(), pEnchant->ID, pEnchant->EffectArg[s]);
-                if (bplusFtEnchantDiag)
-                    ChatHandler(GetSession()).PSendSysMessage(
-                        "FT DIAG BLOCK: enchant=%u arg=%u missing SpellInfo",
-                        enchant_id, uint32(pEnchant->EffectArg[s]));
                 continue;
             }
-
-            bool const bplusFtProcDiag = bplusFtEnchantDiag || BPlusIsFlametongueProcSpellForDiag(spellInfo->Id);
-            if (bplusFtProcDiag)
-                ChatHandler(GetSession()).PSendSysMessage(
-                    "FT DIAG SPELL: enchant=%u effectIndex=%u spell=%u family=%u ftFlag=%u positive=%u baseChance=%u pointsMin=%d",
-                    enchant_id, uint32(s), spellInfo->Id, uint32(spellInfo->SpellFamilyName),
-                    spellInfo->SpellFamilyFlags.HasFlag(0x00200000) ? 1u : 0u, spellInfo->IsPositive() ? 1u : 0u,
-                    spellInfo->ProcChance, pEnchant->EffectPointsMin[s]);
 
             float chance = pEnchant->EffectPointsMin[s] != 0 ? float(pEnchant->EffectPointsMin[s]) : GetWeaponProcChance();
             if (entry)
@@ -8608,25 +8516,11 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (FindCurrentSpellBySpellId(5938) && e_slot == TEMP_ENCHANTMENT_SLOT)
                 chance = 100.0f;
 
-            bool const bplusFtRollPassed = roll_chance_f(chance);
-            if (bplusFtProcDiag)
-                ChatHandler(GetSession()).PSendSysMessage(
-                    "FT DIAG ROLL: enchant=%u spell=%u chance=%.2f result=%u",
-                    enchant_id, spellInfo->Id, double(chance), bplusFtRollPassed ? 1u : 0u);
-
-            if (bplusFtRollPassed)
+            if (roll_chance_f(chance))
             {
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
-                bool const bplusFtForcedVictim = BPlusIsFlametongueProcSpellForDiag(spellInfo->Id);
-                if (bplusFtForcedVictim)
+                if (BPlusIsFlametongueWeaponProcSpell(spellInfo->Id))
                     target = damageInfo.GetVictim();
-
-                if (bplusFtProcDiag)
-                    ChatHandler(GetSession()).PSendSysMessage(
-                        "FT DIAG CAST: enchant=%u spell=%u isPositive=%u forceVictim=%u target=%s victim=%s",
-                        enchant_id, spellInfo->Id, spellInfo->IsPositive() ? 1u : 0u, bplusFtForcedVictim ? 1u : 0u,
-                        target ? target->GetName().c_str() : "null",
-                        damageInfo.GetVictim() ? damageInfo.GetVictim()->GetName().c_str() : "null");
 
                 CastSpellExtraArgs args(item);
                 // reduce effect values if enchant is limited

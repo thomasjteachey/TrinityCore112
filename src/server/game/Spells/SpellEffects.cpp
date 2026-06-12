@@ -20,7 +20,6 @@
 #include "Battleground.h"
 #include "BattlegroundWS.h"
 #include "CellImpl.h"
-#include "Chat.h"
 #include "Common.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -740,35 +739,14 @@ void Spell::EffectSchoolDMG()
 
 void Spell::MangosDummyPort()
 {
-    bool const bplusFtDummyDiag = m_spellInfo && (
-        m_spellInfo->Id == 8026 || m_spellInfo->Id == 8028 || m_spellInfo->Id == 8029 ||
-        m_spellInfo->Id == 10445 || m_spellInfo->Id == 16343 || m_spellInfo->Id == 16344 ||
-        m_spellInfo->Id == 16345 || m_spellInfo->Id == 10444 ||
-        (m_spellInfo->SpellFamilyName == SPELLFAMILY_SHAMAN && m_spellInfo->SpellFamilyFlags.HasFlag(0x00200000)));
-
-    if (bplusFtDummyDiag)
-    {
-        if (Player* player = m_caster ? m_caster->ToPlayer() : nullptr)
-            ChatHandler(player->GetSession()).PSendSysMessage(
-                "FT DIAG DUMMY ENTER: spell=%u family=%u ftFlag=%u mode=%u target=%s castItem=%u damage=%u",
-                m_spellInfo->Id, uint32(m_spellInfo->SpellFamilyName),
-                m_spellInfo->SpellFamilyFlags.HasFlag(0x00200000) ? 1u : 0u, uint32(effectHandleMode),
-                unitTarget ? unitTarget->GetName().c_str() : "null",
-                m_CastItem ? m_CastItem->GetEntry() : 0u, uint32(damage));
-
-        // EffectDummy is called once for SPELL_EFFECT_HANDLE_HIT and once for
-        // SPELL_EFFECT_HANDLE_HIT_TARGET.  The MaNGOS-style Flametongue proc
-        // must only execute in the target-hit phase, otherwise the same weapon
-        // proc can be handled twice or hit the no-target path.
-        if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
-        {
-            if (Player* player = m_caster ? m_caster->ToPlayer() : nullptr)
-                ChatHandler(player->GetSession()).PSendSysMessage(
-                    "FT DIAG DUMMY SKIP: spell=%u ignored mode=%u; waiting for HIT_TARGET mode=%u",
-                    m_spellInfo->Id, uint32(effectHandleMode), uint32(SPELL_EFFECT_HANDLE_HIT_TARGET));
-            return;
-        }
-    }
+    // This MaNGOS-style Flametongue proc is reached by EffectDummy before
+    // EffectDummy's normal HIT_TARGET guard. Without this guard the same
+    // weapon proc can be handled once in HIT mode and again in HIT_TARGET mode.
+    if (m_spellInfo
+        && m_spellInfo->SpellFamilyName == SPELLFAMILY_SHAMAN
+        && (m_spellInfo->SpellFamilyFlags & flag96(0x0000000000200000))
+        && effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        return;
 
     // selection by spell family
     switch (m_spellInfo->SpellFamilyName)
@@ -990,64 +968,33 @@ void Spell::MangosDummyPort()
         case SPELLFAMILY_PALADIN:
             break;
         case SPELLFAMILY_SHAMAN:
-        {
-            Unit* unitCaster = m_caster ? m_caster->ToUnit() : nullptr;
-            Player* playerCaster = unitCaster ? unitCaster->ToPlayer() : nullptr;
 
-            auto sendFtDiag = [&](char const* text)
+            if (m_spellInfo->SpellFamilyFlags & flag96(0x0000000000200000)) // Flametongue Weapon Proc, Ranks
             {
-                if (playerCaster)
-                    ChatHandler(playerCaster->GetSession()).PSendSysMessage("%s", text);
-            };
-
-            auto getMainHandSpeedSeconds = [&]() -> float
-            {
-                if (m_CastItem)
-                    if (ItemTemplate const* castItemTemplate = m_CastItem->GetTemplate())
-                        if (castItemTemplate->Delay)
-                            return float(castItemTemplate->Delay) / float(IN_MILLISECONDS);
-
-                if (playerCaster)
-                    if (Item* mainHand = playerCaster->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
-                        if (ItemTemplate const* mainHandTemplate = mainHand->GetTemplate())
-                            if (mainHandTemplate->Delay)
-                                return float(mainHandTemplate->Delay) / float(IN_MILLISECONDS);
-
-                if (unitCaster)
-                    if (uint32 attackTime = unitCaster->GetAttackTime(BASE_ATTACK))
-                        return float(attackTime) / float(IN_MILLISECONDS);
-
-                return 2.0f;
-            };
-
-            if (m_spellInfo->SpellFamilyFlags.HasFlag(0x00200000)) // Flametongue Weapon Proc, Ranks
-            {
-                if (!unitCaster)
-                {
-                    sendFtDiag("FT DIAG DUMMY BLOCK: no unitCaster");
+                Unit* unitCaster = m_caster ? m_caster->ToUnit() : nullptr;
+                if (!unitTarget || !unitCaster)
                     return;
-                }
 
-                if (!unitTarget)
+                float weaponSpeed = 2.0f;
+
+                if (m_CastItem && m_CastItem->GetTemplate())
+                    weaponSpeed = float(m_CastItem->GetTemplate()->Delay) / float(IN_MILLISECONDS);
+                else if (Player* player = unitCaster->ToPlayer())
                 {
-                    sendFtDiag("FT DIAG DUMMY BLOCK: no unitTarget");
-                    return;
+                    // Fallback. Not perfect for offhand Flametongue, but prevents the proc from dying
+                    // when the triggered spell has no m_CastItem attached.
+                    if (Item* mainHand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND))
+                        weaponSpeed = float(mainHand->GetTemplate()->Delay) / float(IN_MILLISECONDS);
+                    else
+                        weaponSpeed = float(player->GetAttackTime(BASE_ATTACK)) / float(IN_MILLISECONDS);
                 }
-
-                float const weaponSpeed = getMainHandSpeedSeconds();
+                else
+                    weaponSpeed = float(unitCaster->GetAttackTime(BASE_ATTACK)) / float(IN_MILLISECONDS);
 
                 int32 bonusDamage = unitCaster->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE);
                 bonusDamage /= 10; // Flametongue coefficient from the MaNGOS port.
 
-                int32 const totalDamage = int32(float(damage) * 0.01f * weaponSpeed) + bonusDamage;
-
-                if (playerCaster)
-                    ChatHandler(playerCaster->GetSession()).PSendSysMessage(
-                        "FT DIAG DUMMY MATCH: procSpell=%u target=%s castItem=%u speed=%.2f inputDamage=%u bonus=%d total=%d casting10444",
-                        m_spellInfo->Id,
-                        unitTarget ? unitTarget->GetName().c_str() : "null",
-                        m_CastItem ? m_CastItem->GetEntry() : 0u,
-                        double(weaponSpeed), uint32(damage), bonusDamage, totalDamage);
+                int32 totalDamage = int32(float(damage) * 0.01f * weaponSpeed) + bonusDamage;
 
                 CastSpellExtraArgs args(TRIGGERED_FULL_MASK);
                 args.AddSpellBP0(totalDamage);
@@ -1055,12 +1002,6 @@ void Spell::MangosDummyPort()
                 unitCaster->CastSpell(unitTarget, 10444, args);
                 return;
             }
-
-            if (bplusFtDummyDiag)
-                sendFtDiag("FT DIAG DUMMY BLOCK: shaman spell entered but Flametongue family flag did not match");
-
-            break;
-        }
     }
 }
 
