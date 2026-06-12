@@ -20,6 +20,7 @@
 #include "Battleground.h"
 #include "BattlegroundWS.h"
 #include "CellImpl.h"
+#include "Chat.h"
 #include "Common.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -747,7 +748,7 @@ void Spell::MangosDummyPort()
 
     if (bplusFtDummyDiag)
         if (Player* player = m_caster ? m_caster->ToPlayer() : nullptr)
-            player->GetSession()->SendAreaTriggerMessage(
+            ChatHandler(player->GetSession()).PSendSysMessage(
                 "FT DIAG DUMMY ENTER: spell=%u family=%u ftFlag=%u mode=%u target=%s castItem=%u damage=%u",
                 m_spellInfo->Id, uint32(m_spellInfo->SpellFamilyName),
                 m_spellInfo->SpellFamilyFlags.HasFlag(0x00200000) ? 1u : 0u, uint32(effectHandleMode),
@@ -981,7 +982,7 @@ void Spell::MangosDummyPort()
             auto sendFtDiag = [&](char const* text)
             {
                 if (playerCaster)
-                    playerCaster->GetSession()->SendAreaTriggerMessage("%s", text);
+                    ChatHandler(playerCaster->GetSession()).PSendSysMessage("%s", text);
             };
 
             auto getMainHandSpeedSeconds = [&]() -> float
@@ -1026,7 +1027,7 @@ void Spell::MangosDummyPort()
                 int32 const totalDamage = int32(float(damage) * 0.01f * weaponSpeed) + bonusDamage;
 
                 if (playerCaster)
-                    playerCaster->GetSession()->SendAreaTriggerMessage(
+                    ChatHandler(playerCaster->GetSession()).PSendSysMessage(
                         "FT DIAG DUMMY MATCH: procSpell=%u target=%s castItem=%u speed=%.2f inputDamage=%u bonus=%d total=%d casting10444",
                         m_spellInfo->Id,
                         unitTarget ? unitTarget->GetName().c_str() : "null",

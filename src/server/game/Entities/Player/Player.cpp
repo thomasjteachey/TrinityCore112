@@ -8506,7 +8506,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
         bool const bplusFtEnchantDiag = BPlusIsFlametongueEnchantForDiag(enchant_id);
         if (bplusFtEnchantDiag)
         {
-            GetSession()->SendAreaTriggerMessage(
+            ChatHandler(GetSession()).PSendSysMessage(
                 "FT DIAG ITEM: item=%u itemSlot=%u atk=%u hitMask=0x%X enchantSlot=%u enchant=%u effects=%u/%u/%u args=%u/%u/%u",
                 item ? item->GetEntry() : 0,
                 item ? uint32(item->GetSlot()) : 0,
@@ -8523,7 +8523,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (pEnchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL)
             {
                 if (bplusFtEnchantDiag && pEnchant->Effect[s])
-                    GetSession()->SendAreaTriggerMessage(
+                    ChatHandler(GetSession()).PSendSysMessage(
                         "FT DIAG SKIP: enchant=%u effectIndex=%u effectType=%u arg=%u not COMBAT_SPELL(%u)",
                         enchant_id, uint32(s), uint32(pEnchant->Effect[s]), uint32(pEnchant->EffectArg[s]), uint32(ITEM_ENCHANTMENT_TYPE_COMBAT_SPELL));
                 continue;
@@ -8531,7 +8531,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
 
             SpellEnchantProcEntry const* entry = sSpellMgr->GetSpellEnchantProcEvent(enchant_id);
             if (bplusFtEnchantDiag)
-                GetSession()->SendAreaTriggerMessage(
+                ChatHandler(GetSession()).PSendSysMessage(
                     "FT DIAG PROCENTRY: enchant=%u hasEntry=%u entryHitMask=0x%X dmgHitMask=0x%X attr=0x%X canTrigger=%u",
                     enchant_id, entry ? 1u : 0u, entry ? uint32(entry->HitMask) : 0u, uint32(damageInfo.GetHitMask()),
                     entry ? uint32(entry->AttributesMask) : 0u, canTrigger ? 1u : 0u);
@@ -8542,7 +8542,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 if ((entry->HitMask & damageInfo.GetHitMask()) == 0)
                 {
                     if (bplusFtEnchantDiag)
-                        GetSession()->SendAreaTriggerMessage(
+                        ChatHandler(GetSession()).PSendSysMessage(
                             "FT DIAG BLOCK: enchant=%u spell=%u blocked by entry HitMask 0x%X vs dmg 0x%X",
                             enchant_id, uint32(pEnchant->EffectArg[s]), uint32(entry->HitMask), uint32(damageInfo.GetHitMask()));
                     continue;
@@ -8555,7 +8555,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 if (!canTrigger)
                 {
                     if (bplusFtEnchantDiag)
-                        GetSession()->SendAreaTriggerMessage(
+                        ChatHandler(GetSession()).PSendSysMessage(
                             "FT DIAG BLOCK: enchant=%u spell=%u canTrigger=false hitMask=0x%X",
                             enchant_id, uint32(pEnchant->EffectArg[s]), uint32(damageInfo.GetHitMask()));
                     continue;
@@ -8566,7 +8566,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
             if (entry && (entry->AttributesMask & ENCHANT_PROC_ATTR_WHITE_HIT) && damageInfo.GetSpellInfo())
             {
                 if (bplusFtEnchantDiag)
-                    GetSession()->SendAreaTriggerMessage(
+                    ChatHandler(GetSession()).PSendSysMessage(
                         "FT DIAG BLOCK: enchant=%u spell=%u requires white hit but dmg spell=%u",
                         enchant_id, uint32(pEnchant->EffectArg[s]), damageInfo.GetSpellInfo() ? damageInfo.GetSpellInfo()->Id : 0u);
                 continue;
@@ -8578,7 +8578,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
                 TC_LOG_ERROR("entities.player.items", "Player::CastItemCombatSpell: Player '{}' ({}) cast unknown spell (EnchantID: {}, SpellID: {}), ignoring",
                     GetName(), GetGUID().ToString(), pEnchant->ID, pEnchant->EffectArg[s]);
                 if (bplusFtEnchantDiag)
-                    GetSession()->SendAreaTriggerMessage(
+                    ChatHandler(GetSession()).PSendSysMessage(
                         "FT DIAG BLOCK: enchant=%u arg=%u missing SpellInfo",
                         enchant_id, uint32(pEnchant->EffectArg[s]));
                 continue;
@@ -8586,7 +8586,7 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
 
             bool const bplusFtProcDiag = bplusFtEnchantDiag || BPlusIsFlametongueProcSpellForDiag(spellInfo->Id);
             if (bplusFtProcDiag)
-                GetSession()->SendAreaTriggerMessage(
+                ChatHandler(GetSession()).PSendSysMessage(
                     "FT DIAG SPELL: enchant=%u effectIndex=%u spell=%u family=%u ftFlag=%u positive=%u baseChance=%u pointsMin=%d",
                     enchant_id, uint32(s), spellInfo->Id, uint32(spellInfo->SpellFamilyName),
                     spellInfo->SpellFamilyFlags.HasFlag(0x00200000) ? 1u : 0u, spellInfo->IsPositive() ? 1u : 0u,
@@ -8610,18 +8610,21 @@ void Player::CastItemCombatSpell(DamageInfo const& damageInfo, Item* item, ItemT
 
             bool const bplusFtRollPassed = roll_chance_f(chance);
             if (bplusFtProcDiag)
-                GetSession()->SendAreaTriggerMessage(
+                ChatHandler(GetSession()).PSendSysMessage(
                     "FT DIAG ROLL: enchant=%u spell=%u chance=%.2f result=%u",
                     enchant_id, spellInfo->Id, double(chance), bplusFtRollPassed ? 1u : 0u);
 
             if (bplusFtRollPassed)
             {
                 Unit* target = spellInfo->IsPositive() ? this : damageInfo.GetVictim();
+                bool const bplusFtForcedVictim = BPlusIsFlametongueProcSpellForDiag(spellInfo->Id);
+                if (bplusFtForcedVictim)
+                    target = damageInfo.GetVictim();
 
                 if (bplusFtProcDiag)
-                    GetSession()->SendAreaTriggerMessage(
-                        "FT DIAG CAST: enchant=%u spell=%u isPositive=%u target=%s victim=%s",
-                        enchant_id, spellInfo->Id, spellInfo->IsPositive() ? 1u : 0u,
+                    ChatHandler(GetSession()).PSendSysMessage(
+                        "FT DIAG CAST: enchant=%u spell=%u isPositive=%u forceVictim=%u target=%s victim=%s",
+                        enchant_id, spellInfo->Id, spellInfo->IsPositive() ? 1u : 0u, bplusFtForcedVictim ? 1u : 0u,
                         target ? target->GetName().c_str() : "null",
                         damageInfo.GetVictim() ? damageInfo.GetVictim()->GetName().c_str() : "null");
 
