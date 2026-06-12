@@ -11780,7 +11780,10 @@ Pet* Unit::CreateTamedPetFrom(Creature* creatureTarget, uint32 spell_id)
         return nullptr;
     }
 
-    uint8 level = creatureTarget->GetLevel() + 5 < GetLevel() ? (GetLevel() - 5) : creatureTarget->GetLevel();
+    // Classic BarracksPlus rule: a newly tamed hunter pet is immediately
+    // normalized to the hunter's current level. Do not keep Wrath's
+    // owner-5 floor behavior here.
+    uint8 level = uint8(GetLevel());
 
     if (!InitTamedPet(pet, level, spell_id))
     {
