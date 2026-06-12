@@ -959,7 +959,7 @@ void Spell::MangosDummyPort()
         case SPELLFAMILY_PALADIN:
             break;
         case SPELLFAMILY_SHAMAN:
-            /*
+            
             if (m_spellInfo->SpellFamilyFlags & flag96(0x0000000000200000)) // Flametongue Weapon Proc, Ranks
             {
                 if (m_CastItem)
@@ -990,7 +990,7 @@ void Spell::MangosDummyPort()
 
                 return;
             }
-            */
+            
             break;
     }
 }
