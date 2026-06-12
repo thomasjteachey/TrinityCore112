@@ -747,6 +747,7 @@ void Spell::MangosDummyPort()
         (m_spellInfo->SpellFamilyName == SPELLFAMILY_SHAMAN && m_spellInfo->SpellFamilyFlags.HasFlag(0x00200000)));
 
     if (bplusFtDummyDiag)
+    {
         if (Player* player = m_caster ? m_caster->ToPlayer() : nullptr)
             ChatHandler(player->GetSession()).PSendSysMessage(
                 "FT DIAG DUMMY ENTER: spell=%u family=%u ftFlag=%u mode=%u target=%s castItem=%u damage=%u",
@@ -754,6 +755,20 @@ void Spell::MangosDummyPort()
                 m_spellInfo->SpellFamilyFlags.HasFlag(0x00200000) ? 1u : 0u, uint32(effectHandleMode),
                 unitTarget ? unitTarget->GetName().c_str() : "null",
                 m_CastItem ? m_CastItem->GetEntry() : 0u, uint32(damage));
+
+        // EffectDummy is called once for SPELL_EFFECT_HANDLE_HIT and once for
+        // SPELL_EFFECT_HANDLE_HIT_TARGET.  The MaNGOS-style Flametongue proc
+        // must only execute in the target-hit phase, otherwise the same weapon
+        // proc can be handled twice or hit the no-target path.
+        if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
+        {
+            if (Player* player = m_caster ? m_caster->ToPlayer() : nullptr)
+                ChatHandler(player->GetSession()).PSendSysMessage(
+                    "FT DIAG DUMMY SKIP: spell=%u ignored mode=%u; waiting for HIT_TARGET mode=%u",
+                    m_spellInfo->Id, uint32(effectHandleMode), uint32(SPELL_EFFECT_HANDLE_HIT_TARGET));
+            return;
+        }
+    }
 
     // selection by spell family
     switch (m_spellInfo->SpellFamilyName)
