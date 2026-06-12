@@ -16,7 +16,6 @@
  */
 
 #include "Pet.h"
-#include "Chat.h"
 #include "Common.h"
 #include "DBCStores.h"
 #include "DatabaseEnv.h"
@@ -27,7 +26,6 @@
 #include "ObjectMgr.h"
 #include "PetPackets.h"
 #include "Player.h"
-#include "StringFormat.h"
 #include "QueryHolder.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -1797,12 +1795,10 @@ namespace
     }
 
     template<typename... Args>
-    void SendClassicPetDiagnostic(Player* player, Trinity::FormatString<Args...> fmt, Args&&... args)
+    void SendClassicPetDiagnostic(Player*, Args&&...)
     {
-        if (!player || !player->GetSession())
-            return;
-
-        ChatHandler(player->GetSession()).SendSysMessage(Trinity::StringFormat(fmt, std::forward<Args>(args)...));
+        // Diagnostics disabled. Keep this no-op wrapper so the Classic pet
+        // logic can stay clean without sending in-game system messages.
     }
 
     bool IsClassicHunterPetNativeCreateSpellAllowed(uint32 createSpellId, uint32 petSpellId)
