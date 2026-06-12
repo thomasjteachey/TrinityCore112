@@ -691,6 +691,13 @@ struct PetLevelInfo
     uint16 maxDamage = 0;
 };
 
+struct ClassicPetTemplateStats
+{
+    uint32 Entry = 0;
+    uint32 MeleeBaseAttackTime = BASE_ATTACK_TIME;
+    uint32 RangedBaseAttackTime = BASE_ATTACK_TIME;
+};
+
 struct MailLevelReward
 {
     MailLevelReward() : raceMask(0), mailTemplateId(0), senderEntry(0) { }
@@ -980,6 +987,7 @@ class TC_GAME_API ObjectMgr
         InstanceTemplate const* GetInstanceTemplate(uint32 mapId) const;
 
         PetLevelInfo const* GetPetLevelInfo(uint32 creature_id, uint8 level) const;
+        ClassicPetTemplateStats const* GetClassicPetTemplateStats(uint32 entry) const;
 
         PlayerClassInfo const* GetPlayerClassInfo(uint32 class_) const { return class_ < MAX_CLASSES ? _playerClassInfo[class_].get() : nullptr; }
 
@@ -1186,6 +1194,7 @@ class TC_GAME_API ObjectMgr
 
         void LoadPlayerInfo();
         void LoadPetLevelInfo();
+        void LoadClassicPetTemplateStats();
         void LoadExplorationBaseXP();
         void LoadPetNames();
         void LoadPetNumber();
@@ -1623,6 +1632,9 @@ class TC_GAME_API ObjectMgr
 
         typedef std::unordered_map<uint32 /*creatureId*/, std::unique_ptr<PetLevelInfo[] /*level*/>> PetLevelInfoContainer;
         PetLevelInfoContainer _petInfoStore;
+
+        typedef std::unordered_map<uint32 /*creatureId*/, ClassicPetTemplateStats> ClassicPetTemplateStatsContainer;
+        ClassicPetTemplateStatsContainer _classicPetTemplateStatsStore;
 
         std::unique_ptr<PlayerClassInfo> _playerClassInfo[MAX_CLASSES];
 
