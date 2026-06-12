@@ -1020,12 +1020,21 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
         case HUNTER_PET:
         {
             SetUInt32Value(UNIT_FIELD_PETNEXTLEVELEXP, uint32(sObjectMgr->GetXPForLevel(petlevel)*PET_XP_FACTOR));
-            //these formula may not be correct; however, it is designed to be close to what it should be
-            //this makes dps 0.5 of pets level
-            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)));
-            //damage range is then petlevel / 2
-            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)));
-            //damage is increased afterwards as strength and pet scaling modify attack power
+
+            // Trinity's hunter-pet base weapon damage formula assumes the old 2.0s
+            // pet swing baseline. Classic pet attack speeds are per-creature, so the
+            // base weapon damage portion must scale with the current swing timer.
+            // Attack power damage already scales by attack time in
+            // Guardian::UpdateDamagePhysical(), so do not compensate AP here.
+            float const attackTimeFactor = GetAttackTime(BASE_ATTACK)
+                ? float(GetAttackTime(BASE_ATTACK)) / float(BASE_ATTACK_TIME)
+                : 1.0f;
+
+            // this makes dps 0.5 of pets level at the 2.0s baseline
+            SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, float(petlevel - (petlevel / 4)) * attackTimeFactor);
+            // damage range is then petlevel / 2 at the 2.0s baseline
+            SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, float(petlevel + (petlevel / 4)) * attackTimeFactor);
+            // damage is increased afterwards as strength and pet scaling modify attack power
             break;
         }
         default:
@@ -1166,9 +1175,23 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     {
         if (ClassicPetTemplateStats const* classicStats = sObjectMgr->GetClassicPetTemplateStats(GetEntry()))
         {
+            uint32 const oldMeleeAttackTime = GetAttackTime(BASE_ATTACK);
+
+            // If the Classic override changes the attack speed after UpdateAllStats(),
+            // rescale only the base weapon damage by the speed ratio before rebuilding
+            // displayed damage. AP contribution is speed-normalized by
+            // Guardian::UpdateDamagePhysical().
+            if (oldMeleeAttackTime && oldMeleeAttackTime != classicStats->MeleeBaseAttackTime)
+            {
+                float const attackTimeFactor = float(classicStats->MeleeBaseAttackTime) / float(oldMeleeAttackTime);
+                SetBaseWeaponDamage(BASE_ATTACK, MINDAMAGE, GetWeaponDamageRange(BASE_ATTACK, MINDAMAGE) * attackTimeFactor);
+                SetBaseWeaponDamage(BASE_ATTACK, MAXDAMAGE, GetWeaponDamageRange(BASE_ATTACK, MAXDAMAGE) * attackTimeFactor);
+            }
+
             SetAttackTime(BASE_ATTACK, classicStats->MeleeBaseAttackTime);
             SetAttackTime(OFF_ATTACK, classicStats->MeleeBaseAttackTime);
             SetAttackTime(RANGED_ATTACK, classicStats->RangedBaseAttackTime);
+            UpdateDamagePhysical(BASE_ATTACK);
 
             TC_LOG_DEBUG("entities.pet", "Applied classic pet attack speed override: entry {} melee {} ranged {}",
                 GetEntry(), classicStats->MeleeBaseAttackTime, classicStats->RangedBaseAttackTime);
