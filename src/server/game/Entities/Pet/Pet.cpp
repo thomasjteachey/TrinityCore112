@@ -888,7 +888,7 @@ bool Pet::CreateBaseAtTamed(CreatureTemplate const* cinfo, Map* map, uint32 phas
         // actual pet spellbook is rebuilt below from Classic-filtered native
         // tame data and Beast Training.
         for (uint8 i = 0; i < MAX_CREATURE_SPELLS; ++i)
-            m_spells[i] = 0;
+            Creature::m_spells[i] = 0;
     }
 
     return true;
@@ -2329,11 +2329,23 @@ void Pet::CleanupClassicHunterPetLevelupSpells()
 
         uint32 spellId = itr->first;
 
-        // Only police Classic Beast Training pet abilities that also exist in
-        // Wrath's family level-up map.  Generic passives and real native tame
-        // spells are not touched.
-        if (!IsClassicPetTrainingTaughtSpell(spellId))
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        if (!spellInfo)
+        {
+            spellsToRemove.push_back(spellId);
             continue;
+        }
+
+        // Enemy-only active creature spells must never persist in a Classic
+        // hunter pet spellbook. Keep generic/system passives, but remove
+        // disabled Classic pet-template rows and non-template active spells.
+        if (!IsClassicPetTrainingTaughtSpell(spellId))
+        {
+            if (HasClassicPetTrainingTemplateRow(0, spellId) || !spellInfo->IsPassive())
+                spellsToRemove.push_back(spellId);
+
+            continue;
+        }
 
         if (!IsClassicPetFamilyLevelupSpell(creatureTemplate, spellId))
             continue;
