@@ -1879,27 +1879,31 @@ namespace
             SendClassicPetDiagnostic(diagnosticPlayer, "|cff00ff00[ClassicPetDiag]|r {} entry {} accepted create spell {} -> pet spell {}.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
         };
 
-        // Prefer the raw CreatureSpellData DBC row for hunter-pet native tame
-        // abilities.  The SpellMgr pet-default cache is shared with summon/NPC
-        // spell paths and can be affected by Wrath duplicate filtering or
-        // creature-template enemy spells.  CreatureSpellData is the authoritative
-        // per-creature native tame source: e.g. PetSpellDataId 13202 -> Claw R2.
-        if (creatureTemplate->PetSpellDataId)
-            if (CreatureSpellDataEntry const* spellDataEntry = sCreatureSpellDataStore.LookupEntry(creatureTemplate->PetSpellDataId))
-            {
-                for (uint8 i = 0; i < MAX_CREATURE_SPELL_DATA_SLOT; ++i)
-                    addNativeCreateSpell(spellDataEntry->Spells[i], "CreatureSpellData.dbc");
-            }
-            else
-                SendClassicPetDiagnostic(diagnosticPlayer, "|cffff2020[ClassicPetDiag]|r entry {} has PetSpellDataId {} but CreatureSpellData.dbc has no loaded row.", creatureTemplate->Entry, creatureTemplate->PetSpellDataId);
+        // Classic hunter-pet native tame abilities must come from the raw
+        // per-creature PetSpellDataId -> CreatureSpellData.dbc row only.
+        // Do NOT fall back to SpellMgr's PetDefaultSpells cache here: that cache
+        // may contain creature_template combat slots from the wild NPC, such as
+        // raptor enemy-only Rushing Charge (6268). Those spells are valid for the
+        // wild mob, but they are not hunter-pet native abilities.
+        SendClassicPetDiagnostic(diagnosticPlayer, "|cff99ccff[ClassicPetDiag]|r native lookup for entry {}: PetSpellDataId={}, family={}, type={}, type_flags={}.", creatureTemplate->Entry, creatureTemplate->PetSpellDataId, creatureTemplate->family, creatureTemplate->type, creatureTemplate->type_flags);
 
-        // Fallback for custom entries that may still be supplied through the
-        // existing SpellMgr default-pet cache.  The same Classic training-template
-        // allow-list is applied, so enemy-only NPC abilities are still rejected.
-        int32 petSpellsId = creatureTemplate->PetSpellDataId ? -(int32)creatureTemplate->PetSpellDataId : creatureTemplate->Entry;
-        if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
-            for (uint32 createSpellId : defSpells->spellid)
-                addNativeCreateSpell(createSpellId, "PetDefaultSpellsCache");
+        if (!creatureTemplate->PetSpellDataId)
+        {
+            SendClassicPetDiagnostic(diagnosticPlayer, "|cffff2020[ClassicPetDiag]|r entry {} has PetSpellDataId 0, so no Classic native tame spell can be read from CreatureSpellData.dbc. Refusing PetDefaultSpellsCache fallback to avoid enemy/NPC spells.", creatureTemplate->Entry);
+            return;
+        }
+
+        CreatureSpellDataEntry const* spellDataEntry = sCreatureSpellDataStore.LookupEntry(creatureTemplate->PetSpellDataId);
+        if (!spellDataEntry)
+        {
+            SendClassicPetDiagnostic(diagnosticPlayer, "|cffff2020[ClassicPetDiag]|r entry {} has PetSpellDataId {} but CreatureSpellData.dbc has no loaded row. Refusing PetDefaultSpellsCache fallback to avoid enemy/NPC spells.", creatureTemplate->Entry, creatureTemplate->PetSpellDataId);
+            return;
+        }
+
+        SendClassicPetDiagnostic(diagnosticPlayer, "|cff99ccff[ClassicPetDiag]|r CreatureSpellData.dbc row {} spells: {}, {}, {}, {}.", creatureTemplate->PetSpellDataId, spellDataEntry->Spells[0], spellDataEntry->Spells[1], spellDataEntry->Spells[2], spellDataEntry->Spells[3]);
+
+        for (uint8 i = 0; i < MAX_CREATURE_SPELL_DATA_SLOT; ++i)
+            addNativeCreateSpell(spellDataEntry->Spells[i], "CreatureSpellData.dbc");
     }
 
     bool IsClassicPetNativeDefaultSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
