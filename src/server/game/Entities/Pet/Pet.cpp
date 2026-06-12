@@ -1559,12 +1559,36 @@ void Pet::InitLevelupSpellsForLevel()
             if (!spellInfo)
                 continue;
 
+            uint32 learnedSpellId = spellInfo->Id;
+            SpellInfo const* learnedSpellInfo = spellInfo;
+
+            // Classic hunter pet native spell data can store the Beast Training
+            // source/teach spell instead of the actual pet ability.  The create
+            // path already resolves that to the triggered pet spell; do the same
+            // here so pet load/level-sync does not leave Bite/Claw missing or add
+            // the source spell itself to the pet spellbook.
+            if (getPetType() == HUNTER_PET)
+            {
+                for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                {
+                    if ((effect.IsEffect(SPELL_EFFECT_LEARN_SPELL) || effect.IsEffect(SPELL_EFFECT_LEARN_PET_SPELL)) && effect.TriggerSpell)
+                    {
+                        if (SpellInfo const* triggeredSpellInfo = sSpellMgr->GetSpellInfo(effect.TriggerSpell))
+                        {
+                            learnedSpellId = triggeredSpellInfo->Id;
+                            learnedSpellInfo = triggeredSpellInfo;
+                        }
+                        break;
+                    }
+                }
+            }
+
             // will called first if level down
-            if (spellInfo->SpellLevel > level)
-                unlearnSpell(spellInfo->Id, true);
+            if (learnedSpellInfo->SpellLevel > level)
+                unlearnSpell(learnedSpellId, true);
             // will called if level up
-            else
-                learnSpell(spellInfo->Id);
+            else if (learnSpell(learnedSpellId) && getPetType() == HUNTER_PET)
+                TeachOwnerClassicPetTrainingFromKnownSpell(learnedSpellId);
         }
     }
 }

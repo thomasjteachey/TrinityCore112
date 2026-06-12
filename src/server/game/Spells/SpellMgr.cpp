@@ -2287,7 +2287,7 @@ void SpellMgr::LoadPetLevelupSpellMap()
     TC_LOG_INFO("server.loading", ">> Loaded {} pet levelup and default spells for {} families in {} ms", count, family_count, GetMSTimeDiffToNow(oldMSTime));
 }
 
-bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpellsEntry& petDefSpells)
+bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpellsEntry& petDefSpells, bool removeLevelupDuplicates = true)
 {
     // skip empty list;
     bool have_spell = false;
@@ -2303,19 +2303,25 @@ bool LoadPetDefaultSpells_helper(CreatureTemplate const* cInfo, PetDefaultSpells
         return false;
 
     // remove duplicates with levelupSpells if any
-    if (PetLevelupSpellSet const* levelupSpells = cInfo->family ? sSpellMgr->GetPetLevelupSpellList(cInfo->family) : nullptr)
+    // For tameable hunter pets, callers can keep native/default spells intact so
+    // the tame path learns from the creature's own data instead of waiting for a
+    // later pet reload/level-up initialization pass.
+    if (removeLevelupDuplicates)
     {
-        for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
+        if (PetLevelupSpellSet const* levelupSpells = cInfo->family ? sSpellMgr->GetPetLevelupSpellList(cInfo->family) : nullptr)
         {
-            if (!petDefSpells.spellid[j])
-                continue;
-
-            for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
+            for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
             {
-                if (itr->second == petDefSpells.spellid[j])
+                if (!petDefSpells.spellid[j])
+                    continue;
+
+                for (PetLevelupSpellSet::const_iterator itr = levelupSpells->begin(); itr != levelupSpells->end(); ++itr)
                 {
-                    petDefSpells.spellid[j] = 0;
-                    break;
+                    if (itr->second == petDefSpells.spellid[j])
+                    {
+                        petDefSpells.spellid[j] = 0;
+                        break;
+                    }
                 }
             }
         }
@@ -2360,7 +2366,8 @@ void SpellMgr::LoadPetDefaultSpells()
         for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
             petDefSpells.spellid[j] = spellDataEntry->Spells[j];
 
-        if (LoadPetDefaultSpells_helper(&creatureTemplatePair.second, petDefSpells))
+        bool const keepNativeHunterPetSpells = creatureTemplatePair.second.IsTameable(true);
+        if (LoadPetDefaultSpells_helper(&creatureTemplatePair.second, petDefSpells, !keepNativeHunterPetSpells))
         {
             mPetDefaultSpellsMap[petSpellsId] = petDefSpells;
             ++countData;
@@ -2368,6 +2375,37 @@ void SpellMgr::LoadPetDefaultSpells()
     }
 
     TC_LOG_INFO("server.loading", ">> Loaded addition spells for {} pet spell data entries in {} ms", countData, GetMSTimeDiffToNow(oldMSTime));
+
+    TC_LOG_INFO("server.loading", "Loading tameable hunter creature template spells...");
+    oldMSTime = getMSTime();
+
+    uint32 countTameableCreature = 0;
+    for (auto const& creatureTemplatePair : ctc)
+    {
+        CreatureTemplate const& creatureTemplate = creatureTemplatePair.second;
+
+        if (creatureTemplate.PetSpellDataId)
+            continue;
+
+        if (!creatureTemplate.IsTameable(true))
+            continue;
+
+        int32 petSpellsId = creatureTemplate.Entry;
+        if (mPetDefaultSpellsMap.find(petSpellsId) != mPetDefaultSpellsMap.end())
+            continue;
+
+        PetDefaultSpellsEntry petDefSpells;
+        for (uint8 j = 0; j < MAX_CREATURE_SPELL_DATA_SLOT; ++j)
+            petDefSpells.spellid[j] = creatureTemplate.spells[j];
+
+        if (LoadPetDefaultSpells_helper(&creatureTemplate, petDefSpells, false))
+        {
+            mPetDefaultSpellsMap[petSpellsId] = petDefSpells;
+            ++countTameableCreature;
+        }
+    }
+
+    TC_LOG_INFO("server.loading", ">> Loaded native spells for {} tameable hunter creature templates in {} ms", countTameableCreature, GetMSTimeDiffToNow(oldMSTime));
 
     TC_LOG_INFO("server.loading", "Loading summonable creature templates...");
     oldMSTime = getMSTime();
