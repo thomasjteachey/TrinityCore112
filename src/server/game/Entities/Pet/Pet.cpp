@@ -16,6 +16,7 @@
  */
 
 #include "Pet.h"
+#include "Chat.h"
 #include "Common.h"
 #include "DBCStores.h"
 #include "DatabaseEnv.h"
@@ -26,6 +27,7 @@
 #include "ObjectMgr.h"
 #include "PetPackets.h"
 #include "Player.h"
+#include "StringFormat.h"
 #include "QueryHolder.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -40,7 +42,6 @@
 #include "ZoneScript.h"
 #include <algorithm>
 #include <map>
-#include <string>
 #include <vector>
 
 #define PET_XP_FACTOR 0.05f
@@ -1795,125 +1796,13 @@ namespace
         return createSpellId;
     }
 
-    void AddUniqueClassicPetCreateSpell(std::vector<uint32>& createSpellIds, uint32 createSpellId)
+    template<typename... Args>
+    void SendClassicPetDiagnostic(Player* player, Trinity::FormatString<Args...> fmt, Args&&... args)
     {
-        if (!createSpellId)
+        if (!player || !player->GetSession())
             return;
 
-        if (std::find(createSpellIds.begin(), createSpellIds.end(), createSpellId) == createSpellIds.end())
-            createSpellIds.push_back(createSpellId);
-    }
-
-    std::vector<std::string> const& GetClassicCreatureSpellDataDbTables()
-    {
-        static bool loaded = false;
-        static std::vector<std::string> tables;
-
-        if (loaded)
-            return tables;
-
-        loaded = true;
-        tables.clear();
-
-        std::vector<std::string> candidates;
-
-        // Prefer the explicit Classic import first. This path is used only for
-        // hunter-pet native tame spells and is still filtered through
-        // classic_pet_training_template, so enemy-only NPC spells remain blocked.
-        candidates.push_back("creaturespelldata_5875");
-
-        // Then try a suffix inferred from the active world DB name, e.g.
-        // bplusworld -> creaturespelldata_bplus, lplusworld -> creaturespelldata_lplus.
-        if (QueryResult dbNameResult = WorldDatabase.Query("SELECT DATABASE()"))
-        {
-            std::string dbName = (*dbNameResult)[0].GetString();
-            std::string suffix;
-
-            std::string const worldSuffix = "world";
-            if (dbName.size() > worldSuffix.size()
-                && dbName.compare(dbName.size() - worldSuffix.size(), worldSuffix.size(), worldSuffix) == 0)
-                suffix = dbName.substr(0, dbName.size() - worldSuffix.size());
-
-            if (!suffix.empty())
-                candidates.push_back("creaturespelldata_" + suffix);
-        }
-
-        candidates.push_back("creaturespelldata_bplus");
-        candidates.push_back("creaturespelldata_lplus");
-        candidates.push_back("creaturespelldata_legionnaire");
-
-        for (std::string const& tableName : candidates)
-        {
-            if (std::find(tables.begin(), tables.end(), tableName) != tables.end())
-                continue;
-
-            QueryResult exists = WorldDatabase.PQuery(
-                "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'dbc' AND TABLE_NAME = '{}' LIMIT 1",
-                tableName);
-
-            if (exists)
-                tables.push_back(tableName);
-        }
-
-        if (tables.empty())
-            TC_LOG_INFO("entities.pet", "Classic pet native SQL DBC fallback disabled: no dbc.creaturespelldata_* table found.");
-        else
-        {
-            for (std::string const& tableName : tables)
-                TC_LOG_INFO("entities.pet", "Classic pet native SQL DBC fallback enabled: using dbc.{}.", tableName);
-        }
-
-        return tables;
-    }
-
-    void AppendClassicCreatureSpellDataFromSql(uint32 petSpellDataId, std::vector<uint32>& createSpellIds)
-    {
-        if (!petSpellDataId)
-            return;
-
-        for (std::string const& tableName : GetClassicCreatureSpellDataDbTables())
-        {
-            QueryResult result = WorldDatabase.PQuery(
-                "SELECT Spells_1, Spells_2, Spells_3, Spells_4 FROM dbc.`{}` WHERE ID = {} LIMIT 1",
-                tableName,
-                petSpellDataId);
-
-            if (!result)
-                continue;
-
-            Field* fields = result->Fetch();
-            for (uint8 i = 0; i < MAX_CREATURE_SPELL_DATA_SLOT; ++i)
-                AddUniqueClassicPetCreateSpell(createSpellIds, fields[i].GetUInt32());
-        }
-    }
-
-    void GetClassicHunterPetNativeCreateSpells(CreatureTemplate const* creatureTemplate, std::vector<uint32>& createSpellIds)
-    {
-        createSpellIds.clear();
-
-        if (!creatureTemplate)
-            return;
-
-        int32 petSpellsId = creatureTemplate->PetSpellDataId ? -(int32)creatureTemplate->PetSpellDataId : creatureTemplate->Entry;
-
-        // Normal Trinity path from loaded binary DBC/default-spell cache.
-        if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
-            for (uint32 createSpellId : defSpells->spellid)
-                AddUniqueClassicPetCreateSpell(createSpellIds, createSpellId);
-
-        // Direct DBC-store path, in case the default-spell cache filtered or skipped
-        // the row before the Classic pet-training filter could inspect it.
-        if (creatureTemplate->PetSpellDataId)
-        {
-            if (CreatureSpellDataEntry const* spellDataEntry = sCreatureSpellDataStore.LookupEntry(creatureTemplate->PetSpellDataId))
-                for (uint8 i = 0; i < MAX_CREATURE_SPELL_DATA_SLOT; ++i)
-                    AddUniqueClassicPetCreateSpell(createSpellIds, spellDataEntry->Spells[i]);
-
-            // SQL DBC fallback for your db-backed Classic DBC imports. This is
-            // the important fallback when SQL has the correct 5875 row but the
-            // server's loaded binary DBC/cache does not.
-            AppendClassicCreatureSpellDataFromSql(creatureTemplate->PetSpellDataId, createSpellIds);
-        }
+        ChatHandler(player->GetSession()).SendSysMessage(Trinity::StringFormat(fmt, std::forward<Args>(args)...));
     }
 
     bool IsClassicHunterPetNativeCreateSpellAllowed(uint32 createSpellId, uint32 petSpellId)
@@ -1943,25 +1832,87 @@ namespace
         return true;
     }
 
+    void GetClassicHunterPetNativeCreateSpells(CreatureTemplate const* creatureTemplate, std::vector<std::pair<uint32, uint32>>& nativeCreateSpells, Player* diagnosticPlayer = nullptr)
+    {
+        nativeCreateSpells.clear();
+
+        if (!creatureTemplate)
+            return;
+
+        auto addNativeCreateSpell = [&nativeCreateSpells, creatureTemplate, diagnosticPlayer](uint32 createSpellId, char const* sourceName)
+        {
+            if (!createSpellId)
+                return;
+
+            SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId);
+            if (!createSpellInfo)
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} references missing create spell {}.", sourceName, creatureTemplate->Entry, createSpellId);
+                return;
+            }
+
+            uint32 petSpellId = ResolveClassicPetCreateSpell(createSpellId);
+            if (!petSpellId)
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} create spell {} resolved to 0.", sourceName, creatureTemplate->Entry, createSpellId);
+                return;
+            }
+
+            SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
+            if (!petSpellInfo)
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} create spell {} resolved to missing pet spell {}.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
+                return;
+            }
+
+            if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, petSpellId))
+            {
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffffcc00[ClassicPetDiag]|r {} entry {} rejected create spell {} -> pet spell {}: not enabled/wild-learned in classic_pet_training_template.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
+                return;
+            }
+
+            for (std::pair<uint32, uint32> const& existing : nativeCreateSpells)
+                if (existing.second == petSpellId)
+                    return;
+
+            nativeCreateSpells.emplace_back(createSpellId, petSpellId);
+            SendClassicPetDiagnostic(diagnosticPlayer, "|cff00ff00[ClassicPetDiag]|r {} entry {} accepted create spell {} -> pet spell {}.", sourceName, creatureTemplate->Entry, createSpellId, petSpellId);
+        };
+
+        // Prefer the raw CreatureSpellData DBC row for hunter-pet native tame
+        // abilities.  The SpellMgr pet-default cache is shared with summon/NPC
+        // spell paths and can be affected by Wrath duplicate filtering or
+        // creature-template enemy spells.  CreatureSpellData is the authoritative
+        // per-creature native tame source: e.g. PetSpellDataId 13202 -> Claw R2.
+        if (creatureTemplate->PetSpellDataId)
+            if (CreatureSpellDataEntry const* spellDataEntry = sCreatureSpellDataStore.LookupEntry(creatureTemplate->PetSpellDataId))
+            {
+                for (uint8 i = 0; i < MAX_CREATURE_SPELL_DATA_SLOT; ++i)
+                    addNativeCreateSpell(spellDataEntry->Spells[i], "CreatureSpellData.dbc");
+            }
+            else
+                SendClassicPetDiagnostic(diagnosticPlayer, "|cffff2020[ClassicPetDiag]|r entry {} has PetSpellDataId {} but CreatureSpellData.dbc has no loaded row.", creatureTemplate->Entry, creatureTemplate->PetSpellDataId);
+
+        // Fallback for custom entries that may still be supplied through the
+        // existing SpellMgr default-pet cache.  The same Classic training-template
+        // allow-list is applied, so enemy-only NPC abilities are still rejected.
+        int32 petSpellsId = creatureTemplate->PetSpellDataId ? -(int32)creatureTemplate->PetSpellDataId : creatureTemplate->Entry;
+        if (PetDefaultSpellsEntry const* defSpells = sSpellMgr->GetPetDefaultSpellsEntry(petSpellsId))
+            for (uint32 createSpellId : defSpells->spellid)
+                addNativeCreateSpell(createSpellId, "PetDefaultSpellsCache");
+    }
+
     bool IsClassicPetNativeDefaultSpell(CreatureTemplate const* creatureTemplate, uint32 petSpellId)
     {
         if (!creatureTemplate || !petSpellId)
             return false;
 
-        std::vector<uint32> createSpellIds;
-        GetClassicHunterPetNativeCreateSpells(creatureTemplate, createSpellIds);
+        std::vector<std::pair<uint32, uint32>> nativeCreateSpells;
+        GetClassicHunterPetNativeCreateSpells(creatureTemplate, nativeCreateSpells);
 
-        for (uint32 createSpellId : createSpellIds)
-        {
-            uint32 resolvedPetSpellId = ResolveClassicPetCreateSpell(createSpellId);
-            if (resolvedPetSpellId != petSpellId)
-                continue;
-
-            if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, resolvedPetSpellId))
-                continue;
-
-            return true;
-        }
+        for (std::pair<uint32, uint32> const& nativeCreateSpell : nativeCreateSpells)
+            if (nativeCreateSpell.second == petSpellId)
+                return true;
 
         return false;
     }
@@ -2380,6 +2331,7 @@ void Pet::TeachOwnerClassicPetTrainingFromKnownSpell(uint32 taughtSpellId)
             continue;
 
         owner->LearnSpell(sourceSpellId, false);
+        SendClassicPetDiagnostic(owner, "|cff00ff00[ClassicPetDiag]|r hunter learned Beast Training source spell {} from pet spell {}.", sourceSpellId, taughtSpellId);
     }
 }
 
@@ -2412,19 +2364,18 @@ void Pet::TeachOwnerClassicPetTrainingFromDefaultSpells()
     if (!creatureTemplate)
         return;
 
-    std::vector<uint32> createSpellIds;
-    GetClassicHunterPetNativeCreateSpells(creatureTemplate, createSpellIds);
+    std::vector<std::pair<uint32, uint32>> nativeCreateSpells;
+    GetClassicHunterPetNativeCreateSpells(creatureTemplate, nativeCreateSpells, GetOwner());
 
-    for (uint32 createSpellId : createSpellIds)
+    for (std::pair<uint32, uint32> const& nativeCreateSpell : nativeCreateSpells)
     {
-        if (!createSpellId)
-            continue;
+        // This method is also called during pet load as a backfill step. If an
+        // earlier broken tame saved the pet without its real native ability, add
+        // that native spell now as long as it still passes the Classic allow-list.
+        if (!HasSpell(nativeCreateSpell.second))
+            addSpell(nativeCreateSpell.second);
 
-        uint32 petSpellId = ResolveClassicPetCreateSpell(createSpellId);
-        if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, petSpellId))
-            continue;
-
-        TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+        TeachOwnerClassicPetTrainingFromKnownSpell(nativeCreateSpell.second);
     }
 }
 
@@ -2483,7 +2434,7 @@ void Pet::CleanupClassicHunterPetLevelupSpells()
         unlearnSpell(spellId, false, true);
 
     if (!spellsToRemove.empty())
-        TC_LOG_INFO("entities.pet", "Removed {} Wrath family level-up spell(s) from hunter pet {} ({}) during Classic pet load cleanup.", uint32(spellsToRemove.size()), GetName(), GetEntry());
+        SendClassicPetDiagnostic(owner, "|cffffcc00[ClassicPetDiag]|r removed {} invalid/Wrath family spell(s) from hunter pet {} ({}) during Classic pet cleanup.", uint32(spellsToRemove.size()), GetName(), GetEntry());
 }
 
 void Pet::CleanupActionBar()
@@ -2512,51 +2463,32 @@ void Pet::InitPetCreateSpells()
 
     if (getPetType() == HUNTER_PET)
     {
-        // Classic pet create data stores training/source spells or direct pet
-        // spells.  Resolve them from the loaded DBC/default cache first, then
-        // from SQL DBC imports if needed.  Every candidate is filtered through
-        // classic_pet_training_template before entering the pet spellbook, so
-        // enemy-only wild creature abilities remain blocked.
-        std::vector<uint32> createSpellIds;
-        GetClassicHunterPetNativeCreateSpells(GetCreatureTemplate(), createSpellIds);
+        CreatureTemplate const* creatureTemplate = GetCreatureTemplate();
 
-        for (uint32 createSpellId : createSpellIds)
+        std::vector<std::pair<uint32, uint32>> nativeCreateSpells;
+        GetClassicHunterPetNativeCreateSpells(creatureTemplate, nativeCreateSpells, GetOwner());
+
+        for (std::pair<uint32, uint32> const& nativeCreateSpell : nativeCreateSpells)
         {
-            if (!createSpellId)
-                continue;
+            uint32 createSpellId = nativeCreateSpell.first;
+            uint32 petSpellId = nativeCreateSpell.second;
 
-            SpellInfo const* createSpellInfo = sSpellMgr->GetSpellInfo(createSpellId);
-            if (!createSpellInfo)
-                continue;
+            // Classic 1.12 native pet abilities come from per-creature native
+            // spell data, then are filtered through classic_pet_training_template.
+            // This allows Claw/Bite/etc. where Classic data says the beast has
+            // them, but rejects enemy-only mob abilities such as Rushing Charge.
+            addSpell(petSpellId);
 
-            uint32 petSpellId = ResolveClassicPetCreateSpell(createSpellId);
-
-            SpellInfo const* petSpellInfo = sSpellMgr->GetSpellInfo(petSpellId);
-            if (!petSpellInfo)
-                continue;
-
-            // Only Classic Beast Training wild-learned abilities can become
-            // native hunter pet spells. Enemy-only NPC abilities from the wild
-            // creature template/DBC, such as Rushing Charge, are rejected here.
-            if (!IsClassicHunterPetNativeCreateSpellAllowed(createSpellId, petSpellId))
-            {
-                TC_LOG_DEBUG("entities.pet", "Skipping non-Classic hunter pet native spell {} resolved from {} for pet entry {}.", petSpellId, createSpellId, GetEntry());
-                continue;
-            }
-
-            // Classic 1.12 normally taught many wild abilities by observing
-            // the pet use them.  BarracksPlus teaches immediately when the pet
-            // is tamed/loaded: if the native pet knows rank N, the hunter learns
-            // the Beast Training source spell for rank N and every previous rank.
-            if (addSpell(petSpellId))
-                TC_LOG_DEBUG("entities.pet", "Added Classic native hunter pet spell {} from create/default spell {} for pet entry {}.", petSpellId, createSpellId, GetEntry());
-
-            // Learn-on-tame/backfill must inspect the actual native pet spell too.
-            // Classic CreatureSpellData may already contain the taught spell directly
-            // (for example Claw Rank 2 = 16828), not only a source spell that
-            // triggers the taught spell.
+            // BarracksPlus teaches immediately on tame/load: if the native pet
+            // knows rank N, the hunter learns the corresponding Beast Training
+            // source spell for rank N and prior ranks.
             TeachOwnerClassicPetTrainingFromKnownSpell(petSpellId);
+
+            SendClassicPetDiagnostic(GetOwner(), "|cff00ff00[ClassicPetDiag]|r added native pet spell {} from create/default spell {} for pet entry {}.", petSpellId, createSpellId, GetEntry());
         }
+
+        if (nativeCreateSpells.empty() && creatureTemplate && creatureTemplate->PetSpellDataId)
+            SendClassicPetDiagnostic(GetOwner(), "|cffff2020[ClassicPetDiag]|r hunter pet entry {} has PetSpellDataId {} but no enabled wild-learned Classic pet ability passed the native-spell filter.", GetEntry(), creatureTemplate->PetSpellDataId);
     }
     else
         InitLevelupSpellsForLevel();
