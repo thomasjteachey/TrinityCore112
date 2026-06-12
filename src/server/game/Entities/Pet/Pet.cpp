@@ -921,9 +921,9 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
 
     SetStatFlatModifier(UNIT_MOD_ARMOR, BASE_VALUE, float(petlevel * 50));
 
-    SetAttackTime(BASE_ATTACK, BASE_ATTACK_TIME); //ttopper: hardcode broken tooth
-    SetAttackTime(OFF_ATTACK, BASE_ATTACK_TIME);
-    SetAttackTime(RANGED_ATTACK, BASE_ATTACK_TIME);
+    SetAttackTime(BASE_ATTACK, cinfo->BaseAttackTime);
+    SetAttackTime(OFF_ATTACK, cinfo->BaseAttackTime);
+    SetAttackTime(RANGED_ATTACK, cinfo->RangeAttackTime);
 
     SetModCastingSpeed(1.0f);
 
@@ -1151,6 +1151,19 @@ bool Guardian::InitStatsForLevel(uint8 petlevel)
     }
 
     UpdateAllStats();
+
+    if (petType == HUNTER_PET)
+    {
+        if (ClassicPetTemplateStats const* classicStats = sObjectMgr->GetClassicPetTemplateStats(GetEntry()))
+        {
+            SetAttackTime(BASE_ATTACK, classicStats->MeleeBaseAttackTime);
+            SetAttackTime(OFF_ATTACK, classicStats->MeleeBaseAttackTime);
+            SetAttackTime(RANGED_ATTACK, classicStats->RangedBaseAttackTime);
+
+            TC_LOG_DEBUG("entities.pet", "Applied classic pet attack speed override: entry {} melee {} ranged {}",
+                GetEntry(), classicStats->MeleeBaseAttackTime, classicStats->RangedBaseAttackTime);
+        }
+    }
 
     SetFullHealth();
     SetPower(POWER_MANA, GetMaxPower(POWER_MANA));
