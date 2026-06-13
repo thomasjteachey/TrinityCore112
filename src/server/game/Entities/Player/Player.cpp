@@ -119,7 +119,19 @@ namespace
     constexpr float MinStarfireSnareSpeedRate = 0.01f;
     constexpr float MaxStarfireSnareSpeedRate = 1.0f;
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
+    constexpr uint32 SpellResurrectionSickness = 15007;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
+    uint32 GetResurrectionSicknessSpellId(Player const* player)
+    {
+        ChrRacesEntry const* raceEntry = sChrRacesStore.LookupEntry(player->GetRace());
+        if (raceEntry && raceEntry->ResSicknessSpellID && sSpellMgr->GetSpellInfo(raceEntry->ResSicknessSpellID))
+            return raceEntry->ResSicknessSpellID;
+
+        // Classic data should point every playable race at this shared spell, but
+        // keep spirit-healer resurrects working if the DBC field is empty or stale.
+        return SpellResurrectionSickness;
+    }
 }
 #include "ArenaSpectator.h"
 
@@ -4767,19 +4779,19 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
     //for each level they are above 10.
     //Characters level 20 and up suffer from ten minutes of sickness.
     int32 startLevel = sWorld->getIntConfig(CONFIG_DEATH_SICKNESS_LEVEL);
-    ChrRacesEntry const* raceEntry = sChrRacesStore.AssertEntry(GetRace());
+    uint32 resSicknessSpellId = GetResurrectionSicknessSpellId(this);
 
     if (int32(GetLevel()) >= startLevel)
     {
         // set resurrection sickness
-        CastSpell(this, raceEntry->ResSicknessSpellID, true);
+        CastSpell(this, resSicknessSpellId, true);
 
         // not full duration
         if (int32(GetLevel()) < startLevel + 9)
         {
             int32 delta = (int32(GetLevel()) - startLevel + 1) * MINUTE;
 
-            if (Aura* aur = GetAura(raceEntry->ResSicknessSpellID, GetGUID()))
+            if (Aura* aur = GetAura(resSicknessSpellId, GetGUID()))
             {
                 aur->SetDuration(delta * IN_MILLISECONDS);
             }
@@ -18715,10 +18727,10 @@ void Player::_LoadAuras(PreparedQueryResult result, uint32 timediff)
                 continue;
             }
 
-            ChrRacesEntry const* raceEntry = sChrRacesStore.AssertEntry(GetRace());
+            uint32 resSicknessSpellId = GetResurrectionSicknessSpellId(this);
 
             // negative effects should continue counting down after logout
-            if (remaintime != -1 && ((!spellInfo->IsPositive() && spellInfo->Id != raceEntry->ResSicknessSpellID) || spellInfo->HasAttribute(SPELL_ATTR4_FADES_WHILE_LOGGED_OUT))) // Resurrection sickness should not fade while logged out
+            if (remaintime != -1 && ((!spellInfo->IsPositive() && spellInfo->Id != resSicknessSpellId) || spellInfo->HasAttribute(SPELL_ATTR4_FADES_WHILE_LOGGED_OUT))) // Resurrection sickness should not fade while logged out
             {
                 if (remaintime / IN_MILLISECONDS <= int32(timediff))
                     continue;
