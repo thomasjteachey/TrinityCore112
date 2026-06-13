@@ -10399,6 +10399,17 @@ void Unit::RemoveFromWorld()
         if (IsVehicle())
             RemoveVehicleKit();
 
+        // A possessed/charmed creature can reach removal after its charm aura was
+        // already cleared by another cleanup path. In that case the player's
+        // GameClient may still list this unit as an allowed mover, which leaves a
+        // dangling controller pointer and trips Unit::~Unit when the creature is
+        // deleted. Always sever non-player client movement ownership before the
+        // unit leaves the world; normal charm cleanup may do this earlier, but this
+        // is the last safe point before destruction.
+        if (GetTypeId() != TYPEID_PLAYER)
+            if (GameClient* gameClient = GetGameClientMovingMe())
+                gameClient->RemoveAllowedMover(this);
+
         RemoveCharmAuras();
         RemoveBindSightAuras();
         RemoveAllPlayersFromVision();
