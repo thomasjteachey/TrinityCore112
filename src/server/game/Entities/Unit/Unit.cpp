@@ -7065,22 +7065,42 @@ void Unit::RemovePlayerFromVision(Player* player)
 
 void Unit::RemoveAllPlayersFromVision()
 {
+    bool needsFinalVisibilityUpdate = false;
+
     while (!m_sharedVision.empty())
     {
         Player* player = m_sharedVision.front();
 
         if (player && player->GetViewpoint() == this)
+        {
             player->SetViewpoint(this, false);
 
-        // SetViewpoint(false) normally removes the player through
-        // RemovePlayerFromVision. If the farsight update is already
-        // inconsistent, remove the stale entry here so despawning units cannot
-        // reach the destructor with shared vision still attached.
+            // SetViewpoint(false) normally removes the player through
+            // RemovePlayerFromVision. If it removed the last viewer, that path
+            // already queued the world-object switch and doing it again would
+            // trip Map::AddObjectToSwitchList's duplicate-switch assertion.
+            if (m_sharedVision.empty())
+                needsFinalVisibilityUpdate = false;
+            else if (m_sharedVision.front() == player)
+            {
+                m_sharedVision.remove(player);
+                needsFinalVisibilityUpdate = true;
+            }
+
+            continue;
+        }
+
+        // Stale entries cannot be cleared through Player::SetViewpoint(), so do
+        // the final active/world-object update after the list has been drained.
         m_sharedVision.remove(player);
+        needsFinalVisibilityUpdate = true;
     }
 
-    setActive(false);
-    SetWorldObject(false);
+    if (needsFinalVisibilityUpdate)
+    {
+        setActive(false);
+        SetWorldObject(false);
+    }
 }
 
 void Unit::RemoveBindSightAuras()
