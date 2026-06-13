@@ -22,6 +22,7 @@
 #include "Player.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "WorldSession.h"
 
 namespace Trainer
 {
@@ -208,6 +209,13 @@ namespace
             player->LearnSpell(trainerSpell->SpellId, false);
 
         SendTeachSucceeded(npc, player, spellId);
+
+        // The 3.3.5 client mutates trainer-list colors locally after a successful
+        // purchase. With mixed Classic/Wrath trainer data, that local refresh can
+        // mark unavailable ranks as green until the window is reopened. Re-send the
+        // authoritative trainer list immediately so every row is recalculated by
+        // GetSpellState() after each purchase.
+        SendSpells(npc, player, player->GetSession()->GetSessionDbLocaleIndex());
     }
 
     Spell const* Trainer::GetSpell(uint32 spellId) const
