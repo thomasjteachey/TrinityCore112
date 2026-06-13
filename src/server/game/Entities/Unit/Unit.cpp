@@ -7067,22 +7067,42 @@ void Unit::RemovePlayerFromVision(Player* player)
 
 void Unit::RemoveAllPlayersFromVision()
 {
+    bool needsFinalVisibilityUpdate = false;
+
     while (!m_sharedVision.empty())
     {
         Player* player = m_sharedVision.front();
 
         if (player && player->GetViewpoint() == this)
+        {
             player->SetViewpoint(this, false);
 
-        // SetViewpoint(false) normally removes the player through
-        // RemovePlayerFromVision. If the farsight update is already
-        // inconsistent, remove the stale entry here so despawning units cannot
-        // reach the destructor with shared vision still attached.
+            // SetViewpoint(false) normally removes the player through
+            // RemovePlayerFromVision. If it removed the last viewer, that path
+            // already queued the world-object switch and doing it again would
+            // trip Map::AddObjectToSwitchList's duplicate-switch assertion.
+            if (m_sharedVision.empty())
+                needsFinalVisibilityUpdate = false;
+            else if (m_sharedVision.front() == player)
+            {
+                m_sharedVision.remove(player);
+                needsFinalVisibilityUpdate = true;
+            }
+
+            continue;
+        }
+
+        // Stale entries cannot be cleared through Player::SetViewpoint(), so do
+        // the final active/world-object update after the list has been drained.
         m_sharedVision.remove(player);
+        needsFinalVisibilityUpdate = true;
     }
 
-    setActive(false);
-    SetWorldObject(false);
+    if (needsFinalVisibilityUpdate)
+    {
+        setActive(false);
+        SetWorldObject(false);
+    }
 }
 
 void Unit::RemoveBindSightAuras()
@@ -10468,6 +10488,17 @@ void Unit::RemoveFromWorld()
 
         if (IsVehicle())
             RemoveVehicleKit();
+
+        // A possessed/charmed creature can reach removal after its charm aura was
+        // already cleared by another cleanup path. In that case the player's
+        // GameClient may still list this unit as an allowed mover, which leaves a
+        // dangling controller pointer and trips Unit::~Unit when the creature is
+        // deleted. Always sever non-player client movement ownership before the
+        // unit leaves the world; normal charm cleanup may do this earlier, but this
+        // is the last safe point before destruction.
+        if (GetTypeId() != TYPEID_PLAYER)
+            if (GameClient* gameClient = GetGameClientMovingMe())
+                gameClient->RemoveAllowedMover(this);
 
         RemoveCharmAuras();
         RemoveBindSightAuras();

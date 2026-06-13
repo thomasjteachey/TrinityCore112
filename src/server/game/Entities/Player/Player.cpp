@@ -15457,7 +15457,19 @@ bool Player::CanCompleteQuest(uint32 quest_id)
             {
                 for (uint8 i = 0; i < QUEST_ITEM_OBJECTIVES_COUNT; i++)
                 {
-                    if (qInfo->RequiredItemCount[i] != 0 && q_status.ItemCount[i] < qInfo->RequiredItemCount[i])
+                    uint32 requiredItemCount = qInfo->RequiredItemCount[i];
+                    if (!requiredItemCount)
+                        continue;
+
+                    uint32 actualItemCount = GetItemCount(qInfo->RequiredItemId[i], true);
+                    uint16 expectedItemCount = std::min<uint16>(actualItemCount, requiredItemCount);
+                    if (q_status.ItemCount[i] != expectedItemCount)
+                    {
+                        q_status.ItemCount[i] = expectedItemCount;
+                        m_QuestStatusSave[quest_id] = QUEST_DEFAULT_SAVE_TYPE;
+                    }
+
+                    if (actualItemCount < requiredItemCount)
                         return false;
                 }
             }
@@ -16763,7 +16775,7 @@ QuestGiverStatus Player::GetQuestDialogStatus(Object* questgiver)
 
         QuestStatus status = GetQuestStatus(questId);
         if (status == QUEST_STATUS_COMPLETE && !GetQuestRewardStatus(questId))
-            result2 = DIALOG_STATUS_REWARD;
+            result2 = CanRewardQuest(quest, false) ? DIALOG_STATUS_REWARD : DIALOG_STATUS_INCOMPLETE;
         else if (status == QUEST_STATUS_INCOMPLETE)
             result2 = DIALOG_STATUS_INCOMPLETE;
 
@@ -17420,7 +17432,7 @@ bool Player::HasQuestForItem(uint32 itemid, uint32 excludeQuestId /* 0 */, bool 
 
         QuestStatusData const& q_status = qs_itr->second;
 
-        if ((q_status.Status == QUEST_STATUS_INCOMPLETE) || (turnIn && q_status.Status == QUEST_STATUS_COMPLETE))
+        if ((q_status.Status == QUEST_STATUS_INCOMPLETE) || q_status.Status == QUEST_STATUS_COMPLETE)
         {
             Quest const* qinfo = sObjectMgr->GetQuestTemplate(questid);
             if (!qinfo)
@@ -17435,8 +17447,13 @@ bool Player::HasQuestForItem(uint32 itemid, uint32 excludeQuestId /* 0 */, bool 
             // This part for ReqItem drop
             for (uint8 j = 0; j < QUEST_ITEM_OBJECTIVES_COUNT; ++j)
             {
-                if ((itemid == qinfo->RequiredItemId[j] && q_status.ItemCount[j] < qinfo->RequiredItemCount[j]) || (turnIn && q_status.ItemCount[j] >= qinfo->RequiredItemCount[j]))
-                    return true;
+                if (itemid == qinfo->RequiredItemId[j])
+                {
+                    uint32 requiredItemCount = qinfo->RequiredItemCount[j];
+                    uint32 ownedItemCount = GetItemCount(itemid, true);
+                    if ((requiredItemCount && ownedItemCount < requiredItemCount) || (turnIn && ownedItemCount >= requiredItemCount))
+                        return true;
+                }
             }
             // This part - for ReqSource
             for (uint8 j = 0; j < QUEST_SOURCE_ITEM_IDS_COUNT; ++j)

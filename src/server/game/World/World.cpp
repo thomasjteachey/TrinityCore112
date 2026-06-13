@@ -41,6 +41,7 @@
 #include "CreatureGroups.h"
 #include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
+#include "DBCStores.h"
 #include "DisableMgr.h"
 #include "GameEventMgr.h"
 #include "GameObjectModel.h"
@@ -93,6 +94,7 @@
 #include "WhoListStorage.h"
 #include "WorldSession.h"
 
+#include <array>
 #include <memory>
 #include <sstream>
 #include <boost/asio/ip/address.hpp>
@@ -3371,6 +3373,8 @@ namespace
     constexpr uint32 WarchiefNpcEntry = 31412;
     constexpr uint32 WarchiefRunnerUpEntry = 110017;
     constexpr uint32 WarchiefSpellId = 58553;
+    constexpr uint32 WarchiefTitleId = 208;
+    constexpr uint32 FormerWarchiefTitleId = 209;
     constexpr uint32 WarchiefMailSenderEntry = 2784;
     constexpr uint32 WarchiefMailItemEntry = 8586;
     constexpr uint32 WarchiefMailSpellCheck = 16084;
@@ -3477,6 +3481,103 @@ namespace
             BroadcastCreatureTemplateUpdate(mutableTemplate, map);
         }
 
+        return true;
+    }
+
+
+    bool UpdateKnownTitleMask(std::array<uint32, KNOWN_TITLES_SIZE * 2>& knownTitles, CharTitlesEntry const* title, bool learned)
+    {
+        if (!title)
+            return false;
+
+        if (title->MaskID >= KNOWN_TITLES_SIZE * 64)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Title {} mask {} is outside the known title fields.", title->ID, title->MaskID);
+            return false;
+        }
+
+        uint32 const fieldIndexOffset = title->MaskID / 32;
+        uint32 const flag = 1u << (title->MaskID % 32);
+
+        if (learned)
+            knownTitles[fieldIndexOffset] |= flag;
+        else
+            knownTitles[fieldIndexOffset] &= ~flag;
+
+        return true;
+    }
+
+    std::string SerializeKnownTitles(std::array<uint32, KNOWN_TITLES_SIZE * 2> const& knownTitles)
+    {
+        std::ostringstream stream;
+        for (uint32 titleMask : knownTitles)
+            stream << titleMask << ' ';
+
+        return stream.str();
+    }
+
+    bool UpdateWarchiefTitles(ObjectGuid const& playerGuid, uint32 learnTitleId, uint32 forgetTitleId)
+    {
+        if (!playerGuid)
+            return false;
+
+        CharTitlesEntry const* learnTitle = sCharTitlesStore.LookupEntry(learnTitleId);
+        if (!learnTitle)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Title {} not found.", learnTitleId);
+            return false;
+        }
+
+        CharTitlesEntry const* forgetTitle = sCharTitlesStore.LookupEntry(forgetTitleId);
+        if (!forgetTitle)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Title {} not found.", forgetTitleId);
+            return false;
+        }
+
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid))
+        {
+            player->SetTitle(forgetTitle, true);
+            if (player->GetUInt32Value(PLAYER_CHOSEN_TITLE) == forgetTitle->MaskID)
+                player->SetUInt32Value(PLAYER_CHOSEN_TITLE, 0);
+
+            player->SetTitle(learnTitle);
+            player->SaveToDB(false);
+            return true;
+        }
+
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_KNOWN_TITLES);
+        stmt->setUInt32(0, playerGuid.GetCounter());
+        PreparedQueryResult result = CharacterDatabase.Query(stmt);
+        if (!result)
+        {
+            TC_LOG_ERROR("misc", "Weekly honor warchief: Character {} not found while updating titles.", playerGuid.ToString());
+            return false;
+        }
+
+        Field* fields = result->Fetch();
+        std::string knownTitlesString = fields[0].GetString();
+        uint32 chosenTitle = fields[1].GetUInt32();
+
+        std::array<uint32, KNOWN_TITLES_SIZE * 2> knownTitles = {};
+        std::istringstream stream(knownTitlesString);
+        for (uint32& titleMask : knownTitles)
+            stream >> titleMask;
+
+        if (!UpdateKnownTitleMask(knownTitles, forgetTitle, false))
+            return false;
+
+        if (!UpdateKnownTitleMask(knownTitles, learnTitle, true))
+            return false;
+
+        if (chosenTitle == forgetTitle->MaskID)
+            chosenTitle = 0;
+
+        stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_KNOWN_TITLES);
+        stmt->setString(0, SerializeKnownTitles(knownTitles));
+        stmt->setUInt32(1, chosenTitle);
+        stmt->setUInt32(2, playerGuid.GetCounter());
+        CharacterDatabase.Execute(stmt);
         return true;
     }
 
@@ -3626,6 +3727,10 @@ bool World::ProcessWeeklyHonorWarchief(bool resetHonor, std::string* winnerName,
     }
 
     UpdateHonorNpc(WarchiefNpcEntry, winnerGuid, resolvedWinnerName, &previousWarchiefName);
+    if (previousWarchiefGuid && previousWarchiefGuid != winnerLowGuid)
+        UpdateWarchiefTitles(ObjectGuid::Create<HighGuid::Player>(previousWarchiefGuid), FormerWarchiefTitleId, WarchiefTitleId);
+
+    UpdateWarchiefTitles(winnerGuid, WarchiefTitleId, FormerWarchiefTitleId);
     ApplyWarchiefAura(winnerGuid);
 
     MailSender sender(MAIL_CREATURE, WarchiefMailSenderEntry);
