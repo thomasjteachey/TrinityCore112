@@ -1744,29 +1744,51 @@ namespace ShadowPriestWraith
     }
 
 
+    void ReleaseWraithControl(Player* player, Creature* wraith)
+    {
+        if (!player || !wraith)
+            return;
+
+        // Use the core's normal player charm teardown first.  Death cleanup also
+        // enters through this path, and StopCastingCharm() is hardened for cases
+        // where the charm aura was already removed while the player was dying.
+        if (player->GetCharmedGUID() == wraith->GetGUID())
+            player->StopCastingCharm();
+
+        // If the helper aura was removed outside the normal player charm path, make
+        // sure the reverse side is not left pointing at the priest before despawn.
+        if (wraith->GetCharmerGUID() == player->GetGUID())
+            wraith->RemoveCharmedBy(player);
+    }
+
     void FinishWraithCleanup(Player* player, Creature* wraith)
     {
         if (!player)
             return;
 
-        if (wraith)
-        {
-            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
-            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
-
-            if (wraith->GetCharmerGUID() == player->GetGUID())
-                wraith->RemoveCharmedBy(player);
-        }
-
         StopChannelVisual(player);
         player->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_UNSTOPPABLE);
         ApplyUnstoppable(player, false);
-        player->SetControlled(false, UNIT_STATE_ROOT);
+
+        if (player->IsAlive())
+            player->SetControlled(false, UNIT_STATE_ROOT);
+        else
+            player->ClearUnitState(UNIT_STATE_ROOT);
 
         LPlusShadowWraithMovement::ClearClientWraithPosition(player);
 
         if (wraith)
+        {
+            // The wraith owns delayed visual/channel/speed refresh events. Kill them
+            // before charm release/despawn so death-time cleanup cannot execute a
+            // queued refresh against a creature that is being torn down.
+            wraith->m_Events.KillAllEvents(false);
+
+            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_VISUAL);
+            ReleaseWraithControl(player, wraith);
+            wraith->RemoveAurasDueToSpell(SPELL_PRIEST_SHADOW_WRAITH_CHARM);
             wraith->DespawnOrUnsummon();
+        }
     }
 
     void ScheduleWraithCleanup(Player* player, Creature* wraith)
