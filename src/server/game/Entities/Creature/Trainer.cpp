@@ -265,6 +265,13 @@ namespace
         if (player->GetLevel() < trainerSpell->ReqLevel)
             return SpellState::Unavailable;
 
+        // Classic Beast Training trainer rows teach the hunter a source/catalog spell.
+        // Do not apply normal LEARN_SPELL rank validation here: these source spells
+        // trigger pet spells, and the player is not supposed to know pet spell ranks.
+        // Rank prerequisites for these rows must come from trainer_spell.ReqAbility*.
+        if (IsClassicPetTrainingSourceSpell(trainerSpell->SpellId))
+            return SpellState::Available;
+
         // check ranks
         bool hasLearnSpellEffect = false;
         bool knowsAllLearnedSpells = true;
