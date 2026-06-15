@@ -6,7 +6,6 @@
 #include "Log.h"
 #include "Map.h"
 #include "ObjectMgr.h"
-#include "SharedDefines.h"
 #include "TemporarySummon.h"
 #include <algorithm>
 #include <cmath>
@@ -116,44 +115,6 @@ namespace
             multiplier = 0.01f;
 
         return multiplier;
-    }
-
-    float GetBaseExpansionValueForLevel(float const (&baseValues)[MAX_EXPANSIONS], uint8 targetLevel)
-    {
-        float const vanilla = baseValues[EXPANSION_CLASSIC];
-        float const burningCrusade = baseValues[EXPANSION_THE_BURNING_CRUSADE];
-        float const wrath = baseValues[EXPANSION_WRATH_OF_THE_LICH_KING];
-
-        if (targetLevel <= 60)
-            return vanilla;
-
-        if (targetLevel < 63)
-        {
-            float const vanillaMultiplier = (63.0f - static_cast<float>(targetLevel)) / 3.0f;
-            float const bcMultiplier = 1.0f - vanillaMultiplier;
-            return vanilla * vanillaMultiplier + burningCrusade * bcMultiplier;
-        }
-
-        if (targetLevel <= 70)
-            return burningCrusade;
-
-        if (targetLevel < 73)
-        {
-            float const bcMultiplier = (73.0f - static_cast<float>(targetLevel)) / 3.0f;
-            float const wrathMultiplier = 1.0f - bcMultiplier;
-            return burningCrusade * bcMultiplier + wrath * wrathMultiplier;
-        }
-
-        return wrath;
-    }
-
-    float GetBaseExpansionValueForLevel(uint32 const (&baseValues)[MAX_EXPANSIONS], uint8 targetLevel)
-    {
-        float converted[MAX_EXPANSIONS];
-        for (uint8 i = 0; i < MAX_EXPANSIONS; ++i)
-            converted[i] = static_cast<float>(baseValues[i]);
-
-        return GetBaseExpansionValueForLevel(converted, targetLevel);
     }
 
     InflectionPointSettings SelectInflectionSettings(ModuleConfig const& config, Map const* map, uint32 targetPlayers, bool isBoss)
@@ -420,6 +381,13 @@ void ScaleCreature(Creature* creature)
     if (!creature)
         return;
 
+    // Player pets already scale from their owner's level and pet templates.
+    // Applying instance AutoBalance on top of that causes hunter pets to be
+    // downscaled in dungeons and can leave stale multipliers behind when they
+    // level up while inside the instance.
+    if (creature->GetGUID().IsPet())
+        return;
+
     if (!IsEnabled())
         return;
 
@@ -434,10 +402,6 @@ void ScaleCreature(Creature* creature)
     uint32 const effectivePlayers = GetEffectivePlayerCount(map);
     uint32 const targetPlayers = GetTargetPlayerCount(map);
     bool const isBoss = IsBossCreature(*creature);
-    uint8 highestPlayerLevel = GetHighestPlayerLevel(map);
-    if (!highestPlayerLevel)
-        highestPlayerLevel = creature->GetLevel();
-
     InflectionPointSettings const inflectionSettings = SelectInflectionSettings(config, map, targetPlayers, isBoss);
     float const baseMultiplier = EvaluateInflectionMultiplier(effectivePlayers, targetPlayers, inflectionSettings);
     StatModifierValues const statModifiers = SelectStatModifiers(config, map, *creature, isBoss, targetPlayers);
@@ -495,52 +459,12 @@ void ScaleCreature(Creature* creature)
     float levelAttackPowerMultiplier = 1.0f;
     float levelRangedAttackPowerMultiplier = 1.0f;
 
-    bool const levelScalingActive = config.LevelScalingEnabled && unmodifiedLevel != level;
-    if (levelScalingActive)
-    {
-        CreatureBaseStats const* levelBaseStats = sObjectMgr->GetCreatureBaseStats(level, creatureTemplate->unit_class);
-        if (!levelBaseStats)
-            return;
-
-        float const smoothedBaseHealth = GetBaseExpansionValueForLevel(levelBaseStats->BaseHealth, highestPlayerLevel);
-        levelBaseValues.Health = static_cast<uint32>(std::round(smoothedBaseHealth * creatureTemplate->ModHealth));
-        levelBaseValues.Mana = levelBaseStats->GenerateMana(creatureTemplate);
-        levelBaseValues.Armor = levelBaseStats->GenerateArmor(creatureTemplate);
-        float const levelBaseDamage = GetBaseExpansionValueForLevel(levelBaseStats->BaseDamage, highestPlayerLevel);
-        levelBaseValues.MinDamage = levelBaseDamage;
-        levelBaseValues.MaxDamage = levelBaseDamage * 1.5f;
-        levelBaseValues.AttackPower = static_cast<float>(levelBaseStats->AttackPower);
-        levelBaseValues.RangedAttackPower = static_cast<float>(levelBaseStats->RangedAttackPower);
-
-        auto computeLevelMultiplier = [](float originalValue, float newValue)
-        {
-            if (originalValue <= 0.0f)
-                return 1.0f;
-
-            float multiplier = newValue / originalValue;
-            if (!std::isfinite(multiplier) || multiplier <= 0.0f)
-                return 1.0f;
-
-            return multiplier;
-        };
-
-        levelHealthMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Health), static_cast<float>(levelBaseValues.Health));
-        levelManaMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Mana), static_cast<float>(levelBaseValues.Mana));
-        levelArmorMultiplier = computeLevelMultiplier(static_cast<float>(originalBaseValues.Armor), static_cast<float>(levelBaseValues.Armor));
-        levelDamageMultiplier = computeLevelMultiplier(originalBaseValues.MinDamage, levelBaseValues.MinDamage);
-        levelAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.AttackPower, levelBaseValues.AttackPower);
-        levelRangedAttackPowerMultiplier = computeLevelMultiplier(originalBaseValues.RangedAttackPower, levelBaseValues.RangedAttackPower);
-    }
+    // Keep instance scaling agnostic to player level. AutoBalance may adjust
+    // stats for player count, but it must not rebase creatures against party
+    // levels or mutate stats again when someone levels inside the instance.
 
     CreatureMultipliers const baseMultipliers = { healthMultiplier, manaMultiplier, damageMultiplier, armorMultiplier, crowdControlMultiplier };
     CreatureMultipliers finalMultipliers = baseMultipliers;
-    if (levelScalingActive)
-    {
-        finalMultipliers.Health *= levelHealthMultiplier;
-        finalMultipliers.Mana *= levelManaMultiplier;
-        finalMultipliers.Damage *= levelDamageMultiplier;
-        finalMultipliers.Armor *= levelArmorMultiplier;
-    }
 
     auto multipliersDiffer = [](float lhs, float rhs)
     {
