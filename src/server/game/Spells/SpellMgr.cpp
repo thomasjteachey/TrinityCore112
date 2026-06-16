@@ -4839,6 +4839,20 @@ void SpellMgr::LoadSpellInfoCorrections()
         spellInfo->ManaPerSecond = 0;
     });
 
+    // Sap (Classic ranks)
+    //
+    // The Classic DBC rows encode Sap as MECHANIC_KNOCKOUT even though the server
+    // has a dedicated MECHANIC_SAPPED mechanic. PvP targets generally have no
+    // creature_template mechanic mask, so Sap can still appear to work there, but
+    // PvE creatures that are immune to generic knockout/stun-like control reject
+    // Sap before the humanoid/non-combat checks matter. Use the dedicated Sap
+    // mechanic so creature templates can distinguish Sap immunity from generic
+    // knockout immunity.
+    ApplySpellFix({ 6770, 2070, 11297 }, [](SpellInfo* spellInfo)
+    {
+        spellInfo->Mechanic = MECHANIC_SAPPED;
+    });
+
     // Threatening Gaze
     ApplySpellFix({ 24314 }, [](SpellInfo* spellInfo)
     {
