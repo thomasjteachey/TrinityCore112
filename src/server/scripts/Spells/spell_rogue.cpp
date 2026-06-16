@@ -24,6 +24,7 @@
 #include "ScriptMgr.h"
 #include <algorithm>
 #include "Containers.h"
+#include "Creature.h"
 #include "DBCStores.h"
 #include "Item.h"
 #include "Log.h"
