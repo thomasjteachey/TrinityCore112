@@ -2323,7 +2323,8 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
     if (checkIfValid)
     {
         SpellCastResult targetCheck = m_spellInfo->CheckTarget(m_caster, target, implicit);
-        sendSapDiag("[SapDiag] AddUnitTarget CheckTarget result=%u", uint32(targetCheck));
+        sendSapDiag("[SapDiag] AddUnitTarget CheckTarget result=%u targetInCombat=%u targetPetInCombatFlag=%u targetFlags=0x%08X casterInCombat=%u",
+            uint32(targetCheck), target->IsInCombat(), target->HasUnitFlag(UNIT_FLAG_PET_IN_COMBAT), uint32(target->GetUnitFlags()), m_caster->ToUnit() ? m_caster->ToUnit()->IsInCombat() : false);
         if (targetCheck != SPELL_CAST_OK) // skip stealth checks for AOE
         {
             sendSapDiag("[SapDiag] AddUnitTarget return=CheckTarget");
@@ -3633,20 +3634,42 @@ void Spell::_cast(bool skipCheck)
 
     if (Player* playerCaster = m_caster->ToPlayer())
     {
+        bool const isSap = GetSpellInfo()->Id == 6770 || GetSpellInfo()->Id == 2070 || GetSpellInfo()->Id == 11297;
+        auto sendSapCastDiag = [this, playerCaster, isSap](char const* stage)
+        {
+            if (!isSap)
+                return;
+
+            Unit* target = m_targets.GetUnitTarget();
+            ChatHandler(playerCaster->GetSession()).PSendSysMessage("[SapDiag] castStage=%s casterInCombat=%u controlledCount=%u explicitTarget=%s targetInCombat=%u targetPetInCombatFlag=%u targetFlags=0x%08X",
+                stage, playerCaster->IsInCombat(), uint32(playerCaster->m_Controlled.size()),
+                target ? target->GetName().c_str() : "<none>", target ? target->IsInCombat() : false,
+                target ? target->HasUnitFlag(UNIT_FLAG_PET_IN_COMBAT) : false, target ? uint32(target->GetUnitFlags()) : 0);
+        };
+
+        sendSapCastDiag("beforeOnPlayerSpellCast");
+
         // now that we've done the basic check, now run the scripts
         // should be done before the spell is actually executed
         sScriptMgr->OnPlayerSpellCast(playerCaster, this, skipCheck);
+
+        sendSapCastDiag("afterOnPlayerSpellCast");
 
         // As of 3.0.2 pets begin attacking their owner's target immediately
         // Let any pets know we've attacked something. Check DmgClass for harmful spells only
         // This prevents spells such as Hunter's Mark from triggering pet attack
         
-        if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE)
+        // Sap requires a non-combat target. Do not make controlled pets attack
+        // before target selection, or PvE targets enter combat and fail the
+        // spell's SPELL_ATTR1_CANT_TARGET_IN_COMBAT check in AddUnitTarget.
+        if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE && !isSap)
             if (Unit* target = m_targets.GetUnitTarget())
                 for (Unit* controlled : playerCaster->m_Controlled)
                     if (Creature* cControlled = controlled->ToCreature())
                         if (CreatureAI* controlledAI = cControlled->AI())
                                 controlledAI->OwnerAttacked(target);
+
+        sendSapCastDiag("afterControlledAttackNotify");
                                 
     }
 
