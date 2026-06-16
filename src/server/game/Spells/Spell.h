@@ -151,8 +151,6 @@ class TC_GAME_API Spell
 {
     friend class SpellScript;
     public:
-        struct TargetInfo;
-
         void EffectNULL();
         void EffectUnused();
         void EffectDistract();
@@ -455,7 +453,7 @@ class TC_GAME_API Spell
         SpellInfo const* GetTriggeredByAuraSpell() const { return m_triggeredByAuraSpell; }
         int32 GetPowerCost() const { return m_powerCost; }
         uint32 GetHitMask() const { return m_hitMask; }
-        std::vector<TargetInfo> const& GetUniqueTargetInfo() const { return m_UniqueTargetInfo; }
+        uint32 GetUniqueTargetInfoSize() const { return uint32(m_UniqueTargetInfo.size()); }
         uint8 GetAuraScaleMask() const { return m_auraScaleMask; }
 
         bool UpdatePointers();                              // must be used at call Spell code after time delay (non triggered spell cast/update spell call/etc)

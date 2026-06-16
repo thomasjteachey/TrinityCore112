@@ -1340,11 +1340,7 @@ class spell_rog_sap_diagnostic : public SpellScript
         Unit* target = spell->m_targets.GetUnitTarget();
         handler.PSendSysMessage("[SapDiag] onCast explicitTarget=%s entry=%u targetIsCreature=%u uniqueTargets=%u auraScaleMask=0x%02X",
             target ? target->GetName().c_str() : "<none>", target ? target->GetEntry() : 0,
-            target && target->ToCreature() != nullptr, uint32(spell->GetUniqueTargetInfo().size()), spell->GetAuraScaleMask());
-
-        for (Spell::TargetInfo const& targetInfo : spell->GetUniqueTargetInfo())
-            handler.PSendSysMessage("[SapDiag] onCastTarget guid=%s effectMask=0x%02X missCondition=%u scaleAura=%u",
-                targetInfo.TargetGUID.ToString().c_str(), targetInfo.EffectMask, uint32(targetInfo.MissCondition), targetInfo.ScaleAura);
+            target && target->ToCreature() != nullptr, spell->GetUniqueTargetInfoSize(), spell->GetAuraScaleMask());
     }
 
     void HandleBeforeHit(SpellMissInfo missInfo)
