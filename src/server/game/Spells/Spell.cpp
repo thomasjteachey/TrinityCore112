@@ -3459,7 +3459,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         {
             // stealth must be removed at cast starting (at show channel bar)
             // skip triggered spell (item equip spell casting and other not explicit character casts/item uses)
-            if (!(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
+            // Sap is instant and requires a non-combat target. Breaking stealth here
+            // can aggro nearby PvE targets before the spell reaches _cast/AddUnitTarget.
+            bool const delaySapStealthBreak = m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297;
+            if (!delaySapStealthBreak && !(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
             {
                 unitCaster->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CAST);
                 for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
@@ -3593,6 +3596,8 @@ void Spell::_cast(bool skipCheck)
 
     if (Player* playerCaster = m_caster->ToPlayer())
     {
+        bool const isSap = GetSpellInfo()->Id == 6770 || GetSpellInfo()->Id == 2070 || GetSpellInfo()->Id == 11297;
+
         // now that we've done the basic check, now run the scripts
         // should be done before the spell is actually executed
         sScriptMgr->OnPlayerSpellCast(playerCaster, this, skipCheck);
@@ -3600,14 +3605,14 @@ void Spell::_cast(bool skipCheck)
         // As of 3.0.2 pets begin attacking their owner's target immediately
         // Let any pets know we've attacked something. Check DmgClass for harmful spells only
         // This prevents spells such as Hunter's Mark from triggering pet attack
-        
-        if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE)
+        // Sap requires a non-combat target; do not notify controlled pets
+        // before target selection, or the target may enter combat and fail.
+        if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE && !isSap)
             if (Unit* target = m_targets.GetUnitTarget())
                 for (Unit* controlled : playerCaster->m_Controlled)
                     if (Creature* cControlled = controlled->ToCreature())
                         if (CreatureAI* controlledAI = cControlled->AI())
                                 controlledAI->OwnerAttacked(target);
-                                
     }
 
     SetExecutedCurrently(true);

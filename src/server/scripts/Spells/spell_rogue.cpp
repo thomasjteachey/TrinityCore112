@@ -1272,6 +1272,46 @@ class spell_rog_imp_sap : public AuraScript
     }
 };
 
+// 6770, 2070, 11297 - Sap
+class spell_rog_sap : public SpellScript
+{
+    PrepareSpellScript(spell_rog_sap);
+
+    void HandleBeforeHit(SpellMissInfo /*missInfo*/)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return;
+
+        // Sap target selection must happen while still stealthed so nearby PvE
+        // creatures do not aggro and invalidate Sap's non-combat target check.
+        // Once the selected target reaches hit processing, break stealth here so
+        // the existing Improved Sap proc script can restore it if that talent procs.
+        player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CAST);
+        player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_SPELL_ATTACK);
+    }
+
+    void HandleAfterHit()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Unit* target = GetHitUnit();
+        if (!player || !target || !GetHitAura())
+            return;
+
+        // Sap itself should not leave the rogue or the incapacitated creature in
+        // combat; otherwise the target can remain locked in combat for the full
+        // Sap duration after the delayed stealth break.
+        player->CombatStopWithPets(false);
+        target->CombatStop(false);
+    }
+
+    void Register() override
+    {
+        BeforeHit += BeforeSpellHitFn(spell_rog_sap::HandleBeforeHit);
+        AfterHit += SpellHitFn(spell_rog_sap::HandleAfterHit);
+    }
+};
+
 class spell_rog_deadly_shot : public SpellScript
 {
     PrepareSpellScript(spell_rog_deadly_shot);
@@ -1363,6 +1403,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_turn_the_tables);
     RegisterSpellScript(spell_rog_vanish);
     RegisterSpellScript(spell_rog_imp_sap);
+    RegisterSpellScript(spell_rog_sap);
     RegisterSpellScript(spell_rog_poison);
     RegisterSpellScript(spell_rog_evasion);
     RegisterSpellScript(spell_rog_deadly_shot);
