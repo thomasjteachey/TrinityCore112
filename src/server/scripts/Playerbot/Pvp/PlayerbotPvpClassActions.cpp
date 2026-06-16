@@ -483,6 +483,7 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         Position const safeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
+        path.SetAllowSteepSlopes(true);
         path.SetPathLengthLimit(90.0f);
         bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
         PathType pathType = path.GetPathType();
@@ -492,6 +493,7 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         if ((pathType & PATHFIND_SHORTCUT) != 0)
         {
             PathGenerator retryPath(player);
+            retryPath.SetAllowSteepSlopes(true);
             retryPath.SetPathLengthLimit(90.0f);
             bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
             PathType const retryType = retryPath.GetPathType();
@@ -1138,6 +1140,7 @@ RangedPathProbeResult ProbeChasePath(Player* player, Unit* target)
         player->UpdateAllowedPositionZ(probe.destX, probe.destY, probe.destZ);
 
     PathGenerator path(player);
+    path.SetAllowSteepSlopes(true);
     probe.success = path.CalculatePath(probe.destX, probe.destY, probe.destZ, player->CanFly());
     probe.pathType = uint32(path.GetPathType());
     probe.pointCount = uint32(path.GetPath().size());
@@ -1159,6 +1162,7 @@ RangedPathProbeResult ProbeFollowPath(Player* player, Unit* target, float edgeRa
         player->UpdateAllowedPositionZ(probe.destX, probe.destY, probe.destZ);
 
     PathGenerator path(player);
+    path.SetAllowSteepSlopes(true);
     probe.success = path.CalculatePath(probe.destX, probe.destY, probe.destZ, false);
     probe.pathType = uint32(path.GetPathType());
     probe.pointCount = uint32(path.GetPath().size());

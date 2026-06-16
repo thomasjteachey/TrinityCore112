@@ -806,38 +806,6 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return BuildCollisionSafeDestination(player, probe);
     }
 
-    bool ShouldPreferDirectDropShortcut(Player* player, Position const& destination)
-    {
-        if (!player)
-            return false;
-
-        float const destinationDistance = player->GetDistance(destination);
-        if (destinationDistance < 15.0f || destinationDistance > 120.0f)
-            return false;
-
-        float const verticalDrop = player->GetPositionZ() - destination.GetPositionZ();
-        if (verticalDrop < 8.0f)
-            return false;
-
-        PathGenerator path(player);
-        path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
-        if (!path.CalculatePath(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), true))
-            return false;
-
-        if (IsForbiddenBattlegroundPathType(path.GetPathType()))
-            return false;
-
-        Movement::PointsArray const& points = path.GetPath();
-        if (points.size() < 2)
-            return false;
-
-        float pathLength = 0.0f;
-        for (std::size_t i = 1; i < points.size(); ++i)
-            pathLength += (points[i] - points[i - 1]).length();
-
-        return pathLength > destinationDistance * 1.35f;
-    }
-
     bool BuildNavPathSegmentDestination(Player const* player, Movement::PointsArray const& points, float orientation, Position& segmentDestination)
     {
         if (!player || points.size() < 2)
@@ -884,6 +852,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             Position const collisionSafeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
             PathGenerator path(player);
+            path.SetAllowSteepSlopes(true);
             // Allow longer battleground route segments so bots can commit to
             // meaningful navmesh progress toward distant enemies instead of
             // repeatedly selecting tiny local hops that catch on terrain.
@@ -896,6 +865,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             if ((pathType & PATHFIND_SHORTCUT) != 0)
             {
                 PathGenerator retryPath(player);
+                retryPath.SetAllowSteepSlopes(true);
                 retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
                 bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
                 PathType const retryType = retryPath.GetPathType();
@@ -1118,25 +1088,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 }
             }
 
-            if (allowDirectDrop && nowMs >= directDropState.suppressUntilMs && ShouldPreferDirectDropShortcut(player, safeDestination))
-            {
-                Position const shortcutDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, shortcutDestination, false);
-                EmitBattlegroundGmDebug(player,
-                    "movepoint=direct-drop-shortcut destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
-                    " stepDist=" + std::to_string(int32(player->GetDistance(shortcutDestination))), 0);
-                directDropState.startPosition = player->GetPosition();
-                directDropState.issueMs = nowMs;
-                directDropState.pending = true;
-
-                state.lastDestination = destination;
-                state.lastIssueMs = nowMs;
-                return true;
-            }
-            else
-            {
-                directDropState.pending = false;
-            }
+            directDropState.pending = false;
 
             Position segmentDestination;
             PathType pathType = PathType(0);
@@ -1154,19 +1106,15 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                     return true;
                 }
 
-                // Recovery path for segmented-nav failures (for example, after a
-                // partial drop where local nav probing can't find a legal segment):
-                // issue a direct movement order so the bot keeps progressing
-                // instead of stalling in place waiting on nav segment recovery.
-                Position const fallbackDestination = BuildDownhillEscapeDestination(player, safeDestination);
-                motionMaster->MovePoint(0, fallbackDestination, false);
+                // Keep bots on path-generated movement instead of intentionally
+                // stepping off ledges when nav segmentation cannot produce a
+                // shorter intermediate destination.
+                motionMaster->MovePoint(0, safeDestination, true);
                 EmitBattlegroundGmDebug(player,
-                    "movepoint=blocked-no-nav fallback=direct destDist=" + std::to_string(int32(player->GetDistance(safeDestination))) +
-                    " stepDist=" + std::to_string(int32(player->GetDistance(fallbackDestination))), 0);
+                    "movepoint=blocked-no-nav fallback=full-path steep-slopes=enabled destDist=" +
+                    std::to_string(int32(player->GetDistance(safeDestination))), 0);
 
-                directDropState.startPosition = player->GetPosition();
-                directDropState.issueMs = nowMs;
-                directDropState.pending = true;
+                directDropState.pending = false;
                 directDropState.suppressUntilMs = std::max(directDropState.suppressUntilMs, nowMs + 2500);
 
                 state.lastDestination = destination;
