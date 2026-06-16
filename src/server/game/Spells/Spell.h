@@ -151,7 +151,6 @@ class TC_GAME_API Spell
 {
     friend class SpellScript;
     public:
-
         void EffectNULL();
         void EffectUnused();
         void EffectDistract();

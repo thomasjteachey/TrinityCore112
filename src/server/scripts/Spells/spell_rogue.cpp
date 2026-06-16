@@ -22,6 +22,7 @@
  */
 
 #include "ScriptMgr.h"
+#include <algorithm>
 #include "Containers.h"
 #include "DBCStores.h"
 #include "Item.h"
@@ -1272,6 +1273,57 @@ class spell_rog_imp_sap : public AuraScript
     }
 };
 
+// 6770, 2070, 11297 - Sap
+class spell_rog_sap : public SpellScript
+{
+    PrepareSpellScript(spell_rog_sap);
+
+    static uint32 GetImprovedSapChance(Player const* player)
+    {
+        uint32 chance = 0;
+        for (uint32 spellId : { 14076u, 14094u, 14095u })
+            if (AuraEffect const* improvedSap = player->GetAuraEffect(spellId, EFFECT_0))
+                chance = std::max<uint32>(chance, improvedSap->GetAmount());
+
+        return chance;
+    }
+
+    void HandleAfterHit()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Unit* target = GetHitUnit();
+        if (!player || !target || !GetHitAura())
+            return;
+
+        // Sap target selection must happen while still stealthed so nearby PvE
+        // creatures do not aggro and invalidate Sap's non-combat target check.
+        // Once Sap has landed, emulate the normal Classic behavior: Sap breaks
+        // stealth unless Improved Sap procs and immediately restores it.
+        player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CAST);
+        player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_SPELL_ATTACK);
+
+        if (uint32 improvedSapChance = GetImprovedSapChance(player))
+            if (roll_chance_i(improvedSapChance))
+            {
+                if (player->GetSpellHistory()->HasCooldown(SPELL_ROGUE_STEALTH))
+                    player->GetSpellHistory()->ResetCooldown(SPELL_ROGUE_STEALTH);
+
+                player->CastSpell(nullptr, SPELL_ROGUE_STEALTH, true);
+            }
+
+        // Sap itself should not leave the rogue or the incapacitated creature in
+        // combat; otherwise the target can remain locked in combat for the full
+        // Sap duration after the delayed stealth break.
+        player->CombatStopWithPets(false);
+        target->CombatStop(false);
+    }
+
+    void Register() override
+    {
+        AfterHit += SpellHitFn(spell_rog_sap::HandleAfterHit);
+    }
+};
+
 class spell_rog_deadly_shot : public SpellScript
 {
     PrepareSpellScript(spell_rog_deadly_shot);
@@ -1363,6 +1415,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_turn_the_tables);
     RegisterSpellScript(spell_rog_vanish);
     RegisterSpellScript(spell_rog_imp_sap);
+    RegisterSpellScript(spell_rog_sap);
     RegisterSpellScript(spell_rog_poison);
     RegisterSpellScript(spell_rog_evasion);
     RegisterSpellScript(spell_rog_deadly_shot);
