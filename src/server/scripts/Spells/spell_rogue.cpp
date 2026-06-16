@@ -1329,6 +1329,20 @@ class spell_rog_sap_diagnostic : public SpellScript
             creatureTarget ? creatureTarget->GetEntry() : 0, creatureTarget != nullptr);
     }
 
+    void HandleOnCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return;
+
+        Spell* spell = GetSpell();
+        ChatHandler handler(player->GetSession());
+        Unit* target = spell->m_targets.GetUnitTarget();
+        handler.PSendSysMessage("[SapDiag] onCast explicitTarget=%s entry=%u targetIsCreature=%u",
+            target ? target->GetName().c_str() : "<none>", target ? target->GetEntry() : 0,
+            target && target->ToCreature() != nullptr);
+    }
+
     void HandleBeforeHit(SpellMissInfo missInfo)
     {
         Player* player = GetCaster()->ToPlayer();
@@ -1359,6 +1373,7 @@ class spell_rog_sap_diagnostic : public SpellScript
     {
         OnCheckCast += SpellCheckCastFn(spell_rog_sap_diagnostic::CheckCast);
         OnObjectTargetSelect += SpellObjectTargetSelectFn(spell_rog_sap_diagnostic::HandleObjectTargetSelect, EFFECT_0, TARGET_UNIT_TARGET_ENEMY);
+        OnCast += SpellCastFn(spell_rog_sap_diagnostic::HandleOnCast);
         BeforeHit += BeforeSpellHitFn(spell_rog_sap_diagnostic::HandleBeforeHit);
         AfterHit += SpellHitFn(spell_rog_sap_diagnostic::HandleAfterHit);
     }
