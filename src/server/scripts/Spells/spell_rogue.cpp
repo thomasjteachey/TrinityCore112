@@ -1328,12 +1328,6 @@ class spell_rog_sap_diagnostic : public SpellScript
             creatureTarget ? creatureTarget->GetName().c_str() : (target ? target->GetName().c_str() : "<none>"),
             creatureTarget ? creatureTarget->GetEntry() : 0, creatureTarget != nullptr);
 
-        if (creatureTarget)
-        {
-            GetSpell()->AddUnitTargetForScript(creatureTarget, 1 << EFFECT_0, true, false);
-            ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] objectTargetSelect forcedAddUnitTarget=1 uniqueTargets=%u",
-                GetSpell()->GetUniqueTargetInfoSize());
-        }
     }
 
     void HandleOnCast()

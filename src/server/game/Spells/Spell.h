@@ -455,7 +455,6 @@ class TC_GAME_API Spell
         uint32 GetHitMask() const { return m_hitMask; }
         uint32 GetUniqueTargetInfoSize() const { return uint32(m_UniqueTargetInfo.size()); }
         uint8 GetAuraScaleMask() const { return m_auraScaleMask; }
-        void AddUnitTargetForScript(Unit* target, uint32 effectMask, bool checkIfValid = true, bool implicit = true) { AddUnitTarget(target, effectMask, checkIfValid, implicit); }
 
         bool UpdatePointers();                              // must be used at call Spell code after time delay (non triggered spell cast/update spell call/etc)
 

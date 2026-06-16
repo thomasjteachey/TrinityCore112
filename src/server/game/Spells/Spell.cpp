@@ -18,6 +18,7 @@
 #include "Spell.h"
 #include <algorithm>
 #include <sstream>
+#include <utility>
 #include "AccountMgr.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
@@ -2288,22 +2289,59 @@ class ProcReflectDelayed : public BasicEvent
 
 void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*= true*/, bool implicit /*= true*/, Position const* losPosition /*= nullptr*/)
 {
+    bool const sapDiag = (m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297) && m_caster->IsPlayer() && target && target->IsCreature();
+    auto sendSapDiag = [this, sapDiag](char const* fmt, auto&&... args)
+    {
+        if (!sapDiag)
+            return;
+
+        ChatHandler(m_caster->ToPlayer()->GetSession()).PSendSysMessage(fmt, std::forward<decltype(args)>(args)...);
+    };
+
+    sendSapDiag("[SapDiag] AddUnitTarget enter target=%s entry=%u initialMask=0x%02X checkIfValid=%u implicit=%u",
+        target->GetName().c_str(), target->GetEntry(), effectMask, checkIfValid, implicit);
+
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
+    {
         if (!spellEffectInfo.IsEffect() || !CheckEffectTarget(target, spellEffectInfo, losPosition))
+        {
+            sendSapDiag("[SapDiag] AddUnitTarget clear effect=%u isEffect=%u checkEffectTarget=%u",
+                uint32(spellEffectInfo.EffectIndex), spellEffectInfo.IsEffect(), spellEffectInfo.IsEffect() ? CheckEffectTarget(target, spellEffectInfo, losPosition) : false);
             effectMask &= ~(1 << spellEffectInfo.EffectIndex);
+        }
+    }
+
+    sendSapDiag("[SapDiag] AddUnitTarget afterEffectCheck mask=0x%02X", effectMask);
 
     // no effects left
     if (!effectMask)
+    {
+        sendSapDiag("[SapDiag] AddUnitTarget return=noEffects");
         return;
+    }
 
     if (checkIfValid)
-        if (m_spellInfo->CheckTarget(m_caster, target, implicit) != SPELL_CAST_OK) // skip stealth checks for AOE
+    {
+        SpellCastResult targetCheck = m_spellInfo->CheckTarget(m_caster, target, implicit);
+        sendSapDiag("[SapDiag] AddUnitTarget CheckTarget result=%u", uint32(targetCheck));
+        if (targetCheck != SPELL_CAST_OK) // skip stealth checks for AOE
+        {
+            sendSapDiag("[SapDiag] AddUnitTarget return=CheckTarget");
             return;
+        }
+    }
 
     // Check for effect immune skip if immuned
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
+    {
         if (target->IsImmunedToSpellEffect(m_spellInfo, spellEffectInfo, m_caster))
+        {
+            sendSapDiag("[SapDiag] AddUnitTarget clearImmune effect=%u", uint32(spellEffectInfo.EffectIndex));
             effectMask &= ~(1 << spellEffectInfo.EffectIndex);
+        }
+    }
+
+    sendSapDiag("[SapDiag] AddUnitTarget afterImmune mask=0x%02X", effectMask);
 
     ObjectGuid targetGUID = target->GetGUID();
 
@@ -2320,6 +2358,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
             if (uint32(target->GetLevel() + 10) >= auraSpell->SpellLevel)
                 ihit->ScaleAura = true;
         }
+        sendSapDiag("[SapDiag] AddUnitTarget merged existing effectMask=0x%02X uniqueTargets=%u", ihit->EffectMask, uint32(m_UniqueTargetInfo.size()));
         return;
     }
 
@@ -2392,6 +2431,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
 
     // Add target to list
     m_UniqueTargetInfo.emplace_back(std::move(targetInfo));
+    sendSapDiag("[SapDiag] AddUnitTarget emplaced missCondition=%u effectMask=0x%02X uniqueTargets=%u", uint32(m_UniqueTargetInfo.back().MissCondition), m_UniqueTargetInfo.back().EffectMask, uint32(m_UniqueTargetInfo.size()));
 }
 
 void Spell::AddGOTarget(GameObject* go, uint32 effectMask)
