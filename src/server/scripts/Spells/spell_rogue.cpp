@@ -1314,7 +1314,7 @@ class spell_rog_sap_diagnostic : public SpellScript
         return SPELL_CAST_OK;
     }
 
-    void BeforeHit(SpellMissInfo missInfo)
+    void HandleBeforeHit(SpellMissInfo missInfo)
     {
         Player* player = GetCaster()->ToPlayer();
         Creature* target = GetCreatureTarget(GetHitUnit());
@@ -1325,7 +1325,7 @@ class spell_rog_sap_diagnostic : public SpellScript
             target->GetName().c_str(), target->GetEntry(), uint32(missInfo));
     }
 
-    void AfterHit()
+    void HandleAfterHit()
     {
         Player* player = GetCaster()->ToPlayer();
         Creature* target = GetCreatureTarget(GetHitUnit());
@@ -1343,8 +1343,8 @@ class spell_rog_sap_diagnostic : public SpellScript
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_rog_sap_diagnostic::CheckCast);
-        BeforeHit += BeforeSpellHitFn(spell_rog_sap_diagnostic::BeforeHit);
-        AfterHit += SpellHitFn(spell_rog_sap_diagnostic::AfterHit);
+        BeforeHit += BeforeSpellHitFn(spell_rog_sap_diagnostic::HandleBeforeHit);
+        AfterHit += SpellHitFn(spell_rog_sap_diagnostic::HandleAfterHit);
     }
 };
 
