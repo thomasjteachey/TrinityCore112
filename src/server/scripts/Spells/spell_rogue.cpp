@@ -22,7 +22,9 @@
  */
 
 #include "ScriptMgr.h"
+#include "Chat.h"
 #include "Containers.h"
+#include "Creature.h"
 #include "DBCStores.h"
 #include "Item.h"
 #include "Log.h"
@@ -1272,6 +1274,118 @@ class spell_rog_imp_sap : public AuraScript
     }
 };
 
+// 6770, 2070, 11297 - Sap
+class spell_rog_sap_diagnostic : public SpellScript
+{
+    PrepareSpellScript(spell_rog_sap_diagnostic);
+
+    static Creature* GetCreatureTarget(Unit* unitTarget)
+    {
+        return unitTarget ? unitTarget->ToCreature() : nullptr;
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* target = GetCreatureTarget(GetExplTargetUnit());
+        if (!player || !target)
+            return SPELL_CAST_OK;
+
+        SpellInfo const* spellInfo = GetSpellInfo();
+        SpellCastResult targetCheck = spellInfo->CheckTarget(player, target, false);
+        bool fullImmune = target->IsImmunedToSpell(spellInfo, player);
+
+        uint8 immuneEffectMask = 0;
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.IsEffect() && target->IsImmunedToSpellEffect(spellInfo, effect, player))
+                immuneEffectMask |= 1 << effect.EffectIndex;
+
+        ChatHandler handler(player->GetSession());
+        handler.PSendSysMessage("[SapDiag] spell=%u mechanic=%u target=%s entry=%u type=%u typeMask=0x%08X requiredTypeMask=0x%08X",
+            spellInfo->Id, spellInfo->Mechanic, target->GetName().c_str(), target->GetEntry(), target->GetCreatureType(),
+            target->GetCreatureTypeMask(), spellInfo->TargetCreatureType);
+        handler.PSendSysMessage("[SapDiag] targetCheck=%u alive=%u inCombat=%u petInCombatFlag=%u targetFlags=0x%08X templateMechanicImmuneMask=0x%08X",
+            uint32(targetCheck), target->IsAlive(), target->IsInCombat(), target->HasUnitFlag(UNIT_FLAG_PET_IN_COMBAT),
+            uint32(target->GetUnitFlags()), target->GetCreatureTemplate()->MechanicImmuneMask);
+        handler.PSendSysMessage("[SapDiag] fullImmune=%u immuneEffectMask=0x%02X aura0=%u effect0Mechanic=%u casterInCombat=%u casterStealthed=%u",
+            fullImmune, immuneEffectMask, spellInfo->GetEffect(EFFECT_0).ApplyAuraName, spellInfo->GetEffect(EFFECT_0).Mechanic,
+            player->IsInCombat(), player->HasAura(SPELL_ROGUE_STEALTH));
+        handler.PSendSysMessage("[SapDiag] selectionPrecheck validAttack=%u effect0TargetOk=%u positiveEffect0=%u los=%u distance=%.2f targetMap=%u casterMap=%u",
+            player->IsValidAttackTarget(target, spellInfo), GetSpell()->CheckEffectTarget(target, spellInfo->GetEffect(EFFECT_0), nullptr),
+            spellInfo->IsPositiveEffect(EFFECT_0), target->IsWithinLOSInMap(player), player->GetExactDist(target), target->GetMapId(), player->GetMapId());
+
+        return SPELL_CAST_OK;
+    }
+
+    void HandleObjectTargetSelect(WorldObject*& target)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* creatureTarget = target ? target->ToCreature() : nullptr;
+        if (!player)
+            return;
+
+        ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] objectTargetSelect target=%s entry=%u targetIsCreature=%u",
+            creatureTarget ? creatureTarget->GetName().c_str() : (target ? target->GetName().c_str() : "<none>"),
+            creatureTarget ? creatureTarget->GetEntry() : 0, creatureTarget != nullptr);
+
+        if (creatureTarget)
+        {
+            GetSpell()->AddUnitTargetForScript(creatureTarget, 1 << EFFECT_0, true, false);
+            ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] objectTargetSelect forcedAddUnitTarget=1 uniqueTargets=%u",
+                GetSpell()->GetUniqueTargetInfoSize());
+        }
+    }
+
+    void HandleOnCast()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        if (!player)
+            return;
+
+        Spell* spell = GetSpell();
+        ChatHandler handler(player->GetSession());
+        Unit* target = spell->m_targets.GetUnitTarget();
+        handler.PSendSysMessage("[SapDiag] onCast explicitTarget=%s entry=%u targetIsCreature=%u uniqueTargets=%u auraScaleMask=0x%02X",
+            target ? target->GetName().c_str() : "<none>", target ? target->GetEntry() : 0,
+            target && target->ToCreature() != nullptr, spell->GetUniqueTargetInfoSize(), spell->GetAuraScaleMask());
+    }
+
+    void HandleBeforeHit(SpellMissInfo missInfo)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* target = GetCreatureTarget(GetHitUnit());
+        if (!player || !target)
+            return;
+
+        ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] hitPhase target=%s entry=%u missInfo=%u",
+            target->GetName().c_str(), target->GetEntry(), uint32(missInfo));
+    }
+
+    void HandleAfterHit()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* target = GetCreatureTarget(GetHitUnit());
+        if (!player || !target)
+            return;
+
+        Aura* hitAura = GetHitAura();
+        Aura* sapAura = target->GetAura(GetSpellInfo()->Id, player->GetGUID());
+        ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] afterHit target=%s entry=%u hitAura=%u targetHasSapAura=%u sapAuraDuration=%d stunned=%u confused=%u rooted=%u unitFlags=0x%08X",
+            target->GetName().c_str(), target->GetEntry(), hitAura ? hitAura->GetId() : 0, sapAura != nullptr,
+            sapAura ? sapAura->GetDuration() : 0, target->HasUnitState(UNIT_STATE_STUNNED),
+            target->HasUnitState(UNIT_STATE_CONFUSED), target->HasUnitState(UNIT_STATE_ROOT), uint32(target->GetUnitFlags()));
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_rog_sap_diagnostic::CheckCast);
+        OnObjectTargetSelect += SpellObjectTargetSelectFn(spell_rog_sap_diagnostic::HandleObjectTargetSelect, EFFECT_0, TARGET_UNIT_TARGET_ENEMY);
+        OnCast += SpellCastFn(spell_rog_sap_diagnostic::HandleOnCast);
+        BeforeHit += BeforeSpellHitFn(spell_rog_sap_diagnostic::HandleBeforeHit);
+        AfterHit += SpellHitFn(spell_rog_sap_diagnostic::HandleAfterHit);
+    }
+};
+
 class spell_rog_deadly_shot : public SpellScript
 {
     PrepareSpellScript(spell_rog_deadly_shot);
@@ -1363,6 +1477,7 @@ void AddSC_rogue_spell_scripts()
     RegisterSpellScript(spell_rog_turn_the_tables);
     RegisterSpellScript(spell_rog_vanish);
     RegisterSpellScript(spell_rog_imp_sap);
+    RegisterSpellScript(spell_rog_sap_diagnostic);
     RegisterSpellScript(spell_rog_poison);
     RegisterSpellScript(spell_rog_evasion);
     RegisterSpellScript(spell_rog_deadly_shot);
