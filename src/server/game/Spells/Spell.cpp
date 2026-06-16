@@ -18,6 +18,7 @@
 #include "Spell.h"
 #include <algorithm>
 #include <sstream>
+#include <utility>
 #include "AccountMgr.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
@@ -2288,22 +2289,60 @@ class ProcReflectDelayed : public BasicEvent
 
 void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*= true*/, bool implicit /*= true*/, Position const* losPosition /*= nullptr*/)
 {
+    bool const sapDiag = (m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297) && m_caster->IsPlayer() && target && target->IsCreature();
+    auto sendSapDiag = [this, sapDiag](char const* fmt, auto&&... args)
+    {
+        if (!sapDiag)
+            return;
+
+        ChatHandler(m_caster->ToPlayer()->GetSession()).PSendSysMessage(fmt, std::forward<decltype(args)>(args)...);
+    };
+
+    sendSapDiag("[SapDiag] AddUnitTarget enter target=%s entry=%u initialMask=0x%02X checkIfValid=%u implicit=%u",
+        target->GetName().c_str(), target->GetEntry(), effectMask, checkIfValid, implicit);
+
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
+    {
         if (!spellEffectInfo.IsEffect() || !CheckEffectTarget(target, spellEffectInfo, losPosition))
+        {
+            sendSapDiag("[SapDiag] AddUnitTarget clear effect=%u isEffect=%u checkEffectTarget=%u",
+                uint32(spellEffectInfo.EffectIndex), spellEffectInfo.IsEffect(), spellEffectInfo.IsEffect() ? CheckEffectTarget(target, spellEffectInfo, losPosition) : false);
             effectMask &= ~(1 << spellEffectInfo.EffectIndex);
+        }
+    }
+
+    sendSapDiag("[SapDiag] AddUnitTarget afterEffectCheck mask=0x%02X", effectMask);
 
     // no effects left
     if (!effectMask)
+    {
+        sendSapDiag("[SapDiag] AddUnitTarget return=noEffects");
         return;
+    }
 
     if (checkIfValid)
-        if (m_spellInfo->CheckTarget(m_caster, target, implicit) != SPELL_CAST_OK) // skip stealth checks for AOE
+    {
+        SpellCastResult targetCheck = m_spellInfo->CheckTarget(m_caster, target, implicit);
+        sendSapDiag("[SapDiag] AddUnitTarget CheckTarget result=%u targetInCombat=%u targetPetInCombatFlag=%u targetFlags=0x%08X casterInCombat=%u",
+            uint32(targetCheck), target->IsInCombat(), target->HasUnitFlag(UNIT_FLAG_PET_IN_COMBAT), uint32(target->GetUnitFlags()), m_caster->ToUnit() ? m_caster->ToUnit()->IsInCombat() : false);
+        if (targetCheck != SPELL_CAST_OK) // skip stealth checks for AOE
+        {
+            sendSapDiag("[SapDiag] AddUnitTarget return=CheckTarget");
             return;
+        }
+    }
 
     // Check for effect immune skip if immuned
     for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
+    {
         if (target->IsImmunedToSpellEffect(m_spellInfo, spellEffectInfo, m_caster))
+        {
+            sendSapDiag("[SapDiag] AddUnitTarget clearImmune effect=%u", uint32(spellEffectInfo.EffectIndex));
             effectMask &= ~(1 << spellEffectInfo.EffectIndex);
+        }
+    }
+
+    sendSapDiag("[SapDiag] AddUnitTarget afterImmune mask=0x%02X", effectMask);
 
     ObjectGuid targetGUID = target->GetGUID();
 
@@ -2320,6 +2359,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
             if (uint32(target->GetLevel() + 10) >= auraSpell->SpellLevel)
                 ihit->ScaleAura = true;
         }
+        sendSapDiag("[SapDiag] AddUnitTarget merged existing effectMask=0x%02X uniqueTargets=%u", ihit->EffectMask, uint32(m_UniqueTargetInfo.size()));
         return;
     }
 
@@ -2392,6 +2432,7 @@ void Spell::AddUnitTarget(Unit* target, uint32 effectMask, bool checkIfValid /*=
 
     // Add target to list
     m_UniqueTargetInfo.emplace_back(std::move(targetInfo));
+    sendSapDiag("[SapDiag] AddUnitTarget emplaced missCondition=%u effectMask=0x%02X uniqueTargets=%u", uint32(m_UniqueTargetInfo.back().MissCondition), m_UniqueTargetInfo.back().EffectMask, uint32(m_UniqueTargetInfo.size()));
 }
 
 void Spell::AddGOTarget(GameObject* go, uint32 effectMask)
@@ -3459,7 +3500,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         {
             // stealth must be removed at cast starting (at show channel bar)
             // skip triggered spell (item equip spell casting and other not explicit character casts/item uses)
-            if (!(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
+            // Sap is instant and requires a non-combat target. Breaking stealth here
+            // can aggro nearby PvE targets before the spell reaches _cast/AddUnitTarget.
+            bool const delaySapStealthBreak = m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297;
+            if (!delaySapStealthBreak && !(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
             {
                 unitCaster->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CAST);
                 for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
@@ -3593,20 +3637,42 @@ void Spell::_cast(bool skipCheck)
 
     if (Player* playerCaster = m_caster->ToPlayer())
     {
+        bool const isSap = GetSpellInfo()->Id == 6770 || GetSpellInfo()->Id == 2070 || GetSpellInfo()->Id == 11297;
+        auto sendSapCastDiag = [this, playerCaster, isSap](char const* stage)
+        {
+            if (!isSap)
+                return;
+
+            Unit* target = m_targets.GetUnitTarget();
+            ChatHandler(playerCaster->GetSession()).PSendSysMessage("[SapDiag] castStage=%s casterInCombat=%u controlledCount=%u explicitTarget=%s targetInCombat=%u targetPetInCombatFlag=%u targetFlags=0x%08X",
+                stage, playerCaster->IsInCombat(), uint32(playerCaster->m_Controlled.size()),
+                target ? target->GetName().c_str() : "<none>", target ? target->IsInCombat() : false,
+                target ? target->HasUnitFlag(UNIT_FLAG_PET_IN_COMBAT) : false, target ? uint32(target->GetUnitFlags()) : 0);
+        };
+
+        sendSapCastDiag("beforeOnPlayerSpellCast");
+
         // now that we've done the basic check, now run the scripts
         // should be done before the spell is actually executed
         sScriptMgr->OnPlayerSpellCast(playerCaster, this, skipCheck);
+
+        sendSapCastDiag("afterOnPlayerSpellCast");
 
         // As of 3.0.2 pets begin attacking their owner's target immediately
         // Let any pets know we've attacked something. Check DmgClass for harmful spells only
         // This prevents spells such as Hunter's Mark from triggering pet attack
         
-        if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE)
+        // Sap requires a non-combat target. Do not make controlled pets attack
+        // before target selection, or PvE targets enter combat and fail the
+        // spell's SPELL_ATTR1_CANT_TARGET_IN_COMBAT check in AddUnitTarget.
+        if (GetSpellInfo()->DmgClass != SPELL_DAMAGE_CLASS_NONE && !isSap)
             if (Unit* target = m_targets.GetUnitTarget())
                 for (Unit* controlled : playerCaster->m_Controlled)
                     if (Creature* cControlled = controlled->ToCreature())
                         if (CreatureAI* controlledAI = cControlled->AI())
                                 controlledAI->OwnerAttacked(target);
+
+        sendSapCastDiag("afterControlledAttackNotify");
                                 
     }
 
