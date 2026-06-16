@@ -1310,8 +1310,23 @@ class spell_rog_sap_diagnostic : public SpellScript
         handler.PSendSysMessage("[SapDiag] fullImmune=%u immuneEffectMask=0x%02X aura0=%u effect0Mechanic=%u casterInCombat=%u casterStealthed=%u",
             fullImmune, immuneEffectMask, spellInfo->GetEffect(EFFECT_0).ApplyAuraName, spellInfo->GetEffect(EFFECT_0).Mechanic,
             player->IsInCombat(), player->HasAura(SPELL_ROGUE_STEALTH));
+        handler.PSendSysMessage("[SapDiag] selectionPrecheck validAttack=%u effect0TargetOk=%u los=%u distance=%.2f targetMap=%u casterMap=%u",
+            player->IsValidAttackTarget(target, spellInfo), GetSpell()->CheckEffectTarget(target, spellInfo->GetEffect(EFFECT_0), nullptr),
+            target->IsWithinLOSInMap(player), player->GetExactDist(target), target->GetMapId(), player->GetMapId());
 
         return SPELL_CAST_OK;
+    }
+
+    void HandleObjectTargetSelect(WorldObject*& target)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* creatureTarget = target ? target->ToCreature() : nullptr;
+        if (!player)
+            return;
+
+        ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] objectTargetSelect target=%s entry=%u targetIsCreature=%u",
+            creatureTarget ? creatureTarget->GetName().c_str() : (target ? target->GetName().c_str() : "<none>"),
+            creatureTarget ? creatureTarget->GetEntry() : 0, creatureTarget != nullptr);
     }
 
     void HandleBeforeHit(SpellMissInfo missInfo)
@@ -1343,6 +1358,7 @@ class spell_rog_sap_diagnostic : public SpellScript
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_rog_sap_diagnostic::CheckCast);
+        OnObjectTargetSelect += SpellObjectTargetSelectFn(spell_rog_sap_diagnostic::HandleObjectTargetSelect, EFFECT_0, TARGET_UNIT_TARGET_ENEMY);
         BeforeHit += BeforeSpellHitFn(spell_rog_sap_diagnostic::HandleBeforeHit);
         AfterHit += SpellHitFn(spell_rog_sap_diagnostic::HandleAfterHit);
     }
