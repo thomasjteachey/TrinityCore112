@@ -4847,10 +4847,14 @@ void SpellMgr::LoadSpellInfoCorrections()
     // PvE creatures that are immune to generic knockout/stun-like control reject
     // Sap before the humanoid/non-combat checks matter. Use the dedicated Sap
     // mechanic so creature templates can distinguish Sap immunity from generic
-    // knockout immunity.
+    // knockout immunity. Also force Sap negative: the Classic rows do not carry
+    // SPELL_ATTR0_NEGATIVE_1, which can make the aura look positive to aura
+    // scaling/target processing and drop PvE targets before hit processing.
     ApplySpellFix({ 6770, 2070, 11297 }, [](SpellInfo* spellInfo)
     {
         spellInfo->Mechanic = MECHANIC_SAPPED;
+        spellInfo->Attributes |= SPELL_ATTR0_NEGATIVE_1;
+        spellInfo->AttributesCu |= SPELL_ATTR0_CU_NEGATIVE_EFF0;
     });
 
     // Threatening Gaze
