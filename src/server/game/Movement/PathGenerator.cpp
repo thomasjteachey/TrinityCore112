@@ -30,7 +30,7 @@
 PathGenerator::PathGenerator(WorldObject const* owner) :
     _polyLength(0), _type(PATHFIND_BLANK), _useStraightPath(false),
     _forceDestination(false), _pointPathLimit(MAX_POINT_PATH_LENGTH), _useRaycast(false),
-    _allowSteepSlopes(false), _endPosition(G3D::Vector3::zero()), _source(owner), _navMesh(nullptr),
+    _endPosition(G3D::Vector3::zero()), _source(owner), _navMesh(nullptr),
     _navMeshQuery(nullptr)
 {
     memset(_pathPolyRefs, 0, sizeof(_pathPolyRefs));
@@ -644,12 +644,6 @@ void PathGenerator::BuildShortcut()
     _type = PATHFIND_SHORTCUT;
 }
 
-void PathGenerator::SetAllowSteepSlopes(bool allowSteepSlopes)
-{
-    _allowSteepSlopes = allowSteepSlopes;
-    UpdateFilter();
-}
-
 void PathGenerator::CreateFilter()
 {
     uint16 includeFlags = 0;
@@ -692,9 +686,6 @@ void PathGenerator::UpdateFilter()
 
             _filter.setIncludeFlags(includedFlags);
         }
-
-        if (_allowSteepSlopes)
-            _filter.setIncludeFlags(_filter.getIncludeFlags() | NAV_GROUND_STEEP);
 
         if (Creature const* _sourceCreature = _source->ToCreature())
             if (_sourceCreature->IsInCombat() || _sourceCreature->IsInEvadeMode())
