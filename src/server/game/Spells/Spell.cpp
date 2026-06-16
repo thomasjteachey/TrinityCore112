@@ -3500,7 +3500,10 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
         {
             // stealth must be removed at cast starting (at show channel bar)
             // skip triggered spell (item equip spell casting and other not explicit character casts/item uses)
-            if (!(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
+            // Sap is instant and requires a non-combat target. Breaking stealth here
+            // can aggro nearby PvE targets before the spell reaches _cast/AddUnitTarget.
+            bool const delaySapStealthBreak = m_spellInfo->Id == 6770 || m_spellInfo->Id == 2070 || m_spellInfo->Id == 11297;
+            if (!delaySapStealthBreak && !(_triggeredCastFlags & TRIGGERED_IGNORE_AURA_INTERRUPT_FLAGS) && m_spellInfo->IsBreakingStealth())
             {
                 unitCaster->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CAST);
                 for (SpellEffectInfo const& spellEffectInfo : m_spellInfo->GetEffects())
