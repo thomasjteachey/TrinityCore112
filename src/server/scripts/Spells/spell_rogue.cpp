@@ -1310,9 +1310,9 @@ class spell_rog_sap_diagnostic : public SpellScript
         handler.PSendSysMessage("[SapDiag] fullImmune=%u immuneEffectMask=0x%02X aura0=%u effect0Mechanic=%u casterInCombat=%u casterStealthed=%u",
             fullImmune, immuneEffectMask, spellInfo->GetEffect(EFFECT_0).ApplyAuraName, spellInfo->GetEffect(EFFECT_0).Mechanic,
             player->IsInCombat(), player->HasAura(SPELL_ROGUE_STEALTH));
-        handler.PSendSysMessage("[SapDiag] selectionPrecheck validAttack=%u effect0TargetOk=%u los=%u distance=%.2f targetMap=%u casterMap=%u",
+        handler.PSendSysMessage("[SapDiag] selectionPrecheck validAttack=%u effect0TargetOk=%u positiveEffect0=%u los=%u distance=%.2f targetMap=%u casterMap=%u",
             player->IsValidAttackTarget(target, spellInfo), GetSpell()->CheckEffectTarget(target, spellInfo->GetEffect(EFFECT_0), nullptr),
-            target->IsWithinLOSInMap(player), player->GetExactDist(target), target->GetMapId(), player->GetMapId());
+            spellInfo->IsPositiveEffect(EFFECT_0), target->IsWithinLOSInMap(player), player->GetExactDist(target), target->GetMapId(), player->GetMapId());
 
         return SPELL_CAST_OK;
     }
