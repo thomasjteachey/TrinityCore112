@@ -1279,11 +1279,15 @@ class spell_rog_sap_diagnostic : public SpellScript
 {
     PrepareSpellScript(spell_rog_sap_diagnostic);
 
+    static Creature* GetCreatureTarget(Unit* unitTarget)
+    {
+        return unitTarget ? unitTarget->ToCreature() : nullptr;
+    }
+
     SpellCastResult CheckCast()
     {
         Player* player = GetCaster()->ToPlayer();
-        Unit* unitTarget = GetExplTargetUnit();
-        Creature* target = unitTarget ? unitTarget->ToCreature() : nullptr;
+        Creature* target = GetCreatureTarget(GetExplTargetUnit());
         if (!player || !target)
             return SPELL_CAST_OK;
 
@@ -1310,9 +1314,37 @@ class spell_rog_sap_diagnostic : public SpellScript
         return SPELL_CAST_OK;
     }
 
+    void BeforeHit(SpellMissInfo missInfo)
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* target = GetCreatureTarget(GetHitUnit());
+        if (!player || !target)
+            return;
+
+        ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] hitPhase target=%s entry=%u missInfo=%u",
+            target->GetName().c_str(), target->GetEntry(), uint32(missInfo));
+    }
+
+    void AfterHit()
+    {
+        Player* player = GetCaster()->ToPlayer();
+        Creature* target = GetCreatureTarget(GetHitUnit());
+        if (!player || !target)
+            return;
+
+        Aura* hitAura = GetHitAura();
+        Aura* sapAura = target->GetAura(GetSpellInfo()->Id, player->GetGUID());
+        ChatHandler(player->GetSession()).PSendSysMessage("[SapDiag] afterHit target=%s entry=%u hitAura=%u targetHasSapAura=%u sapAuraDuration=%d stunned=%u confused=%u rooted=%u unitFlags=0x%08X",
+            target->GetName().c_str(), target->GetEntry(), hitAura ? hitAura->GetId() : 0, sapAura != nullptr,
+            sapAura ? sapAura->GetDuration() : 0, target->HasUnitState(UNIT_STATE_STUNNED),
+            target->HasUnitState(UNIT_STATE_CONFUSED), target->HasUnitState(UNIT_STATE_ROOT), uint32(target->GetUnitFlags()));
+    }
+
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_rog_sap_diagnostic::CheckCast);
+        BeforeHit += BeforeSpellHitFn(spell_rog_sap_diagnostic::BeforeHit);
+        AfterHit += SpellHitFn(spell_rog_sap_diagnostic::AfterHit);
     }
 };
 
