@@ -3643,8 +3643,6 @@ void Spell::_cast(bool skipCheck)
         // should be done before the spell is actually executed
         sScriptMgr->OnPlayerSpellCast(playerCaster, this, skipCheck);
 
-        sendSapCastDiag("afterOnPlayerSpellCast");
-
         // As of 3.0.2 pets begin attacking their owner's target immediately
         // Let any pets know we've attacked something. Check DmgClass for harmful spells only
         // This prevents spells such as Hunter's Mark from triggering pet attack
