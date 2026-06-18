@@ -7012,10 +7012,11 @@ uint32 ObjectMgr::GetNearestTaxiNodeAnyTeam(float x, float y, float z, uint32 ma
         if (!node || node->ContinentID != mapid)
             continue;
 
-        // Barracks+ factionless taxi fix: the current node belongs to the
-        // flight master, not the player's spoofed team. Accept either side's
-        // taxi mount, plus the existing DK special case.
-        if (!node->MountCreatureID[0] && !node->MountCreatureID[1] && node->MountCreatureID[0] != 32981)
+        // Barracks+ factionless taxi fix:
+        // In a one-faction setup, GetTeam() may not match the historical side
+        // of the flight master. Accept Horde-only, Alliance-only, and special
+        // taxi nodes when finding the physical node a flight master is at.
+        if (!node->MountCreatureID[0] && !node->MountCreatureID[1])
             continue;
 
         uint8  field   = (uint8)((i - 1) / 32);
