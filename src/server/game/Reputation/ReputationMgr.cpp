@@ -140,47 +140,6 @@ ReputationRank ReputationMgr::GetBaseRank(FactionEntry const* factionEntry) cons
     return ReputationToRank(reputation);
 }
 
-namespace
-{
-    bool BPlus_IsFactionlessClassicCityOrTeamFaction(uint32 factionId)
-    {
-        switch (factionId)
-        {
-            case 47:  // Ironforge
-            case 54:  // Gnomeregan Exiles
-            case 67:  // Horde
-            case 68:  // Undercity
-            case 69:  // Darnassus
-            case 72:  // Stormwind
-            case 76:  // Orgrimmar
-            case 81:  // Thunder Bluff
-            case 469: // Alliance
-            case 530: // Darkspear Trolls
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    bool BPlus_ShouldForceFactionlessFriendly(FactionTemplateEntry const* factionTemplate)
-    {
-        if (!factionTemplate || !factionTemplate->Faction)
-            return false;
-
-        uint32 const playerSideMask = FACTION_MASK_PLAYER | FACTION_MASK_ALLIANCE | FACTION_MASK_HORDE;
-
-        // Do not change FactionGroup or Player::SetFactionForRace().
-        // This only tells the client to render player-side/city factions friendly.
-        if ((factionTemplate->FactionGroup & playerSideMask) != 0)
-            return true;
-
-        if ((factionTemplate->FriendGroup & (FACTION_MASK_ALLIANCE | FACTION_MASK_HORDE)) != 0)
-            return true;
-
-        return BPlus_IsFactionlessClassicCityOrTeamFaction(factionTemplate->Faction);
-    }
-}
-
 void ReputationMgr::ApplyForceReaction(uint32 faction_id, ReputationRank rank, bool apply)
 {
     if (apply)
@@ -620,41 +579,6 @@ void ReputationMgr::LoadFromDB(PreparedQueryResult result)
             }
         }
         while (result->NextRow());
-    }
-
-    // Barracks+: factionless client reaction bootstrap.
-    //
-    // We intentionally do NOT alter Player::SetFactionForRace() here because that
-    // function is used by cross-server BG/team logic. Instead, force client-side
-    // reactions for player-side/city factions with SMSG_SET_FORCED_REACTIONS and
-    // normalize the loaded in-memory reputation state so old Horde/Alliance city
-    // reputation flags cannot keep city NPCs red on the client.
-    for (uint32 i = 1; i < sFactionTemplateStore.GetNumRows(); ++i)
-    {
-        FactionTemplateEntry const* factionTemplate = sFactionTemplateStore.LookupEntry(i);
-        if (!BPlus_ShouldForceFactionlessFriendly(factionTemplate))
-            continue;
-
-        ApplyForceReaction(factionTemplate->Faction, REP_FRIENDLY, true);
-
-        if (FactionEntry const* factionEntry = sFactionStore.LookupEntry(factionTemplate->Faction))
-        {
-            if (factionEntry->CanHaveReputation())
-            {
-                FactionStateList::iterator state = _factions.find(factionEntry->ReputationIndex);
-                if (state != _factions.end())
-                {
-                    int32 const baseRep = GetBaseReputation(factionEntry);
-                    if (baseRep + state->second.Standing < 0)
-                        state->second.Standing = -baseRep;
-
-                    state->second.Flags |= FACTION_FLAG_VISIBLE | FACTION_FLAG_PEACE_FORCED;
-                    state->second.Flags &= ~(FACTION_FLAG_AT_WAR | FACTION_FLAG_HIDDEN | FACTION_FLAG_INVISIBLE_FORCED);
-                    state->second.needSend = true;
-                    state->second.needSave = true;
-                }
-            }
-        }
     }
 }
 
