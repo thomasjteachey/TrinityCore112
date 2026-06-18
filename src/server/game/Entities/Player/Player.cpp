@@ -22246,7 +22246,10 @@ bool Player::ActivateTaxiPathTo(std::vector<uint32> const& nodes, Creature* npc 
     // only one mount ID for both sides. Probably not good to use 315 in case DBC nodes
     // change but I couldn't find a suitable alternative. OK to use class because only DK
     // can use this taxi.
-    uint32 mount_display_id = sObjectMgr->GetTaxiMountDisplayId(sourcenode, GetTeam(), npc == nullptr || (sourcenode == 315 && GetClass() == CLASS_DEATH_KNIGHT));
+    // Barracks+ factionless taxi fix: a player may be spoofed to one team while
+    // using a flight point whose TaxiNodes.dbc mount is only populated for the
+    // other team. Allow the existing alternate-team mount fallback.
+    uint32 mount_display_id = sObjectMgr->GetTaxiMountDisplayId(sourcenode, GetTeam(), true);
 
     // in spell case allow 0 model
     if ((mount_display_id == 0 && spellid == 0) || sourcepath == 0)
@@ -22393,7 +22396,7 @@ void Player::SendTaxiNodeStatusMultiple()
             continue;
         if (!creature->HasNpcFlag(UNIT_NPC_FLAG_FLIGHTMASTER))
             continue;
-        uint32 nearestNode = sObjectMgr->GetNearestTaxiNode(creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ(), creature->GetMapId(), GetTeam());
+        uint32 nearestNode = sObjectMgr->GetNearestTaxiNodeAnyTeam(creature->GetPositionX(), creature->GetPositionY(), creature->GetPositionZ(), creature->GetMapId());
         if (!nearestNode)
             continue;
         WorldPacket data(SMSG_TAXINODE_STATUS, 9);

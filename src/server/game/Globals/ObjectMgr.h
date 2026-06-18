@@ -1016,6 +1016,10 @@ class TC_GAME_API ObjectMgr
         CreatureQuestItemMap const* GetCreatureQuestItemMap() const { return &_creatureQuestItemStore; }
 
         uint32 GetNearestTaxiNode(float x, float y, float z, uint32 mapid, uint32 team);
+        // Barracks+ factionless taxi fix: find the flight master's physical taxi node
+        // without filtering by the player's spoofed team. This prevents Horde
+        // flight masters from teaching the nearest Alliance-valid node instead.
+        uint32 GetNearestTaxiNodeAnyTeam(float x, float y, float z, uint32 mapid);
         void GetTaxiPath(uint32 source, uint32 destination, uint32 &path, uint32 &cost);
         uint32 GetTaxiMountDisplayId(uint32 id, uint32 team, bool allowed_alt_team = false);
 

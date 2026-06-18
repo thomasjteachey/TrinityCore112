@@ -6999,6 +6999,52 @@ uint32 ObjectMgr::GetNearestTaxiNode(float x, float y, float z, uint32 mapid, ui
     return id;
 }
 
+uint32 ObjectMgr::GetNearestTaxiNodeAnyTeam(float x, float y, float z, uint32 mapid)
+{
+    bool found = false;
+    float dist = 10000;
+    uint32 id = 0;
+
+    for (uint32 i = 1; i < sTaxiNodesStore.GetNumRows(); ++i)
+    {
+        TaxiNodesEntry const* node = sTaxiNodesStore.LookupEntry(i);
+
+        if (!node || node->ContinentID != mapid)
+            continue;
+
+        // Barracks+ factionless taxi fix: the current node belongs to the
+        // flight master, not the player's spoofed team. Accept either side's
+        // taxi mount, plus the existing DK special case.
+        if (!node->MountCreatureID[0] && !node->MountCreatureID[1] && node->MountCreatureID[0] != 32981)
+            continue;
+
+        uint8  field   = (uint8)((i - 1) / 32);
+        uint32 submask = 1<<((i-1)%32);
+
+        // skip not taxi network nodes
+        if ((sTaxiNodesMask[field] & submask) == 0)
+            continue;
+
+        float dist2 = (node->Pos.X - x)*(node->Pos.X - x)+(node->Pos.Y - y)*(node->Pos.Y - y)+(node->Pos.Z - z)*(node->Pos.Z - z);
+        if (found)
+        {
+            if (dist2 < dist)
+            {
+                dist = dist2;
+                id = i;
+            }
+        }
+        else
+        {
+            found = true;
+            dist = dist2;
+            id = i;
+        }
+    }
+
+    return id;
+}
+
 void ObjectMgr::GetTaxiPath(uint32 source, uint32 destination, uint32 &path, uint32 &cost)
 {
     TaxiPathSetBySource::iterator src_i = sTaxiPathSetBySource.find(source);
