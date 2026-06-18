@@ -24229,6 +24229,44 @@ void Player::LearnDefaultSkills()
 
         LearnDefaultSkill(skillId, itr->Rank);
     }
+
+    // Barracks+: factionless realm language bootstrap.
+    //
+    // The project spoofs classic races onto one faction through ChrRaces.dbc.
+    // Existing/new characters can still miss the language skill/spell pairs that
+    // the client and server require for the chat language dropdown. Grant them
+    // from source instead of relying on playercreateinfo_spell.
+    struct BPlusFactionlessLanguage
+    {
+        uint32 SkillId;
+        uint32 SpellId;
+    };
+
+    static BPlusFactionlessLanguage const factionlessLanguages[] =
+    {
+        { 98,    668   }, // Common
+        { 109,   669   }, // Orcish
+        { 111,   672   }, // Dwarven
+        { 113,   671   }, // Darnassian
+        { 115,   670   }, // Taurahe
+        { 313,   7340  }, // Gnomish
+        { 315,   7341  }, // Troll
+        { 673,   17737 }  // Gutterspeak
+    };
+
+    for (BPlusFactionlessLanguage const& lang : factionlessLanguages)
+    {
+        if (!HasSkill(lang.SkillId) || GetPureSkillValue(lang.SkillId) < 300 || GetMaxSkillValue(lang.SkillId) < 300)
+            SetSkill(lang.SkillId, 0, 300, 300);
+
+        if (!HasSpell(lang.SpellId))
+        {
+            if (!IsInWorld())
+                AddSpell(lang.SpellId, true, true, true, false);
+            else
+                LearnSpell(lang.SpellId, true);
+        }
+    }
 }
 
 void Player::LearnDefaultSkill(uint32 skillId, uint16 rank)
