@@ -120,7 +120,7 @@ bool IsPolearmOrStaffEquipped(Player const* player)
     if (!player)
         return false;
 
-    Item const* weapon = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    Item const* weapon = player->GetUseableItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
     if (!weapon)
         return false;
 
