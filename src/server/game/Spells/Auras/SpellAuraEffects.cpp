@@ -47,6 +47,12 @@
 #include "World.h"
 #include "WorldPacket.h"
 #include <numeric>
+
+namespace PolearmStaffInnerAuras
+{
+    void OnEquipmentChanged(Player* player);
+}
+
 namespace
 {
     bool IsFollowFearSpell(SpellInfo const* spellInfo)
@@ -2416,6 +2422,8 @@ void AuraEffect::HandleAuraModDisarm(AuraApplication const* aurApp, uint8 mode, 
                 if (!apply) // apply case already handled on item dependent aura removal (if any)
                     player->UpdateWeaponDependentAuras(attackType);
             }
+
+            PolearmStaffInnerAuras::OnEquipmentChanged(player);
         }
     }
 
