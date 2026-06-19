@@ -8338,14 +8338,6 @@ void Spell::DoEffectOnLaunchTarget(TargetInfo& targetInfo, float multiplier, Spe
         if (spellEffectInfo.IsTargetingArea() || spellEffectInfo.IsAreaAuraEffect() || spellEffectInfo.IsEffect(SPELL_EFFECT_PERSISTENT_AREA_AURA))
         {
             m_damage = unit->CalculateAOEAvoidance(m_damage, m_spellInfo->SchoolMask, m_originalCaster->GetGUID());
-
-            if (m_originalCaster->GetTypeId() == TYPEID_PLAYER)
-            {
-                // cap damage of player AOE
-                uint32 targetAmount = m_UniqueTargetInfo.size();
-                if (targetAmount > 10)
-                    m_damage = m_damage * 10 / targetAmount;
-            }
         }
     }
 
