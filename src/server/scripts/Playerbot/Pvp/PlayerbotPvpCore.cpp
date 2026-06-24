@@ -1988,6 +1988,39 @@ ObjectGuid SelectFriendlyWithoutAuraFromSpellChain(Player const* player, uint32 
     return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
 }
 
+ObjectGuid SelectFriendlyWithoutManaAndAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance)
+{
+    if (!player || !player->FindMap() || !baseSpellId)
+        return ObjectGuid::Empty;
+
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!candidate || !candidate->IsAlive())
+            continue;
+        if (candidate == player || candidate->GetMaxPower(POWER_MANA) > 0)
+            continue;
+        if (!IsFriendlySupportTarget(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+            continue;
+        if (HasAuraFromSpellChain(candidate, baseSpellId))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
+
 ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std::initializer_list<uint32> baseSpellIds, float maxDistance, bool includeSelf)
 {
     if (!player || !player->FindMap() || baseSpellIds.size() == 0)
@@ -2125,10 +2158,19 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
         }
         case CLASS_PALADIN:
         {
-            if (IsSpellReady(player, 25898))
+            if (IsSpellReady(player, 21918))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "paladin greater blessing of kings prep", "buff nearby team before gates open", 25898, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 21918, 45.0f, true); !targetGuid.IsEmpty())
+                    return { "paladin greater blessing of wisdom prep", "buff nearby team before gates open", 21918, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+            }
+
+            if (IsSpellReady(player, 25291))
+            {
+                if (!HasAuraFromSpellChain(player, 25291))
+                    return { "paladin blessing of might self prep", "ret paladin prefers might before gates open", 25291, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f); !targetGuid.IsEmpty())
+                    return { "paladin blessing of might prep", "buff nearby non-mana allies before gates open", 25291, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
             }
 
             break;
@@ -4224,10 +4266,16 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* repentanceTarget = (isRetPaladin && IsSpellReady(player, 20066)) ? SelectEnemyCastingTarget(player, 20.0f, executeTarget) : nullptr;
     Unit const* stunnedJudgementTarget = (isRetPaladin && HasAuraFromSpellChain(player, 20375)) ? SelectStunnedEnemyTarget(player, executeTarget, 30.0f) : nullptr;
     Unit const* protectionTarget = (isRetPaladin && IsSpellReady(player, 10278)) ? SelectFriendlyMeleePressureTarget(player, 40.0f, 50.0f) : nullptr;
+    Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
+    ObjectGuid const mightTargetGuid = IsSpellReady(player, 25291) ? SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f) : ObjectGuid::Empty;
     Unit const* flashHealTarget = (!isRetPaladin && IsSpellReady(player, 19943)) ? SelectFriendlyHealthTarget(player, 40.0f, 85.0f) : nullptr;
     Unit const* holyLightTarget = (!isRetPaladin && IsSpellReady(player, 635)) ? SelectFriendlyHealthTarget(player, 40.0f, 60.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
+    AddDecisionCandidate(candidates, isRetPaladin && holyStrikeFlashHealTarget, 63.0f,
+        { "paladin flash of light holy strike", "consume holy strike buff on the lowest-health friendly target", 19943, holyStrikeFlashHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, holyStrikeFlashHealTarget ? holyStrikeFlashHealTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, isRetPaladin && executeTarget && IsSpellReady(player, 89796), 62.5f,
+        { "paladin holy strike", "use holy strike with very high priority", 89796, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isRetPaladin && !HasAuraFromSpellChain(player, 20218) && IsSpellReady(player, 20218), 61.0f,
         { "paladin sanctity aura", "maintain sanctity aura for ret pressure", 20218, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRetPaladin && !HasAuraFromSpellChain(player, 20375) && IsSpellReady(player, 20375), 60.8f,
@@ -4272,8 +4320,12 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin judgement", "default offensive pressure when a seal is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isRetPaladin && !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
         { "paladin concentration aura", "maintain concentration aura", 19746, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(25898) && IsSpellReady(player, 25898), 19.0f,
-        { "paladin greater blessing of kings", "maintain kings out of combat", 25898, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && IsSpellReady(player, 21918) && !HasAuraFromSpellChain(player, 21918), 19.0f,
+        { "paladin greater blessing of wisdom", "maintain greater wisdom out of combat", 21918, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && IsSpellReady(player, 25291) && !HasAuraFromSpellChain(player, 25291), 18.5f,
+        { "paladin blessing of might self", "ret paladin prefers blessing of might", 25291, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && !mightTargetGuid.IsEmpty(), 18.0f,
+        { "paladin blessing of might", "maintain might on nearby non-mana allies", 25291, playerbot::PvpClassSpellContext::TargetMode::Ally, mightTargetGuid });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
