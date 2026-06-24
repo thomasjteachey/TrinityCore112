@@ -2930,6 +2930,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             }
         }
 
+        Trinity::Containers::RandomShuffle(managedBotGuids);
+
         uint32 queuedCount = 0;
         for (ObjectGuid const& guid : managedBotGuids)
         {
