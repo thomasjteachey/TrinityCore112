@@ -74,6 +74,13 @@ TEST_CASE("Playerbot battleground queue target remains Warsong", "[playerbot][po
     CHECK(source.find("BATTLEGROUND_WS") != std::string::npos);
 }
 
+TEST_CASE("Playerbot mass battleground queue order is randomized", "[playerbot][population]")
+{
+    std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp");
+    CHECK(source.find("RandomShuffle(managedBotGuids)") != std::string::npos);
+    CHECK(source.find("for (ObjectGuid const& guid : managedBotGuids)") != std::string::npos);
+}
+
 TEST_CASE("Playerbot class spell decision cadence is once per second", "[playerbot][pvp]")
 {
     std::string const source = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotRandomBotParticipation.cpp");
