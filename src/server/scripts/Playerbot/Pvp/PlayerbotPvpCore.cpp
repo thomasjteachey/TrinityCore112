@@ -2158,6 +2158,20 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
         }
         case CLASS_PALADIN:
         {
+            ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+            bool const isRetPaladin = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
+
+            if (!isRetPaladin)
+            {
+                if (IsSpellReady(player, 25898))
+                {
+                    if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
+                        return { "paladin greater blessing of kings prep", "buff nearby team before gates open", 25898, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+                }
+
+                break;
+            }
+
             if (IsSpellReady(player, 21918))
             {
                 if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 21918, 45.0f, true); !targetGuid.IsEmpty())
@@ -4320,11 +4334,13 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin judgement", "default offensive pressure when a seal is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isRetPaladin && !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
         { "paladin concentration aura", "maintain concentration aura", 19746, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && IsSpellReady(player, 21918) && !HasAuraFromSpellChain(player, 21918), 19.0f,
-        { "paladin greater blessing of wisdom", "maintain greater wisdom out of combat", 21918, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && !isRetPaladin && IsSpellReady(player, 25898) && !HasAuraFromSpellChain(player, 25898), 19.0f,
+        { "paladin greater blessing of kings", "maintain kings out of combat for holy/prot", 25898, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && IsSpellReady(player, 21918) && !HasAuraFromSpellChain(player, 21918), 19.0f,
+        { "paladin greater blessing of wisdom", "maintain greater wisdom out of combat for ret", 21918, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
     AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && IsSpellReady(player, 25291) && !HasAuraFromSpellChain(player, 25291), 18.5f,
         { "paladin blessing of might self", "ret paladin prefers blessing of might", 25291, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && !mightTargetGuid.IsEmpty(), 18.0f,
+    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && !mightTargetGuid.IsEmpty(), 18.0f,
         { "paladin blessing of might", "maintain might on nearby non-mana allies", 25291, playerbot::PvpClassSpellContext::TargetMode::Ally, mightTargetGuid });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
