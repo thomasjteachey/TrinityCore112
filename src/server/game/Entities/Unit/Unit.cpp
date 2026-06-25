@@ -8549,9 +8549,16 @@ bool Unit::IsImmunedToSpell(SpellInfo const* spellInfo, WorldObject const* caste
                 if (!immuneSpellInfo || !immuneSpellInfo->HasAttribute(SPELL_ATTR1_DISPEL_AURAS_ON_IMMUNITY))
                     continue;
 
+            // Custom: Holy Strike (89796) is a hostile strike that also applies a self-buff.
+            // While Divine Shield is active, the whole spell is considered non-positive because
+            // of its damage effect, which makes the self-buff fail the school-immunity check.
+            // Only bypass this school-immunity spell check when Holy Strike is targeting its
+            // own caster for the self-buff; do not let Holy Strike pierce immunity on enemies.
+            bool const holyStrikeSelfBuff = spellInfo->Id == 89796 && caster == this;
+
             // Consider the school immune if any of these conditions are not satisfied.
             // In case of no immuneSpellInfo, ignore that condition and check only the other conditions
-            if ((immuneSpellInfo && !immuneSpellInfo->IsPositive()) || !spellInfo->IsPositive() || !caster || !IsFriendlyTo(caster))
+            if (!holyStrikeSelfBuff && ((immuneSpellInfo && !immuneSpellInfo->IsPositive()) || !spellInfo->IsPositive() || !caster || !IsFriendlyTo(caster)))
                 if (!spellInfo->CanPierceImmuneAura(immuneSpellInfo))
                     schoolImmunityMask |= itr->first;
         }

@@ -2926,6 +2926,14 @@ void SpellInfo::ApplyAllSpellImmunitiesTo(Unit* target, SpellEffectInfo const& s
             target->RemoveAppliedAuras([this, schoolImmunity](AuraApplication const* aurApp) -> bool
             {
                 SpellInfo const* auraSpellInfo = aurApp->GetBase()->GetSpellInfo();
+
+                // Custom: Holy Strike (89796) is a hostile strike spell that also owns a
+                // beneficial self-buff aura. Divine Shield has DISPEL_AURAS_ON_IMMUNITY,
+                // and without this exception it can purge the Holy Strike self-buff because
+                // the spell's school is Holy and the spell as a whole is non-positive.
+                if (auraSpellInfo->Id == 89796)
+                    return false;
+
                 return ((auraSpellInfo->GetSchoolMask() & schoolImmunity) != 0 && // Check for school mask
                     CanDispelAura(auraSpellInfo) &&
                     (IsPositive() != aurApp->IsPositive()) &&                     // Check spell vs aura possitivity
