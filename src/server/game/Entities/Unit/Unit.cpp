@@ -3978,17 +3978,20 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
 void Unit::_UnapplyAura(AuraApplication* aurApp, AuraRemoveMode removeMode)
 {
-    // Aura can be removed from a unit only if the Aura still maps this target to
-    // the same application.  When cleanup is already recovering from stale aura
-    // application state, do not assert before the caller has a chance to detach
-    // the stale aura-side entry.
-    if (!aurApp || aurApp->GetBase()->GetApplicationOfTarget(GetGUID()) != aurApp)
+    if (!aurApp)
     {
-        TC_LOG_ERROR("spells",
-            "Unit::_UnapplyAura, target: {}, found stale aura application (app: {}, spell: {}). Skipping direct unapply.",
-            GetGUID().ToString(), static_cast<void const*>(aurApp), aurApp && aurApp->GetBase() ? aurApp->GetBase()->GetId() : 0);
+        TC_LOG_ERROR("spells", "Unit::_UnapplyAura, target: {} received a null aura application.", GetGUID().ToString());
         return;
     }
+
+    // AuraApplication ownership can be inconsistent while recovering from a
+    // stale reapply/removal.  Prefer the Unit's applied-aura list as the source
+    // of truth here: the iterator overload can detach this Unit-side pointer and
+    // Aura::_UnapplyForTarget will reconcile the Aura-side target map.
+    if (aurApp->GetBase()->GetApplicationOfTarget(GetGUID()) != aurApp)
+        TC_LOG_ERROR("spells",
+            "Unit::_UnapplyAura, target: {}, spell: {} has stale aura target mapping for application {}. Continuing Unit-side detach.",
+            GetGUID().ToString(), aurApp->GetBase()->GetId(), static_cast<void const*>(aurApp));
 
     uint32 spellId = aurApp->GetBase()->GetId();
     AuraApplicationMapBoundsNonConst range = m_appliedAuras.equal_range(spellId);
