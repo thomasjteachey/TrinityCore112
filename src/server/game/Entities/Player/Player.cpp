@@ -1377,16 +1377,21 @@ void Player::Update(uint32 p_time)
     UpdateEnchantTime(p_time);
     UpdateHomebindTime(p_time);
 
-    if (!_instanceResetTimes.empty())
     {
+        std::lock_guard<std::mutex> instanceResetTimesGuard(_instanceResetTimesLock);
         for (InstanceTimeMap::iterator itr = _instanceResetTimes.begin(); itr != _instanceResetTimes.end();)
         {
             if (itr->second < now)
+            {
+                Trinity::SetCrashContext(Trinity::StringFormat("Player::Update erasing expired instance reset time playerPtr={} guid={} mapId={} instanceId={} releaseTime={} now={}",
+                    static_cast<void const*>(this), GetGUID().ToString(), GetMapId(), itr->first, uint64(itr->second), uint64(now)));
                 itr = _instanceResetTimes.erase(itr);
+            }
             else
                 ++itr;
         }
     }
+    Trinity::ClearCrashContext();
 
     if (GetClass() == CLASS_DEATH_KNIGHT)
     {
@@ -19859,6 +19864,8 @@ bool Player::CheckInstanceValidity(bool /*isLogin*/)
 
 bool Player::CheckInstanceCount(uint32 instanceId) const
 {
+    std::lock_guard<std::mutex> instanceResetTimesGuard(_instanceResetTimesLock);
+
     if (_instanceResetTimes.size() < sWorld->getIntConfig(CONFIG_MAX_INSTANCES_PER_HOUR))
         return true;
     return _instanceResetTimes.find(instanceId) != _instanceResetTimes.end();
@@ -19866,6 +19873,8 @@ bool Player::CheckInstanceCount(uint32 instanceId) const
 
 void Player::AddInstanceEnterTime(uint32 instanceId, time_t enterTime)
 {
+    std::lock_guard<std::mutex> instanceResetTimesGuard(_instanceResetTimesLock);
+
     if (_instanceResetTimes.find(instanceId) == _instanceResetTimes.end())
         _instanceResetTimes.insert(InstanceTimeMap::value_type(instanceId, enterTime + HOUR));
 }
@@ -27923,6 +27932,8 @@ void Player::_LoadInstanceTimeRestrictions(PreparedQueryResult result)
     if (!result)
         return;
 
+    std::lock_guard<std::mutex> instanceResetTimesGuard(_instanceResetTimesLock);
+
     do
     {
         Field* fields = result->Fetch();
@@ -27981,6 +27992,8 @@ void Player::_LoadPetStable(uint8 petStableSlots, PreparedQueryResult result)
 
 void Player::_SaveInstanceTimeRestrictions(CharacterDatabaseTransaction trans)
 {
+    std::lock_guard<std::mutex> instanceResetTimesGuard(_instanceResetTimesLock);
+
     if (_instanceResetTimes.empty())
         return;
 
