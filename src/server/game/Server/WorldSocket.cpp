@@ -18,6 +18,7 @@
 #include "WorldSocket.h"
 #include "BigNumber.h"
 #include "DatabaseEnv.h"
+#include "Errors.h"
 #include "GameTime.h"
 #include "CryptoHash.h"
 #include "CryptoRandom.h"
@@ -28,6 +29,7 @@
 #include "RBAC.h"
 #include "Realm.h"
 #include "ScriptMgr.h"
+#include "StringFormat.h"
 #include "World.h"
 #include "WorldSession.h"
 #include <memory>
@@ -87,6 +89,9 @@ bool WorldSocket::Update()
     MessageBuffer buffer(_sendBufferSize);
     while (_bufferQueue.Dequeue(queued))
     {
+        Trinity::SetCrashContext(Trinity::StringFormat("WorldSocket::Update dequeued packet socketPtr={} packetPtr={} opcode={} size={} encrypt={} remote={}:{}",
+            static_cast<void const*>(this), static_cast<void const*>(queued), queued->GetOpcode(), queued->size(), queued->NeedsEncryption(), GetRemoteIpAddress().to_string(), GetRemotePort()));
+
         ServerPktHeader header(queued->size() + 2, queued->GetOpcode());
         if (queued->NeedsEncryption())
             _authCrypt.EncryptSend(header.header, header.getHeaderLength());
@@ -113,7 +118,10 @@ bool WorldSocket::Update()
             QueuePacket(std::move(packetBuffer));
         }
 
+        Trinity::SetCrashContext(Trinity::StringFormat("WorldSocket::Update deleting packet socketPtr={} packetPtr={} opcode={} size={} remote={}:{}",
+            static_cast<void const*>(this), static_cast<void const*>(queued), queued->GetOpcode(), queued->size(), GetRemoteIpAddress().to_string(), GetRemotePort()));
         delete queued;
+        Trinity::ClearCrashContext();
     }
 
     if (buffer.GetActiveSize() > 0)
