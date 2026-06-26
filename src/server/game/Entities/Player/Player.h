@@ -33,6 +33,7 @@
 #include "QuestDef.h"
 #include <array>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <unordered_set>
 
@@ -2611,6 +2612,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_ChampioningFaction;
 
         InstanceTimeMap _instanceResetTimes;
+        mutable std::mutex _instanceResetTimesLock;
         uint32 _pendingBindId;
         uint32 _pendingBindTimer;
 
