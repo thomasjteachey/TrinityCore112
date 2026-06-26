@@ -671,20 +671,27 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
         return;
     }
 
-    // aura has to be already applied.  If the owning Unit has a stale
-    // AuraApplication pointer, do not let cleanup/logout crash while holding
-    // on to the valid application in this aura map.  This can happen after an
-    // earlier inconsistent reapplication overwrote the per-target entry but
-    // left the old application in Unit::m_appliedAuras.  The stale application
-    // has already been detached from the Unit by Unit::_UnapplyAura, so queue
-    // only that object for deletion and keep the current application mapped.
+    // Aura has to be already applied. If the owning Unit has a stale
+    // AuraApplication pointer, detach every Aura-side entry that still points
+    // at that stale application. Keep the current per-target application mapped
+    // so the valid application can be removed by its own Unit cleanup path.
     if (itr->second != auraApp)
     {
         TC_LOG_ERROR("spells",
-            "Aura::_UnapplyForTarget, target: {}, caster: {}, spell:{} found mismatched aura application for owner map (expected: {}, found: {}). Queuing stale application for deletion.",
+            "Aura::_UnapplyForTarget, target: {}, caster: {}, spell:{} found mismatched aura application for owner map (expected: {}, found: {}). Detaching stale application entries.",
             target->GetGUID().ToString(), caster ? caster->GetGUID().ToString() : "0", auraApp->GetBase()->GetSpellInfo()->Id,
             static_cast<void const*>(auraApp), static_cast<void const*>(itr->second));
-        _removedApplications.push_back(auraApp);
+
+        for (ApplicationMap::iterator staleItr = m_applications.begin(); staleItr != m_applications.end();)
+        {
+            if (staleItr->second == auraApp)
+                staleItr = m_applications.erase(staleItr);
+            else
+                ++staleItr;
+        }
+
+        if (std::find(_removedApplications.begin(), _removedApplications.end(), auraApp) == _removedApplications.end())
+            _removedApplications.push_back(auraApp);
         return;
     }
 
@@ -708,8 +715,31 @@ void Aura::_Remove(AuraRemoveMode removeMode)
     ApplicationMap::iterator appItr = m_applications.begin();
     for (appItr = m_applications.begin(); appItr != m_applications.end();)
     {
-        AuraApplication * aurApp = appItr->second;
-        Unit* target = aurApp->GetTarget();
+        ObjectGuid const applicationGuid = appItr->first;
+        AuraApplication* aurApp = appItr->second;
+        Unit* target = aurApp ? aurApp->GetTarget() : nullptr;
+
+        // A previous inconsistent reapply/removal can leave Aura::m_applications
+        // pointing at an AuraApplication that no longer matches the target stored
+        // on the application itself.  Calling Unit::_UnapplyAura(AuraApplication*)
+        // in that state asserts before it can erase this map entry, which turns
+        // logout or pet cleanup into a crash loop.  Drop only the stale aura-side
+        // entry here; the target's own applied-aura list, if it still references
+        // this application, is handled by Unit removal paths.
+        if (!target || aurApp->GetBase() != this || applicationGuid != target->GetGUID() || GetApplicationOfTarget(target->GetGUID()) != aurApp)
+        {
+            TC_LOG_ERROR("spells",
+                "Aura::_Remove, owner: {}, spell: {} found stale application entry (map target: {}, app target: {}, app: {}). Detaching stale application.",
+                GetOwner() ? GetOwner()->GetGUID().ToString() : "0", GetSpellInfo()->Id, applicationGuid.ToString(),
+                target ? target->GetGUID().ToString() : "0", static_cast<void const*>(aurApp));
+
+            m_applications.erase(appItr);
+            if (aurApp && std::find(_removedApplications.begin(), _removedApplications.end(), aurApp) == _removedApplications.end())
+                _removedApplications.push_back(aurApp);
+            appItr = m_applications.begin();
+            continue;
+        }
+
         target->_UnapplyAura(aurApp, removeMode);
         appItr = m_applications.begin();
     }
