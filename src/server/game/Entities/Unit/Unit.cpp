@@ -3978,10 +3978,68 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
 void Unit::_UnapplyAura(AuraApplication* aurApp, AuraRemoveMode removeMode)
 {
-    // aura can be removed from unit only if it's applied on it, shouldn't happen
-    ASSERT(aurApp->GetBase()->GetApplicationOfTarget(GetGUID()) == aurApp);
+    ASSERT(aurApp);
 
-    uint32 spellId = aurApp->GetBase()->GetId();
+    Aura* aura = aurApp->GetBase();
+    ASSERT(aura);
+
+    AuraApplication* mappedAurApp = aura->GetApplicationOfTarget(GetGUID());
+    if (mappedAurApp != aurApp)
+    {
+        std::stringstream crashContext;
+        crashContext << "Unit::_UnapplyAura stale application recovery"
+            << " unitPtr=" << static_cast<void const*>(this)
+            << " unitGuid=" << GetGUID().ToString()
+            << " unitMapId=" << GetMapId()
+            << " unitHasMap=" << (FindMap() ? 1 : 0)
+            << " auraAppPtr=" << static_cast<void const*>(aurApp)
+            << " mappedAuraAppPtr=" << static_cast<void const*>(mappedAurApp)
+            << " auraAppTargetPtr=" << static_cast<void const*>(aurApp->GetTarget())
+            << " auraAppTargetGuid=" << (aurApp->GetTarget() ? aurApp->GetTarget()->GetGUID().ToString() : "none")
+            << " auraPtr=" << static_cast<void const*>(aura)
+            << " spellId=" << (aura->GetSpellInfo() ? aura->GetSpellInfo()->Id : 0)
+            << " auraOwnerPtr=" << static_cast<void const*>(aura->GetOwner())
+            << " casterGuid=" << aura->GetCasterGUID().ToString()
+            << " auraRemoved=" << aura->IsRemoved()
+            << " auraEffectMask=" << uint32(aura->GetEffectMask())
+            << " auraAppRemoveMode=" << uint32(aurApp->GetRemoveMode())
+            << " auraAppEffectMask=" << uint32(aurApp->GetEffectMask())
+            << " auraAppEffectsToApply=" << uint32(aurApp->GetEffectsToApply())
+            << " requestedRemoveMode=" << uint32(removeMode);
+        Trinity::SetCrashContext(crashContext.str());
+
+        TC_LOG_ERROR("spells", "{}", crashContext.str());
+
+        // Prefer the Unit-owned application list when it still contains this
+        // exact AuraApplication.  The iterator overload removes all secondary
+        // Unit references before asking Aura to detach the per-target entry.
+        uint32 spellId = aura->GetId();
+        AuraApplicationMapBoundsNonConst range = m_appliedAuras.equal_range(spellId);
+        for (AuraApplicationMap::iterator iter = range.first; iter != range.second; ++iter)
+        {
+            if (iter->second == aurApp)
+            {
+                _UnapplyAura(iter, removeMode);
+                return;
+            }
+        }
+
+        // The Aura still references an application that the target no longer
+        // owns.  Do not assert during logout/delete cleanup; detach that stale
+        // per-target entry so Aura::_Remove can make progress and the removed
+        // application can be reclaimed by Aura's removed-application queue.
+        if (!aurApp->GetRemoveMode())
+        {
+            aurApp->SetRemoveMode(removeMode);
+            aurApp->_Remove();
+        }
+
+        aura->_UnapplyForTarget(this, aura->GetCaster(), aurApp);
+        Trinity::ClearCrashContext();
+        return;
+    }
+
+    uint32 spellId = aura->GetId();
     AuraApplicationMapBoundsNonConst range = m_appliedAuras.equal_range(spellId);
 
     for (AuraApplicationMap::iterator iter = range.first; iter != range.second;)
@@ -3994,7 +4052,28 @@ void Unit::_UnapplyAura(AuraApplication* aurApp, AuraRemoveMode removeMode)
         else
             ++iter;
     }
-    ABORT();
+
+    std::stringstream crashContext;
+    crashContext << "Unit::_UnapplyAura missing Unit application"
+        << " unitPtr=" << static_cast<void const*>(this)
+        << " unitGuid=" << GetGUID().ToString()
+        << " unitMapId=" << GetMapId()
+        << " auraAppPtr=" << static_cast<void const*>(aurApp)
+        << " auraPtr=" << static_cast<void const*>(aura)
+        << " spellId=" << spellId
+        << " casterGuid=" << aura->GetCasterGUID().ToString()
+        << " removeMode=" << uint32(removeMode);
+    Trinity::SetCrashContext(crashContext.str());
+    TC_LOG_ERROR("spells", "{}", crashContext.str());
+
+    if (!aurApp->GetRemoveMode())
+    {
+        aurApp->SetRemoveMode(removeMode);
+        aurApp->_Remove();
+    }
+
+    aura->_UnapplyForTarget(this, aura->GetCaster(), aurApp);
+    Trinity::ClearCrashContext();
 }
 
 void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)
