@@ -29,6 +29,7 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include <algorithm>
 #include <array>
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -689,7 +690,8 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
 
     m_applications.erase(itr);
 
-    _removedApplications.push_back(auraApp);
+    if (std::find(_removedApplications.begin(), _removedApplications.end(), auraApp) == _removedApplications.end())
+        _removedApplications.push_back(auraApp);
 
     // reset cooldown state for spells
     if (caster && GetSpellInfo()->IsCooldownStartedOnEvent())
