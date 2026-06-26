@@ -17,7 +17,6 @@
 
 #include "Transport.h"
 #include "Cell.h"
-#include "Chat.h"
 #include "CellImpl.h"
 #include "Common.h"
 #include "DBCStores.h"
@@ -32,12 +31,11 @@
 #include "UpdateData.h"
 #include "Vehicle.h"
 #include <G3D/Vector3.h>
-#include <fmt/printf.h>
 
 Transport::Transport() : GameObject(),
     _transportInfo(nullptr), _isMoving(true), _pendingStop(false),
     _triggeredArrivalEvent(false), _triggeredDepartureEvent(false),
-    _passengerTeleportItr(_passengers.begin()), _delayedAddModel(false), _delayedTeleport(false), _transportDiagnosticTimer(0)
+    _passengerTeleportItr(_passengers.begin()), _delayedAddModel(false), _delayedTeleport(false)
 {
     m_updateFlag = UPDATEFLAG_TRANSPORT | UPDATEFLAG_LOWGUID | UPDATEFLAG_STATIONARY_POSITION | UPDATEFLAG_ROTATION;
 }
@@ -105,7 +103,6 @@ bool Transport::Create(ObjectGuid::LowType guidlow, uint32 entry, uint32 mapid, 
     SetParentRotation(QuaternionData());
 
     CreateModel();
-    SendGMTransportDiagnostic("created");
     return true;
 }
 
@@ -151,15 +148,12 @@ void Transport::Update(uint32 diff)
             {
                 DoEventIfAny(*_currentFrame, false);
                 _triggeredArrivalEvent = true;
-                SendGMTransportDiagnostic("arrival-event", &*_currentFrame);
             }
 
             if (timer < _currentFrame->DepartureTime)
             {
                 justStopped = IsMoving();
                 SetMoving(false);
-                if (justStopped)
-                    SendGMTransportDiagnostic("stopped-at-node", &*_currentFrame);
                 if (_pendingStop && GetGoState() != GO_STATE_READY)
                 {
                     SetGoState(GO_STATE_READY);
@@ -175,17 +169,10 @@ void Transport::Update(uint32 diff)
         {
             DoEventIfAny(*_currentFrame, true); // departure event
             _triggeredDepartureEvent = true;
-            SendGMTransportDiagnostic("departure-event", &*_currentFrame);
         }
 
         // not waiting anymore
-        if (!IsMoving())
-        {
-            SetMoving(true);
-            SendGMTransportDiagnostic("resumed-from-node", &*_currentFrame);
-        }
-        else
-            SetMoving(true);
+        SetMoving(true);
 
         // Enable movement
         if (GetGOInfo()->moTransport.canBeStopped)
@@ -199,7 +186,6 @@ void Transport::Update(uint32 diff)
         sScriptMgr->OnRelocate(this, _currentFrame->Node->NodeIndex, _currentFrame->Node->ContinentID, _currentFrame->Node->Loc.X, _currentFrame->Node->Loc.Y, _currentFrame->Node->Loc.Z);
 
         TC_LOG_DEBUG("entities.transport", "Transport {} ({}) moved to node {} {} {} {} {}", GetEntry(), GetName(), _currentFrame->Node->NodeIndex, _currentFrame->Node->ContinentID, _currentFrame->Node->Loc.X, _currentFrame->Node->Loc.Y, _currentFrame->Node->Loc.Z);
-        SendGMTransportDiagnostic("advanced-to-node", &*_currentFrame);
 
         // Departure event
         if (_currentFrame->IsTeleportFrame())
@@ -213,8 +199,6 @@ void Transport::Update(uint32 diff)
         _delayedAddModel = false;
         if (m_model)
             GetMap()->InsertGameObjectModel(*m_model);
-
-        SendGMTransportDiagnostic("delayed-model-added");
     }
 
     // Set position
@@ -250,14 +234,6 @@ void Transport::Update(uint32 diff)
                 UnloadStaticPassengers();
         }
     }
-
-    if (_transportDiagnosticTimer <= diff)
-    {
-        _transportDiagnosticTimer = 15000;
-        SendGMTransportDiagnostic("heartbeat");
-    }
-    else
-        _transportDiagnosticTimer -= diff;
 
     sScriptMgr->OnTransportUpdate(this, diff);
 }
@@ -591,7 +567,6 @@ void Transport::EnableMovement(bool enabled)
         return;
 
     _pendingStop = !enabled;
-    SendGMTransportDiagnostic(enabled ? "movement-enabled" : "movement-disabled");
 }
 
 void Transport::MoveToNextWaypoint()
@@ -643,7 +618,6 @@ bool Transport::TeleportTransport(uint32 newMapid, float x, float y, float z, fl
 
     if (oldMap->GetId() != newMapid)
     {
-        SendGMTransportDiagnostic("map-teleport-start", &*_currentFrame);
         _delayedTeleport = true;
         UnloadStaticPassengers();
         return true;
@@ -670,7 +644,6 @@ bool Transport::TeleportTransport(uint32 newMapid, float x, float y, float z, fl
         }
 
         UpdatePosition(x, y, z, o);
-        SendGMTransportDiagnostic("same-map-teleport-complete", &*_currentFrame);
         return false;
     }
 }
@@ -715,7 +688,6 @@ void Transport::DelayedTeleportTransport()
 
     Relocate(x, y, z, o);
     GetMap()->AddToMap<Transport>(this);
-    SendGMTransportDiagnostic("map-teleport-complete", &*_nextFrame);
 }
 
 void Transport::UpdatePassengerPositions(PassengerSet& passengers)
@@ -781,95 +753,6 @@ void Transport::DoEventIfAny(KeyFrame const& node, bool departure)
         TC_LOG_DEBUG("maps.script", "Taxi {} event {} of node {} of {} path", departure ? "departure" : "arrival", eventid, node.Node->NodeIndex, GetName());
         GetMap()->ScriptsStart(sEventScripts, eventid, this, this);
         EventInform(eventid);
-    }
-}
-
-
-void Transport::SendGMTransportDiagnostic(char const* reason, KeyFrame const* frame /*= nullptr*/) const
-{
-    if (!IsInWorld())
-        return;
-
-    Map* map = GetMap();
-    if (!map)
-        return;
-
-    Map::PlayerList const& players = map->GetPlayers();
-    if (players.isEmpty())
-        return;
-
-    bool hasGMInGMMode = false;
-    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-    {
-        Player* player = itr->GetSource();
-        if (player && player->IsInWorld() && player->IsGameMaster() && player->GetSession())
-        {
-            hasGMInGMMode = true;
-            break;
-        }
-    }
-
-    if (!hasGMInGMMode)
-        return;
-
-    KeyFrame const* currentFrame = frame;
-    if (!currentFrame && _transportInfo && !_transportInfo->keyFrames.empty() && _currentFrame != _transportInfo->keyFrames.end())
-        currentFrame = &*_currentFrame;
-
-    KeyFrame const* nextFrame = nullptr;
-    if (_transportInfo && !_transportInfo->keyFrames.empty() && _nextFrame != _transportInfo->keyFrames.end())
-        nextFrame = &*_nextFrame;
-
-    uint32 period = GetTransportPeriod();
-    uint32 timer = period ? (m_goValue.Transport.PathProgress % period) : 0;
-
-    uint32 nodeIndex = currentFrame && currentFrame->Node ? currentFrame->Node->NodeIndex : 0;
-    uint32 nodeMap = currentFrame && currentFrame->Node ? currentFrame->Node->ContinentID : GetMapId();
-    float nodeX = currentFrame && currentFrame->Node ? currentFrame->Node->Loc.X : 0.0f;
-    float nodeY = currentFrame && currentFrame->Node ? currentFrame->Node->Loc.Y : 0.0f;
-    float nodeZ = currentFrame && currentFrame->Node ? currentFrame->Node->Loc.Z : 0.0f;
-    uint32 nodeFlags = currentFrame && currentFrame->Node ? currentFrame->Node->Flags : 0;
-    uint32 arrivalEvent = currentFrame && currentFrame->Node ? currentFrame->Node->ArrivalEventID : 0;
-    uint32 departureEvent = currentFrame && currentFrame->Node ? currentFrame->Node->DepartureEventID : 0;
-    uint32 arriveTime = currentFrame ? currentFrame->ArriveTime : 0;
-    uint32 departureTime = currentFrame ? currentFrame->DepartureTime : 0;
-    uint32 delay = departureTime > arriveTime ? departureTime - arriveTime : 0;
-
-    uint32 nextNodeIndex = nextFrame && nextFrame->Node ? nextFrame->Node->NodeIndex : 0;
-    uint32 nextMap = nextFrame && nextFrame->Node ? nextFrame->Node->ContinentID : GetMapId();
-    float nextX = nextFrame && nextFrame->Node ? nextFrame->Node->Loc.X : 0.0f;
-    float nextY = nextFrame && nextFrame->Node ? nextFrame->Node->Loc.Y : 0.0f;
-    float nextZ = nextFrame && nextFrame->Node ? nextFrame->Node->Loc.Z : 0.0f;
-
-    bool gridLoaded = map->IsGridLoaded(GetPositionX(), GetPositionY());
-
-    std::string message = fmt::sprintf(
-        "|cff00ffff[TransportDiag]|r %s entry=%u guid=%s name=\"%s\" map=%u pos=(%.2f %.2f %.2f %.2f) "
-        "moving=%u pendingStop=%u state=%u timer=%u/%u progress=%u node=%u nodeMap=%u nodeLoc=(%.2f %.2f %.2f) "
-        "nodeFlags=%u arrive=%u depart=%u delayMs=%u arrEvt=%u depEvt=%u next=%u nextMap=%u nextLoc=(%.2f %.2f %.2f) "
-        "passengers=%u static=%u gridLoaded=%u",
-        reason ? reason : "unknown",
-        GetEntry(),
-        GetGUID().ToString().c_str(),
-        GetName().c_str(),
-        GetMapId(),
-        GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation(),
-        IsMoving() ? 1 : 0,
-        _pendingStop ? 1 : 0,
-        uint32(GetGoState()),
-        timer, period, m_goValue.Transport.PathProgress,
-        nodeIndex, nodeMap, nodeX, nodeY, nodeZ,
-        nodeFlags, arriveTime, departureTime, delay, arrivalEvent, departureEvent,
-        nextNodeIndex, nextMap, nextX, nextY, nextZ,
-        uint32(_passengers.size()), uint32(_staticPassengers.size()), gridLoaded ? 1 : 0);
-
-    for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-    {
-        Player* player = itr->GetSource();
-        if (!player || !player->IsInWorld() || !player->IsGameMaster() || !player->GetSession())
-            continue;
-
-        ChatHandler(player->GetSession()).PSendSysMessage("%s", message.c_str());
     }
 }
 

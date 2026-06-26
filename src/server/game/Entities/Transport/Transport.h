@@ -108,7 +108,6 @@ class TC_GAME_API Transport : public GameObject, public TransportBase
         void DelayedTeleportTransport();
         void UpdatePassengerPositions(PassengerSet& passengers);
         void DoEventIfAny(KeyFrame const& node, bool departure);
-        void SendGMTransportDiagnostic(char const* reason, KeyFrame const* frame = nullptr) const;
 
         //! Helpers to know if stop frame was reached
         bool IsMoving() const { return _isMoving; }
@@ -132,7 +131,6 @@ class TC_GAME_API Transport : public GameObject, public TransportBase
 
         bool _delayedAddModel;
         bool _delayedTeleport;
-        uint32 _transportDiagnosticTimer;
 };
 
 #endif
