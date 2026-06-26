@@ -3978,8 +3978,17 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
 void Unit::_UnapplyAura(AuraApplication* aurApp, AuraRemoveMode removeMode)
 {
-    // aura can be removed from unit only if it's applied on it, shouldn't happen
-    ASSERT(aurApp->GetBase()->GetApplicationOfTarget(GetGUID()) == aurApp);
+    // Aura can be removed from a unit only if the Aura still maps this target to
+    // the same application.  When cleanup is already recovering from stale aura
+    // application state, do not assert before the caller has a chance to detach
+    // the stale aura-side entry.
+    if (!aurApp || aurApp->GetBase()->GetApplicationOfTarget(GetGUID()) != aurApp)
+    {
+        TC_LOG_ERROR("spells",
+            "Unit::_UnapplyAura, target: {}, found stale aura application (app: {}, spell: {}). Skipping direct unapply.",
+            GetGUID().ToString(), static_cast<void const*>(aurApp), aurApp && aurApp->GetBase() ? aurApp->GetBase()->GetId() : 0);
+        return;
+    }
 
     uint32 spellId = aurApp->GetBase()->GetId();
     AuraApplicationMapBoundsNonConst range = m_appliedAuras.equal_range(spellId);
