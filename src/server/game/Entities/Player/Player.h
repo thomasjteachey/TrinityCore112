@@ -32,7 +32,9 @@
 #include "PlayerTaxi.h"
 #include "QuestDef.h"
 #include <array>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <unordered_set>
 
@@ -157,7 +159,7 @@ typedef std::unordered_map<uint32, PlayerTalent*> PlayerTalentMap;
 typedef std::unordered_map<uint32, PlayerSpell> PlayerSpellMap;
 typedef std::unordered_set<SpellModifier*> SpellModContainer;
 
-typedef std::unordered_map<uint32 /*instanceId*/, time_t/*releaseTime*/> InstanceTimeMap;
+typedef std::map<uint32 /*instanceId*/, time_t/*releaseTime*/> InstanceTimeMap;
 
 enum ActionButtonUpdateState
 {
@@ -2611,6 +2613,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_ChampioningFaction;
 
         InstanceTimeMap _instanceResetTimes;
+        mutable std::mutex _instanceResetTimesLock;
         uint32 _pendingBindId;
         uint32 _pendingBindTimer;
 
