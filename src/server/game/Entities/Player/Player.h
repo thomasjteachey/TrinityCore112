@@ -32,6 +32,7 @@
 #include "PlayerTaxi.h"
 #include "QuestDef.h"
 #include <array>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -158,7 +159,7 @@ typedef std::unordered_map<uint32, PlayerTalent*> PlayerTalentMap;
 typedef std::unordered_map<uint32, PlayerSpell> PlayerSpellMap;
 typedef std::unordered_set<SpellModifier*> SpellModContainer;
 
-typedef std::unordered_map<uint32 /*instanceId*/, time_t/*releaseTime*/> InstanceTimeMap;
+typedef std::map<uint32 /*instanceId*/, time_t/*releaseTime*/> InstanceTimeMap;
 
 enum ActionButtonUpdateState
 {
