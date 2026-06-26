@@ -29,6 +29,7 @@
 #include "Opcodes.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include <algorithm>
 #include <array>
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -670,11 +671,31 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
         return;
     }
 
-    // aura has to be already applied
-    ASSERT(itr->second == auraApp);
-    m_applications.erase(itr);
+    // aura has to be already applied. During forced player cleanup (logout/transport
+    // removal) corrupted duplicate aura applications can leave Unit::m_appliedAuras and
+    // Aura::m_applications out of sync. Do not abort the whole server in that cleanup
+    // path; detach the exact application if present elsewhere and queue it for deletion.
+    if (itr->second != auraApp)
+    {
+        TC_LOG_ERROR("spells",
+            "Aura::_UnapplyForTarget, target: {}, caster: {}, spell:{} application mismatch (expected: {}, actual: {}). Recovering.",
+            target->GetGUID().ToString(), caster ? caster->GetGUID().ToString() : "0",
+            auraApp->GetBase()->GetSpellInfo()->Id, static_cast<void const*>(auraApp), static_cast<void const*>(itr->second));
 
-    _removedApplications.push_back(auraApp);
+        auto matchingItr = std::find_if(m_applications.begin(), m_applications.end(),
+            [auraApp](ApplicationMap::value_type const& applicationPair)
+            {
+                return applicationPair.second == auraApp;
+            });
+
+        if (matchingItr != m_applications.end())
+            m_applications.erase(matchingItr);
+    }
+    else
+        m_applications.erase(itr);
+
+    if (std::find(_removedApplications.begin(), _removedApplications.end(), auraApp) == _removedApplications.end())
+        _removedApplications.push_back(auraApp);
 
     // reset cooldown state for spells
     if (caster && GetSpellInfo()->IsCooldownStartedOnEvent())
