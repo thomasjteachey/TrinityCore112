@@ -670,8 +670,23 @@ void Aura::_UnapplyForTarget(Unit* target, Unit* caster, AuraApplication* auraAp
         return;
     }
 
-    // aura has to be already applied
-    ASSERT(itr->second == auraApp);
+    // aura has to be already applied.  If the owning Unit has a stale
+    // AuraApplication pointer, do not let cleanup/logout crash while holding
+    // on to the valid application in this aura map.  This can happen after an
+    // earlier inconsistent reapplication overwrote the per-target entry but
+    // left the old application in Unit::m_appliedAuras.  The stale application
+    // has already been detached from the Unit by Unit::_UnapplyAura, so queue
+    // only that object for deletion and keep the current application mapped.
+    if (itr->second != auraApp)
+    {
+        TC_LOG_ERROR("spells",
+            "Aura::_UnapplyForTarget, target: {}, caster: {}, spell:{} found mismatched aura application for owner map (expected: {}, found: {}). Queuing stale application for deletion.",
+            target->GetGUID().ToString(), caster ? caster->GetGUID().ToString() : "0", auraApp->GetBase()->GetSpellInfo()->Id,
+            static_cast<void const*>(auraApp), static_cast<void const*>(itr->second));
+        _removedApplications.push_back(auraApp);
+        return;
+    }
+
     m_applications.erase(itr);
 
     _removedApplications.push_back(auraApp);
