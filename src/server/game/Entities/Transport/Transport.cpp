@@ -27,6 +27,7 @@
 #include "ScriptMgr.h"
 #include "Spline.h"
 #include "Player.h"
+#include "Pet.h"
 #include "Totem.h"
 #include "UpdateData.h"
 #include "Vehicle.h"
@@ -259,7 +260,24 @@ void Transport::AddPassenger(WorldObject* passenger)
         TC_LOG_DEBUG("entities.transport", "Object {} boarded transport {}.", passenger->GetName(), GetName());
 
         if (Player* plr = passenger->ToPlayer())
+        {
+            if (Pet* pet = plr->GetPet())
+            {
+                if (pet->IsInWorld() && pet->GetTransport() != this)
+                {
+                    float x = pet->GetPositionX();
+                    float y = pet->GetPositionY();
+                    float z = pet->GetPositionZ();
+                    float o = pet->GetOrientation();
+                    CalculatePassengerOffset(x, y, z, &o);
+                    pet->m_movementInfo.transport.pos.Relocate(x, y, z, o);
+                    pet->SetTransportHomePosition(pet->m_movementInfo.transport.pos);
+                    AddPassenger(pet);
+                }
+            }
+
             sScriptMgr->OnAddPassenger(this, plr);
+        }
     }
 }
 
@@ -290,6 +308,10 @@ void Transport::RemovePassenger(WorldObject* passenger)
 
         if (Player* plr = passenger->ToPlayer())
         {
+            if (Pet* pet = plr->GetPet())
+                if (pet->GetTransport() == this)
+                    RemovePassenger(pet);
+
             sScriptMgr->OnRemovePassenger(this, plr);
             plr->SetFallInformation(0, plr->GetPositionZ());
         }

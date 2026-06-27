@@ -45,6 +45,7 @@
 #include "SpellHistory.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
+#include "Transport.h"
 #include "Vehicle.h"
 #include "PetAI.h"
 
@@ -120,14 +121,22 @@ class spell_pet_moveto : public SpellScript
         // The client shows an area as unreachable once the target destination is 4 yards above your position
         WorldLocation const* destination = GetExplTargetDest();
 
-        PathGenerator path(pet);
-        if (!path.CalculatePath(destination->GetPositionX(), destination->GetPositionY(), destination->GetPositionZ()))
-            return SPELL_FAILED_NOPATH;
+        // Transport floors are not represented in regular map navigation data.
+        // When both owner and pet are on the same transport, let pet movement use
+        // transport-relative spline coordinates instead of rejecting the command as
+        // an unreachable world-space path.
+        bool const onSameTransport = pet->GetTransport() && pet->GetTransport() == GetCaster()->GetTransport();
+        if (!onSameTransport)
+        {
+            PathGenerator path(pet);
+            if (!path.CalculatePath(destination->GetPositionX(), destination->GetPositionY(), destination->GetPositionZ()))
+                return SPELL_FAILED_NOPATH;
 
-        PathType const pathType = path.GetPathType();
-        if ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
-            (path.HasNavigationData() && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))
-            return SPELL_FAILED_NOPATH;
+            PathType const pathType = path.GetPathType();
+            if ((pathType & (PATHFIND_NOPATH | PATHFIND_INCOMPLETE)) ||
+                (path.HasNavigationData() && (pathType & (PATHFIND_NOT_USING_PATH | PATHFIND_SHORTCUT))))
+                return SPELL_FAILED_NOPATH;
+        }
         // Do a mini Spell::CheckCasterAuras on the pet, no other way of doing this
         SpellCastResult result = SPELL_CAST_OK;
         uint32 const unitflag = pet->GetUnitFlags();
@@ -161,7 +170,13 @@ class spell_pet_moveto : public SpellScript
         charmInfo->SetIsFollowing(false);
         charmInfo->SetIsReturning(false);
         const WorldLocation* stayPos = GetExplTargetDest();
-        charmInfo->SetStayPosition(stayPos->GetPositionX(), stayPos->GetPositionY(), stayPos->GetPositionZ());
+        float x = stayPos->GetPositionX();
+        float y = stayPos->GetPositionY();
+        float z = stayPos->GetPositionZ();
+        if (Transport* transport = pet->GetTransport())
+            if (transport == GetCaster()->GetTransport())
+                transport->CalculatePassengerOffset(x, y, z);
+        charmInfo->SetStayPosition(x, y, z);
         //pet->GetMotionMaster()->MoveChase();
         CreatureAI* AI = pet->ToCreature()->AI();
         if (PetAI* petAI = dynamic_cast<PetAI*>(AI))
