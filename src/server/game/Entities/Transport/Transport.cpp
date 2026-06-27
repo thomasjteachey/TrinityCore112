@@ -27,10 +27,13 @@
 #include "ScriptMgr.h"
 #include "Spline.h"
 #include "Player.h"
+#include "Pet.h"
+#include "PetDefines.h"
 #include "Totem.h"
 #include "UpdateData.h"
 #include "Vehicle.h"
 #include <G3D/Vector3.h>
+#include <cmath>
 
 Transport::Transport() : GameObject(),
     _transportInfo(nullptr), _isMoving(true), _pendingStop(false),
@@ -259,7 +262,27 @@ void Transport::AddPassenger(WorldObject* passenger)
         TC_LOG_DEBUG("entities.transport", "Object {} boarded transport {}.", passenger->GetName(), GetName());
 
         if (Player* plr = passenger->ToPlayer())
+        {
+            if (Pet* pet = plr->GetPet())
+            {
+                if (pet->IsInWorld() && pet->GetTransport() != this)
+                {
+                    float x = plr->GetTransOffsetX();
+                    float y = plr->GetTransOffsetY();
+                    float z = plr->GetTransOffsetZ();
+                    float o = plr->GetTransOffsetO();
+                    x += std::cos(o + pet->GetFollowAngle()) * PET_FOLLOW_DIST;
+                    y += std::sin(o + pet->GetFollowAngle()) * PET_FOLLOW_DIST;
+                    pet->m_movementInfo.transport.pos.Relocate(x, y, z, o);
+                    pet->SetTransportHomePosition(pet->m_movementInfo.transport.pos);
+                    CalculatePassengerPosition(x, y, z, &o);
+                    GetMap()->CreatureRelocation(pet, x, y, z, o, false);
+                    AddPassenger(pet);
+                }
+            }
+
             sScriptMgr->OnAddPassenger(this, plr);
+        }
     }
 }
 
@@ -290,6 +313,10 @@ void Transport::RemovePassenger(WorldObject* passenger)
 
         if (Player* plr = passenger->ToPlayer())
         {
+            if (Pet* pet = plr->GetPet())
+                if (pet->GetTransport() == this)
+                    RemovePassenger(pet);
+
             sScriptMgr->OnRemovePassenger(this, plr);
             plr->SetFallInformation(0, plr->GetPositionZ());
         }

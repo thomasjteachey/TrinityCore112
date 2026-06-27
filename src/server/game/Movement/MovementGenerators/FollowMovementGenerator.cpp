@@ -177,6 +177,20 @@ bool FollowMovementGenerator::Update(Unit* owner, uint32 diff)
             if (owner->IsHovering())
                 owner->UpdateAllowedPositionZ(x, y, z);
 
+            if (owner->GetTransport() && owner->GetTransport() == target->GetTransport())
+            {
+                LogPlayerbotFollowDiag(owner, target, "same_transport_direct_move", _range, _angle);
+                owner->AddUnitState(UNIT_STATE_FOLLOW_MOVE);
+                AddFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+
+                Movement::MoveSplineInit init(owner);
+                init.MoveTo(x, y, z, false);
+                init.SetWalk(target->IsWalking());
+                init.SetFacing(target->GetOrientation());
+                init.Launch();
+                return true;
+            }
+
             // pets are allowed to "cheat" on pathfinding when following their master
             bool allowShortcut = false;
             if (Pet* oPet = owner->ToPet())
