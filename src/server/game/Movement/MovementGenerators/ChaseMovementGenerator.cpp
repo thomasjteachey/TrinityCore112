@@ -259,6 +259,20 @@ bool ChaseMovementGenerator::Update(Unit* owner, uint32 diff)
             if (owner->IsHovering())
                 owner->UpdateAllowedPositionZ(x, y, z);
 
+            if (owner->GetTransport() && owner->GetTransport() == target->GetTransport())
+            {
+                LogPlayerbotChaseDiag(owner, target, "same_transport_direct_move", _range, angle, minRange, maxRange, _movingTowards);
+                owner->AddUnitState(UNIT_STATE_CHASE_MOVE);
+                AddFlag(MOVEMENTGENERATOR_FLAG_INFORM_ENABLED);
+
+                Movement::MoveSplineInit init(owner);
+                init.MoveTo(x, y, z, false);
+                init.SetWalk(target->IsWalking());
+                init.SetFacing(target->GetOrientation());
+                init.Launch();
+                return true;
+            }
+
             bool success = _path->CalculatePath(x, y, z, owner->CanFly());
             TC_LOG_DEBUG("playerbots.pvp.classspell",
                 "PB chase path: owner={} target={} move_toward={} path_ok={} path_type={} points={} dest=({}, {}, {}) edge_dist={} exact_dist={} max_target={} max_range={}.",
