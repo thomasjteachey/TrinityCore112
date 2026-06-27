@@ -46,8 +46,10 @@
 #include "SpellMgr.h"
 #include "SpellScript.h"
 #include "Transport.h"
+#include "PetDefines.h"
 #include "Vehicle.h"
 #include "PetAI.h"
+#include <cmath>
 
 class spell_gen_absorb0_hitlimit1 : public AuraScript
 {
@@ -125,7 +127,7 @@ class spell_pet_moveto : public SpellScript
         // When both owner and pet are on the same transport, let pet movement use
         // transport-relative spline coordinates instead of rejecting the command as
         // an unreachable world-space path.
-        bool const onSameTransport = pet->GetTransport() && pet->GetTransport() == GetCaster()->GetTransport();
+        bool const onSameTransport = GetCaster()->GetTransport() && (!pet->GetTransport() || pet->GetTransport() == GetCaster()->GetTransport());
         if (!onSameTransport)
         {
             PathGenerator path(pet);
@@ -169,6 +171,24 @@ class spell_pet_moveto : public SpellScript
         charmInfo->SetIsCommandFollow(false);
         charmInfo->SetIsFollowing(false);
         charmInfo->SetIsReturning(false);
+        if (Transport* transport = GetCaster()->GetTransport())
+        {
+            if (pet->GetTransport() != transport)
+            {
+                float petX = GetCaster()->GetTransOffsetX();
+                float petY = GetCaster()->GetTransOffsetY();
+                float petZ = GetCaster()->GetTransOffsetZ();
+                float petO = GetCaster()->GetTransOffsetO();
+                petX += std::cos(petO + pet->GetFollowAngle()) * PET_FOLLOW_DIST;
+                petY += std::sin(petO + pet->GetFollowAngle()) * PET_FOLLOW_DIST;
+                pet->m_movementInfo.transport.pos.Relocate(petX, petY, petZ, petO);
+                pet->SetTransportHomePosition(pet->m_movementInfo.transport.pos);
+                transport->CalculatePassengerPosition(petX, petY, petZ, &petO);
+                pet->GetMap()->CreatureRelocation(pet, petX, petY, petZ, petO, false);
+                transport->AddPassenger(pet);
+            }
+        }
+
         const WorldLocation* stayPos = GetExplTargetDest();
         float x = stayPos->GetPositionX();
         float y = stayPos->GetPositionY();
