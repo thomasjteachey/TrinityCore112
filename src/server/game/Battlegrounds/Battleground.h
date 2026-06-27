@@ -472,6 +472,7 @@ class TC_GAME_API Battleground
 
         // Death related
         virtual WorldSafeLocsEntry const* GetClosestGraveyard(Player* player);
+        virtual bool HandlePlayerRepopAtGraveyard(Player* player, bool shouldResurrect) { return false; }
 
         virtual void AddPlayer(Player* player);                // must be implemented in BG subclass
 

@@ -148,7 +148,7 @@ namespace
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
         if (Battleground const* battleground = player->GetBattleground())
-            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT)
+            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT || battleground->GetTypeID(true) == BATTLEGROUND_GS)
                 return true;
 
         switch (slot)
@@ -5172,6 +5172,15 @@ void Player::RepopAtGraveyard()
     // stop countdown until repop
     m_deathTimer = 0;
 
+    if (Battleground* bg = GetBattleground())
+    {
+        if (bg->HandlePlayerRepopAtGraveyard(this, shouldResurrect))
+        {
+            RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
+            return;
+        }
+    }
+
     // if no grave found, stay at the current location
     // and don't show spirit healer location
     if (ClosestGrave)
@@ -9883,6 +9892,9 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             battleground->FillInitialWorldStates(packet);
         // Blackrock Throne can report stock BRD zone IDs; initialize from battleground type.
         else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BRT)
+            battleground->FillInitialWorldStates(packet);
+        // Gunship Deathmatch uses cloned Northrend map/areas; initialize from battleground type.
+        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_GS)
             battleground->FillInitialWorldStates(packet);
         break;
     }
@@ -26434,7 +26446,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     if (InBattleground())
     {
         Battleground const* battleground = GetBattleground();
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT))
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT && battleground->GetTypeID(true) != BATTLEGROUND_GS))
             return;
     }
 

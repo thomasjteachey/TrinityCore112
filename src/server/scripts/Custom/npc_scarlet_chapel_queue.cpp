@@ -20,7 +20,10 @@ constexpr uint32 ACTION_QUEUE_SCARLET_HORDE = GOSSIP_ACTION_INFO_DEF + 3;
 constexpr uint32 ACTION_QUEUE_BLACKROCK_REGULAR = GOSSIP_ACTION_INFO_DEF + 4;
 constexpr uint32 ACTION_QUEUE_BLACKROCK_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 5;
 constexpr uint32 ACTION_QUEUE_BLACKROCK_HORDE = GOSSIP_ACTION_INFO_DEF + 6;
-constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 7;
+constexpr uint32 ACTION_QUEUE_GUNSHIP_REGULAR = GOSSIP_ACTION_INFO_DEF + 7;
+constexpr uint32 ACTION_QUEUE_GUNSHIP_ALLIANCE = GOSSIP_ACTION_INFO_DEF + 8;
+constexpr uint32 ACTION_QUEUE_GUNSHIP_HORDE = GOSSIP_ACTION_INFO_DEF + 9;
+constexpr uint32 ACTION_CLOSE = GOSSIP_ACTION_INFO_DEF + 10;
 
 void SendQueueError(Player* player, char const* text)
 {
@@ -89,6 +92,9 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_REGULAR);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_ALLIANCE);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Blackrock Throne (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_BLACKROCK_HORDE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Gunship Deathmatch", GOSSIP_SENDER_MAIN, ACTION_QUEUE_GUNSHIP_REGULAR);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Gunship Deathmatch (Force Alliance side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_GUNSHIP_ALLIANCE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Queue for Gunship Deathmatch (Force Horde side)", GOSSIP_SENDER_MAIN, ACTION_QUEUE_GUNSHIP_HORDE);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Maybe later", GOSSIP_SENDER_MAIN, ACTION_CLOSE);
             SendGossipMenuFor(player, player->GetGossipTextId(me), me);
             return true;
@@ -105,6 +111,9 @@ public:
                 case ACTION_QUEUE_BLACKROCK_REGULAR: return HandleQueue(player, BATTLEGROUND_BRT, "Blackrock Throne", TEAM_NEUTRAL);
                 case ACTION_QUEUE_BLACKROCK_ALLIANCE: return HandleQueue(player, BATTLEGROUND_BRT, "Blackrock Throne", TEAM_ALLIANCE);
                 case ACTION_QUEUE_BLACKROCK_HORDE: return HandleQueue(player, BATTLEGROUND_BRT, "Blackrock Throne", TEAM_HORDE);
+                case ACTION_QUEUE_GUNSHIP_REGULAR: return HandleQueue(player, BATTLEGROUND_GS, "Gunship Deathmatch", TEAM_NEUTRAL);
+                case ACTION_QUEUE_GUNSHIP_ALLIANCE: return HandleQueue(player, BATTLEGROUND_GS, "Gunship Deathmatch", TEAM_ALLIANCE);
+                case ACTION_QUEUE_GUNSHIP_HORDE: return HandleQueue(player, BATTLEGROUND_GS, "Gunship Deathmatch", TEAM_HORDE);
                 case ACTION_CLOSE: CloseGossipMenuFor(player); return true;
                 default: return false;
             }

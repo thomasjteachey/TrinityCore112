@@ -3578,6 +3578,7 @@ bool ShouldPreserveMountInWaterForBattleground(Player const* player)
     switch (battleground->GetTypeID(true))
     {
         case BATTLEGROUND_SCM:
+        case BATTLEGROUND_GS:
         case BATTLEGROUND_RL:
             return true;
         default:
