@@ -1379,13 +1379,21 @@ void Player::Update(uint32 p_time)
 
     if (!_instanceResetTimes.empty())
     {
-        for (InstanceTimeMap::iterator itr = _instanceResetTimes.begin(); itr != _instanceResetTimes.end();)
+        // Rebuild the instance reset map instead of erasing while iterating.
+        // Player::Update can run after spell/aura processing that may trigger
+        // map or instance state changes; rebuilding avoids depending on an
+        // iterator that can be invalidated before unordered_map::erase walks
+        // the bucket chain.
+        InstanceTimeMap activeInstanceResetTimes;
+        activeInstanceResetTimes.reserve(_instanceResetTimes.size());
+
+        for (InstanceTimeMap::value_type const& instanceResetTime : _instanceResetTimes)
         {
-            if (itr->second < now)
-                itr = _instanceResetTimes.erase(itr);
-            else
-                ++itr;
+            if (instanceResetTime.second >= now)
+                activeInstanceResetTimes.insert(instanceResetTime);
         }
+
+        _instanceResetTimes.swap(activeInstanceResetTimes);
     }
 
     if (GetClass() == CLASS_DEATH_KNIGHT)
