@@ -1,5 +1,5 @@
 #include "BattlegroundGS.h"
-
+#include "Map.h"
 #include "BattlegroundMgr.h"
 #include "Creature.h"
 #include "DBCStores.h"
