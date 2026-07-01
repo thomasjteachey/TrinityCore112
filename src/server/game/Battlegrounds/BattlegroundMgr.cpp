@@ -22,6 +22,7 @@
 #include "BattlegroundEY.h"
 #include "BattlegroundWS.h"
 #include "BattlegroundNA.h"
+#include "BattlegroundNL.h"
 #include "BattlegroundBE.h"
 #include "BattlegroundRL.h"
 #include "BattlegroundSA.h"
@@ -416,6 +417,9 @@ Battleground* BattlegroundMgr::CreateNewBattleground(BattlegroundTypeId original
         case BATTLEGROUND_RL:
             bg = new BattlegroundRL(*(BattlegroundRL*)bg_template);
             break;
+        case BATTLEGROUND_NL:
+            bg = new BattlegroundNL(*(BattlegroundNL*)bg_template);
+            break;
         case BATTLEGROUND_SA:
             bg = new BattlegroundSA(*(BattlegroundSA*)bg_template);
             break;
@@ -524,6 +528,9 @@ bool BattlegroundMgr::CreateBattleground(BattlegroundTemplate const* bgTemplate)
                 break;
             case BATTLEGROUND_RL:
                 bg = new BattlegroundRL();
+                break;
+            case BATTLEGROUND_NL:
+                bg = new BattlegroundNL();
                 break;
             case BATTLEGROUND_SA:
                 bg = new BattlegroundSA();
@@ -816,6 +823,7 @@ bool BattlegroundMgr::IsArenaType(BattlegroundTypeId bgTypeId)
         || bgTypeId == BATTLEGROUND_DS
         || bgTypeId == BATTLEGROUND_RV
         || bgTypeId == BATTLEGROUND_RL
+        || bgTypeId == BATTLEGROUND_NL
         || bgTypeId == BATTLEGROUND_TV
         || bgTypeId == BATTLEGROUND_TTP;
 }
@@ -854,6 +862,7 @@ BattlegroundQueueTypeId BattlegroundMgr::BGQueueTypeId(BattlegroundTypeId bgType
         case BATTLEGROUND_NA:
         case BATTLEGROUND_RL:
         case BATTLEGROUND_RV:
+        case BATTLEGROUND_NL:
         case BATTLEGROUND_TV:
         case BATTLEGROUND_TTP:
             switch (arenaType)
