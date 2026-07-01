@@ -44,8 +44,8 @@ void BattlegroundNL::StartingEventCloseDoors()
 
 void BattlegroundNL::StartingEventOpenDoors()
 {
-    // BWL portcullis state is visually inverted versus the stock arena door helpers:
-    // in the source BWL spawn, state 1 is open and player use toggles it shut.
+    // BWL portcullis uses the opposite state from the first pass here:
+    // READY is the closed/prep visual, ACTIVE is the open/battle visual.
     SetNefarianDoorOpen(BG_NL_OBJECT_DOOR_1);
     SetNefarianDoorOpen(BG_NL_OBJECT_DOOR_2);
 
@@ -75,11 +75,11 @@ bool BattlegroundNL::SetupBattleground()
     if (!AddObject(BG_NL_OBJECT_DOOR_1, BG_NL_OBJECT_TYPE_DOOR,
             -7488.169922f, -1150.540039f, 476.712006f, 0.610865f,
             0.0f, 0.0f, 0.300706f, 0.953717f,
-            RESPAWN_IMMEDIATELY, GO_STATE_ACTIVE)
+            RESPAWN_IMMEDIATELY, GO_STATE_READY)
         || !AddObject(BG_NL_OBJECT_DOOR_2, BG_NL_OBJECT_TYPE_DOOR,
             -7591.849121f, -1203.417725f, 476.799896f, 2.171660f,
             -0.0f, -0.0f, -0.884691f, -0.466177f,
-            RESPAWN_IMMEDIATELY, GO_STATE_ACTIVE)
+            RESPAWN_IMMEDIATELY, GO_STATE_READY)
         // Permanent wall/blocker, from original BWL gameobject 75164.
         || !AddObject(BG_NL_OBJECT_WALL_1, BG_NL_OBJECT_TYPE_WALL,
             -7464.000000f, -1103.550049f, 480.029999f, 0.610865f,
@@ -121,9 +121,9 @@ void BattlegroundNL::SetNefarianDoorClosed(uint32 type)
 {
     if (GameObject* door = GetBGObject(type, false))
     {
-        // For this BWL portcullis display, ACTIVE is the closed/prep visual.
-        door->SetLootState(GO_ACTIVATED);
-        door->SetGoState(GO_STATE_ACTIVE);
+        // For this BWL portcullis display, READY is the closed/prep visual.
+        door->SetLootState(GO_READY);
+        door->SetGoState(GO_STATE_READY);
     }
 }
 
@@ -131,8 +131,8 @@ void BattlegroundNL::SetNefarianDoorOpen(uint32 type)
 {
     if (GameObject* door = GetBGObject(type, false))
     {
-        // For this BWL portcullis display, READY is the open visual.
-        door->SetLootState(GO_READY);
-        door->SetGoState(GO_STATE_READY);
+        // For this BWL portcullis display, ACTIVE is the open/battle visual.
+        door->SetLootState(GO_ACTIVATED);
+        door->SetGoState(GO_STATE_ACTIVE);
     }
 }
