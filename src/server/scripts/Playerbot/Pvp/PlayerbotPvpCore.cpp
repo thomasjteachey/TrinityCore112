@@ -1201,13 +1201,25 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (!player->IsWithinLOSInMap(resolvedTarget))
         return false;
 
-    float const maxRange = spellInfo->GetMaxRange(false);
-    if (maxRange > 0.0f && !player->IsWithinDistInMap(resolvedTarget, maxRange))
-        return false;
+    bool const isPlayerbotChargeSpell = decision.spellId == 16979 || decision.spellId == 49376 || decision.spellId == 81910;
+    if (isPlayerbotChargeSpell)
+    {
+        float const minChargeRange = decision.spellId == 81910 ? 5.0f : 8.0f;
+        float const maxChargeRange = decision.spellId == 81910 ? 15.0f : 25.0f;
+        float const distance = player->GetExactDist(resolvedTarget);
+        if (distance < minChargeRange || distance > maxChargeRange)
+            return false;
+    }
+    else
+    {
+        float const maxRange = spellInfo->GetMaxRange(false);
+        if (maxRange > 0.0f && !player->IsWithinDistInMap(resolvedTarget, maxRange))
+            return false;
 
-    float const minRange = spellInfo->GetMinRange(false);
-    if (minRange > 0.0f && player->IsWithinDistInMap(resolvedTarget, minRange))
-        return false;
+        float const minRange = spellInfo->GetMinRange(false);
+        if (minRange > 0.0f && player->IsWithinDistInMap(resolvedTarget, minRange))
+            return false;
+    }
 
     // Skip decisions we cannot currently pay for so the fallback chain can
     // choose a castable alternative (wand, movement, etc.) instead of
@@ -4608,7 +4620,8 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     Unit const* earthShieldTarget = isRestoShaman && IsSpellReady(player, 32593) && !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 32593) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
     Unit const* purgeTarget = isRestoShaman && hasHostileTarget && IsSpellReady(player, 81325) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* allyMagicTarget = isRestoShaman && IsSpellReady(player, 81325) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f) : nullptr;
-    Unit const* rehgarsFuryThreat = hasHostileTarget && IsSpellReady(player, 81910) ? SelectNearbyMeleeTarget(player, target, 10.0f) : nullptr;
+    bool const inGhostWolf = HasAuraFromSpellChain(player, 2645);
+    Unit const* rehgarsFuryThreat = hasHostileTarget && inGhostWolf && IsSpellReady(player, 81910) ? SelectEnemyGapCloserTarget(player, target, 5.0f, 15.0f, false) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
@@ -4647,7 +4660,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman poison cleansing totem", "maintain a nearby poison cleansing totem", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
         { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
+    AddDecisionCandidate(candidates, isRestoShaman && !inGhostWolf && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, rehgarsFuryThreat && !HasBreakableCrowdControl(rehgarsFuryThreat), 59.5f,
         { "shaman rehgar's fury", "escape nearby melee pressure", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy, rehgarsFuryThreat ? rehgarsFuryThreat->GetGUID() : ObjectGuid::Empty });
