@@ -70,6 +70,7 @@
 
 namespace
 {
+    // Replay V113: rewrite spell interrupt/channel packets and force yellow faction on non-green replay actors.
     // Replay V112: restore v108 baseline, add real periodic channel-clear packets and actor visibility probes.
     // Replay V108: filter owner/private update fields from replay actor VALUES blocks, including low-only VALUES blocks.
     // Replay V105: skip/dump deterministic bad converted update-object packet.
@@ -871,6 +872,27 @@ namespace
         return false;
     }
 
+    ReplayActor const* RewriteFirstPackedGuidIfReplayActorOrCounter(std::vector<uint8>& payload, MatchRecord const& match)
+    {
+        size_t pos = 0;
+        size_t guidStart = pos;
+
+        ObjectGuid guid;
+        if (!ReadPackedGuid(payload, pos, guid))
+            return nullptr;
+
+        size_t guidEnd = pos;
+        if (ReplayActor const* actor = FindReplayActorByOriginalGuidOrCounter(match, guid))
+        {
+            if (WritePackedGuidInPlace(payload, guidStart, guidEnd, actor->FakeGuid))
+                return actor;
+
+            return nullptr;
+        }
+
+        return nullptr;
+    }
+
     uint32 RewriteAllPackedReplayActorGuidByteSequences(std::vector<uint8>& payload, MatchRecord const& match)
     {
         // Use only packed GUID byte sequences, never raw 8-byte replacement.
@@ -1348,6 +1370,19 @@ namespace
             case SMSG_SPELL_GO:
                 RewriteSpellCastDataGuids(payload, match, true);
                 return;
+            case SMSG_SPELL_FAILURE:
+            case SMSG_SPELL_FAILED_OTHER:
+                // Kick/interrupt uses these packets to tell nearby clients to stop the cast visual.
+                // Without rewriting the caster GUID, the stop applies to the original player GUID, not the fake replay actor,
+                // so the fake actor can keep glowing hands for the rest of the replay.
+                RewriteFirstPackedGuidIfReplayActorOrCounter(payload, match);
+                return;
+            case MSG_CHANNEL_START:
+            case MSG_CHANNEL_UPDATE:
+                // Channel start/update/clear layout starts with the packed unit GUID.
+                // Especially important for MSG_CHANNEL_UPDATE time=0, which clears channel visuals.
+                RewriteFirstPackedGuidIfReplayActorOrCounter(payload, match);
+                return;
             case SMSG_ATTACK_START:
                 RewriteRawGuidPair(payload, match);
                 return;
@@ -1441,13 +1476,25 @@ namespace
         return actor.Team == HORDE || actor.Team == 67;
     }
 
-    uint32 ReplayFriendlyFactionTemplateForViewer(Player const* viewer)
+    uint32 ReplayFriendlyFactionTemplateForViewer(Player const* /*viewer*/)
     {
-        // Use the viewer's own faction template for the friendly/green attempt.
-        if (viewer && viewer->GetFaction())
-            return viewer->GetFaction();
+        // Use the explicit friendly template instead of the viewer faction. Using the viewer faction can
+        // vary under GM / arena faction state and can make both sides appear green.
+        return FACTION_FRIENDLY;
+    }
 
-        return 35;
+    uint32 ReplayYellowFactionTemplateForActor(ReplayActor const& /*actor*/)
+    {
+        // FACTION_CREATURE is neutral/yellow to normal players in 3.3.5.
+        // Force non-green replay actors back to this so recorded player faction updates cannot turn both teams green.
+        return FACTION_CREATURE;
+    }
+
+    uint32 ReplayNameColorFactionTemplateForActor(Player const* viewer, ReplayActor const& actor)
+    {
+        return ReplayActorShouldUseFriendlyGreenName(actor)
+            ? ReplayFriendlyFactionTemplateForViewer(viewer)
+            : ReplayYellowFactionTemplateForActor(actor);
     }
 
     uint32 ReplayGreenNameUnitBytes2ForActor(ReplayActor const& actor, uint32 originalBytes2)
@@ -1667,6 +1714,8 @@ namespace
                         value = fakeLow;
                     else if (fieldIndex == OBJECT_FIELD_GUID + 1)
                         value = fakeHigh;
+                    else if (fieldIndex == UNIT_FIELD_FACTIONTEMPLATE)
+                        value = ReplayNameColorFactionTemplateForActor(nullptr, *actor);
                     else if (fieldIndex == UNIT_FIELD_BYTES_2)
                     {
                         uint32 patched = ReplayGreenNameUnitBytes2ForActor(*actor, value);
@@ -2752,10 +2801,36 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
     void SendReplayGreenNameValueUpdate(Player* viewer, ReplayActor const& actor)
     {
-        if (!viewer || !viewer->GetSession() || !ReplayActorShouldUseFriendlyGreenName(actor))
+        if (!viewer || !viewer->GetSession())
             return;
 
         constexpr uint8 REPLAY_UPDATETYPE_VALUES = 0;
+
+        uint32 const factionField = UNIT_FIELD_FACTIONTEMPLATE;
+
+        if (!ReplayActorShouldUseFriendlyGreenName(actor))
+        {
+            // Keep the yellow/neutral side yellow. Do not send the green-side flag/bytes overrides to these actors.
+            WorldPacket data(SMSG_UPDATE_OBJECT, 32);
+            data << uint32(1);
+            data << uint8(REPLAY_UPDATETYPE_VALUES);
+            data << actor.FakeGuid.WriteAsPacked();
+
+            uint8 const blockCount = uint8(factionField / 32 + 1);
+            data << uint8(blockCount);
+            for (uint8 block = 0; block < blockCount; ++block)
+            {
+                uint32 mask = 0;
+                if (factionField / 32 == block)
+                    mask |= uint32(1) << (factionField % 32);
+
+                data << uint32(mask);
+            }
+
+            data << uint32(ReplayYellowFactionTemplateForActor(actor));
+            viewer->GetSession()->SendPacket(&data);
+            return;
+        }
 
         uint32 const field0 = UNIT_FIELD_FACTIONTEMPLATE;
         uint32 const field1 = UNIT_FIELD_FLAGS;
@@ -2804,14 +2879,11 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
         uint32 sent = 0;
         for (ReplayActor const& actor : state.Match.Actors)
         {
-            if (!ReplayActorShouldUseFriendlyGreenName(actor))
-                continue;
-
             SendReplayGreenNameValueUpdate(viewer, actor);
             ++sent;
         }
 
-        TC_LOG_DEBUG("arena.replay", "Replay persistent green-name update viewer={} sent={} burst={} faction={} reason={}",
+        TC_LOG_DEBUG("arena.replay", "Replay persistent name-color update viewer={} sent={} burst={} faction={} reason={}",
             viewer->GetGUID().GetCounter(), sent, uint32(state.NameColorUpdateBursts), viewer->GetFaction(), reason ? reason : "");
     }
 
