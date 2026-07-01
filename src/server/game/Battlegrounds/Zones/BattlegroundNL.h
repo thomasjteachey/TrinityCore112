@@ -19,7 +19,7 @@
 
 #include "Arena.h"
 
-// Nefarian's Lair Arena
+// Nefarian's Arena
 // Custom arena type 103 / map 1572.
 enum BattlegroundNLObjectTypes
 {

@@ -3521,7 +3521,7 @@ enum BattlegroundTypeId : uint32
     BATTLEGROUND_RB             = 32, // Random Battleground
     BATTLEGROUND_SCM            = 100, // Scarlet Chapel
     BATTLEGROUND_BRT            = 101, // Blackrock Throne
-    BATTLEGROUND_NL             = 103, // Nefarian's Lair Arena
+    BATTLEGROUND_NL             = 103, // Nefarian's Arena
     BATTLEGROUND_TP             = 108, // Twin Peaks
     BATTLEGROUND_BFG            = 120, // Battle for Gilneas
     BATTLEGROUND_TV             = 870, // Tol'Viron Arena

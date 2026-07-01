@@ -123,9 +123,8 @@ void BattlegroundNL::SetNefarianDoorClosed(uint32 type)
 {
     if (GameObject* door = GetBGObject(type, false))
     {
-        // For this BWL portcullis display, ACTIVE is the closed/prep visual.
-        door->SetLootState(GO_ACTIVATED);
-        door->SetGoState(GO_STATE_ACTIVE);
+        door->SetLootState(GO_READY);
+        door->SetGoState(GO_STATE_READY);
     }
 }
 
@@ -133,8 +132,7 @@ void BattlegroundNL::SetNefarianDoorOpen(uint32 type)
 {
     if (GameObject* door = GetBGObject(type, false))
     {
-        // For this BWL portcullis display, READY is the open visual.
-        door->SetLootState(GO_READY);
-        door->SetGoState(GO_STATE_READY);
+        door->SetLootState(GO_ACTIVATED);
+        door->SetGoState(GO_STATE_ACTIVE);
     }
 }

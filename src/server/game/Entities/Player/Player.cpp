@@ -9686,6 +9686,16 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             packet.Worldstates.emplace_back(3002, 0); // BATTELGROUND_RUINS_OF_LORDAERNON_SHOW
         }
         break;
+    case 30231: // Nefarian's Arena
+        if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_NL)
+            battleground->FillInitialWorldStates(packet);
+        else
+        {
+            packet.Worldstates.emplace_back(3601, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GOLD
+            packet.Worldstates.emplace_back(3600, 0); // ARENA_WORLD_STATE_ALIVE_PLAYERS_GREEN
+            packet.Worldstates.emplace_back(3002, 0); // BATTLEGROUND_NEFARIAN_ARENA_SHOW
+        }
+        break;
     case 4378: // Dalaran Sewers
         if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_DS)
             battleground->FillInitialWorldStates(packet);
