@@ -70,7 +70,7 @@ namespace GurubashiShadowSight
 {
 constexpr uint32 Entry = 184663;
 constexpr float PlayerClearance = 5.0f;
-constexpr float TriggerRadius = 3.0f;
+constexpr float TriggerRadius = 5.0f;
 constexpr float MaxSpawnRadius = 30.0f;
 constexpr uint8 SpawnAttempts = 128;
 constexpr Seconds DespawnTime = 30s;
@@ -689,65 +689,50 @@ private:
     }
 
 
-    Player* FindShadowSightTriggerPlayer(GameObject const* shadowSight) const
+    void DespawnPickedUpShadowSight(GameObject* shadowSight, Player* triggerPlayer)
     {
         if (!shadowSight || !shadowSight->IsInWorld())
-            return nullptr;
+            return;
 
-        std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
-        for (auto const& playerPair : ObjectAccessor::GetPlayers())
-        {
-            Player* player = playerPair.second;
-            if (!player || !player->IsInWorld() || !player->IsAlive())
-                continue;
+        if (triggerPlayer)
+            if (GameObjectTemplate const* goInfo = shadowSight->GetGOInfo())
+                if (goInfo->type == GAMEOBJECT_TYPE_TRAP && goInfo->trap.spellId)
+                    shadowSight->CastSpell(triggerPlayer, goInfo->trap.spellId);
 
-            if (player->GetMap() != shadowSight->GetMap())
-                continue;
-
-            if (GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId()) != GurubashiAreaState::BattleRing)
-                continue;
-
-            if (player->GetExactDist2d(shadowSight->GetPositionX(), shadowSight->GetPositionY()) <= GurubashiShadowSight::TriggerRadius)
-                return player;
-        }
-
-        return nullptr;
+        ObjectGuid const shadowSightGuid = shadowSight->GetGUID();
+        shadowSight->DespawnOrUnsummon();
+        _shadowSightGuids.erase(std::remove(_shadowSightGuids.begin(), _shadowSightGuids.end(), shadowSightGuid), _shadowSightGuids.end());
     }
 
     void DespawnTriggeredShadowSights()
     {
-        if (_shadowSightGuids.empty())
+        if (!_chestActive)
             return;
 
-        _shadowSightGuids.erase(std::remove_if(_shadowSightGuids.begin(), _shadowSightGuids.end(), [](ObjectGuid const& guid)
+        std::vector<ObjectGuid> playerGuids;
         {
-            bool removeTrackedGuid = false;
-            sMapMgr->DoForAllMaps([&](Map* map)
+            std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+            for (auto const& playerPair : ObjectAccessor::GetPlayers())
             {
-                if (removeTrackedGuid)
-                    return;
+                Player* player = playerPair.second;
+                if (!IsPlayerEligible(player))
+                    continue;
 
-                GameObject* shadowSight = map->GetGameObject(guid);
-                if (!shadowSight || !shadowSight->IsInWorld())
-                {
-                    removeTrackedGuid = true;
-                    return;
-                }
+                playerGuids.push_back(player->GetGUID());
+            }
+        }
 
-                gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
-                Player* triggerPlayer = event ? event->FindShadowSightTriggerPlayer(shadowSight) : nullptr;
-                if (!triggerPlayer)
-                    return;
+        for (ObjectGuid const& playerGuid : playerGuids)
+        {
+            Player* player = ObjectAccessor::FindPlayer(playerGuid);
+            if (!IsPlayerEligible(player))
+                continue;
 
-                if (GameObjectTemplate const* goInfo = shadowSight->GetGOInfo())
-                    if (goInfo->type == GAMEOBJECT_TYPE_TRAP && goInfo->trap.spellId)
-                        shadowSight->CastSpell(triggerPlayer, goInfo->trap.spellId);
+            if (GameObject* shadowSight = player->FindNearestGameObject(GurubashiShadowSight::Entry, GurubashiShadowSight::TriggerRadius))
+                DespawnPickedUpShadowSight(shadowSight, player);
+        }
 
-                shadowSight->DespawnOrUnsummon();
-                removeTrackedGuid = true;
-            });
-            return removeTrackedGuid;
-        }), _shadowSightGuids.end());
+        PruneShadowSightGuids();
     }
 
     void PruneShadowSightGuids()
