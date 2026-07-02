@@ -62,6 +62,7 @@ char output_path[128]=".";
 char input_path[1024]=".";
 bool hasInputPathParam = false;
 bool preciseVectorData = false;
+int singleMapId = -1;
 std::unordered_map<std::string, WMODoodadData> WmoDoodads;
 
 // Constants
@@ -199,8 +200,14 @@ void ParsMapFiles()
 {
     char fn[512];
     //char id_filename[64];
+    if (singleMapId >= 0)
+        printf("Single-map mode: extracting map %d only\n", singleMapId);
+
     for (unsigned int i=0; i<map_count; ++i)
     {
+        if (singleMapId >= 0 && static_cast<unsigned int>(singleMapId) != map_ids[i].id)
+            continue;
+
         sprintf(fn,"World\\Maps\\%s\\%s.wdt", map_ids[i].name, map_ids[i].name);
         WDTFile WDT(fn,map_ids[i].name);
         if (WDT.init(map_ids[i].id))
@@ -234,6 +241,22 @@ void getGamePath()
 #endif
 }
 
+static bool add_archive_if_exists(std::string const& path, std::vector<std::string>& pArchiveNames)
+{
+#ifdef __linux__
+    FILE* h = fopen64(path.c_str(), "rb");
+#else
+    FILE* h = fopen(path.c_str(), "rb");
+#endif
+
+    if (!h)
+        return false;
+
+    fclose(h);
+    pArchiveNames.push_back(path);
+    return true;
+}
+
 bool scan_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames)
 {
     int i;
@@ -249,19 +272,23 @@ bool scan_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames
         {
             sprintf(path, "%s.MPQ", scanmatch);
         }
-#ifdef __linux__
-        if(FILE* h = fopen64(path, "rb"))
-#else
-        if(FILE* h = fopen(path, "rb"))
-#endif
-        {
-            fclose(h);
-            //matches.push_back(path);
-            pArchiveNames.push_back(path);
-        }
+
+        add_archive_if_exists(path, pArchiveNames);
     }
 
     return(true);
+}
+
+void scan_letter_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames)
+{
+    char path[512];
+
+    for (char letter = 'A'; letter <= 'Z'; ++letter)
+    {
+        sprintf(path, "%s-%c.MPQ", scanmatch, letter);
+        if (add_archive_if_exists(path, pArchiveNames))
+            printf("Found custom patch archive: %s\n", path);
+    }
 }
 
 bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
@@ -331,6 +358,12 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
             foundOne = true;
     }
 
+    // Custom letter patches such as patch-Z.MPQ. Add these after the stock
+    // numeric and locale patches so they are opened last and therefore win
+    // MPQ lookup priority (MPQArchive pushes opened archives to the front).
+    printf("Scanning custom letter patches from data directory.\n");
+    scan_letter_patches(Trinity::StringFormat("{}patch", input_path).c_str(), pArchiveNames);
+
     printf("\n");
 
     if(!foundOne)
@@ -379,6 +412,18 @@ bool processArgv(int argc, char ** argv, const char *versionString)
         {
             preciseVectorData = true;
         }
+        else if(strcmp("-m",argv[i]) == 0)
+        {
+            if((i+1)<argc)
+            {
+                singleMapId = atoi(argv[i + 1]);
+                if (singleMapId < 0)
+                    result = false;
+                ++i;
+            }
+            else
+                result = false;
+        }
         else
         {
             result = false;
@@ -388,10 +433,11 @@ bool processArgv(int argc, char ** argv, const char *versionString)
     if(!result)
     {
         printf("Extract %s.\n",versionString);
-        printf("%s [-?][-s][-l][-d <path>]\n", argv[0]);
+        printf("%s [-?][-s][-l][-d <path>][-m <mapid>]\n", argv[0]);
         printf("   -s : (default) small size (data size optimization), ~500MB less vmap data.\n");
         printf("   -l : large size, ~500MB more vmap data. (might contain more details)\n");
         printf("   -d <path>: Path to the vector data source folder.\n");
+        printf("   -m <mapid>: Extract static map WMO/ADT data only for one map, example: -m 617.\n");
         printf("   -? : This message.\n");
     }
     return result;

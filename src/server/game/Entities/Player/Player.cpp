@@ -1297,9 +1297,21 @@ void Player::Update(uint32 p_time)
             else
             {
                 // use area updates as well
-                // needed for free far all arenas for example
+                // needed for free for all arenas for example
                 if (m_areaUpdateId != newarea)
+                {
                     UpdateArea(newarea);
+                }
+                else
+                {
+                    bool const isCustomGurubashiFFAArea =
+                        newarea == 2177 || newarea == 30232 ||
+                        m_zoneUpdateId == 2177 || m_zoneUpdateId == 30232;
+
+                    // Repair stale FFA state when the area id is already correct but the PvP flag did not get applied.
+                    if (isCustomGurubashiFFAArea && (!pvpInfo.IsInFFAPvPArea || !IsFFAPvP()))
+                        UpdateArea(newarea);
+                }
 
                 m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
             }
@@ -7388,7 +7400,7 @@ void Player::UpdateArea(uint32 newArea)
 
     if (!isFFAArea)
     {
-        static std::array<uint32, 2> const customFFAAreas = { 3217, 30232 }; // The Maul (Dire Maul arena), The Battle Ring (Gurubashi Arena WMO area)
+        static std::array<uint32, 3> const customFFAAreas = { 3217, 2177, 30232 }; // The Maul, Gurubashi Catacombs, The Battle Ring
 
         for (uint32 customArea : customFFAAreas)
         {
@@ -7401,7 +7413,6 @@ void Player::UpdateArea(uint32 newArea)
     }
 
     pvpInfo.IsInFFAPvPArea = isFFAArea;
-    UpdatePvPState(true);
 
     // check if we were in ffa arena and we left
     if (oldFFAPvPArea && !pvpInfo.IsInFFAPvPArea)
@@ -7432,6 +7443,9 @@ void Player::UpdateArea(uint32 newArea)
         SetRestFlag(REST_FLAG_IN_FACTION_AREA);
     else
         RemoveRestFlag(REST_FLAG_IN_FACTION_AREA);
+
+    // Re-apply FFA PvP after sanctuary/no-PvP state has been recalculated.
+    UpdatePvPState(true);
 }
 
 void Player::HandleAttackStopAfterTaunt()
