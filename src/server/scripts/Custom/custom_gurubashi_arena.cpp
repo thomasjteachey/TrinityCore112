@@ -59,6 +59,8 @@ constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
+constexpr float GURUBASHI_BATTLE_RING_FLOOR_REFERENCE_Z = 33.454601f;
+constexpr float GURUBASHI_BATTLE_RING_FLOOR_GRACE_YARDS = 5.0f;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
@@ -90,12 +92,25 @@ uint32 GetChestMarkRewardCount()
     return localTime.tm_hour == 21 ? 3u : 1u;
 }
 
+bool IsBelowGurubashiBattleRingFloor(Player const* player)
+{
+    if (!player)
+        return false;
+
+    return player->GetPositionZ() < GURUBASHI_BATTLE_RING_FLOOR_REFERENCE_Z - GURUBASHI_BATTLE_RING_FLOOR_GRACE_YARDS;
+}
+
 bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
 {
     if (!player)
         return false;
 
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
+        return false;
+
+    // Players deep below the Battle Ring floor can retain the FFA PvP state,
+    // but should not count as being inside Gurubashi Arena for arena checks.
+    if (IsBelowGurubashiBattleRingFloor(player))
         return false;
 
     // The server already maintains authoritative FFA arena membership.
