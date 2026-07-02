@@ -70,6 +70,7 @@ namespace GurubashiShadowSight
 {
 constexpr uint32 Entry = 184663;
 constexpr float PlayerClearance = 5.0f;
+constexpr float TriggerRadius = 3.0f;
 constexpr float MaxSpawnRadius = 30.0f;
 constexpr uint8 SpawnAttempts = 128;
 constexpr Seconds DespawnTime = 30s;
@@ -539,6 +540,7 @@ public:
     {
         _scheduler.Update(diff);
         _shadowSightScheduler.Update(diff);
+        DespawnTriggeredShadowSights();
 
         if (_chestActive && !IsChestGuidActiveInWorld(_currentChestGuid))
         {
@@ -704,6 +706,68 @@ private:
                 if (GameObject* shadowSight = map->GetGameObject(guid))
                     shadowSight->DespawnOrUnsummon();
         });
+    }
+
+
+    Player* FindShadowSightTriggerPlayer(GameObject const* shadowSight) const
+    {
+        if (!shadowSight || !shadowSight->IsInWorld())
+            return nullptr;
+
+        std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+        for (auto const& playerPair : ObjectAccessor::GetPlayers())
+        {
+            Player* player = playerPair.second;
+            if (!player || !player->IsInWorld() || !player->IsAlive())
+                continue;
+
+            if (player->GetMap() != shadowSight->GetMap())
+                continue;
+
+            if (GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId()) != GurubashiAreaState::BattleRing)
+                continue;
+
+            if (player->GetExactDist2d(shadowSight->GetPositionX(), shadowSight->GetPositionY()) <= GurubashiShadowSight::TriggerRadius)
+                return player;
+        }
+
+        return nullptr;
+    }
+
+    void DespawnTriggeredShadowSights()
+    {
+        if (_shadowSightGuids.empty())
+            return;
+
+        _shadowSightGuids.erase(std::remove_if(_shadowSightGuids.begin(), _shadowSightGuids.end(), [](ObjectGuid const& guid)
+        {
+            bool removeTrackedGuid = false;
+            sMapMgr->DoForAllMaps([&](Map* map)
+            {
+                if (removeTrackedGuid)
+                    return;
+
+                GameObject* shadowSight = map->GetGameObject(guid);
+                if (!shadowSight || !shadowSight->IsInWorld())
+                {
+                    removeTrackedGuid = true;
+                    return;
+                }
+
+                gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+                Player* triggerPlayer = event ? event->FindShadowSightTriggerPlayer(shadowSight) : nullptr;
+                if (!triggerPlayer)
+                    return;
+
+                if (GameObjectTemplate const* goInfo = shadowSight->GetGOInfo())
+                    if (goInfo->type == GAMEOBJECT_TYPE_TRAP && goInfo->trap.spellId)
+                        shadowSight->CastSpell(triggerPlayer, goInfo->trap.spellId);
+
+                shadowSight->DespawnOrUnsummon();
+                removeTrackedGuid = true;
+            });
+            return removeTrackedGuid;
+        }), _shadowSightGuids.end());
     }
 
     void PruneShadowSightGuids()
