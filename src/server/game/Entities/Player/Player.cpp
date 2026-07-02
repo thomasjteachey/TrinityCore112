@@ -7388,7 +7388,7 @@ void Player::UpdateArea(uint32 newArea)
 
     if (!isFFAArea)
     {
-        static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul (Dire Maul arena)
+        static std::array<uint32, 2> const customFFAAreas = { 3217, 30232 }; // The Maul (Dire Maul arena), The Battle Ring (Gurubashi Arena WMO area)
 
         for (uint32 customArea : customFFAAreas)
         {
