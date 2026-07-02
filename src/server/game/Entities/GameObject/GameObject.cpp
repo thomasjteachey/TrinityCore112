@@ -47,6 +47,14 @@
 #include <G3D/CoordinateFrame.h>
 #include <G3D/Quat.h>
 
+namespace
+{
+bool IsArenaShadowSightObject(uint32 entry)
+{
+    return entry == 184663 || entry == 184664;
+}
+}
+
 void GameObjectTemplate::InitializeQueryData()
 {
     for (uint8 loc = LOCALE_enUS; loc < TOTAL_LOCALES; ++loc)
@@ -821,9 +829,19 @@ void GameObject::Update(uint32 diff)
 
                         // Battleground gameobjects have data2 == 0 && data5 == 3
                         if (!goInfo->trap.diameter && goInfo->trap.cooldown == 3)
+                        {
+                            Battleground* bg = nullptr;
                             if (Player* player = target->ToPlayer())
-                                if (Battleground* bg = player->GetBattleground())
-                                    bg->HandleTriggerBuff(GetGUID());
+                                bg = player->GetBattleground();
+
+                            if (bg)
+                                bg->HandleTriggerBuff(GetGUID());
+                            else if (IsArenaShadowSightObject(GetEntry()))
+                            {
+                                DespawnOrUnsummon();
+                                break;
+                            }
+                        }
                     }
                     break;
                 }
@@ -1693,6 +1711,17 @@ void GameObject::Use(Unit* user)
 
             if (goInfo->trap.type == 1)         // Deactivate after trigger
                 SetLootState(GO_JUST_DEACTIVATED);
+            else if (IsArenaShadowSightObject(GetEntry()))
+            {
+                Battleground* bg = nullptr;
+                if (Player* player = user->ToPlayer())
+                    bg = player->GetBattleground();
+
+                if (bg)
+                    bg->HandleTriggerBuff(GetGUID());
+                else
+                    DespawnOrUnsummon();
+            }
 
             return;
         }
