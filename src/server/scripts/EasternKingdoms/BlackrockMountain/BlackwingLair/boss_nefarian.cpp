@@ -93,7 +93,8 @@ enum Paths
 enum GameObjects
 {
     GO_PORTCULLIS_ACTIVE       = 164726,
-    GO_PORTCULLIS_TOBOSSROOMS  = 175186
+    GO_PORTCULLIS_TOBOSSROOMS  = 175186,
+    GO_NEFARIAN_ARENA_OBJECT   = 179118
 };
 
 enum Creatures
@@ -160,6 +161,9 @@ Position const NefarianLoc[2] =
     {-7535.456543f, -1279.562500f, 476.798706f, 3.0f}  // nefarian move
 };
 
+Position const NefarianArenaObjectLoc = {-7587.76f, -1261.43f, 482.0f, 0.577301f};
+QuaternionData const NefarianArenaObjectRot = {0.0f, 0.0f, 0.284659f, 0.958629f};
+
 uint32 const Entry[5] = {NPC_BRONZE_DRAKANOID, NPC_BLUE_DRAKANOID, NPC_RED_DRAKANOID, NPC_GREEN_DRAKANOID, NPC_BLACK_DRAKANOID};
 
 struct boss_victor_nefarius : public BossAI
@@ -201,6 +205,9 @@ struct boss_victor_nefarius : public BossAI
         _JustEngagedWith(target);
 
         Talk(SAY_GAMESBEGIN_2);
+
+        if (!me->FindNearestGameObject(GO_NEFARIAN_ARENA_OBJECT, 50.0f))
+            me->SummonGameObject(GO_NEFARIAN_ARENA_OBJECT, NefarianArenaObjectLoc, NefarianArenaObjectRot, 0s);
 
         me->SetFaction(FACTION_DRAGONFLIGHT_BLACK);
         me->RemoveNpcFlag(UNIT_NPC_FLAG_GOSSIP);
