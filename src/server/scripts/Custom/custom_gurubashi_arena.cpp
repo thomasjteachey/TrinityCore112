@@ -65,8 +65,17 @@ constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr float GURUBASHI_BATTLE_RING_FLOOR_REFERENCE_Z = 33.454601f;
 constexpr float GURUBASHI_BATTLE_RING_FLOOR_GRACE_YARDS = 5.0f;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
-constexpr Seconds SHADOW_SIGHT_DESPAWN_TIME = 30s;
-constexpr Seconds SHADOW_SIGHT_RESPAWN_INTERVAL = 30s;
+
+namespace GurubashiShadowSight
+{
+constexpr uint32 Entry = 184663;
+constexpr float PlayerClearance = 5.0f;
+constexpr float MaxSpawnRadius = 30.0f;
+constexpr uint8 SpawnAttempts = 128;
+constexpr Seconds DespawnTime = 30s;
+constexpr Seconds RespawnInterval = 30s;
+}
+
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 {
@@ -304,7 +313,7 @@ Position BuildRandomBattleRingPosition(Player* player)
     for (uint8 attempt = 0; attempt < 8; ++attempt)
     {
         float const angle = frand(0.0f, twoPi);
-        float const radius = frand(3.0f, SHADOW_SIGHT_MAX_SPAWN_RADIUS);
+        float const radius = frand(3.0f, GurubashiShadowSight::MaxSpawnRadius);
 
         float const x = ChestSpawnPosition.GetPositionX() + std::cos(angle) * radius;
         float const y = ChestSpawnPosition.GetPositionY() + std::sin(angle) * radius;
@@ -335,7 +344,7 @@ bool IsBattleRingPointClearOfPlayers(Map const* map, Position const& position)
         if (player->GetMap() != map || GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId()) != GurubashiAreaState::BattleRing)
             continue;
 
-        if (player->GetExactDist2d(position.GetPositionX(), position.GetPositionY()) < SHADOW_SIGHT_PLAYER_CLEARANCE)
+        if (player->GetExactDist2d(position.GetPositionX(), position.GetPositionY()) < GurubashiShadowSight::PlayerClearance)
             return false;
     }
 
@@ -350,11 +359,11 @@ bool BuildRandomShadowSightPosition(Player* summoner, Position& destination)
     constexpr float twoPi = 6.28318530718f;
     Map* map = summoner->GetMap();
 
-    for (uint8 attempt = 0; attempt < SHADOW_SIGHT_SPAWN_ATTEMPTS; ++attempt)
+    for (uint8 attempt = 0; attempt < GurubashiShadowSight::SpawnAttempts; ++attempt)
     {
         float const angle = frand(0.0f, twoPi);
         // sqrt keeps selection uniform across the circular battle-ring surface.
-        float const radius = std::sqrt(frand(0.0f, 1.0f)) * SHADOW_SIGHT_MAX_SPAWN_RADIUS;
+        float const radius = std::sqrt(frand(0.0f, 1.0f)) * GurubashiShadowSight::MaxSpawnRadius;
         float const x = ChestSpawnPosition.GetPositionX() + std::cos(angle) * radius;
         float const y = ChestSpawnPosition.GetPositionY() + std::sin(angle) * radius;
         float const z = map->GetHeight(summoner->GetPhaseMask(), x, y, ChestSpawnPosition.GetPositionZ() + 6.0f);
@@ -665,13 +674,13 @@ private:
     void ScheduleShadowSightSpawns()
     {
         _shadowSightScheduler.CancelAll();
-        _shadowSightScheduler.Schedule(SHADOW_SIGHT_RESPAWN_INTERVAL, [this](TaskContext context)
+        _shadowSightScheduler.Schedule(GurubashiShadowSight::RespawnInterval, [this](TaskContext context)
         {
             if (!IsChestActive())
                 return;
 
             AttemptShadowSightSpawn();
-            context.Repeat(SHADOW_SIGHT_RESPAWN_INTERVAL);
+            context.Repeat(GurubashiShadowSight::RespawnInterval);
         });
     }
 
@@ -730,7 +739,7 @@ private:
 
         DespawnShadowSights();
 
-        if (GameObject* shadowSight = summoner->SummonGameObject(SHADOW_SIGHT_ENTRY, shadowSightPosition, QuaternionData::fromEulerAnglesZYX(shadowSightPosition.GetOrientation(), 0.f, 0.f), SHADOW_SIGHT_DESPAWN_TIME))
+        if (GameObject* shadowSight = summoner->SummonGameObject(GurubashiShadowSight::Entry, shadowSightPosition, QuaternionData::fromEulerAnglesZYX(shadowSightPosition.GetOrientation(), 0.f, 0.f), GurubashiShadowSight::DespawnTime))
         {
             summoner->RemoveGameObject(shadowSight, false);
             shadowSight->SetRespawnTime(0);
