@@ -33,7 +33,9 @@ void BattlegroundNL::StartingEventCloseDoors()
     SpawnBGObject(BG_NL_OBJECT_DOOR_2, RESPAWN_IMMEDIATELY);
     SpawnBGObject(BG_NL_OBJECT_WALL_1, RESPAWN_IMMEDIATELY);
 
-    // Hide Shadow Sight until the arena begins.
+    // Hide the start object and Shadow Sight until the arena begins.
+    SpawnBGObject(BG_NL_OBJECT_START_OBJECT, RESPAWN_ONE_DAY);
+
     SpawnBGObject(BG_NL_OBJECT_BUFF_1, RESPAWN_ONE_DAY);
     SpawnBGObject(BG_NL_OBJECT_BUFF_2, RESPAWN_ONE_DAY);
 
@@ -48,6 +50,8 @@ void BattlegroundNL::StartingEventOpenDoors()
     // in the source BWL spawn, state 1 is open and player use toggles it shut.
     SetNefarianDoorOpen(BG_NL_OBJECT_DOOR_1);
     SetNefarianDoorOpen(BG_NL_OBJECT_DOOR_2);
+
+    SpawnBGObject(BG_NL_OBJECT_START_OBJECT, RESPAWN_IMMEDIATELY);
 
     SpawnBGObject(BG_NL_OBJECT_BUFF_1, 60);
     SpawnBGObject(BG_NL_OBJECT_BUFF_2, 60);
@@ -87,6 +91,11 @@ bool BattlegroundNL::SetupBattleground()
             -7464.000000f, -1103.550049f, 480.029999f, 0.610865f,
             0.0f, 0.0f, 0.300706f, 0.953717f,
             RESPAWN_IMMEDIATELY, GO_STATE_READY)
+        // Start object, from requested BWL gameobject 35829.
+        || !AddObject(BG_NL_OBJECT_START_OBJECT, BG_NL_OBJECT_TYPE_START,
+            -7587.760000f, -1261.430000f, 482.000000f, 0.577301f,
+            0.0f, 0.0f, 0.284659f, 0.958629f,
+            RESPAWN_ONE_DAY)
         // Shadow Sight objects.
         || !AddObject(BG_NL_OBJECT_BUFF_1, BG_NL_OBJECT_TYPE_BUFF_1,
             -7571.823242f, -1250.127808f, 476.800140f, 0.628354f,
@@ -117,6 +126,9 @@ void BattlegroundNL::ApplyNonInteractableObjectFlags()
 
     if (GameObject* wall = GetBGObject(BG_NL_OBJECT_WALL_1, false))
         wall->SetFlag(GO_FLAG_NOT_SELECTABLE);
+
+    if (GameObject* startObject = GetBGObject(BG_NL_OBJECT_START_OBJECT, false))
+        startObject->SetFlag(GO_FLAG_NOT_SELECTABLE);
 }
 
 void BattlegroundNL::SetNefarianDoorClosed(uint32 type)
