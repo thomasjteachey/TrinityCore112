@@ -23,18 +23,20 @@
 // Custom arena type 103 / map 1572.
 enum BattlegroundNLObjectTypes
 {
-    BG_NL_OBJECT_DOOR_1      = 0,
-    BG_NL_OBJECT_DOOR_2      = 1,
-    BG_NL_OBJECT_WALL_1      = 2,
-    BG_NL_OBJECT_BUFF_1      = 3,
-    BG_NL_OBJECT_BUFF_2      = 4,
-    BG_NL_OBJECT_MAX         = 5
+    BG_NL_OBJECT_DOOR_1       = 0,
+    BG_NL_OBJECT_DOOR_2       = 1,
+    BG_NL_OBJECT_WALL_1       = 2,
+    BG_NL_OBJECT_START_OBJECT = 3,
+    BG_NL_OBJECT_BUFF_1       = 4,
+    BG_NL_OBJECT_BUFF_2       = 5,
+    BG_NL_OBJECT_MAX          = 6
 };
 
 enum BattlegroundNLGameObjects
 {
     BG_NL_OBJECT_TYPE_DOOR   = 176966, // BWL Portcullis
     BG_NL_OBJECT_TYPE_WALL   = 179117, // BWL Portcullis / permanent blocker
+    BG_NL_OBJECT_TYPE_START  = 179118, // BWL arena start object
     BG_NL_OBJECT_TYPE_BUFF_1 = 184663, // Shadow Sight
     BG_NL_OBJECT_TYPE_BUFF_2 = 184664  // Shadow Sight
 };
