@@ -36,6 +36,7 @@
 #include "TemporarySummon.h"
 #include "Util.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -44,6 +45,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace std::chrono_literals;
@@ -62,6 +64,18 @@ constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
 constexpr float GURUBASHI_BATTLE_RING_FLOOR_REFERENCE_Z = 20.613464f;
 constexpr float GURUBASHI_BATTLE_RING_FLOOR_GRACE_YARDS = 5.0f;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
+
+namespace GurubashiShadowSight
+{
+constexpr uint32 Entry = 184663;
+constexpr float PlayerClearance = 5.0f;
+constexpr float TriggerRadius = 3.0f;
+constexpr float MaxSpawnRadius = 30.0f;
+constexpr uint8 SpawnAttempts = 128;
+constexpr Seconds DespawnTime = 30s;
+constexpr Seconds RespawnInterval = 30s;
+}
+
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
 char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
 {
@@ -77,6 +91,7 @@ char const* const GURUBASHI_LATE_ENTRY_RULE_WHISPER = "You were not part of this
 
 void ClearChestDeathLockouts();
 void ClearChestParticipants();
+void StopGurubashiShadowSightSpawns();
 void MarkChestParticipants(std::vector<ObjectGuid> const& participantGuids);
 bool IsChestParticipant(ObjectGuid guid);
 
@@ -293,13 +308,12 @@ Position BuildRandomBattleRingPosition(Player* player)
     if (!player)
         return destination;
 
-    constexpr float maxRadius = 30.0f;
     constexpr float twoPi = 6.28318530718f;
 
     for (uint8 attempt = 0; attempt < 8; ++attempt)
     {
         float const angle = frand(0.0f, twoPi);
-        float const radius = frand(3.0f, maxRadius);
+        float const radius = frand(3.0f, GurubashiShadowSight::MaxSpawnRadius);
 
         float const x = ChestSpawnPosition.GetPositionX() + std::cos(angle) * radius;
         float const y = ChestSpawnPosition.GetPositionY() + std::sin(angle) * radius;
@@ -313,6 +327,59 @@ Position BuildRandomBattleRingPosition(Player* player)
     }
 
     return destination;
+}
+
+bool IsBattleRingPointClearOfPlayers(Map const* map, Position const& position)
+{
+    if (!map)
+        return false;
+
+    std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+    for (auto const& playerPair : ObjectAccessor::GetPlayers())
+    {
+        Player* player = playerPair.second;
+        if (!player || !player->IsInWorld() || !player->IsAlive())
+            continue;
+
+        if (player->GetMap() != map || GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId()) != GurubashiAreaState::BattleRing)
+            continue;
+
+        if (player->GetExactDist2d(position.GetPositionX(), position.GetPositionY()) < GurubashiShadowSight::PlayerClearance)
+            return false;
+    }
+
+    return true;
+}
+
+bool BuildRandomShadowSightPosition(Player* summoner, Position& destination)
+{
+    if (!summoner || !summoner->GetMap())
+        return false;
+
+    constexpr float twoPi = 6.28318530718f;
+    Map* map = summoner->GetMap();
+
+    for (uint8 attempt = 0; attempt < GurubashiShadowSight::SpawnAttempts; ++attempt)
+    {
+        float const angle = frand(0.0f, twoPi);
+        // sqrt keeps selection uniform across the circular battle-ring surface.
+        float const radius = std::sqrt(frand(0.0f, 1.0f)) * GurubashiShadowSight::MaxSpawnRadius;
+        float const x = ChestSpawnPosition.GetPositionX() + std::cos(angle) * radius;
+        float const y = ChestSpawnPosition.GetPositionY() + std::sin(angle) * radius;
+        float const z = map->GetHeight(summoner->GetPhaseMask(), x, y, ChestSpawnPosition.GetPositionZ() + 6.0f);
+
+        if (!std::isfinite(z))
+            continue;
+
+        Position candidate(x, y, z + 0.25f, frand(0.0f, twoPi));
+        if (!IsBattleRingPointClearOfPlayers(map, candidate))
+            continue;
+
+        destination = candidate;
+        return true;
+    }
+
+    return false;
 }
 
 void TeleportStranglethornPlayersToBattleRing()
@@ -414,6 +481,7 @@ public:
             _rewardGranted = true;
             ClearChestDeathLockouts();
             ClearChestParticipants();
+            StopGurubashiShadowSightSpawns();
             me->DespawnOrUnsummon();
         }
 
@@ -458,6 +526,7 @@ public:
     void OnShutdown() override
     {
         _scheduler.CancelAll();
+        StopShadowSightSpawns();
         _currentChestGuid.Clear();
         _nextCheckTimeMs = 0;
         _lastEligibleCount = 0;
@@ -469,11 +538,14 @@ public:
     void OnUpdate(uint32 diff) override
     {
         _scheduler.Update(diff);
+        _shadowSightScheduler.Update(diff);
+        DespawnTriggeredShadowSights();
 
         if (_chestActive && !IsChestGuidActiveInWorld(_currentChestGuid))
         {
             _currentChestGuid.Clear();
             _chestActive = false;
+            StopShadowSightSpawns();
             ClearChestDeathLockouts();
             ClearChestParticipants();
         }
@@ -509,6 +581,13 @@ public:
     bool IsChestActive() const
     {
         return _currentChestGuid && _chestActive;
+    }
+
+    void OnChestLooted()
+    {
+        _currentChestGuid.Clear();
+        _chestActive = false;
+        StopShadowSightSpawns();
     }
 
 private:
@@ -571,6 +650,7 @@ private:
 
             _currentChestGuid.Clear();
             _chestActive = false;
+            StopShadowSightSpawns();
             ClearChestDeathLockouts();
             ClearChestParticipants();
         }
@@ -584,6 +664,7 @@ private:
             _chestActive = true;
             ClearChestDeathLockouts();
             TeleportStranglethornPlayersToBattleRing();
+            ScheduleShadowSightSpawns();
             YellFromChromie();
             return SpawnResult::Success;
         }
@@ -591,17 +672,165 @@ private:
         return SpawnResult::MapNotAvailable;
     }
 
+    void ScheduleShadowSightSpawns()
+    {
+        _shadowSightScheduler.CancelAll();
+        _shadowSightScheduler.Schedule(GurubashiShadowSight::RespawnInterval, [this](TaskContext context)
+        {
+            if (!IsChestActive())
+                return;
+
+            AttemptShadowSightSpawn();
+            context.Repeat(GurubashiShadowSight::RespawnInterval);
+        });
+    }
+
+    void StopShadowSightSpawns()
+    {
+        _shadowSightScheduler.CancelAll();
+        DespawnShadowSights();
+    }
+
+    void DespawnShadowSights()
+    {
+        if (_shadowSightGuids.empty())
+            return;
+
+        std::vector<ObjectGuid> shadowSightGuids = std::move(_shadowSightGuids);
+        _shadowSightGuids.clear();
+
+        sMapMgr->DoForAllMaps([&shadowSightGuids](Map* map)
+        {
+            for (ObjectGuid const& guid : shadowSightGuids)
+                if (GameObject* shadowSight = map->GetGameObject(guid))
+                    shadowSight->DespawnOrUnsummon();
+        });
+    }
+
+
+    Player* FindShadowSightTriggerPlayer(GameObject const* shadowSight) const
+    {
+        if (!shadowSight || !shadowSight->IsInWorld())
+            return nullptr;
+
+        std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+        for (auto const& playerPair : ObjectAccessor::GetPlayers())
+        {
+            Player* player = playerPair.second;
+            if (!player || !player->IsInWorld() || !player->IsAlive())
+                continue;
+
+            if (player->GetMap() != shadowSight->GetMap())
+                continue;
+
+            if (GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId()) != GurubashiAreaState::BattleRing)
+                continue;
+
+            if (player->GetExactDist2d(shadowSight->GetPositionX(), shadowSight->GetPositionY()) <= GurubashiShadowSight::TriggerRadius)
+                return player;
+        }
+
+        return nullptr;
+    }
+
+    void DespawnTriggeredShadowSights()
+    {
+        if (_shadowSightGuids.empty())
+            return;
+
+        _shadowSightGuids.erase(std::remove_if(_shadowSightGuids.begin(), _shadowSightGuids.end(), [](ObjectGuid const& guid)
+        {
+            bool removeTrackedGuid = false;
+            sMapMgr->DoForAllMaps([&](Map* map)
+            {
+                if (removeTrackedGuid)
+                    return;
+
+                GameObject* shadowSight = map->GetGameObject(guid);
+                if (!shadowSight || !shadowSight->IsInWorld())
+                {
+                    removeTrackedGuid = true;
+                    return;
+                }
+
+                gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
+                Player* triggerPlayer = event ? event->FindShadowSightTriggerPlayer(shadowSight) : nullptr;
+                if (!triggerPlayer)
+                    return;
+
+                if (GameObjectTemplate const* goInfo = shadowSight->GetGOInfo())
+                    if (goInfo->type == GAMEOBJECT_TYPE_TRAP && goInfo->trap.spellId)
+                        shadowSight->CastSpell(triggerPlayer, goInfo->trap.spellId);
+
+                shadowSight->DespawnOrUnsummon();
+                removeTrackedGuid = true;
+            });
+            return removeTrackedGuid;
+        }), _shadowSightGuids.end());
+    }
+
+    void PruneShadowSightGuids()
+    {
+        _shadowSightGuids.erase(std::remove_if(_shadowSightGuids.begin(), _shadowSightGuids.end(), [](ObjectGuid const& guid)
+        {
+            bool active = false;
+            sMapMgr->DoForAllMaps([&](Map* map)
+            {
+                if (active)
+                    return;
+
+                if (GameObject* shadowSight = map->GetGameObject(guid))
+                    active = shadowSight->IsInWorld();
+            });
+            return !active;
+        }), _shadowSightGuids.end());
+    }
+
+    void AttemptShadowSightSpawn()
+    {
+        PruneShadowSightGuids();
+
+        ObjectGuid summonerGuid;
+        CountEligiblePlayers(&summonerGuid);
+        Player* summoner = FindEligibleSummoner(summonerGuid);
+        if (!summoner || !summoner->IsInWorld())
+            return;
+
+        Position shadowSightPosition;
+        if (!BuildRandomShadowSightPosition(summoner, shadowSightPosition))
+            return;
+
+        DespawnShadowSights();
+
+        if (GameObject* shadowSight = summoner->SummonGameObject(GurubashiShadowSight::Entry, shadowSightPosition, QuaternionData::fromEulerAnglesZYX(shadowSightPosition.GetOrientation(), 0.f, 0.f), GurubashiShadowSight::DespawnTime))
+        {
+            summoner->RemoveGameObject(shadowSight, false);
+            shadowSight->SetRespawnTime(0);
+            _shadowSightGuids.push_back(shadowSight->GetGUID());
+        }
+    }
+
     TaskScheduler _scheduler;
+    TaskScheduler _shadowSightScheduler;
     ObjectGuid _currentChestGuid;
     uint32 _nextCheckTimeMs = 0;
     bool _chestActive = false;
     uint32 _lastEligibleCount = 0;
+    std::vector<ObjectGuid> _shadowSightGuids;
 
     static gurubashi_arena_hourly_event* s_Instance;
 };
 
 gurubashi_arena_hourly_event* gurubashi_arena_hourly_event::s_Instance = nullptr;
 
+namespace
+{
+void StopGurubashiShadowSightSpawns()
+{
+    if (gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance())
+        event->OnChestLooted();
+}
+}
 
 namespace
 {
