@@ -71,7 +71,7 @@ char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
     "Enemy players impede the exit from the Battle Ring."
 };
 
-Position const ChestSpawnPosition = { -13204.609f, 272.2056f, 21.858f, 1.022f };
+Position const ChestSpawnPosition = { -13205.281250f, 273.045685f, 20.550077f, 4.423725f };
 char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
 char const* const GURUBASHI_LATE_ENTRY_RULE_WHISPER = "You were not part of this chest battle. Entering the Battle Ring now is forbidden.";
 
