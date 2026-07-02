@@ -54,15 +54,16 @@ namespace
 {
 constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
 constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
+constexpr uint32 GURUBASHI_CATACOMBS_AREA_ID = 2177;
+constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 30232;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
+constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
 constexpr uint32 CHROMIE_ENTRY = 10667;
 constexpr uint32 PVP_CONSUMABLE_ITEM_LIMIT_CATEGORY = 5;
 constexpr uint32 TELEPORT_VISUAL_SPELL = 64446;
 constexpr uint32 FORCED_DEATH_STARFIRE_SPELL_ID = 48465;
 constexpr uint32 REQUIRED_PLAYER_COUNT = 5;
-constexpr float GURUBASHI_BATTLE_RING_FLOOR_REFERENCE_Z = 20.613464f;
-constexpr float GURUBASHI_BATTLE_RING_FLOOR_GRACE_YARDS = 5.0f;
 constexpr Seconds CHEST_DESPAWN_TIME = 15min;
 
 namespace GurubashiShadowSight
@@ -107,32 +108,6 @@ uint32 GetChestMarkRewardCount()
     return localTime.tm_hour == 21 ? 3u : 1u;
 }
 
-bool IsBelowGurubashiBattleRingFloor(Player const* player)
-{
-    if (!player)
-        return false;
-
-    return player->GetPositionZ() < GURUBASHI_BATTLE_RING_FLOOR_REFERENCE_Z - GURUBASHI_BATTLE_RING_FLOOR_GRACE_YARDS;
-}
-
-bool IsInGurubashiBattleRingByPvpState(Player const* player, uint32 zoneId)
-{
-    if (!player)
-        return false;
-
-    if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
-        return false;
-
-    // Players deep below the Battle Ring floor can retain the FFA PvP state,
-    // but should not count as being inside Gurubashi Arena for arena checks.
-    if (IsBelowGurubashiBattleRingFloor(player))
-        return false;
-
-    // The server already maintains authoritative FFA arena membership.
-    // In Gurubashi, entering/leaving the battle ring toggles this state.
-    return player->pvpInfo.IsInFFAPvPArea && player->HasPvpFlag(UNIT_BYTE2_FLAG_FFA_PVP);
-}
-
 bool IsPlayerEligible(Player* player)
 {
     if (!player || !player->IsInWorld())
@@ -157,16 +132,22 @@ enum class GurubashiAreaState
     NonRing
 };
 
-GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 /*areaId*/)
+GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, uint32 areaId)
 {
     if (!player)
+        return GurubashiAreaState::Outside;
+
+    if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
         return GurubashiAreaState::Outside;
 
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    if (IsInGurubashiBattleRingByPvpState(player, zoneId))
+    if (areaId == GURUBASHI_BATTLE_RING_AREA_ID)
         return GurubashiAreaState::BattleRing;
+
+    if (areaId == GURUBASHI_CATACOMBS_AREA_ID)
+        return GurubashiAreaState::NonRing;
 
     return GurubashiAreaState::NonRing;
 }
