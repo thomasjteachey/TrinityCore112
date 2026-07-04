@@ -1767,9 +1767,9 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     // Battleground cliff descent recovery:
     // When chasing a distant lower target from elevated terrain, repeatedly
-    // issuing CHASE/FOLLOW can route bots back uphill. Force a short direct
-    // downhill step toward the target to commit the descent before resuming
-    // target-relative pathing.
+    // issuing CHASE/FOLLOW can route bots back uphill. Move the bot downhill
+    // immediately by teleporting it to a legal point near the lower target,
+    // then resume normal target-relative pathing on the next update.
     bool const shouldForceDownhillCommit =
         battleground &&
         strictPathing &&
@@ -1780,24 +1780,33 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
     if (shouldForceDownhillCommit)
     {
-        bool const issuedStrictDescent = IssueStrictHumanMove(player, target->GetPosition(), 3.0f, 350);
-        if (issuedStrictDescent)
-        {
-            stallState.targetGuid = target->GetGUID();
-            stallState.lastDistance = currentDistance;
-            stallState.lastSampleMs = nowMs;
-            stallState.lastIssueMs = nowMs;
-            stallState.lastIssuedRange = safeDistance;
-            stallState.lastIssuedMode = 1;
+        float teleportX = target->GetPositionX();
+        float teleportY = target->GetPositionY();
+        float teleportZ = target->GetPositionZ();
+        float const teleportRange = std::clamp(safeDistance, 2.0f, 12.0f);
+        target->GetNearPoint(player, teleportX, teleportY, teleportZ, teleportRange, target->GetAbsoluteAngle(player));
 
-            std::ostringstream diag;
-            diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_strict_path",
-                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "strict_path")
-                 << " vertical_delta=" << verticalDeltaToTarget
-                 << " planar_delta=" << planarDistanceToTarget;
-            SetLastMovementDebugStatus(player, diag.str());
-            return;
-        }
+        Position teleportDestination(teleportX, teleportY, teleportZ, player->GetOrientation());
+        teleportDestination = BuildCollisionSafeDestination(player, teleportDestination);
+
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        player->NearTeleportTo(teleportDestination, false);
+
+        stallState.targetGuid = target->GetGUID();
+        stallState.lastDistance = currentDistance;
+        stallState.lastSampleMs = nowMs;
+        stallState.lastIssueMs = nowMs;
+        stallState.lastIssuedRange = safeDistance;
+        stallState.lastIssuedMode = 1;
+
+        std::ostringstream diag;
+        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_teleport",
+            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "teleport")
+             << " vertical_delta=" << verticalDeltaToTarget
+             << " planar_delta=" << planarDistanceToTarget
+             << " teleport_dist=" << player->GetDistance(teleportDestination);
+        SetLastMovementDebugStatus(player, diag.str());
+        return;
     }
 
     // For target-relative ranged approach, do NOT use MovePoint here.
