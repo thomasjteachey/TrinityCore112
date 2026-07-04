@@ -37,12 +37,12 @@
 #include <sys/stat.h>
 
 #ifdef _WIN32
-    #include <direct.h>
-    #define mkdir _mkdir
+#include <direct.h>
+#define mkdir _mkdir
 #endif
 
-//------------------------------------------------------------------------------
-// Defines
+ //------------------------------------------------------------------------------
+ // Defines
 
 #define MPQ_BLOCK_SIZE 0x1000
 
@@ -58,11 +58,10 @@ typedef struct
 
 std::vector<map_id> map_ids;
 uint32 map_count;
-char output_path[128]=".";
-char input_path[1024]=".";
+char output_path[128] = ".";
+char input_path[1024] = ".";
 bool hasInputPathParam = false;
 bool preciseVectorData = false;
-int singleMapId = -1;
 std::unordered_map<std::string, WMODoodadData> WmoDoodads;
 
 // Constants
@@ -137,8 +136,8 @@ bool ExtractSingleWmo(std::string& fname)
         printf("Couldn't open RootWmo!!!\n");
         return true;
     }
-    FILE *output = fopen(szLocalFile,"wb");
-    if(!output)
+    FILE* output = fopen(szLocalFile, "wb");
+    if (!output)
     {
         printf("couldn't open %s for writing!\n", szLocalFile);
         return false;
@@ -149,13 +148,13 @@ bool ExtractSingleWmo(std::string& fname)
     int Wmo_nVertices = 0;
     uint32 groupCount = 0;
     //printf("root has %d groups\n", froot->nGroups);
-    if (froot.nGroups !=0)
+    if (froot.nGroups != 0)
     {
         for (uint32 i = 0; i < froot.nGroups; ++i)
         {
             char temp[1024];
             strncpy(temp, fname.c_str(), 1024);
-            temp[fname.length()-4] = 0;
+            temp[fname.length() - 4] = 0;
 
             WMOGroup fgroup(Trinity::StringFormat("{}_{:03}.wmo", temp, i));
             if (!fgroup.open(&froot))
@@ -185,7 +184,7 @@ bool ExtractSingleWmo(std::string& fname)
     }
 
     fseek(output, 8, SEEK_SET); // store the correct no of vertices
-    fwrite(&Wmo_nVertices,sizeof(int),1,output);
+    fwrite(&Wmo_nVertices, sizeof(int), 1, output);
     // store the correct no of groups
     fwrite(&groupCount, sizeof(uint32), 1, output);
     fclose(output);
@@ -200,24 +199,18 @@ void ParsMapFiles()
 {
     char fn[512];
     //char id_filename[64];
-    if (singleMapId >= 0)
-        printf("Single-map mode: extracting map %d only\n", singleMapId);
-
-    for (unsigned int i=0; i<map_count; ++i)
+    for (unsigned int i = 0; i < map_count; ++i)
     {
-        if (singleMapId >= 0 && static_cast<unsigned int>(singleMapId) != map_ids[i].id)
-            continue;
-
-        sprintf(fn,"World\\Maps\\%s\\%s.wdt", map_ids[i].name, map_ids[i].name);
-        WDTFile WDT(fn,map_ids[i].name);
+        sprintf(fn, "World\\Maps\\%s\\%s.wdt", map_ids[i].name, map_ids[i].name);
+        WDTFile WDT(fn, map_ids[i].name);
         if (WDT.init(map_ids[i].id))
         {
             printf("Processing Map %u\n[", map_ids[i].id);
-            for (int x=0; x<64; ++x)
+            for (int x = 0; x < 64; ++x)
             {
-                for (int y=0; y<64; ++y)
+                for (int y = 0; y < 64; ++y)
                 {
-                    if (ADTFile *ADT = WDT.GetMap(x,y))
+                    if (ADTFile* ADT = WDT.GetMap(x, y))
                     {
                         //sprintf(id_filename,"%02u %02u %03u",x,y,map_ids[i].id);//!!!!!!!!!
                         ADT->init(map_ids[i].id, x, y);
@@ -235,26 +228,10 @@ void ParsMapFiles()
 void getGamePath()
 {
 #ifdef _WIN32
-    strcpy(input_path,"Data\\");
+    strcpy(input_path, "Data\\");
 #else
-    strcpy(input_path,"Data/");
+    strcpy(input_path, "Data/");
 #endif
-}
-
-static bool add_archive_if_exists(std::string const& path, std::vector<std::string>& pArchiveNames)
-{
-#ifdef __linux__
-    FILE* h = fopen64(path.c_str(), "rb");
-#else
-    FILE* h = fopen(path.c_str(), "rb");
-#endif
-
-    if (!h)
-        return false;
-
-    fclose(h);
-    pArchiveNames.push_back(path);
-    return true;
 }
 
 bool scan_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames)
@@ -272,28 +249,24 @@ bool scan_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames
         {
             sprintf(path, "%s.MPQ", scanmatch);
         }
-
-        add_archive_if_exists(path, pArchiveNames);
+#ifdef __linux__
+        if (FILE* h = fopen64(path, "rb"))
+#else
+        if (FILE* h = fopen(path, "rb"))
+#endif
+        {
+            fclose(h);
+            //matches.push_back(path);
+            pArchiveNames.push_back(path);
+        }
     }
 
     return(true);
 }
 
-void scan_letter_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames)
-{
-    char path[512];
-
-    for (char letter = 'A'; letter <= 'Z'; ++letter)
-    {
-        sprintf(path, "%s-%c.MPQ", scanmatch, letter);
-        if (add_archive_if_exists(path, pArchiveNames))
-            printf("Found custom patch archive: %s\n", path);
-    }
-}
-
 bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
 {
-    if(!hasInputPathParam)
+    if (!hasInputPathParam)
         getGamePath();
 
     printf("\nGame path: %s\n", input_path);
@@ -354,19 +327,12 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
     for (std::string const& locale : locales)
     {
         printf("Locale: %s\n", locale.c_str());
-        if(scan_patches(Trinity::StringFormat("{}{}/patch-{}", input_path, locale, locale).c_str(), pArchiveNames))
+        if (scan_patches(Trinity::StringFormat("{}{}/patch-{}", input_path, locale, locale).c_str(), pArchiveNames))
             foundOne = true;
     }
-
-    // Custom letter patches such as patch-Z.MPQ. Add these after the stock
-    // numeric and locale patches so they are opened last and therefore win
-    // MPQ lookup priority (MPQArchive pushes opened archives to the front).
-    printf("Scanning custom letter patches from data directory.\n");
-    scan_letter_patches(Trinity::StringFormat("{}patch", input_path).c_str(), pArchiveNames);
-
     printf("\n");
 
-    if(!foundOne)
+    if (!foundOne)
     {
         printf("no locale found\n");
         return false;
@@ -375,21 +341,21 @@ bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
     return true;
 }
 
-bool processArgv(int argc, char ** argv, const char *versionString)
+bool processArgv(int argc, char** argv, const char* versionString)
 {
     bool result = true;
     hasInputPathParam = false;
     preciseVectorData = false;
 
-    for(int i = 1; i < argc; ++i)
+    for (int i = 1; i < argc; ++i)
     {
-        if(strcmp("-s",argv[i]) == 0)
+        if (strcmp("-s", argv[i]) == 0)
         {
             preciseVectorData = false;
         }
-        else if(strcmp("-d",argv[i]) == 0)
+        else if (strcmp("-d", argv[i]) == 0)
         {
-            if((i+1)<argc)
+            if ((i + 1) < argc)
             {
                 hasInputPathParam = true;
                 strncpy(input_path, argv[i + 1], sizeof(input_path));
@@ -404,25 +370,13 @@ bool processArgv(int argc, char ** argv, const char *versionString)
                 result = false;
             }
         }
-        else if(strcmp("-?",argv[1]) == 0)
+        else if (strcmp("-?", argv[1]) == 0)
         {
             result = false;
         }
-        else if(strcmp("-l",argv[i]) == 0)
+        else if (strcmp("-l", argv[i]) == 0)
         {
             preciseVectorData = true;
-        }
-        else if(strcmp("-m",argv[i]) == 0)
-        {
-            if((i+1)<argc)
-            {
-                singleMapId = atoi(argv[i + 1]);
-                if (singleMapId < 0)
-                    result = false;
-                ++i;
-            }
-            else
-                result = false;
         }
         else
         {
@@ -430,14 +384,13 @@ bool processArgv(int argc, char ** argv, const char *versionString)
             break;
         }
     }
-    if(!result)
+    if (!result)
     {
-        printf("Extract %s.\n",versionString);
-        printf("%s [-?][-s][-l][-d <path>][-m <mapid>]\n", argv[0]);
+        printf("Extract %s.\n", versionString);
+        printf("%s [-?][-s][-l][-d <path>]\n", argv[0]);
         printf("   -s : (default) small size (data size optimization), ~500MB less vmap data.\n");
         printf("   -l : large size, ~500MB more vmap data. (might contain more details)\n");
         printf("   -d <path>: Path to the vector data source folder.\n");
-        printf("   -m <mapid>: Extract static map WMO/ADT data only for one map, example: -m 617.\n");
         printf("   -? : This message.\n");
     }
     return result;
@@ -452,7 +405,7 @@ bool processArgv(int argc, char ** argv, const char *versionString)
 // Arg2 - Listfile name
 //
 
-int main(int argc, char ** argv)
+int main(int argc, char** argv)
 {
     Trinity::VerifyOsVersion();
 
@@ -461,7 +414,7 @@ int main(int argc, char ** argv)
     Trinity::Banner::Show("VMAP data extractor", [](char const* text) { printf("%s\n", text); }, nullptr);
 
     bool success = true;
-    const char *versionString = "V4.00 2012_02";
+    const char* versionString = "V4.00 2012_02";
 
     // Use command line arguments, when some
     if (!processArgv(argc, argv, versionString))
@@ -487,17 +440,17 @@ int main(int argc, char ** argv)
     // Create the working directory
     if (mkdir(szWorkDirWmo
 #if defined(__linux__) || defined(__APPLE__) || defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-                    , 0711
+        , 0711
 #endif
-                    ))
-            success = (errno == EEXIST);
+    ))
+        success = (errno == EEXIST);
 
     // prepare archive name list
     std::vector<std::string> archiveNames;
     fillArchiveNameVector(archiveNames);
     for (size_t i = 0; i < archiveNames.size(); ++i)
     {
-        MPQArchive *archive = new MPQArchive(archiveNames[i].c_str());
+        MPQArchive* archive = new MPQArchive(archiveNames[i].c_str());
         if (gOpenArchives.empty() || gOpenArchives.front() != archive)
             delete archive;
     }
@@ -512,7 +465,7 @@ int main(int argc, char ** argv)
     //map.dbc
     if (success)
     {
-        DBCFile * dbc = new DBCFile("DBFilesClient\\Map.dbc");
+        DBCFile* dbc = new DBCFile("DBFilesClient\\Map.dbc");
         if (!dbc->open())
         {
             delete dbc;
