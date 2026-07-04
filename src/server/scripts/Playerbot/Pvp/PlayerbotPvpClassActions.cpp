@@ -535,7 +535,17 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
         float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
+        float const downwardDelta = player->GetPositionZ() - resolvedDestination.GetPositionZ();
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        // Never accept a strict movement segment that snaps sharply below the
+        // bot. Battleground floors, bridges, and ramps can have map-height
+        // samples below the walkable surface; issuing a MovePoint to that lower
+        // sample makes bots dive through the floor instead of pathing like a
+        // player. Real descents still work by chaining short, path-generated
+        // segments whose Z changes are proportional to their horizontal travel.
+        if (!player->IsInWater() && downwardDelta > std::max(4.0f, planarDelta * 0.35f + 1.0f))
             return false;
 
         return true;
@@ -1770,31 +1780,24 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
     if (shouldForceDownhillCommit)
     {
-        float const stepDistance = std::min(16.0f, std::max(6.0f, planarDistanceToTarget * 0.3f));
-        float const invPlanar = 1.0f / std::max(0.01f, planarDistanceToTarget);
-        Position downhillProbe(
-            player->GetPositionX() + dxToTarget * invPlanar * stepDistance,
-            player->GetPositionY() + dyToTarget * invPlanar * stepDistance,
-            player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
-            player->GetOrientation());
-        Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
-        motionMaster->MovePoint(0, downhillDestination, false);
+        bool const issuedStrictDescent = IssueStrictHumanMove(player, target->GetPosition(), 3.0f, 350);
+        if (issuedStrictDescent)
+        {
+            stallState.targetGuid = target->GetGUID();
+            stallState.lastDistance = currentDistance;
+            stallState.lastSampleMs = nowMs;
+            stallState.lastIssueMs = nowMs;
+            stallState.lastIssuedRange = safeDistance;
+            stallState.lastIssuedMode = 1;
 
-        stallState.targetGuid = target->GetGUID();
-        stallState.lastDistance = currentDistance;
-        stallState.lastSampleMs = nowMs;
-        stallState.lastIssueMs = nowMs;
-        stallState.lastIssuedRange = safeDistance;
-        stallState.lastIssuedMode = 1;
-
-        std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_direct",
-            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "direct")
-             << " vertical_delta=" << verticalDeltaToTarget
-             << " planar_delta=" << planarDistanceToTarget
-             << " commit_dist=" << player->GetDistance(downhillDestination);
-        SetLastMovementDebugStatus(player, diag.str());
-        return;
+            std::ostringstream diag;
+            diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_strict_path",
+                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "strict_path")
+                 << " vertical_delta=" << verticalDeltaToTarget
+                 << " planar_delta=" << planarDistanceToTarget;
+            SetLastMovementDebugStatus(player, diag.str());
+            return;
+        }
     }
 
     // For target-relative ranged approach, do NOT use MovePoint here.
