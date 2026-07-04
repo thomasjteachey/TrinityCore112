@@ -535,7 +535,17 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
         float const planarDelta = std::sqrt(dx * dx + dy * dy);
         float const verticalDelta = std::fabs(resolvedDestination.GetPositionZ() - player->GetPositionZ());
+        float const downwardDelta = player->GetPositionZ() - resolvedDestination.GetPositionZ();
         if (planarDelta < 0.5f || verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        // Never accept a strict movement segment that snaps sharply below the
+        // bot. Battleground floors, bridges, and ramps can have map-height
+        // samples below the walkable surface; issuing a MovePoint to that lower
+        // sample makes bots dive through the floor instead of pathing like a
+        // player. Real descents still work by chaining short, path-generated
+        // segments whose Z changes are proportional to their horizontal travel.
+        if (!player->IsInWater() && downwardDelta > std::max(4.0f, planarDelta * 0.35f + 1.0f))
             return false;
 
         return true;
@@ -1757,12 +1767,14 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     // Battleground cliff descent recovery:
     // When chasing a distant lower target from elevated terrain, repeatedly
-    // issuing CHASE/FOLLOW can route bots back uphill. Force a short direct
-    // downhill step toward the target to commit the descent before resuming
-    // target-relative pathing.
+    // issuing CHASE/FOLLOW can route bots back uphill. Move the bot only a short
+    // downhill step, then resume normal target-relative pathing on the next
+    // update. Do not teleport all the way to the target/midfield.
+    bool const downhillTeleportReady = !sameStallTarget || stallState.lastIssueMs == 0 || lastIssueAgeMs >= 3000;
     bool const shouldForceDownhillCommit =
         battleground &&
         strictPathing &&
+        downhillTeleportReady &&
         verticalDeltaToTarget > 8.0f &&
         planarDistanceToTarget > 30.0f &&
         !currentlyMoving &&
@@ -1770,15 +1782,22 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
     if (shouldForceDownhillCommit)
     {
-        float const stepDistance = std::min(16.0f, std::max(6.0f, planarDistanceToTarget * 0.3f));
-        float const invPlanar = 1.0f / std::max(0.01f, planarDistanceToTarget);
-        Position downhillProbe(
-            player->GetPositionX() + dxToTarget * invPlanar * stepDistance,
-            player->GetPositionY() + dyToTarget * invPlanar * stepDistance,
-            player->GetPositionZ() - std::min(12.0f, std::max(4.0f, verticalDeltaToTarget * 0.5f)),
-            player->GetOrientation());
-        Position const downhillDestination = BuildCollisionSafeDestination(player, downhillProbe);
-        motionMaster->MovePoint(0, downhillDestination, false);
+        float const teleportStep = std::clamp(planarDistanceToTarget * 0.20f, 12.0f, 35.0f);
+        float const teleportFraction = std::min(teleportStep / std::max(0.01f, planarDistanceToTarget), 1.0f);
+        float const teleportX = player->GetPositionX() + dxToTarget * teleportFraction;
+        float const teleportY = player->GetPositionY() + dyToTarget * teleportFraction;
+        float const teleportZ = player->GetPositionZ() - std::min(10.0f, verticalDeltaToTarget * teleportFraction);
+
+        // Do not call GetNearPoint/BuildCollisionSafeDestination here: both can
+        // call UpdateAllowedPositionZ(), which may sample the terrain below a
+        // bridge/platform and put the bot under the walkable surface. This is a
+        // capped downhill nudge from the bot's current position, not a teleport
+        // to the distant target.
+        Position teleportDestination(teleportX, teleportY, teleportZ, player->GetOrientation());
+
+        float const preTeleportDistance = player->GetDistance(teleportDestination);
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        player->NearTeleportTo(teleportDestination, false);
 
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
@@ -1788,11 +1807,13 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = 1;
 
         std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_direct",
-            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "direct")
+        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_teleport",
+            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "teleport")
              << " vertical_delta=" << verticalDeltaToTarget
              << " planar_delta=" << planarDistanceToTarget
-             << " commit_dist=" << player->GetDistance(downhillDestination);
+             << " teleport_dist=" << preTeleportDistance
+             << " teleport_step=" << teleportStep
+             << " cooldown_ms=3000";
         SetLastMovementDebugStatus(player, diag.str());
         return;
     }
