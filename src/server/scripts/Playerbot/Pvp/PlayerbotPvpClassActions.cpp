@@ -1782,13 +1782,17 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     {
         float teleportX = target->GetPositionX();
         float teleportY = target->GetPositionY();
-        float teleportZ = target->GetPositionZ();
         float const teleportRange = std::clamp(safeDistance, 2.0f, 12.0f);
-        target->GetNearPoint(player, teleportX, teleportY, teleportZ, teleportRange, target->GetAbsoluteAngle(player));
+        target->GetNearPoint2D(player, teleportX, teleportY, teleportRange, target->GetAbsoluteAngle(player));
 
-        Position teleportDestination(teleportX, teleportY, teleportZ, player->GetOrientation());
-        teleportDestination = BuildCollisionSafeDestination(player, teleportDestination);
+        // Do not call GetNearPoint/BuildCollisionSafeDestination here: both can
+        // call UpdateAllowedPositionZ(), which may sample the terrain below a
+        // bridge/platform and put the bot under the walkable surface. The target
+        // is already standing on the lower playable surface, so preserve its Z
+        // and only let normal movement resume after the teleport.
+        Position teleportDestination(teleportX, teleportY, target->GetPositionZ(), player->GetOrientation());
 
+        float const preTeleportDistance = player->GetDistance(teleportDestination);
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
         player->NearTeleportTo(teleportDestination, false);
 
@@ -1804,7 +1808,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "teleport")
              << " vertical_delta=" << verticalDeltaToTarget
              << " planar_delta=" << planarDistanceToTarget
-             << " teleport_dist=" << player->GetDistance(teleportDestination);
+             << " teleport_dist=" << preTeleportDistance;
         SetLastMovementDebugStatus(player, diag.str());
         return;
     }
