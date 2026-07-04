@@ -236,34 +236,51 @@ void getGamePath()
 
 bool scan_patches(char const* scanmatch, std::vector<std::string>& pArchiveNames)
 {
-    int i;
     char path[512];
 
-    for (i = 1; i <= 99; i++)
+    auto tryAddArchive = [&](char const* archivePath)
     {
-        if (i != 1)
-        {
-            sprintf(path, "%s-%d.MPQ", scanmatch, i);
-        }
-        else
-        {
-            sprintf(path, "%s.MPQ", scanmatch);
-        }
 #ifdef __linux__
-        if (FILE* h = fopen64(path, "rb"))
+        FILE* h = fopen64(archivePath, "rb");
 #else
-        if (FILE* h = fopen(path, "rb"))
+        FILE* h = fopen(archivePath, "rb");
 #endif
+        if (h)
         {
             fclose(h);
-            //matches.push_back(path);
-            pArchiveNames.push_back(path);
+            pArchiveNames.push_back(archivePath);
+            return true;
         }
+
+        return false;
+    };
+
+    // Normal Blizzard patch order:
+    // patch.MPQ, patch-2.MPQ, patch-3.MPQ ... patch-99.MPQ
+    for (int i = 1; i <= 99; ++i)
+    {
+        if (i != 1)
+            sprintf(path, "%s-%d.MPQ", scanmatch, i);
+        else
+            sprintf(path, "%s.MPQ", scanmatch);
+
+        tryAddArchive(path);
     }
 
-    return(true);
-}
+    // Custom lettered patches:
+    // patch-A.MPQ ... patch-Z.MPQ
+    //
+    // This makes patch-Z.MPQ load after numeric patches,
+    // so it should win override priority assuming later-opened archives
+    // are searched first by the MPQ archive layer.
+    for (char c = 'A'; c <= 'Z'; ++c)
+    {
+        sprintf(path, "%s-%c.MPQ", scanmatch, c);
+        tryAddArchive(path);
+    }
 
+    return true;
+}
 bool fillArchiveNameVector(std::vector<std::string>& pArchiveNames)
 {
     if (!hasInputPathParam)
