@@ -1767,12 +1767,14 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
 
     // Battleground cliff descent recovery:
     // When chasing a distant lower target from elevated terrain, repeatedly
-    // issuing CHASE/FOLLOW can route bots back uphill. Move the bot downhill
-    // immediately by teleporting it to a legal point near the lower target,
-    // then resume normal target-relative pathing on the next update.
+    // issuing CHASE/FOLLOW can route bots back uphill. Move the bot only a short
+    // downhill step, then resume normal target-relative pathing on the next
+    // update. Do not teleport all the way to the target/midfield.
+    bool const downhillTeleportReady = !sameStallTarget || stallState.lastIssueMs == 0 || lastIssueAgeMs >= 3000;
     bool const shouldForceDownhillCommit =
         battleground &&
         strictPathing &&
+        downhillTeleportReady &&
         verticalDeltaToTarget > 8.0f &&
         planarDistanceToTarget > 30.0f &&
         !currentlyMoving &&
@@ -1780,17 +1782,18 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
     if (shouldForceDownhillCommit)
     {
-        float teleportX = target->GetPositionX();
-        float teleportY = target->GetPositionY();
-        float const teleportRange = std::clamp(safeDistance, 2.0f, 12.0f);
-        target->GetNearPoint2D(player, teleportX, teleportY, teleportRange, target->GetAbsoluteAngle(player));
+        float const teleportStep = std::clamp(planarDistanceToTarget * 0.20f, 12.0f, 35.0f);
+        float const teleportFraction = std::min(teleportStep / std::max(0.01f, planarDistanceToTarget), 1.0f);
+        float const teleportX = player->GetPositionX() + dxToTarget * teleportFraction;
+        float const teleportY = player->GetPositionY() + dyToTarget * teleportFraction;
+        float const teleportZ = player->GetPositionZ() - std::min(10.0f, verticalDeltaToTarget * teleportFraction);
 
         // Do not call GetNearPoint/BuildCollisionSafeDestination here: both can
         // call UpdateAllowedPositionZ(), which may sample the terrain below a
-        // bridge/platform and put the bot under the walkable surface. The target
-        // is already standing on the lower playable surface, so preserve its Z
-        // and only let normal movement resume after the teleport.
-        Position teleportDestination(teleportX, teleportY, target->GetPositionZ(), player->GetOrientation());
+        // bridge/platform and put the bot under the walkable surface. This is a
+        // capped downhill nudge from the bot's current position, not a teleport
+        // to the distant target.
+        Position teleportDestination(teleportX, teleportY, teleportZ, player->GetOrientation());
 
         float const preTeleportDistance = player->GetDistance(teleportDestination);
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
@@ -1808,7 +1811,9 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "teleport")
              << " vertical_delta=" << verticalDeltaToTarget
              << " planar_delta=" << planarDistanceToTarget
-             << " teleport_dist=" << preTeleportDistance;
+             << " teleport_dist=" << preTeleportDistance
+             << " teleport_step=" << teleportStep
+             << " cooldown_ms=3000";
         SetLastMovementDebugStatus(player, diag.str());
         return;
     }
