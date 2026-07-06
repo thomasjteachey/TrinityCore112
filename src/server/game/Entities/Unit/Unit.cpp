@@ -11974,10 +11974,23 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
                 killerPlayer->GetCombatManager().RefreshPvPCombatTimer(killedPlayer);
 
             if (victim->IsTotem())
+            {
                 if (Unit* totemOwner = victim->GetCharmerOrOwner())
+                {
                     if (totemOwner->IsControlledByPlayer())
+                    {
                         // Keep the attacker in combat for the PvP timeout while not flagging the shaman owner
                         killerPlayer->GetCombatManager().SetInCombatWith(totemOwner, true);
+                    }
+                    else if (totemOwner->IsAlive())
+                    {
+                        // Killing an NPC shaman's totem must keep the shaman engaged with the killer.
+                        // Totems cannot own threat lists, so their death can otherwise leave the owner
+                        // with no selectable hostile and cause an immediate evade reset.
+                        totemOwner->EngageWithTarget(attacker);
+                    }
+                }
+            }
         }
     }
 
