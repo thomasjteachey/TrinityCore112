@@ -948,13 +948,20 @@ namespace
         // the target packed GUID and missed the caster packed GUID inside aura entries.
         constexpr uint8 REPLAY_AFLAG_CASTER = 0x08;
         constexpr uint8 REPLAY_AFLAG_DURATION = 0x20;
+        constexpr uint32 REPLAY_SPELL_GHOST = 8326;
 
         size_t pos = 0;
         if (!RewritePackedGuidAt(payload, pos, match))
             return false;
 
+        std::vector<uint8> filtered;
+        filtered.reserve(payload.size());
+        filtered.insert(filtered.end(), payload.begin(), payload.begin() + pos);
+
         while (pos < payload.size())
         {
+            size_t const entryStart = pos;
+
             uint8 slot = 0;
             if (!ReadUInt8(payload, pos, slot))
                 return false;
@@ -965,7 +972,10 @@ namespace
 
             // Aura removal entry: slot + zero spell id.
             if (!spellId)
+            {
+                filtered.insert(filtered.end(), payload.begin() + entryStart, payload.begin() + pos);
                 continue;
+            }
 
             uint8 flags = 0;
             uint8 casterLevel = 0;
@@ -995,8 +1005,25 @@ namespace
 
                 pos += 8;
             }
+
+            if (spellId == REPLAY_SPELL_GHOST)
+            {
+                // Arena replays keep fake participant objects alive after death so later combat/movement packets
+                // cannot target a destroyed player object. Do not replay the death ghost aura, though: it makes
+                // dead participants render as visible ghosts to replay viewers. Convert it to an explicit removal
+                // for this aura slot and drop the variable-length apply payload.
+                filtered.push_back(slot);
+                filtered.push_back(0);
+                filtered.push_back(0);
+                filtered.push_back(0);
+                filtered.push_back(0);
+                continue;
+            }
+
+            filtered.insert(filtered.end(), payload.begin() + entryStart, payload.begin() + pos);
         }
 
+        payload.swap(filtered);
         return true;
     }
 
@@ -3442,11 +3469,15 @@ size_t CountBytes(std::vector<uint8> const& payload, std::vector<uint8> const& n
 
     bool ReplayASShouldShowAuraInDefaultFrame(uint32 spellId, uint8 flags, uint32 maxDurationMs, uint32 remainingMs)
     {
+        constexpr uint32 REPLAY_SPELL_GHOST = 8326;
         constexpr uint8 REPLAY_AFLAG_EFFECT1  = 0x01;
         constexpr uint8 REPLAY_AFLAG_EFFECT2  = 0x02;
         constexpr uint8 REPLAY_AFLAG_EFFECT3  = 0x04;
         constexpr uint8 REPLAY_AFLAG_POSITIVE = 0x10;
         constexpr uint8 REPLAY_AFLAG_NEGATIVE = 0x80;
+
+        if (spellId == REPLAY_SPELL_GHOST)
+            return false;
 
         bool hasEffect = (flags & (REPLAY_AFLAG_EFFECT1 | REPLAY_AFLAG_EFFECT2 | REPLAY_AFLAG_EFFECT3)) != 0;
         bool hasDefaultFramePolarity = (flags & (REPLAY_AFLAG_POSITIVE | REPLAY_AFLAG_NEGATIVE)) != 0;
