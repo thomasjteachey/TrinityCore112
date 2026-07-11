@@ -7380,33 +7380,28 @@ void Player::UpdateArea(uint32 newArea)
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
 
-    bool isFFAArea = false;
+    static std::array<uint32, 2> const customFFAAreas = { 3217, 30232 }; // The Maul, The Battle Ring
+    bool const isCustomFFAArea = std::find(customFFAAreas.begin(), customFFAAreas.end(), newArea) != customFFAAreas.end();
+    bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && newArea != 30232;
+
+    bool isFFAArea = isCustomFFAArea;
     // Walk the area hierarchy in case the arena flag is defined on a parent zone.
-    for (AreaTableEntry const* currentArea = area; currentArea;)
+    // Gurubashi has safe ramp/outer areas under the same parent arena hierarchy, so
+    // do not let parent AREA_FLAG_ARENA bleed FFA PvP into non-Battle Ring areas.
+    if (!isFFAArea && !isGurubashiSafeArea)
     {
-        if (currentArea->Flags & AREA_FLAG_ARENA)
+        for (AreaTableEntry const* currentArea = area; currentArea;)
         {
-            isFFAArea = true;
-            break;
-        }
-
-        if (!currentArea->ParentAreaID)
-            break;
-
-        currentArea = sAreaTableStore.LookupEntry(currentArea->ParentAreaID);
-    }
-
-    if (!isFFAArea)
-    {
-        static std::array<uint32, 2> const customFFAAreas = { 3217, 30232 }; // The Maul, The Battle Ring
-
-        for (uint32 customArea : customFFAAreas)
-        {
-            if (newArea == customArea)
+            if (currentArea->Flags & AREA_FLAG_ARENA)
             {
                 isFFAArea = true;
                 break;
             }
+
+            if (!currentArea->ParentAreaID)
+                break;
+
+            currentArea = sAreaTableStore.LookupEntry(currentArea->ParentAreaID);
         }
     }
 
