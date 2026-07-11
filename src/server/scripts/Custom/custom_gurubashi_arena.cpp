@@ -192,7 +192,10 @@ bool HasLivingHostileInGurubashiBattleRing(Player const* player)
         if (other->GetMapId() != player->GetMapId() || other->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
             continue;
 
-        if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
+        bool const otherInBattleRingFfa =
+            GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) == GurubashiAreaState::BattleRing ||
+            (other->pvpInfo.IsInFFAPvPArea && !other->pvpInfo.IsInNoPvPArea) || other->IsFFAPvP();
+        if (!otherInBattleRingFfa)
             continue;
 
         if (other->HasStealthAura() || other->HasInvisibilityAura())
@@ -1035,6 +1038,8 @@ public:
 
             _trackedPlayers.insert(guid);
             GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
+            bool const currentInBattleRingFfa = currentState == GurubashiAreaState::BattleRing ||
+                (player->pvpInfo.IsInFFAPvPArea && !player->pvpInfo.IsInNoPvPArea);
 
             gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
             bool const chestActive = event && event->IsChestActive();
@@ -1052,11 +1057,30 @@ public:
                 MarkChestDeathLockout(guid);
             }
 
-            // Leaving the Battle Ring through a real area transition moves the player
-            // into Gurubashi's safe ramp/outer area. Do not punish that transition here;
-            // Battle Ring-only chest re-entry and late-entry checks above still apply
-            // when the player is actually resolved inside the Battle Ring.
+            if (tracked.HasPosition)
+            {
+                float const distance2d = tracked.LastPosition.GetExactDist2d(currentPosition);
+                bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 45.0f;
+                bool const crossedBattleRingBoundary =
+                    (tracked.AreaState == GurubashiAreaState::BattleRing || tracked.InBattleRingFfa) &&
+                    currentState == GurubashiAreaState::NonRing && !currentInBattleRingFfa;
 
+                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive() &&
+                    HasLivingHostileInGurubashiBattleRing(player))
+                {
+                    PlayForcedDeathStarfireVisual(player);
+                    Unit::Kill(player, player);
+                    MarkChestDeathLockout(guid);
+
+                    WhisperRandomExitKillLineFromChromie(player);
+                }
+            }
+
+            tracked.AreaState = currentState;
+            tracked.InBattleRingFfa = currentInBattleRingFfa;
+            tracked.LastPosition = currentPosition;
+            tracked.MapId = player->GetMapId();
+            tracked.HasPosition = true;
         }
 
         for (auto itr = _trackedPlayers.begin(); itr != _trackedPlayers.end();)
@@ -1067,7 +1091,16 @@ public:
     }
 
 private:
-    std::unordered_set<ObjectGuid> _trackedPlayers;
+    struct TrackedState
+    {
+        GurubashiAreaState AreaState = GurubashiAreaState::Outside;
+        bool InBattleRingFfa = false;
+        Position LastPosition;
+        uint32 MapId = 0;
+        bool HasPosition = false;
+    };
+
+    std::unordered_map<ObjectGuid, TrackedState> _trackedPlayers;
     uint32 _scanAccumulator = 0;
     static constexpr uint32 _scanIntervalMs = 250;
 };
