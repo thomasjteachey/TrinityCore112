@@ -54,8 +54,8 @@ namespace
 {
 constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
 constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
-constexpr uint32 GURUBASHI_CATACOMBS_AREA_ID = 2177;
 constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 30232;
+constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
@@ -138,7 +138,7 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    if (areaId == GURUBASHI_BATTLE_RING_AREA_ID)
+    if (areaId == GURUBASHI_BATTLE_RING_AREA_ID && player->GetPositionZ() <= GURUBASHI_BATTLE_RING_MAX_Z)
         return GurubashiAreaState::BattleRing;
 
     return GurubashiAreaState::NonRing;
@@ -175,6 +175,34 @@ void PlayForcedDeathStarfireVisual(Player* player)
         return;
 
     player->SendPlaySpellVisual(visualKit);
+}
+
+bool HasLivingHostileInGurubashiBattleRing(Player const* player)
+{
+    if (!player)
+        return false;
+
+    std::shared_lock<std::shared_mutex> guard(*HashMapHolder<Player>::GetLock());
+    for (auto const& playerPair : ObjectAccessor::GetPlayers())
+    {
+        Player* other = playerPair.second;
+        if (!other || other == player || !other->IsAlive())
+            continue;
+
+        if (other->GetMapId() != player->GetMapId() || other->GetZoneId() != STRANGLETHORN_VALE_ZONE_ID)
+            continue;
+
+        if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
+            continue;
+
+        if (other->HasStealthAura() || other->HasInvisibilityAura())
+            continue;
+
+        if (!player->IsInSameRaidWith(other))
+            return true;
+    }
+
+    return false;
 }
 
 uint32 CountEligiblePlayers(ObjectGuid* firstEligibleGuid = nullptr)
