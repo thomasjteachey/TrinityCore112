@@ -1036,7 +1036,9 @@ public:
 
             processedPlayers.insert(guid);
 
-            _trackedPlayers.insert(guid);
+            auto trackedResult = _trackedPlayers.emplace(guid, TrackedState{});
+            TrackedState& tracked = trackedResult.first->second;
+            Position const currentPosition = player->GetPosition();
             GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
             bool const currentInBattleRingFfa = currentState == GurubashiAreaState::BattleRing ||
                 (player->pvpInfo.IsInFFAPvPArea && !player->pvpInfo.IsInNoPvPArea);
