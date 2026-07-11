@@ -54,8 +54,8 @@ namespace
 {
 constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
 constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
-constexpr uint32 GURUBASHI_CATACOMBS_AREA_ID = 2177;
 constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 30232;
+constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
 constexpr uint32 GURUBASHI_CHEST_ENTRY = 179697;
 constexpr uint32 SHADOW_SIGHT_ENTRY = 184663;
 constexpr uint32 LEGIONNAIRE_MARK_OF_HONOR = 20558;
@@ -140,14 +140,14 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
         return GurubashiAreaState::Outside;
 
+    if (Map const* map = player->FindMap())
+        map->GetZoneAndAreaId(player->GetPhaseMask(), zoneId, areaId, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
-    if (areaId == GURUBASHI_BATTLE_RING_AREA_ID)
+    if (areaId == GURUBASHI_BATTLE_RING_AREA_ID && player->GetPositionZ() <= GURUBASHI_BATTLE_RING_MAX_Z)
         return GurubashiAreaState::BattleRing;
-
-    if (areaId == GURUBASHI_CATACOMBS_AREA_ID)
-        return GurubashiAreaState::NonRing;
 
     return GurubashiAreaState::NonRing;
 }
@@ -211,13 +211,9 @@ bool HasLivingHostileInGurubashiBattleRing(Player const* player)
         if (GetGurubashiAreaState(other, other->GetZoneId(), other->GetAreaId()) != GurubashiAreaState::BattleRing)
             continue;
 
-        // Stealthed/invisible players should not block non-lethal exits from the ring.
         if (other->HasStealthAura() || other->HasInvisibilityAura())
             continue;
 
-        // Evaluate hostility without relying on transient FFA flags.
-        // When a player steps out of the ring, FFA can drop before this check runs,
-        // but the exit rule should still treat non-group/raid players in the ring as hostile.
         if (!player->IsInSameRaidWith(other))
             return true;
     }
