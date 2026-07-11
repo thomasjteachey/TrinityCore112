@@ -120,6 +120,29 @@ namespace
     constexpr float MaxStarfireSnareSpeedRate = 1.0f;
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
+    constexpr uint32 GURUBASHI_ARENA_MAP_ID = 0;
+    constexpr uint32 STRANGLETHORN_VALE_ZONE_ID = 33;
+    constexpr uint32 GURUBASHI_BATTLE_RING_AREA_ID = 30232;
+    constexpr float GURUBASHI_BATTLE_RING_MAX_Z = 27.0f;
+    constexpr float GURUBASHI_BATTLE_RING_CENTER_X = -13205.281250f;
+    constexpr float GURUBASHI_BATTLE_RING_CENTER_Y = 273.045685f;
+    constexpr float GURUBASHI_BATTLE_RING_FFA_RADIUS = 65.0f;
+
+    bool IsInGurubashiBattleRingOrCatacombs(Player const* player, uint32 zoneId, uint32 areaId)
+    {
+        if (!player || player->GetMapId() != GURUBASHI_ARENA_MAP_ID || zoneId != STRANGLETHORN_VALE_ZONE_ID)
+            return false;
+
+        if (areaId == GURUBASHI_BATTLE_RING_AREA_ID && player->GetPositionZ() <= GURUBASHI_BATTLE_RING_MAX_Z)
+            return true;
+
+        if (player->GetPositionZ() > GURUBASHI_BATTLE_RING_MAX_Z)
+            return false;
+
+        return player->GetExactDist2dSq(GURUBASHI_BATTLE_RING_CENTER_X, GURUBASHI_BATTLE_RING_CENTER_Y) <=
+            GURUBASHI_BATTLE_RING_FFA_RADIUS * GURUBASHI_BATTLE_RING_FFA_RADIUS;
+    }
 }
 #include "ArenaSpectator.h"
 
@@ -1304,11 +1327,11 @@ void Player::Update(uint32 p_time)
                 }
                 else
                 {
-                    bool const isCustomGurubashiArea = GetMapId() == 0 && m_zoneUpdateId == 33 && newarea == 30232;
-                    bool const isCustomGurubashiFFAArea = isCustomGurubashiArea && GetPositionZ() <= 27.0f;
+                    bool const isCustomGurubashiArea = GetMapId() == GURUBASHI_ARENA_MAP_ID && m_zoneUpdateId == STRANGLETHORN_VALE_ZONE_ID;
+                    bool const isCustomGurubashiFFAArea = IsInGurubashiBattleRingOrCatacombs(this, m_zoneUpdateId, newarea);
 
-                    // Repair stale FFA state when vertical movement keeps the same Battle Ring area id
-                    // but moves between the FFA floor and safe ramp/outer geometry above it.
+                    // Repair stale FFA state when movement keeps the same area id but crosses
+                    // between the Battle Ring/catacombs FFA space and safe geometry above it.
                     if (isCustomGurubashiArea &&
                         ((isCustomGurubashiFFAArea && (!pvpInfo.IsInFFAPvPArea || !IsFFAPvP())) ||
                          (!isCustomGurubashiFFAArea && (pvpInfo.IsInFFAPvPArea || IsFFAPvP()))))
@@ -7384,8 +7407,8 @@ void Player::UpdateArea(uint32 newArea)
     AreaTableEntry const* area = sAreaTableStore.LookupEntry(newArea);
     bool oldFFAPvPArea = pvpInfo.IsInFFAPvPArea;
 
-    bool const isGurubashiBattleRing = GetMapId() == 0 && m_zoneUpdateId == 33 && newArea == 30232 && GetPositionZ() <= 27.0f;
-    bool const isGurubashiSafeArea = GetMapId() == 0 && m_zoneUpdateId == 33 && !isGurubashiBattleRing;
+    bool const isGurubashiBattleRing = IsInGurubashiBattleRingOrCatacombs(this, m_zoneUpdateId, newArea);
+    bool const isGurubashiSafeArea = GetMapId() == GURUBASHI_ARENA_MAP_ID && m_zoneUpdateId == STRANGLETHORN_VALE_ZONE_ID && !isGurubashiBattleRing;
 
     static std::array<uint32, 1> const customFFAAreas = { 3217 }; // The Maul
     bool const isCustomFFAArea = std::find(customFFAAreas.begin(), customFFAAreas.end(), newArea) != customFFAAreas.end();
