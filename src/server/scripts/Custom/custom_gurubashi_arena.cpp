@@ -140,14 +140,14 @@ GurubashiAreaState GetGurubashiAreaState(Player const* player, uint32 zoneId, ui
     if (player->GetMapId() != GURUBASHI_ARENA_MAP_ID)
         return GurubashiAreaState::Outside;
 
+    if (Map const* map = player->FindMap())
+        map->GetZoneAndAreaId(player->GetPhaseMask(), zoneId, areaId, player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+
     if (zoneId != STRANGLETHORN_VALE_ZONE_ID)
         return GurubashiAreaState::Outside;
 
     if (areaId == GURUBASHI_BATTLE_RING_AREA_ID)
         return GurubashiAreaState::BattleRing;
-
-    if (areaId == GURUBASHI_CATACOMBS_AREA_ID)
-        return GurubashiAreaState::NonRing;
 
     return GurubashiAreaState::NonRing;
 }

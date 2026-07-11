@@ -1304,11 +1304,9 @@ void Player::Update(uint32 p_time)
                 }
                 else
                 {
-                    bool const isCustomGurubashiFFAArea =
-                        newarea == 2177 || newarea == 30232 ||
-                        m_zoneUpdateId == 2177 || m_zoneUpdateId == 30232;
+                    bool const isCustomGurubashiFFAArea = newarea == 30232;
 
-                    // Repair stale FFA state when the area id is already correct but the PvP flag did not get applied.
+                    // Repair stale FFA state when the Battle Ring area id is already correct but the PvP flag did not get applied.
                     if (isCustomGurubashiFFAArea && (!pvpInfo.IsInFFAPvPArea || !IsFFAPvP()))
                         UpdateArea(newarea);
                 }
@@ -7400,11 +7398,11 @@ void Player::UpdateArea(uint32 newArea)
 
     if (!isFFAArea)
     {
-        static std::array<uint32, 3> const customFFAAreas = { 3217, 2177, 30232 }; // The Maul, Gurubashi Catacombs, The Battle Ring
+        static std::array<uint32, 2> const customFFAAreas = { 3217, 30232 }; // The Maul, The Battle Ring
 
         for (uint32 customArea : customFFAAreas)
         {
-            if (newArea == customArea || m_zoneUpdateId == customArea)
+            if (newArea == customArea)
             {
                 isFFAArea = true;
                 break;
