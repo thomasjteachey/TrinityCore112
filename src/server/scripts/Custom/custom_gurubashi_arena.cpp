@@ -78,14 +78,6 @@ constexpr Seconds RespawnInterval = 30s;
 }
 
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
-char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
-{
-    "The only way out of the arena is death.",
-    "One does not simply walk out of the Battle Ring.",
-    "Coward.",
-    "Enemy players impede the exit from the Battle Ring."
-};
-
 Position const ChestSpawnPosition = { -13205.281250f, 273.045685f, 20.550077f, 4.423725f };
 char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
 char const* const GURUBASHI_LATE_ENTRY_RULE_WHISPER = "You were not part of this chest battle. Entering the Battle Ring now is forbidden.";
@@ -162,14 +154,6 @@ void WhisperFromChromi(Player* player, std::string_view message)
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message, 0, "Chromie");
     player->SendDirectMessage(&data);
-}
-
-void WhisperRandomExitKillLineFromChromie(Player* player)
-{
-    if (!player)
-        return;
-
-    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 3)]);
 }
 
 void PlayForcedDeathStarfireVisual(Player* player)
@@ -1052,8 +1036,7 @@ public:
 
             processedPlayers.insert(guid);
 
-            TrackedState& tracked = _trackedPlayers[guid];
-            Position const currentPosition = player->GetPosition();
+            _trackedPlayers.insert(guid);
             GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
             bool const currentInBattleRingFfa = currentState == GurubashiAreaState::BattleRing ||
                 (player->pvpInfo.IsInFFAPvPArea && !player->pvpInfo.IsInNoPvPArea);
@@ -1101,7 +1084,7 @@ public:
         }
 
         for (auto itr = _trackedPlayers.begin(); itr != _trackedPlayers.end();)
-            if (processedPlayers.find(itr->first) == processedPlayers.end())
+            if (processedPlayers.find(*itr) == processedPlayers.end())
                 itr = _trackedPlayers.erase(itr);
             else
                 ++itr;
