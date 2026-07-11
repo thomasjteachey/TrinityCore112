@@ -78,14 +78,6 @@ constexpr Seconds RespawnInterval = 30s;
 }
 
 constexpr std::chrono::milliseconds CHECK_INTERVAL = 1h;
-char const* const GURUBASHI_EXIT_KILL_WHISPERS[] =
-{
-    "The only way out of the arena is death.",
-    "One does not simply walk out of the Battle Ring.",
-    "Coward.",
-    "Enemy players impede the exit from the Battle Ring."
-};
-
 Position const ChestSpawnPosition = { -13205.281250f, 273.045685f, 20.550077f, 4.423725f };
 char const* const GURUBASHI_REENTRY_RULE_WHISPER = "You died while the chest is active. No re-entry to the Battle Ring until the chest is looted or despawns.";
 char const* const GURUBASHI_LATE_ENTRY_RULE_WHISPER = "You were not part of this chest battle. Entering the Battle Ring now is forbidden.";
@@ -162,14 +154,6 @@ void WhisperFromChromi(Player* player, std::string_view message)
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_FOREIGN, LANG_UNIVERSAL, chromieGuid, player->GetGUID(), message, 0, "Chromie");
     player->SendDirectMessage(&data);
-}
-
-void WhisperRandomExitKillLineFromChromie(Player* player)
-{
-    if (!player)
-        return;
-
-    WhisperFromChromi(player, GURUBASHI_EXIT_KILL_WHISPERS[urand(0, 3)]);
 }
 
 void PlayForcedDeathStarfireVisual(Player* player)
@@ -1049,8 +1033,7 @@ public:
 
             processedPlayers.insert(guid);
 
-            TrackedState& tracked = _trackedPlayers[guid];
-            Position const currentPosition = player->GetPosition();
+            _trackedPlayers.insert(guid);
             GurubashiAreaState const currentState = GetGurubashiAreaState(player, player->GetZoneId(), player->GetAreaId());
 
             gurubashi_arena_hourly_event* event = gurubashi_arena_hourly_event::GetInstance();
@@ -1069,47 +1052,22 @@ public:
                 MarkChestDeathLockout(guid);
             }
 
-            if (tracked.HasPosition)
-            {
-                float const distance2d = tracked.LastPosition.GetExactDist2d(currentPosition);
-                bool const isTeleportTransition = player->IsBeingTeleported() || tracked.MapId != player->GetMapId() || distance2d > 45.0f;
-                bool const crossedBattleRingBoundary =
-                    tracked.AreaState == GurubashiAreaState::BattleRing && currentState == GurubashiAreaState::NonRing;
+            // Leaving the Battle Ring through a real area transition moves the player
+            // into Gurubashi's safe ramp/outer area. Do not punish that transition here;
+            // Battle Ring-only chest re-entry and late-entry checks above still apply
+            // when the player is actually resolved inside the Battle Ring.
 
-                if (crossedBattleRingBoundary && !isTeleportTransition && !player->IsGameMaster() && player->IsAlive() &&
-                    HasLivingHostileInGurubashiBattleRing(player))
-                {
-                    PlayForcedDeathStarfireVisual(player);
-                    Unit::Kill(player, player);
-                    MarkChestDeathLockout(guid);
-
-                    WhisperRandomExitKillLineFromChromie(player);
-                }
-            }
-
-            tracked.AreaState = currentState;
-            tracked.LastPosition = currentPosition;
-            tracked.MapId = player->GetMapId();
-            tracked.HasPosition = true;
         }
 
         for (auto itr = _trackedPlayers.begin(); itr != _trackedPlayers.end();)
-            if (processedPlayers.find(itr->first) == processedPlayers.end())
+            if (processedPlayers.find(*itr) == processedPlayers.end())
                 itr = _trackedPlayers.erase(itr);
             else
                 ++itr;
     }
 
 private:
-    struct TrackedState
-    {
-        GurubashiAreaState AreaState = GurubashiAreaState::Outside;
-        Position LastPosition;
-        uint32 MapId = 0;
-        bool HasPosition = false;
-    };
-
-    std::unordered_map<ObjectGuid, TrackedState> _trackedPlayers;
+    std::unordered_set<ObjectGuid> _trackedPlayers;
     uint32 _scanAccumulator = 0;
     static constexpr uint32 _scanIntervalMs = 250;
 };
