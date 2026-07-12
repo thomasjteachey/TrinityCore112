@@ -3135,8 +3135,25 @@ void StopPlayerbotForStationaryCast(Player* player)
     if (!player)
         return;
 
+    MotionMaster* motionMaster = player->GetMotionMaster();
+
+    // Unit::StopMoving() halts the movespline unconditionally, and Clear()
+    // below bypasses MotionMaster priority protection entirely -- neither
+    // checks what generator is actually driving movement. A charge/intercept
+    // spline runs through the effect motion slot at MOTION_PRIORITY_HIGHEST
+    // for ~1-1.5s; if the bot's next decision tick wants a stationary cast
+    // (target is already in range right after the charge lands) this used to
+    // rip the charge spline out mid-flight. Let the charge resolve first --
+    // the caller's SPELL_FAILED_MOVING retry path already handles waiting a
+    // tick for a stationary cast, so this is a short defer, not a stall.
+    if (player->HasUnitState(UNIT_STATE_CHARGING) &&
+        motionMaster && motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
+    {
+        return;
+    }
+
     player->StopMoving();
-    if (MotionMaster* motionMaster = player->GetMotionMaster())
+    if (motionMaster)
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
     // Unit::StopMoving() only strips the spline forward flag when an active
