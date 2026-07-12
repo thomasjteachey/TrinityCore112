@@ -766,10 +766,29 @@ bool TryBuildSafeDownhillTeleportDestination(Player* player, Unit* target, Posit
 
         if (bestPoint)
         {
-            teleportDestination.Relocate(bestPoint->x, bestPoint->y, bestPoint->z, player->GetOrientation());
-            teleportStep = bestPlanarDistance;
-            teleportMode = "path_safe_teleport";
-            return true;
+            // bestPoint->z is Detour's raw navmesh sample for this corner.
+            // The (x,y) and path connectivity are trustworthy - the path was
+            // rejected above if it wasn't a real route - but the navmesh
+            // surface itself is a simplified approximation of the actual
+            // walkable geometry and can sit a little off true floor height,
+            // especially over reused dungeon geometry with multiple room
+            // volumes stacked in the same X/Y footprint. Re-ground it and
+            // sanity-check the floor the same way the terrain-snap fallback
+            // below already does, instead of teleporting to the raw sample.
+            Position candidateDestination(bestPoint->x, bestPoint->y, bestPoint->z, player->GetOrientation());
+            Position const safeCandidateDestination = BuildCollisionSafeDestination(player, candidateDestination);
+            Map* pathSafetyMap = player->FindMap();
+            bool const candidateHasLos = pathSafetyMap && pathSafetyMap->isInLineOfSight(
+                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + player->GetCollisionHeight(),
+                safeCandidateDestination.GetPositionX(), safeCandidateDestination.GetPositionY(), safeCandidateDestination.GetPositionZ() + player->GetCollisionHeight(),
+                player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+            if (candidateHasLos && IsSafeDownhillTerrainDestination(player, safeCandidateDestination))
+            {
+                teleportDestination = safeCandidateDestination;
+                teleportStep = bestPlanarDistance;
+                teleportMode = "path_safe_teleport";
+                return true;
+            }
         }
     }
 
