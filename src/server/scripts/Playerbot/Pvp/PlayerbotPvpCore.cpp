@@ -4871,7 +4871,17 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     // consumes the form on impact. Enhancement shifts into Ghost Wolf first,
     // then charges the kill target with Rehgar's Fury to close the gap.
     bool const enhNeedsGapClose = isEnhancementShaman && hasHostileTarget && target && !player->IsWithinMeleeRange(target);
-    bool const enhInGhostWolf = isEnhancementShaman && HasAuraFromSpellChain(player, 2645);
+    bool const shamanInGhostWolf = HasAuraFromSpellChain(player, 2645);
+    bool const enhInGhostWolf = isEnhancementShaman && shamanInGhostWolf;
+
+    if (shamanInGhostWolf)
+    {
+        if (hasHostileTarget && target && IsSpellReady(player, 81910))
+            return { "shaman rehgar's fury", "only allowed action while in ghost wolf form", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+
+        const_cast<Player*>(player)->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+        return decision;
+    }
 
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
