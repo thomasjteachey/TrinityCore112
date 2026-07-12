@@ -4244,6 +4244,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         Position dest = target->GetPosition();
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
+    // 81271 - Heroic Leap is a ground-targeted gap closer/escape (ranged like
+    // the gnome racial). Enemy mode leaps at the gap-close target; Self mode
+    // leaps away from the current melee threat to disengage.
+    else if (resolvedSpellId == 81271 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
+    {
+        Position dest = target->GetPosition();
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    else if (resolvedSpellId == 81271 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+    {
+        Unit* threat = player->GetVictim();
+        float const awayAngle = threat ? player->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI) : player->GetOrientation();
+        Position dest = player->GetFirstCollisionPosition(20.0f, awayAngle);
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
     else if (itemTarget)
         castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);
     else
