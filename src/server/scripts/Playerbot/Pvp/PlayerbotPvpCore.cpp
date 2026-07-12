@@ -1933,11 +1933,17 @@ bool HasAnyAuraFromSpellChain(Unit const* unit, std::initializer_list<uint32> ba
     return false;
 }
 
-bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
+bool HasHunterDamagingStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
 {
     return HasAuraFromSpellChain(unit, 25295, casterGuid) || // Serpent Sting
-        HasAuraFromSpellChain(unit, 14280, casterGuid) ||   // Viper Sting
-        HasAuraFromSpellChain(unit, 19386, casterGuid);     // Wyvern Sting
+        HasAuraFromSpellChain(unit, 14280, casterGuid) ||    // Viper Sting
+        HasAuraFromSpellChain(unit, 3043, casterGuid);       // Scorpid Sting
+}
+
+bool HasHunterStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
+{
+    return HasHunterDamagingStingFromCaster(unit, casterGuid) ||
+        HasAuraFromSpellChain(unit, 19386, casterGuid);      // Wyvern Sting
 }
 
 bool HasActivePaladinSeal(Player const* player)
@@ -3966,7 +3972,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
          player->HasAuraWithMechanic(1 << MECHANIC_FEAR) ||
          player->IsPolymorphed() ||
          player->HasAuraType(SPELL_AURA_MOD_CONFUSE));
-    bool const bmHasBitePrimerOnKillTarget = isBeastMasteryHunter && activeTarget && HasAuraFromSpellChain(activeTarget, 25295);
+    bool const bmHasBitePrimerOnKillTarget = isBeastMasteryHunter && activeTarget && HasHunterDamagingStingFromCaster(activeTarget, player->GetGUID());
     bool const bmReadyToBiteKillTarget = bmHasBitePrimerOnKillTarget && !IsRootedOrSnared(player);
     Unit const* manaTarget = isSurvivalHunter
         ? SelectNearbyEnemyManaTarget(player, activeTarget, GetConfiguredLongRange(), 0.0f)
@@ -4037,7 +4043,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, bmHasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
-        { "hunter mongoose bite", "consume serpent sting for beast mastery melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+        { "hunter mongoose bite", "consume hunter sting for beast mastery melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
         { "hunter arcane shot", "instant pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
