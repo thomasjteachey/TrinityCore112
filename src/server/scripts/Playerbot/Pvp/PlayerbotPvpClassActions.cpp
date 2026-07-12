@@ -686,7 +686,14 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     if (!player || !target)
         return false;
 
-    return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
+    // IssueStrictHumanMove's defaults (4y drift / 350ms) were tuned for a
+    // short reactive retreat, not for continuously chasing a live target.
+    // A moving PvP target routinely drifts more than 4y in under 350ms, so
+    // every call here was clearing the active spline and reissuing a fresh
+    // short segment before the previous one had time to actually execute -
+    // visible as a bot taking one short step, stopping, taking another step,
+    // stopping, etc. Give each segment room to run before reconsidering.
+    return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance), 8.0f, 900);
 }
 
 bool IsSafeDownhillTerrainDestination(Player* player, Position const& destination)
@@ -1682,7 +1689,19 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
     bool issuedStrict = false;
     bool const strictPathingRequired = RequiresStrictHumanPathing(player);
     if (strictPathingRequired)
-        issuedStrict = IssueStrictHumanMove(player, destination, 2.0f, 150);
+    {
+        // These were 2.0f/150ms - tight enough that a hunter kiting a live
+        // target reissued a fresh short segment several times a second,
+        // clearing the previous one before it had finished executing. Beyond
+        // the visible stutter, every reissue re-runs the segment's floor/
+        // height computation from scratch, and re-running that far more
+        // often than necessary meant far more chances to land on an
+        // ambiguous height sample on this map's stacked geometry. Loosened
+        // to still react quickly to being pushed into/out of the dead zone,
+        // but without re-triggering on every few hundred milliseconds of
+        // ordinary target movement.
+        issuedStrict = IssueStrictHumanMove(player, destination, 4.0f, 500);
+    }
 
     // If strict pathing was attempted and explicitly failed, PathGenerator
     // has already determined this retreat destination is not safely
@@ -5073,8 +5092,13 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     // especially, since they flee constantly) walk straight
                     // through walls and eventually fall below the map.
                     // Standing still for a tick is far cheaper than clipping
-                    // through geometry.
-                    IssueStrictHumanMove(player, destination);
+                    // through geometry. Loosened reissue cadence for the same
+                    // reason as the hunter dead-zone retreat: the default
+                    // 4y/350ms throttle reissues a fresh segment (and re-runs
+                    // its floor computation) far more often than a fleeing
+                    // bot actually needs, which was contributing to both the
+                    // visible stutter and the floor-clip risk.
+                    IssueStrictHumanMove(player, destination, 5.0f, 500);
                 }
                 else
                 {
