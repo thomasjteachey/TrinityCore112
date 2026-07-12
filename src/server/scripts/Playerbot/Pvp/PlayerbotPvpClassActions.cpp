@@ -1944,13 +1944,22 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
-    bool const downhillTeleportReady = !sameStallTarget || stallState.lastIssueMs == 0 || lastIssueAgeMs >= 3000;
-    bool const shouldForceDownhillCommit =
-        strictPathing &&
-        downhillTeleportReady &&
-        !currentlyMoving &&
-        !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
-        !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    // Disabled entirely (2026-07-12): this was built to un-stick bots that
+    // spawned at Twin Peaks (map 726) graveyards where the release point has
+    // no VMAP area data (VMAP AreaInfo ok=0) and PathGenerator can't route
+    // them down to the walkable ground below at all. Applied broadly to any
+    // 8y+ vertical / 30y+ horizontal gap, it became a general-purpose
+    // "can't find a path, so blind-teleport toward the target" hammer that
+    // was dropping bots through the floor on other maps (confirmed on
+    // Blackrock Throne) even after hardening both destination-selection
+    // branches with LOS/floor checks - the underlying problem is that a
+    // terrain-height or navmesh-corner sample near reused/complex geometry
+    // can land inside a different, disconnected room below the intended
+    // floor, and no single-point sanity check reliably catches every case of
+    // that. If the graveyard-stuck problem needs solving again, it should be
+    // scoped narrowly to graveyard release positions specifically rather
+    // than firing for any bot with a large vertical/horizontal gap to target.
+    bool const shouldForceDownhillCommit = false;
     if (shouldForceDownhillCommit)
     {
         Position teleportDestination;
