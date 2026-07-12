@@ -3117,6 +3117,30 @@ void ScheduleWandDiagnostics(Player*, Unit*, uint32)
     // Intentionally silent; delayed wand diagnostics were temporary.
 }
 
+bool IsMindFlaySpell(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+    return firstRank && firstRank->Id == 15407;
+}
+
+bool IsPlayerbotStationaryChannel(SpellInfo const* spellInfo)
+{
+    if (!spellInfo || !spellInfo->IsChanneled())
+        return false;
+
+    // Mind Flay must be treated like Drain Life for playerbot movement even on
+    // DBC/custom data where the generic channel flags look movable.
+    return !spellInfo->IsMoveAllowedChannel() || IsMindFlaySpell(spellInfo);
+}
+
+bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spellInfo)
+{
+    return player && spellInfo && spellInfo->IsStarfire() && player->GetStarfireSnareSpeedRate() > 0.0f;
+}
+
 bool HasActiveStationaryChannel(Player const* player)
 {
     if (!player)
@@ -3126,8 +3150,7 @@ bool HasActiveStationaryChannel(Player const* player)
     if (!channel || channel->getState() == SPELL_STATE_FINISHED)
         return false;
 
-    SpellInfo const* spellInfo = channel->GetSpellInfo();
-    return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
+    return IsPlayerbotStationaryChannel(channel->GetSpellInfo());
 }
 
 void StopPlayerbotForStationaryCast(Player* player)
@@ -4149,8 +4172,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // left the bot inching or stuck.
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
     bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
-    bool const requiresStationaryCast = spellInfo->CalcCastTime() > 0 || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
-        isHunterStationaryCastTimeAction || (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel());
+    bool const movableCastTimeSpell = IsPlayerbotMovableCastTimeSpell(player, spellInfo);
+    bool const requiresStationaryCast = (spellInfo->CalcCastTime() > 0 && !movableCastTimeSpell) || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
+        isHunterStationaryCastTimeAction || IsPlayerbotStationaryChannel(spellInfo);
 
     if (isHunterStationaryCastTimeAction)
     {
@@ -4399,7 +4423,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (player->GetClass() == CLASS_HUNTER && IsHunterBreakableCrowdControlSpell(spellInfo))
         StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_breakable_cc_cast_stop_autoshot");
 
-    if (spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel())
+    if (IsPlayerbotStationaryChannel(spellInfo))
         StopPlayerbotForStationaryCast(player);
 
     ResumeDruidShapeshiftMovement(player, shapeshiftMovementResume, resolvedSpellId);

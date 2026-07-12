@@ -1651,6 +1651,15 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     void StopVirtualPlayerbotMovement(Player* player);
 
+    bool IsMindFlaySpell(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        return firstRank && firstRank->Id == 15407;
+    }
+
     bool HasActiveStationaryChannel(Player const* player)
     {
         if (!player)
@@ -1661,7 +1670,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
 
         SpellInfo const* spellInfo = channel->GetSpellInfo();
-        return spellInfo && spellInfo->IsChanneled() && !spellInfo->IsMoveAllowedChannel();
+        return spellInfo && spellInfo->IsChanneled() && (!spellInfo->IsMoveAllowedChannel() || IsMindFlaySpell(spellInfo));
     }
 
     bool CanIssueBotMovement(Player* player)

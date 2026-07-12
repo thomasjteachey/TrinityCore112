@@ -3951,9 +3951,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
          player->HasAuraWithMechanic(1 << MECHANIC_FEAR) ||
          player->IsPolymorphed() ||
          player->HasAuraType(SPELL_AURA_MOD_CONFUSE));
-    bool const bmReadyToBiteKillTarget = isBeastMasteryHunter && activeTarget &&
-        HasAuraFromSpellChain(activeTarget, 25295) && !IsSpellReady(player, 14287) &&
-        !IsSpellReady(player, 25294) && !IsRootedOrSnared(player);
+    bool const bmHasBitePrimerOnKillTarget = isBeastMasteryHunter && activeTarget && HasAuraFromSpellChain(activeTarget, 25295);
+    bool const bmReadyToBiteKillTarget = bmHasBitePrimerOnKillTarget && !IsRootedOrSnared(player);
     Unit const* manaTarget = isSurvivalHunter
         ? SelectNearbyEnemyManaTarget(player, activeTarget, GetConfiguredLongRange(), 0.0f)
         : SelectNearbyEnemyTarget(player, activeTarget, GetConfiguredLongRange());
@@ -4022,6 +4021,8 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter serpent sting", "apply ranged dot pressure", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, bmHasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
+        { "hunter mongoose bite", "consume serpent sting for beast mastery melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
         { "hunter arcane shot", "instant pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
