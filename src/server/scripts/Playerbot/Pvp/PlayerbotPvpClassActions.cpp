@@ -3906,8 +3906,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // The random bot cadence evaluates roughly every 2 seconds, so waiting for
     // the next tick to leave form makes bots appear locked out. If the selected
     // spell is blocked only by current shapeshift state, immediately cancel the
-    // form and continue with the same cast attempt in this tick.
-    if (player->GetClass() == CLASS_DRUID && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+    // form and continue with the same cast attempt in this tick. This is also
+    // the mechanism that drops a shaman out of Ghost Wolf the moment nothing
+    // castable requires it (Ghost Wolf's only real use is charging with
+    // Rehgar's Fury). 81910 itself is exempted for the same reason as the
+    // matching check in IsDecisionImmediatelyCastable - it is specifically
+    // meant to be cast while shapeshifted into Ghost Wolf.
+    if (resolvedSpellId != 81910 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
         if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
@@ -4365,7 +4370,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
-        Position const dest = player->GetFirstCollisionPosition(20.0f, player->GetOrientation());
+        // GetFirstCollisionPosition only raycasts for navmesh/VMap collision;
+        // it does not re-ground the resulting Z against actual terrain height.
+        // On multi-layer geometry (bridges, cliffs, caves) that can leave the
+        // destination floating or clipped into the ground, which reads as the
+        // bot falling through the map after the leap lands. Re-ground it the
+        // same way regular movement destinations already do.
+        Position const dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, player->GetOrientation()));
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (resolvedSpellId == 89160 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
@@ -4385,7 +4396,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         Unit* threat = player->GetVictim();
         float const awayAngle = threat ? player->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI) : player->GetOrientation();
-        Position dest = player->GetFirstCollisionPosition(20.0f, awayAngle);
+        // See the Blink comment above: re-ground the raycast destination so the
+        // leap cannot land the warrior clipped into or floating above terrain.
+        Position dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, awayAngle));
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (itemTarget)
