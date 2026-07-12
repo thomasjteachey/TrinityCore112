@@ -1300,7 +1300,7 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
                 return { ClassicClassProfile::TertiaryClassic, "Ret-like", false, false };
             break;
         case CLASS_HUNTER:
-            if (player->HasTalent(19574, activeSpec))
+            if (player->HasTalent(81300, activeSpec))
                 return { ClassicClassProfile::PrimaryClassic, "BM-like", false, false };
             if (player->HasTalent(19506, activeSpec))
                 return { ClassicClassProfile::SecondaryClassic, "MM-like", false, false };
@@ -1308,7 +1308,7 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
                 return { ClassicClassProfile::TertiaryClassic, "SV-like", false, false };
             break;
         case CLASS_ROGUE:
-            if (player->HasTalent(14177, activeSpec))
+            if (player->HasTalent(81302, activeSpec))
                 return { ClassicClassProfile::PrimaryClassic, "Assassination-like", false, false };
             if (player->HasTalent(13750, activeSpec))
                 return { ClassicClassProfile::SecondaryClassic, "Combat-like", false, false };
