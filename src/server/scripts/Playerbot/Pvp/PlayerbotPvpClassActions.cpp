@@ -601,6 +601,7 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
 
     struct MoveOrderState
     {
+        Position lastRequestedDestination;
         Position lastDestination;
         uint32 lastIssueMs = 0;
     };
@@ -610,8 +611,15 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     MoveOrderState& state = stateByGuid[botGuid];
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
+    // Compare against the last *requested* destination (e.g. a follow point
+    // trailing a moving target), not the last *resolved* segment endpoint.
+    // The resolved segment is frequently shortened by the strict-pathing
+    // fallback below, so comparing against it made destinationChanged true on
+    // almost every call -- defeating the time throttle and causing the
+    // active spline to be cleared and reissued as a short MovePoint nearly
+    // every tick (visible as the bot inching instead of running smoothly).
     bool const destinationChanged = state.lastIssueMs == 0 ||
-        state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
+        state.lastRequestedDestination.GetExactDist(destination) >= destinationChangeThreshold;
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
 
     if (!destinationChanged && !canReissueByTime)
@@ -626,12 +634,14 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     if (!motionMaster)
         return false;
 
-    if (!destinationChanged && !canReissueByTime)
+    if (destinationChanged && !canReissueByTime)
     {
-        // Do not suppress strict re-issue while stalled. Battleground pathing
-        // can occasionally leave a stale/idle generator active, which causes
-        // repeated "reach spell" directives to report success while the bot
-        // remains stationary.
+        // The requested destination drifted (e.g. a chased target kept
+        // moving) but we are still inside the reissue throttle window. Do
+        // not cancel an in-flight segment for that drift -- clearing and
+        // reissuing a fresh short MovePoint every tick is what produces the
+        // visible inch/stop stutter. Let the active point move continue; a
+        // fresh segment will be issued once the throttle window elapses.
         MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
         bool const hasActivePointMove = player->isMoving() && movementType == POINT_MOTION_TYPE;
         if (hasActivePointMove)
@@ -645,6 +655,7 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
     motionMaster->MovePoint(0, segmentDestination, true);
 
+    state.lastRequestedDestination = destination;
     state.lastDestination = segmentDestination;
     state.lastIssueMs = nowMs;
     return true;
