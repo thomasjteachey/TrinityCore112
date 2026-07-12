@@ -3987,7 +3987,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // (for example Lightning Shield reports SPELL_FAILED_NOT_SHAPESHIFT), so
     // cancel the form immediately and suppress this cast attempt instead of
     // spamming spell-fail logs until the next decision tick.
-    if (player->GetClass() == CLASS_SHAMAN && HasAuraInSpellChain(player, 2645) && resolvedSpellId != 81910)
+    if (player->GetClass() == CLASS_SHAMAN && HasAuraInSpellChain(player, 2645) && resolvedSpellId != 82419)
     {
         player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
         failureReason = "shaman_ghost_wolf_cancelled_for_non_rehgar_action";
@@ -4002,10 +4002,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // form and continue with the same cast attempt in this tick. This is also
     // the mechanism that drops a shaman out of Ghost Wolf the moment nothing
     // castable requires it (Ghost Wolf's only real use is charging with
-    // Rehgar's Fury). 81910 itself is exempted for the same reason as the
+    // Rehgar's Fury). 82419 itself is exempted for the same reason as the
     // matching check in IsDecisionImmediatelyCastable - it is specifically
     // meant to be cast while shapeshifted into Ghost Wolf.
-    if (resolvedSpellId != 81910 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+    if (resolvedSpellId != 82419 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
         if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
@@ -4492,6 +4492,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // See the Blink comment above: re-ground the raycast destination so the
         // leap cannot land the warrior clipped into or floating above terrain.
         Position dest = BuildCollisionSafeDestination(player, player->GetFirstCollisionPosition(20.0f, awayAngle));
+        castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    // 82419 - Rehgar's Fury uses the same SPELL_EFFECT_JUMP_DEST mechanic as
+    // Heroic Leap (Spell::EffectJumpDest requires m_targets.HasDst() or it
+    // silently no-ops). A plain unit-target cast never populates a
+    // destination, so without this the spell "casts" successfully but the
+    // charge never actually happens - it needs the same explicit dest cast.
+    else if (resolvedSpellId == 82419 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
+    {
+        Position dest = target->GetPosition();
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (itemTarget)

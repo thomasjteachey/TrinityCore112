@@ -1160,13 +1160,13 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     // Lightning Shield as "castable" while the caster is a Ghost Wolf, attempts
     // it, and it fails server-side with SPELL_FAILED_NOT_SHAPESHIFT instead of
     // the loop moving on to a candidate that actually works.
-    // Rehgar's Fury (81910) is exempted: its whole purpose (spell_sha_ghost_wolf_charge
+    // Rehgar's Fury (82419) is exempted: its whole purpose (spell_sha_ghost_wolf_charge
     // / Unit::CompleteGhostWolfCharge) is to be cast while Ghost Wolf is active, but
     // if its spell_template Stances field was never authored to explicitly allow the
     // Ghost Wolf stance, this generic DBC-driven check would wrongly reject it too -
     // leaving nothing valid to do while shifted except immediately unshift again,
     // which reads as the shaman flickering in and out of Ghost Wolf and never leaping.
-    if (knownByPlayer && decision.spellId != 81910 && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) &&
+    if (knownByPlayer && decision.spellId != 82419 && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) &&
         spellInfo->CheckShapeshift(player->GetShapeshiftForm()) != SPELL_CAST_OK)
         return false;
 
@@ -4672,8 +4672,12 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const canInterceptByRange = !player->IsWithinDistInMap(gapCloseTarget, interceptMinRange);
     bool const shouldUseChargeGapCloser = !player->IsWithinMeleeRange(gapCloseTarget) && !player->IsInCombat() && canChargeByRange && IsSpellReady(player, 11578);
     bool const shouldUseInterceptGapCloser = !isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 20617);
-    // Fury uses Heroic Leap (ground-targeted, 8-25y) instead of Intercept.
-    bool const shouldUseHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && IsSpellReady(player, 81271);
+    // Fury uses Heroic Leap (ground-targeted, same range band as Intercept)
+    // instead of Intercept. This was missing the same min-range gate
+    // Intercept has above - close-but-not-melee distances inside Intercept's
+    // min range would try to fire Heroic Leap anyway and fail the spell's own
+    // range validation, silently doing nothing.
+    bool const shouldUseHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && canInterceptByRange && IsSpellReady(player, 81271);
     bool const furyInDanger = isFuryWarrior && player->HealthBelowPct(35) && SelectNearbyMeleeTarget(player, activeTarget, 8.0f) && IsSpellReady(player, 81271);
     bool const furyRecentGapCloser = isFuryWarrior && (player->GetSpellHistory()->HasCooldown(11578) || player->GetSpellHistory()->HasCooldown(81271));
     uint32 const meleeFinisherSpellId = isProtWarrior ? uint32(23925) : (isFuryWarrior ? uint32(23881) : uint32(21553));
@@ -4866,24 +4870,24 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     Unit const* earthShieldTarget = isRestoShaman && IsSpellReady(player, 32593) && !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 32593) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
     Unit const* purgeTarget = isRestoShaman && hasHostileTarget && IsSpellReady(player, 81325) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* allyMagicTarget = isRestoShaman && IsSpellReady(player, 81325) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f) : nullptr;
-    // Rehgar's Fury (81910) is a charge that requires Ghost Wolf form active
+    // Rehgar's Fury (82419) is a charge that requires Ghost Wolf form active
     // (see spell_sha_ghost_wolf_charge / Unit::CompleteGhostWolfCharge) - it
     // consumes the form on impact. Enhancement shifts into Ghost Wolf first,
     // then charges the kill target with Rehgar's Fury to close the gap.
     bool const enhNeedsGapClose = isEnhancementShaman && hasHostileTarget && target && !player->IsWithinMeleeRange(target);
     bool const shamanInGhostWolf = HasAuraFromSpellChain(player, 2645);
     bool const enhInGhostWolf = isEnhancementShaman && shamanInGhostWolf;
-    SpellInfo const* rehgarsFuryInfo = sSpellMgr->GetSpellInfo(81910);
+    SpellInfo const* rehgarsFuryInfo = sSpellMgr->GetSpellInfo(82419);
     bool const canRehgarsFuryTarget = isEnhancementShaman && hasHostileTarget && target && rehgarsFuryInfo &&
         player->IsValidAttackTarget(target, rehgarsFuryInfo) && player->IsWithinLOSInMap(target) &&
         (rehgarsFuryInfo->GetMaxRange(false) <= 0.0f || player->IsWithinDistInMap(target, rehgarsFuryInfo->GetMaxRange(false))) &&
         (rehgarsFuryInfo->GetMinRange(false) <= 0.0f || !player->IsWithinDistInMap(target, rehgarsFuryInfo->GetMinRange(false)));
-    bool const canUseRehgarsFury = canRehgarsFuryTarget && IsSpellReady(player, 81910);
+    bool const canUseRehgarsFury = canRehgarsFuryTarget && IsSpellReady(player, 82419);
 
     if (shamanInGhostWolf)
     {
         if (canUseRehgarsFury)
-            return { "shaman rehgar's fury", "only allowed action while in ghost wolf form", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy };
+            return { "shaman rehgar's fury", "only allowed action while in ghost wolf form", 82419, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
         const_cast<Player*>(player)->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
         return decision;
@@ -4938,7 +4942,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     AddDecisionCandidate(candidates, enhNeedsGapClose && !enhInGhostWolf && canUseRehgarsFury && IsSpellReady(player, 2645), 59.6f,
         { "shaman ghost wolf", "shift to close the gap with rehgar's fury", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, enhNeedsGapClose && enhInGhostWolf && canUseRehgarsFury, 59.5f,
-        { "shaman rehgar's fury", "charge the kill target while in ghost wolf form", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+        { "shaman rehgar's fury", "charge the kill target while in ghost wolf form", 82419, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && purgeTarget, 53.5f,
