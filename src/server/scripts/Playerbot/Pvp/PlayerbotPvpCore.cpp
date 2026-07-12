@@ -4746,9 +4746,21 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior berserker stance", "switch to berserker stance before intercept gap close", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseInterceptGapCloser, 51.0f,
         { "warrior intercept", "close gap to target while in combat", 20617, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, shouldUseHeroicLeapGapCloser, 51.0f,
+    // Heroic Leap's ShapeshiftMask requires Berserker Stance (same shapeshift
+    // mechanism as Druid forms/Ghost Wolf), and there was no stance-swap
+    // candidate for it - unlike Intercept, which already has one just above.
+    // Without this, the generic shapeshift-compatibility check silently
+    // rejects Heroic Leap whenever the warrior isn't already in Berserker
+    // Stance, and the bot falls back to Charge (which doesn't need it).
+    AddDecisionCandidate(candidates, (shouldUseHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458), 1000.0f,
+        { "warrior berserker stance", "switch to berserker stance before heroic leap", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
+    // TEMPORARY: forced to top priority (above everything, including
+    // emergency defensives) at the user's explicit request to isolate and
+    // test whether Heroic Leap fires at all once the stance prerequisite is
+    // met. Revert to a normal tier once confirmed working.
+    AddDecisionCandidate(candidates, shouldUseHeroicLeapGapCloser, 999.0f,
         { "warrior heroic leap", "close gap to target with heroic leap instead of intercept", 81271, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, furyInDanger, 53.5f,
+    AddDecisionCandidate(candidates, furyInDanger, 999.5f,
         { "warrior heroic leap", "leap away from danger instead of intercept", 81271, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, furyRecentGapCloser && !HasAuraFromSpellChain(player, 12328) && IsSpellReady(player, 12328), 49.5f,
         { "warrior death wish", "pop death wish right after closing with charge or heroic leap", 12328, playerbot::PvpClassSpellContext::TargetMode::Self });
