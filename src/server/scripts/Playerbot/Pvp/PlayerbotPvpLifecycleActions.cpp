@@ -1700,6 +1700,19 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
         }
 
+        // Charge/Intercept/Heroic Leap travel through EFFECT_MOTION_TYPE. If
+        // combat-positioning logic issues MoveChase/MoveFollow while that spline
+        // is still in flight, it cancels the leap and replaces it with a normal
+        // chase - the bot's stun/damage effect still lands (that resolves at
+        // cast, independent of movement), but the bot never visibly performs the
+        // charge motion and just appears to run at the target. Withhold
+        // positioning movement until the charge spline itself completes.
+        if (player->HasUnitState(UNIT_STATE_CHARGING) &&
+            player->GetMotionMaster()->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
+        {
+            return false;
+        }
+
         return true;
     }
 
