@@ -4873,10 +4873,16 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     bool const enhNeedsGapClose = isEnhancementShaman && hasHostileTarget && target && !player->IsWithinMeleeRange(target);
     bool const shamanInGhostWolf = HasAuraFromSpellChain(player, 2645);
     bool const enhInGhostWolf = isEnhancementShaman && shamanInGhostWolf;
+    SpellInfo const* rehgarsFuryInfo = sSpellMgr->GetSpellInfo(81910);
+    bool const canRehgarsFuryTarget = isEnhancementShaman && hasHostileTarget && target && rehgarsFuryInfo &&
+        player->IsValidAttackTarget(target, rehgarsFuryInfo) && player->IsWithinLOSInMap(target) &&
+        (rehgarsFuryInfo->GetMaxRange(false) <= 0.0f || player->IsWithinDistInMap(target, rehgarsFuryInfo->GetMaxRange(false))) &&
+        (rehgarsFuryInfo->GetMinRange(false) <= 0.0f || !player->IsWithinDistInMap(target, rehgarsFuryInfo->GetMinRange(false)));
+    bool const canUseRehgarsFury = canRehgarsFuryTarget && IsSpellReady(player, 81910);
 
     if (shamanInGhostWolf)
     {
-        if (hasHostileTarget && target && IsSpellReady(player, 81910))
+        if (canUseRehgarsFury)
             return { "shaman rehgar's fury", "only allowed action while in ghost wolf form", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
         const_cast<Player*>(player)->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
@@ -4929,9 +4935,9 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, enhNeedsGapClose && !enhInGhostWolf && IsSpellReady(player, 2645), 59.6f,
+    AddDecisionCandidate(candidates, enhNeedsGapClose && !enhInGhostWolf && canUseRehgarsFury && IsSpellReady(player, 2645), 59.6f,
         { "shaman ghost wolf", "shift to close the gap with rehgar's fury", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, enhNeedsGapClose && enhInGhostWolf && IsSpellReady(player, 81910), 59.5f,
+    AddDecisionCandidate(candidates, enhNeedsGapClose && enhInGhostWolf && canUseRehgarsFury, 59.5f,
         { "shaman rehgar's fury", "charge the kill target while in ghost wolf form", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
