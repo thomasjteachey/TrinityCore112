@@ -1286,7 +1286,7 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
         case CLASS_WARRIOR:
             if (player->HasTalent(12294, activeSpec))
                 return { ClassicClassProfile::PrimaryClassic, "Arms-like", false, false };
-            if (player->HasTalent(23881, activeSpec))
+            if (player->HasTalent(81273, activeSpec))
                 return { ClassicClassProfile::SecondaryClassic, "Fury-like", false, false };
             if (player->HasTalent(23922, activeSpec))
                 return { ClassicClassProfile::TertiaryClassic, "Prot-like", false, false };
