@@ -3305,6 +3305,19 @@ bool CanIssueFollowCommands(Player const* player)
         return false;
     }
 
+    // Charge/Intercept movement is issued through the effect motion slot at
+    // MOTION_PRIORITY_HIGHEST, but that engine-side priority protection only
+    // stops other MotionMaster::Add() calls -- it does nothing against a bare
+    // Clear(), which follow/strict-move callers issue unconditionally. Without
+    // this guard the very next melee-approach tick after a charge wipes the
+    // in-flight charge spline, so the charge visibly never plays out.
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (motionMaster && player->HasUnitState(UNIT_STATE_CHARGING) &&
+        motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
+    {
+        return false;
+    }
+
     return true;
 }
 

@@ -2024,9 +2024,13 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool MoveAwayFromUnit(Player* player, Unit* target, float desiredDistance)
     {
+        // Do not pre-check CanIssueMovementCommand here: IssueMovePointThrottled
+        // below performs the same throttle check internally. GameTime is a
+        // per-World::Update cache, not a live clock, so calling the gate twice
+        // in the same tick consumes the throttle token on the first call and
+        // guarantees the second (real) check fails -- silently turning this
+        // into a permanent no-op.
         if (!player || !target || !CanIssueBotMovement(player))
-            return false;
-        if (!CanIssueMovementCommand(player, 500))
             return false;
 
         float const angleAway = target->GetAbsoluteAngle(player);
@@ -2041,18 +2045,44 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
     {
+        // See MoveAwayFromUnit above: no outer CanIssueMovementCommand check --
+        // IssueMovePointThrottled already gates this call, and double-gating
+        // guaranteed failure every time this function was reached.
         if (!player || !target || !target->IsAlive() || !CanIssueBotMovement(player))
             return false;
-        if (!CanIssueMovementCommand(player, 500))
-            return false;
+
+        struct LosRecoveryState
+        {
+            ObjectGuid targetGuid;
+            float orbitAngle = 0.0f;
+            bool hasAngle = false;
+        };
+        static std::unordered_map<uint64, LosRecoveryState> stateByGuid;
+        uint64 const botGuid = player->GetGUID().GetRawValue();
+        LosRecoveryState& state = stateByGuid[botGuid];
 
         if (player->IsWithinLOSInMap(target))
+        {
+            state.hasAngle = false;
             return false;
+        }
 
-        float const orbitAngle = target->GetAbsoluteAngle(player) + frand(-0.85f, 0.85f);
+        // Pick the orbit angle once per LOS-loss episode instead of
+        // re-randomizing every call. A fresh +-0.85 rad jitter each time swings
+        // the destination by many yards -- comfortably past the reissue
+        // threshold below -- so every successful call looked like the
+        // destination changed, forcing a brand new segment every time instead
+        // of a smooth orbit toward line of sight.
+        if (!state.hasAngle || state.targetGuid != target->GetGUID())
+        {
+            state.orbitAngle = target->GetAbsoluteAngle(player) + frand(-0.85f, 0.85f);
+            state.targetGuid = target->GetGUID();
+            state.hasAngle = true;
+        }
+
         float const orbitRange = std::max(profile.preferredMinRange + 2.0f, profile.preferredIdealRange);
-        Position reposition(target->GetPositionX() + std::cos(orbitAngle) * orbitRange,
-            target->GetPositionY() + std::sin(orbitAngle) * orbitRange,
+        Position reposition(target->GetPositionX() + std::cos(state.orbitAngle) * orbitRange,
+            target->GetPositionY() + std::sin(state.orbitAngle) * orbitRange,
             target->GetPositionZ(), player->GetOrientation());
         if (!IssueMovePointThrottled(player, reposition, 4.0f, 500))
             return false;
@@ -2687,9 +2717,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         {
             // Only close if the hunter has genuinely drifted outside Auto Shot
             // range. Close to the outer edge, never to preferred/ideal range.
-            if (!CanIssueMovementCommand(player, 500))
-                return true;
-
+            // IssueHumanLikeFollow gates internally; an outer pre-check here
+            // double-consumed the same-tick throttle token (see MoveAwayFromUnit).
             float const closeToRange = std::max(1.0f, maxAutoShotRange - 1.0f);
             bool const issued = IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 700);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -2794,8 +2823,10 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         if (!player->IsWithinDistInMap(target, desiredDistance))
         {
-            if (!CanIssueMovementCommand(player, 500))
-                return false;
+            // IssueHumanLikeFollow -> IssueMovePointThrottled already gates
+            // this via CanIssueMovementCommand; an outer pre-check here
+            // double-consumed the same-tick throttle token and made the
+            // follow call always fail.
             ClearEatDrinkAurasForMovement(player);
             return IssueHumanLikeFollow(player, target, desiredDistance, 6.0f, 500);
         }
@@ -3348,9 +3379,7 @@ namespace playerbot
         {
             if (ShouldForceMeleeFallbackOnLowMana(player) && player->GetClass() != CLASS_HUNTER)
             {
-                if (!CanIssueMovementCommand(player, 500))
-                    return true;
-
+                // MoveTowardUnit gates internally; see MoveAwayFromUnit above.
                 return MoveTowardUnit(player, target, std::max(1.0f, playerbot::PvpCore::GetConfig().meleeRange - 1.0f));
             }
 
@@ -3407,9 +3436,7 @@ namespace playerbot
                         return true;
                     }
 
-                    if (!CanIssueMovementCommand(player, 500))
-                        return true;
-
+                    // IssueHumanLikeFollow gates internally; see MoveAwayFromUnit above.
                     float const closeToRange = hasHunterRange ? std::max(1.0f, maxAutoShotRange - 1.0f) : profile.preferredMaxPressureRange;
                     if (!IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 500))
                         return true;
@@ -3419,8 +3446,7 @@ namespace playerbot
                     return true;
                 }
 
-                if (!CanIssueMovementCommand(player, 500))
-                    return true;
+                // IssueHumanLikeFollow gates internally; see MoveAwayFromUnit above.
                 if (!IssueHumanLikeFollow(player, target, profile.preferredIdealRange, 6.0f, 500))
                     return true;
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
