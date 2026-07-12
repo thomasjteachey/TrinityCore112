@@ -1623,10 +1623,18 @@ void IssueHunterDeadZoneRetreatMovement(Player* player, Unit* target, char const
 
     MovementGeneratorType const motionBefore = motionMaster->GetCurrentMovementGeneratorType();
     bool issuedStrict = false;
-    if (RequiresStrictHumanPathing(player))
+    bool const strictPathingRequired = RequiresStrictHumanPathing(player);
+    if (strictPathingRequired)
         issuedStrict = IssueStrictHumanMove(player, destination, 2.0f, 150);
 
-    if (!issuedStrict)
+    // If strict pathing was attempted and explicitly failed, PathGenerator
+    // has already determined this retreat destination is not safely
+    // reachable (wall, unnavigable geometry, etc). Falling back to a raw
+    // MovePoint here is exactly what was walking kiting hunters straight
+    // through walls and eventually below the map - do nothing instead and
+    // let the next tick re-evaluate. Outside a battleground (no strict
+    // pathing attempted at all) keep the simpler point move.
+    if (!issuedStrict && !strictPathingRequired)
     {
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
         motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
@@ -4992,15 +5000,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                     std::sin(angleToTarget + static_cast<float>(M_PI)) * fleeDistance, 0.0f, 0.0f });
                 if (RequiresStrictHumanPathing(player))
                 {
-                    if (!IssueStrictHumanMove(player, destination))
-                    {
-                        // Strict segment pathing can fail to resolve around
-                        // battleground geometry. Fall back to a direct point
-                        // move so flee directives never devolve into idle.
-                        MotionMaster* fallbackMotionMaster = player->GetMotionMaster();
-                        if (fallbackMotionMaster)
-                            fallbackMotionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
-                    }
+                    // If strict segment pathing fails to resolve, PathGenerator
+                    // has already determined this flee destination is not
+                    // safely reachable. Do NOT fall back to a raw point move
+                    // here - that fallback was what let fleeing bots (hunters
+                    // especially, since they flee constantly) walk straight
+                    // through walls and eventually fall below the map.
+                    // Standing still for a tick is far cheaper than clipping
+                    // through geometry.
+                    IssueStrictHumanMove(player, destination);
                 }
                 else
                 {

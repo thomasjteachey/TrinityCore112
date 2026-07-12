@@ -1641,8 +1641,43 @@ void RandomBotParticipationManager::OnPlayerLogout(Player const* player)
     }
 }
 
+// Real players get an under-map recovery for free: MovementHandler.cpp's
+// CMSG_MOVE_* handler checks GetPositionZ() against GetMinHeight() on every
+// incoming movement packet and calls Battleground::HandlePlayerUnderMap()
+// (see e.g. BattlegroundBRT::HandlePlayerUnderMap, which teleports the
+// player back to their team's starting graveyard). Playerbots move via
+// server-side motion generators, never send real CMSG_MOVE_* packets, and so
+// never reach that check - nothing in this module calls HandlePlayerUnderMap
+// at all. A bot that clips through geometry (most likely on custom maps
+// whose navmesh has gaps a client's own collision would have caught) just
+// keeps falling forever with no recovery. Mirror the same check here on the
+// bot lifecycle tick so bots get the same safety net real players get.
+bool TryRecoverPlayerbotFromUnderMap(Player* player)
+{
+    if (!player || !player->IsInWorld() || !player->FindMap())
+        return false;
+
+    if (player->GetPositionZ() >= player->GetMap()->GetMinHeight(player->GetPositionX(), player->GetPositionY()))
+        return false;
+
+    if (Battleground* bg = player->GetBattleground())
+        if (bg->HandlePlayerUnderMap(player))
+            return true;
+
+    if (player->IsAlive())
+    {
+        player->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_IS_OUT_OF_BOUNDS);
+        player->EnvironmentalDamage(DAMAGE_FALL_TO_VOID, player->GetMaxHealth());
+        if (player->IsAlive())
+            player->KillPlayer();
+    }
+
+    return true;
+}
+
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
+    TryRecoverPlayerbotFromUnderMap(player);
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingManagedBotTeleport(player);
     TryUsePlayerbotInsigniaBreaker(player);
