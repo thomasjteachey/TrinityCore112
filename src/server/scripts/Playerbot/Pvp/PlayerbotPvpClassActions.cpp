@@ -78,6 +78,26 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool HasAuraInSpellChain(Unit const* unit, uint32 baseSpellId)
+{
+    if (!unit || !baseSpellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return false;
+
+    SpellInfo const* firstRank = baseSpellInfo->GetFirstRankSpell();
+    if (!firstRank)
+        return unit->HasAura(baseSpellId);
+
+    for (uint32 chainSpellId = firstRank->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (unit->HasAura(chainSpellId))
+            return true;
+
+    return false;
+}
+
 bool IsDruidFeralMeleePositioning(Player const* player)
 {
     if (!player || player->GetClass() != CLASS_DRUID)
@@ -667,6 +687,115 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
         return false;
 
     return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance));
+}
+
+bool IsSafeDownhillTerrainDestination(Player* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return false;
+
+    PositionFullTerrainStatus terrainStatus;
+    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+        destination.GetPositionZ() + player->GetCollisionHeight(), terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
+
+    if (terrainStatus.floorZ <= INVALID_HEIGHT)
+        return false;
+
+    float const floorDelta = std::fabs(destination.GetPositionZ() - (terrainStatus.floorZ + player->GetHoverOffset()));
+    if (floorDelta > 1.5f)
+        return false;
+
+    LiquidData liquidData{};
+    if (map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+            destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()) &&
+        !player->CanSwim() && !player->HasAuraType(SPELL_AURA_WATER_WALK))
+        return false;
+
+    return true;
+}
+
+bool TryBuildSafeDownhillTeleportDestination(Player* player, Unit* target, Position& teleportDestination, float& teleportStep, char const*& teleportMode)
+{
+    teleportMode = "none";
+    if (!player || !target || !player->InBattleground())
+        return false;
+
+    float const verticalDeltaToTarget = player->GetPositionZ() - target->GetPositionZ();
+    float const dxToTarget = target->GetPositionX() - player->GetPositionX();
+    float const dyToTarget = target->GetPositionY() - player->GetPositionY();
+    float const planarDistanceToTarget = std::sqrt(dxToTarget * dxToTarget + dyToTarget * dyToTarget);
+    if (verticalDeltaToTarget <= 8.0f || planarDistanceToTarget <= 30.0f)
+        return false;
+
+    teleportStep = std::clamp(planarDistanceToTarget * 0.20f, 12.0f, 35.0f);
+    float const teleportFraction = std::min(teleportStep / std::max(0.01f, planarDistanceToTarget), 1.0f);
+    Position requestedDestination(
+        player->GetPositionX() + dxToTarget * teleportFraction,
+        player->GetPositionY() + dyToTarget * teleportFraction,
+        player->GetPositionZ() - std::min(10.0f, verticalDeltaToTarget * teleportFraction),
+        player->GetOrientation());
+
+    PathGenerator path(player);
+    path.SetPathLengthLimit(45.0f);
+    bool const pathOk = path.CalculatePath(requestedDestination.GetPositionX(), requestedDestination.GetPositionY(), requestedDestination.GetPositionZ(), true);
+    PathType const pathType = path.GetPathType();
+    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+    if (pathOk && (pathType & forbiddenPathFlags) == 0)
+    {
+        Movement::PointsArray const& points = path.GetPath();
+        G3D::Vector3 const* bestPoint = nullptr;
+        float bestPlanarDistance = 0.0f;
+        for (G3D::Vector3 const& point : points)
+        {
+            float const dx = point.x - player->GetPositionX();
+            float const dy = point.y - player->GetPositionY();
+            float const planarDistance = std::sqrt(dx * dx + dy * dy);
+            if (planarDistance > teleportStep + 1.0f)
+                break;
+
+            if (planarDistance >= 3.0f && planarDistance > bestPlanarDistance)
+            {
+                bestPoint = &point;
+                bestPlanarDistance = planarDistance;
+            }
+        }
+
+        if (bestPoint)
+        {
+            teleportDestination.Relocate(bestPoint->x, bestPoint->y, bestPoint->z, player->GetOrientation());
+            teleportStep = bestPlanarDistance;
+            teleportMode = "path_safe_teleport";
+            return true;
+        }
+    }
+
+    // Some battleground graveyards/cliffs have no navmesh route down even
+    // though the lower terrain is walkable. Fall back to a capped terrain snap
+    // in the same generic downhill direction, but only accept points that snap
+    // to the destination floor and are not unsafe liquid for this bot.
+    Position terrainDestination = requestedDestination;
+    float terrainZ = terrainDestination.GetPositionZ();
+    player->UpdateAllowedPositionZ(terrainDestination.GetPositionX(), terrainDestination.GetPositionY(), terrainZ);
+    terrainDestination.Relocate(terrainDestination.GetPositionX(), terrainDestination.GetPositionY(), terrainZ, player->GetOrientation());
+
+    float const terrainDx = terrainDestination.GetPositionX() - player->GetPositionX();
+    float const terrainDy = terrainDestination.GetPositionY() - player->GetPositionY();
+    float const terrainPlanarDistance = std::sqrt(terrainDx * terrainDx + terrainDy * terrainDy);
+    float const downwardDelta = player->GetPositionZ() - terrainDestination.GetPositionZ();
+    if (terrainPlanarDistance >= 3.0f && terrainPlanarDistance <= teleportStep + 1.0f && downwardDelta > 1.0f &&
+        IsSafeDownhillTerrainDestination(player, terrainDestination))
+    {
+        teleportDestination = terrainDestination;
+        teleportStep = terrainPlanarDistance;
+        teleportMode = "terrain_safe_teleport";
+        return true;
+    }
+
+    return false;
 }
 
 bool PrepareMotionMasterForExplicitBotMovement(Player* player)
@@ -1675,12 +1804,6 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = 0;
         return;
     }
-    bool const battleground = player->InBattleground();
-    float const verticalDeltaToTarget = player->GetPositionZ() - target->GetPositionZ();
-    float const dxToTarget = target->GetPositionX() - player->GetPositionX();
-    float const dyToTarget = target->GetPositionY() - player->GetPositionY();
-    float const planarDistanceToTarget = std::sqrt(dxToTarget * dxToTarget + dyToTarget * dyToTarget);
-
     // Important: SPELL_FAILED_LINE_OF_SIGHT is more authoritative than the
     // generic IsWithinLOSInMap() diagnostic. On custom BG maps/vmaps the simple
     // LOS check can say yes while Spell::CheckCast still rejects the cast. In
@@ -1776,57 +1899,40 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
-    // Battleground cliff descent recovery:
-    // When chasing a distant lower target from elevated terrain, repeatedly
-    // issuing CHASE/FOLLOW can route bots back uphill. Move the bot only a short
-    // downhill step, then resume normal target-relative pathing on the next
-    // update. Do not teleport all the way to the target/midfield.
     bool const downhillTeleportReady = !sameStallTarget || stallState.lastIssueMs == 0 || lastIssueAgeMs >= 3000;
     bool const shouldForceDownhillCommit =
-        battleground &&
         strictPathing &&
         downhillTeleportReady &&
-        verticalDeltaToTarget > 8.0f &&
-        planarDistanceToTarget > 30.0f &&
         !currentlyMoving &&
         !player->HasUnitState(UNIT_STATE_CHASE_MOVE) &&
         !player->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
     if (shouldForceDownhillCommit)
     {
-        float const teleportStep = std::clamp(planarDistanceToTarget * 0.20f, 12.0f, 35.0f);
-        float const teleportFraction = std::min(teleportStep / std::max(0.01f, planarDistanceToTarget), 1.0f);
-        float const teleportX = player->GetPositionX() + dxToTarget * teleportFraction;
-        float const teleportY = player->GetPositionY() + dyToTarget * teleportFraction;
-        float const teleportZ = player->GetPositionZ() - std::min(10.0f, verticalDeltaToTarget * teleportFraction);
+        Position teleportDestination;
+        float teleportStep = 0.0f;
+        char const* teleportMode = "none";
+        if (TryBuildSafeDownhillTeleportDestination(player, target, teleportDestination, teleportStep, teleportMode))
+        {
+            float const preTeleportDistance = player->GetDistance(teleportDestination);
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            player->NearTeleportTo(teleportDestination, false);
 
-        // Do not call GetNearPoint/BuildCollisionSafeDestination here: both can
-        // call UpdateAllowedPositionZ(), which may sample the terrain below a
-        // bridge/platform and put the bot under the walkable surface. This is a
-        // capped downhill nudge from the bot's current position, not a teleport
-        // to the distant target.
-        Position teleportDestination(teleportX, teleportY, teleportZ, player->GetOrientation());
+            stallState.targetGuid = target->GetGUID();
+            stallState.lastDistance = currentDistance;
+            stallState.lastSampleMs = nowMs;
+            stallState.lastIssueMs = nowMs;
+            stallState.lastIssuedRange = safeDistance;
+            stallState.lastIssuedMode = 1;
 
-        float const preTeleportDistance = player->GetDistance(teleportDestination);
-        motionMaster->Clear(MOTION_SLOT_ACTIVE);
-        player->NearTeleportTo(teleportDestination, false);
-
-        stallState.targetGuid = target->GetGUID();
-        stallState.lastDistance = currentDistance;
-        stallState.lastSampleMs = nowMs;
-        stallState.lastIssueMs = nowMs;
-        stallState.lastIssuedRange = safeDistance;
-        stallState.lastIssuedMode = 1;
-
-        std::ostringstream diag;
-        diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_teleport",
-            safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, "teleport")
-             << " vertical_delta=" << verticalDeltaToTarget
-             << " planar_delta=" << planarDistanceToTarget
-             << " teleport_dist=" << preTeleportDistance
-             << " teleport_step=" << teleportStep
-             << " cooldown_ms=3000";
-        SetLastMovementDebugStatus(player, diag.str());
-        return;
+            std::ostringstream diag;
+            diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_safe_teleport",
+                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, teleportMode)
+                 << " teleport_dist=" << preTeleportDistance
+                 << " teleport_step=" << teleportStep
+                 << " cooldown_ms=3000";
+            SetLastMovementDebugStatus(player, diag.str());
+            return;
+        }
     }
 
     // For target-relative ranged approach, do NOT use MovePoint here.
@@ -3800,6 +3906,18 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // specific control-breaking racials are explicit exceptions because
         // they are intentionally usable while the corresponding control is active.
         failureReason = "crowd_controlled_polymorph";
+        return false;
+    }
+
+    // Rehgar's Fury is the only playerbot PvP action that should be attempted
+    // while a shaman is in Ghost Wolf. Other casts fail shapeshift validation
+    // (for example Lightning Shield reports SPELL_FAILED_NOT_SHAPESHIFT), so
+    // cancel the form immediately and suppress this cast attempt instead of
+    // spamming spell-fail logs until the next decision tick.
+    if (player->GetClass() == CLASS_SHAMAN && HasAuraInSpellChain(player, 2645) && resolvedSpellId != 81910)
+    {
+        player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+        failureReason = "shaman_ghost_wolf_cancelled_for_non_rehgar_action";
         return false;
     }
 
