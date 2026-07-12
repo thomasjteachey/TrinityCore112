@@ -78,6 +78,26 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool HasAuraInSpellChain(Unit const* unit, uint32 baseSpellId)
+{
+    if (!unit || !baseSpellId)
+        return false;
+
+    SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+    if (!baseSpellInfo)
+        return false;
+
+    SpellInfo const* firstRank = baseSpellInfo->GetFirstRankSpell();
+    if (!firstRank)
+        return unit->HasAura(baseSpellId);
+
+    for (uint32 chainSpellId = firstRank->Id; chainSpellId != 0; chainSpellId = sSpellMgr->GetNextSpellInChain(chainSpellId))
+        if (unit->HasAura(chainSpellId))
+            return true;
+
+    return false;
+}
+
 bool IsDruidFeralMeleePositioning(Player const* player)
 {
     if (!player || player->GetClass() != CLASS_DRUID)
@@ -3902,7 +3922,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // (for example Lightning Shield reports SPELL_FAILED_NOT_SHAPESHIFT), so
     // cancel the form immediately and suppress this cast attempt instead of
     // spamming spell-fail logs until the next decision tick.
-    if (player->GetClass() == CLASS_SHAMAN && HasAuraFromSpellChain(player, 2645) && resolvedSpellId != 81910)
+    if (player->GetClass() == CLASS_SHAMAN && HasAuraInSpellChain(player, 2645) && resolvedSpellId != 81910)
     {
         player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
         failureReason = "shaman_ghost_wolf_cancelled_for_non_rehgar_action";
