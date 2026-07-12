@@ -3153,6 +3153,19 @@ bool HasActiveStationaryChannel(Player const* player)
     return IsPlayerbotStationaryChannel(channel->GetSpellInfo());
 }
 
+bool HasActiveMovementEffectSpline(Player const* player)
+{
+    if (!player)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+        return false;
+
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
+}
+
 void StopPlayerbotForStationaryCast(Player* player)
 {
     if (!player)
@@ -3169,11 +3182,8 @@ void StopPlayerbotForStationaryCast(Player* player)
     // rip the charge spline out mid-flight. Let the charge resolve first --
     // the caller's SPELL_FAILED_MOVING retry path already handles waiting a
     // tick for a stationary cast, so this is a short defer, not a stall.
-    if (player->HasUnitState(UNIT_STATE_CHARGING) &&
-        motionMaster && motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
-    {
+    if (HasActiveMovementEffectSpline(player))
         return;
-    }
 
     player->StopMoving();
     if (motionMaster)
@@ -3345,18 +3355,15 @@ bool CanIssueFollowCommands(Player const* player)
         return false;
     }
 
-    // Charge/Intercept movement is issued through the effect motion slot at
+    // Charge/leap/jump movement is issued through the effect motion slot at
     // MOTION_PRIORITY_HIGHEST, but that engine-side priority protection only
     // stops other MotionMaster::Add() calls -- it does nothing against a bare
     // Clear(), which follow/strict-move callers issue unconditionally. Without
-    // this guard the very next melee-approach tick after a charge wipes the
-    // in-flight charge spline, so the charge visibly never plays out.
-    MotionMaster const* motionMaster = player->GetMotionMaster();
-    if (motionMaster && player->HasUnitState(UNIT_STATE_CHARGING) &&
-        motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
-    {
+    // this guard the very next movement tick can wipe the in-flight effect
+    // spline, so leap-style abilities visibly apply spell effects without
+    // moving the bot.
+    if (HasActiveMovementEffectSpline(player))
         return false;
-    }
 
     return true;
 }
@@ -4506,7 +4513,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->SetSelection(target->GetGUID());
         if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
         {
-            if (player->HasUnitState(UNIT_STATE_CHARGING))
+            if (HasActiveMovementEffectSpline(player))
             {
                 ObjectGuid const playerGuid = player->GetGUID();
                 ObjectGuid const targetGuid = target->GetGUID();
