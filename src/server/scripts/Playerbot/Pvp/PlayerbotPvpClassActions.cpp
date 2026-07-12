@@ -789,10 +789,28 @@ bool TryBuildSafeDownhillTeleportDestination(Player* player, Unit* target, Posit
     if (terrainPlanarDistance >= 3.0f && terrainPlanarDistance <= teleportStep + 1.0f && downwardDelta > 1.0f &&
         IsSafeDownhillTerrainDestination(player, terrainDestination))
     {
-        teleportDestination = terrainDestination;
-        teleportStep = terrainPlanarDistance;
-        teleportMode = "terrain_safe_teleport";
-        return true;
+        // The terrain-height query above finds *a* floor near that X/Y - not
+        // necessarily one actually connected to where the bot is standing.
+        // Battlegrounds built on top of a larger dungeon map (multiple rooms/
+        // levels stacked in the same X/Y footprint) can have an unrelated
+        // lower chamber's floor picked up here. NearTeleportTo has no path
+        // validation at all, so require an unobstructed line of sight to the
+        // candidate point first; if there is a wall/floor between here and
+        // there, the "floor" that was found is on the other side of it, not
+        // reachable from here, and teleporting to it drops the bot through
+        // the world instead of down a legitimate slope/cliff.
+        Map* map = player->FindMap();
+        bool const hasLos = map && map->isInLineOfSight(
+            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + player->GetCollisionHeight(),
+            terrainDestination.GetPositionX(), terrainDestination.GetPositionY(), terrainDestination.GetPositionZ() + player->GetCollisionHeight(),
+            player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
+        if (hasLos)
+        {
+            teleportDestination = terrainDestination;
+            teleportStep = terrainPlanarDistance;
+            teleportMode = "terrain_safe_teleport";
+            return true;
+        }
     }
 
     return false;
