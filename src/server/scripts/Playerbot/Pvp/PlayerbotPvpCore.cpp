@@ -1160,7 +1160,13 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     // Lightning Shield as "castable" while the caster is a Ghost Wolf, attempts
     // it, and it fails server-side with SPELL_FAILED_NOT_SHAPESHIFT instead of
     // the loop moving on to a candidate that actually works.
-    if (knownByPlayer && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) &&
+    // Rehgar's Fury (81910) is exempted: its whole purpose (spell_sha_ghost_wolf_charge
+    // / Unit::CompleteGhostWolfCharge) is to be cast while Ghost Wolf is active, but
+    // if its spell_template Stances field was never authored to explicitly allow the
+    // Ghost Wolf stance, this generic DBC-driven check would wrongly reject it too -
+    // leaving nothing valid to do while shifted except immediately unshift again,
+    // which reads as the shaman flickering in and out of Ghost Wolf and never leaping.
+    if (knownByPlayer && decision.spellId != 81910 && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) &&
         spellInfo->CheckShapeshift(player->GetShapeshiftForm()) != SPELL_CAST_OK)
         return false;
 
@@ -4032,9 +4038,9 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, bmHasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
         { "hunter mongoose bite", "consume serpent sting for beast mastery melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
+    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
         { "hunter arcane shot", "instant pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
+    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -4055,13 +4061,14 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     // Needs to actually win the priority sort while out of melee range, not
     // just be "true": SelectHighestPriorityCastableDecision skips any
     // candidate that isn't immediately castable (mongoose bite is melee-range
-    // only) and returns the next castable one instead, so if concussive
-    // shot/viper sting were still in the running they'd get picked forever
-    // and the bot would never approach. Those two are suppressed above while
-    // this condition holds so this candidate reliably becomes the fallback
-    // that drives CastDirectSpell's out-of-range approach movement.
+    // only) and returns the next castable one instead, so every ranged filler
+    // that would otherwise still be castable at range (concussive shot, the
+    // sting/shots above, viper sting) is suppressed above while this
+    // condition holds, so this candidate reliably becomes the fallback that
+    // drives CastDirectSpell's out-of-range approach movement instead of the
+    // bot just kiting at max range indefinitely.
     AddDecisionCandidate(candidates, bmReadyToBiteKillTarget && IsSpellReady(player, 81285), 20.5f,
-        { "hunter mongoose bite", "close distance and bite while arcane shot and multi-shot are down", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+        { "hunter mongoose bite", "close distance and weave in a bite", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }
@@ -4669,6 +4676,15 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const shouldUseHeroicLeapGapCloser = isFuryWarrior && !player->IsWithinMeleeRange(gapCloseTarget) && player->IsInCombat() && IsSpellReady(player, 81271);
     bool const furyInDanger = isFuryWarrior && player->HealthBelowPct(35) && SelectNearbyMeleeTarget(player, activeTarget, 8.0f) && IsSpellReady(player, 81271);
     bool const furyRecentGapCloser = isFuryWarrior && (player->GetSpellHistory()->HasCooldown(11578) || player->GetSpellHistory()->HasCooldown(81271));
+    uint32 const meleeFinisherSpellId = isProtWarrior ? uint32(23925) : (isFuryWarrior ? uint32(23881) : uint32(21553));
+    // Bloodrage/Battle Shout are self-targeted, so the immediate-castability
+    // check never fails them for range - they are always "ready" whenever
+    // their own condition holds. Sitting above the gap closers in priority,
+    // they permanently starve Charge/Intercept/Heroic Leap from ever being
+    // selected while out of melee range, since the selector always returns
+    // the first immediately-castable candidate scanning top-down rather than
+    // preferring an out-of-range action that would trigger approach movement.
+    bool const gapCloseUrgent = shouldUseChargeGapCloser || shouldUseInterceptGapCloser || shouldUseHeroicLeapGapCloser;
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
@@ -4707,7 +4723,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior piercing howl", "apply area snare when multiple enemies are unsnared in melee range", 12323, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, HasHostileTarget(player, activeTarget) && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 5246), 55.5f,
         { "warrior intimidating shout", "aoe fear around the current target when outnumbered", 5246, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, isProtWarrior ? uint32(23925) : uint32(21553))) &&
+    AddDecisionCandidate(candidates, !gapCloseUrgent && (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, meleeFinisherSpellId)) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isProtWarrior && inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
@@ -4733,7 +4749,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior berserker stance", "switch to berserker stance before execute", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, executeReady && inBerserkerStance, 50.0f,
         { "warrior execute", "finisher at low enemy health while in berserker stance", 20662, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 25289) && IsSpellReady(player, 25289), 40.0f,
+    AddDecisionCandidate(candidates, !gapCloseUrgent && !HasAuraFromSpellChain(player, 25289) && IsSpellReady(player, 25289), 40.0f,
         { "warrior battle shout", "maintain attack power buff", 25289, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, revengeReady && inDefensiveStance, 40.5f,
         { "warrior revenge", "use reactive revenge whenever available", 25288, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
@@ -4744,7 +4760,6 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
             (isProtWarrior ? !HasAuraFromSpellChain(activeTarget, 11597) : (!HasAuraFromSpellChain(activeTarget, 7373) || (activeTarget->GetAura(7373) && activeTarget->GetAura(7373)->GetDuration() < 2000))) &&
             IsSpellReady(player, isProtWarrior ? uint32(11597) : uint32(7373)), 39.0f,
         { isProtWarrior ? "warrior sunder armor" : "warrior hamstring", isProtWarrior ? "apply sunder armor as protection filler" : "maintain stickiness snare", isProtWarrior ? uint32(11597) : uint32(7373), playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    uint32 const meleeFinisherSpellId = isProtWarrior ? uint32(23925) : (isFuryWarrior ? uint32(23881) : uint32(21553));
     char const* meleeFinisherName = isProtWarrior ? "warrior shield slam" : (isFuryWarrior ? "warrior bloodthirst" : "warrior mortal strike");
     char const* meleeFinisherReason = isProtWarrior ? "protection kill target pressure" : (isFuryWarrior ? "fury primary strike instead of mortal strike" : "arms-like burst pressure");
     AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && (isProtWarrior || isFuryWarrior || !HasAuraFromSpellChain(activeTarget, 21553)) &&

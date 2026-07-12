@@ -3812,8 +3812,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // form and continue with the same cast attempt in this tick. This is also
     // the mechanism that drops a shaman out of Ghost Wolf the moment nothing
     // castable requires it (Ghost Wolf's only real use is charging with
-    // Rehgar's Fury).
-    if ((player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
+    // Rehgar's Fury). 81910 itself is exempted for the same reason as the
+    // matching check in IsDecisionImmediatelyCastable - it is specifically
+    // meant to be cast while shapeshifted into Ghost Wolf.
+    if (resolvedSpellId != 81910 && (player->GetClass() == CLASS_DRUID || player->GetClass() == CLASS_SHAMAN) && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT))
         if (spellInfo->CheckShapeshift(player->GetShapeshiftForm()) == SPELL_FAILED_NOT_SHAPESHIFT)
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
 
