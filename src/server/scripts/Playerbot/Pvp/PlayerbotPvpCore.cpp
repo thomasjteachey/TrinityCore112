@@ -1155,6 +1155,15 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (!spellInfo)
         return false;
 
+    // A shapeshift form (Moonkin, Ghost Wolf, Bear/Cat, ...) makes most other
+    // spells uncastable. Without this check the selector marks something like
+    // Lightning Shield as "castable" while the caster is a Ghost Wolf, attempts
+    // it, and it fails server-side with SPELL_FAILED_NOT_SHAPESHIFT instead of
+    // the loop moving on to a candidate that actually works.
+    if (knownByPlayer && player->HasAuraType(SPELL_AURA_MOD_SHAPESHIFT) &&
+        spellInfo->CheckShapeshift(player->GetShapeshiftForm()) != SPELL_CAST_OK)
+        return false;
+
     // Classic hunter traps cannot be placed while the hunter is still in combat.
     // Feign Death may clear combat and make the next trap valid, but the selector
     // must not return an in-combat trap attempt that would spam
