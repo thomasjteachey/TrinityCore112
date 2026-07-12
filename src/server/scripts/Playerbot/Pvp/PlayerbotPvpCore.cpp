@@ -2219,9 +2219,12 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
 
             ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
             bool const isAfflictionWarlock = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
-            uint32 const summonPetSpell = isAfflictionWarlock ? 691 : 697;
+            bool const isDestructionWarlock = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
+            uint32 const summonPetSpell = isAfflictionWarlock ? 691 : (isDestructionWarlock ? 712 : 697);
+            char const* summonPetName = isAfflictionWarlock ? "warlock summon felhunter prep" : (isDestructionWarlock ? "warlock summon succubus prep" : "warlock summon voidwalker prep");
+            char const* summonPetReason = isAfflictionWarlock ? "summon felhunter before gates open" : (isDestructionWarlock ? "summon succubus before gates open" : "summon voidwalker before gates open");
             if (IsSpellReady(player, summonPetSpell))
-                return { isAfflictionWarlock ? "warlock summon felhunter prep" : "warlock summon voidwalker prep", isAfflictionWarlock ? "summon felhunter before gates open" : "summon voidwalker before gates open", summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+                return { summonPetName, summonPetReason, summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             break;
         }
@@ -4010,7 +4013,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         21.0f,
         { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy,
             enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
+    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
         { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
         !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, 25295), 19.75f,
@@ -4025,7 +4028,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
+    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
         { "hunter viper sting", "drain mana on mana users", 14280, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget ? manaTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(enemyOnTopTarget), 14.0f,
         { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
@@ -4039,7 +4042,15 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter outmaneuver", "mobility while under melee pressure with the pet at range", 81297, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBeastMasteryHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
         { "hunter mongoose bite", "bite the nearest attacker under melee pressure", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, bmReadyToBiteKillTarget && IsSpellReady(player, 81285), 16.5f,
+    // Needs to actually win the priority sort while out of melee range, not
+    // just be "true": SelectHighestPriorityCastableDecision skips any
+    // candidate that isn't immediately castable (mongoose bite is melee-range
+    // only) and returns the next castable one instead, so if concussive
+    // shot/viper sting were still in the running they'd get picked forever
+    // and the bot would never approach. Those two are suppressed above while
+    // this condition holds so this candidate reliably becomes the fallback
+    // that drives CastDirectSpell's out-of-range approach movement.
+    AddDecisionCandidate(candidates, bmReadyToBiteKillTarget && IsSpellReady(player, 81285), 20.5f,
         { "hunter mongoose bite", "close distance and bite while arcane shot and multi-shot are down", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
@@ -4448,7 +4459,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
     ObjectGuid const mightTargetGuid = IsSpellReady(player, 25291) ? SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f) : ObjectGuid::Empty;
     Unit const* flashHealTarget = (!isRetPaladin && IsSpellReady(player, 19943)) ? SelectFriendlyHealthTarget(player, 40.0f, 85.0f) : nullptr;
-    Unit const* holyLightTarget = (!isRetPaladin && IsSpellReady(player, 635)) ? SelectFriendlyHealthTarget(player, 40.0f, 60.0f) : nullptr;
+    // Holy Light is intentionally never used; Flash of Light covers every heal tier instead.
+    Unit const* bigFlashHealTarget = (!isRetPaladin && IsSpellReady(player, 19943)) ? SelectFriendlyHealthTarget(player, 40.0f, 60.0f) : nullptr;
 
     std::vector<PrioritizedSpellDecision> candidates;
     AddDecisionCandidate(candidates, isRetPaladin && holyStrikeFlashHealTarget, 63.0f,
@@ -4467,10 +4479,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin compel", "pull the kill target onto the tank", 62124, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isProtPaladin && executeTarget && IsSpellReady(player, 32699), 45.5f,
         { "paladin avengers shield", "ranged pressure and silence on the kill target", 32699, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, emergencyLowAlly && IsSpellReady(player, 635), 56.0f,
-        { "paladin holy light", "prioritize emergency heal for nearby ally below 25 percent health", 635, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, emergencyLowAlly && IsSpellReady(player, 19943), 55.5f,
-        { "paladin flash of light", "fallback emergency heal for nearby ally below 25 percent health", 19943, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, emergencyLowAlly && IsSpellReady(player, 19943), 56.0f,
+        { "paladin flash of light", "emergency heal for nearby ally below 25 percent health", 19943, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !emergencyLowAlly && cleanseTarget, 55.0f,
         { "paladin cleanse", "prioritize cleansing allies", 4987, cleanseTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, cleanseTarget ? cleanseTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, freedomTarget, 54.0f,
@@ -4497,8 +4507,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin divine favor", "increase emergency heal throughput", 20216, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, flashHealTarget, 48.0f,
         { "paladin flash of light", "heal injured allies efficiently", 19943, flashHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, flashHealTarget ? flashHealTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, holyLightTarget, 47.0f,
-        { "paladin holy light", "large heal for heavily injured ally", 635, holyLightTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, holyLightTarget ? holyLightTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, bigFlashHealTarget, 47.0f,
+        { "paladin flash of light", "large heal for heavily injured ally", 19943, bigFlashHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, bigFlashHealTarget ? bigFlashHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isRetPaladin && stunnedJudgementTarget && IsSpellReady(player, 20271), 46.5f,
         { "paladin judgement", "judge nearby stunned enemy while seal of command is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, stunnedJudgementTarget ? stunnedJudgementTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, executeTarget && HasActivePaladinSeal(player) && IsSpellReady(player, 20271), 46.0f,
@@ -4570,7 +4580,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, fearTarget, 53.0f,
         { "warlock fear", "prioritize fear control on paladin/priest targets in range", 6215, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget ? fearTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && !player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708), 52.0f,
-        { "warlock fel domination", "prepare instant out-of-combat pet recovery before voidwalker summon", 18708, playerbot::PvpClassSpellContext::TargetMode::Self });
+        { "warlock fel domination", "prepare instant out-of-combat pet recovery before demon summon", 18708, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, needsPetSummon && !player->IsInCombat() && IsSpellReady(player, summonPetSpell), 51.0f,
         { summonPetName, summonPetReasonRecover, summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && !player->HasAura(25228) && IsSpellReady(player, 19028), 45.0f,
@@ -4831,7 +4841,12 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     Unit const* earthShieldTarget = isRestoShaman && IsSpellReady(player, 32593) && !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, 32593) ? SelectFriendlyHealthTarget(player, 40.0f, 100.0f) : nullptr;
     Unit const* purgeTarget = isRestoShaman && hasHostileTarget && IsSpellReady(player, 81325) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* allyMagicTarget = isRestoShaman && IsSpellReady(player, 81325) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 40.0f) : nullptr;
-    Unit const* rehgarsFuryThreat = hasHostileTarget && IsSpellReady(player, 81910) ? SelectNearbyMeleeTarget(player, target, 10.0f) : nullptr;
+    // Rehgar's Fury (81910) is a charge that requires Ghost Wolf form active
+    // (see spell_sha_ghost_wolf_charge / Unit::CompleteGhostWolfCharge) - it
+    // consumes the form on impact. Enhancement shifts into Ghost Wolf first,
+    // then charges the kill target with Rehgar's Fury to close the gap.
+    bool const enhNeedsGapClose = isEnhancementShaman && hasHostileTarget && target && !player->IsWithinMeleeRange(target);
+    bool const enhInGhostWolf = isEnhancementShaman && HasAuraFromSpellChain(player, 2645);
 
     std::vector<PrioritizedSpellDecision> candidates;
     // Disabled: auto-casting Windfury Weapon from PvP loop while investigating weapon-dependent aura crashes.
@@ -4851,7 +4866,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman chain heal", "primary restoration heal", 10623, chainHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, chainHealTarget ? chainHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isRestoShaman && earthShieldTarget && !HasAuraFromSpellChain(earthShieldTarget, 32593), 58.0f,
         { "shaman earth shield", "protect lowest health ally", 32593, earthShieldTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, earthShieldTarget ? earthShieldTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 10605), 57.0f,
+    AddDecisionCandidate(candidates, !isRestoShaman && !isEnhancementShaman && IsSpellReady(player, 10605), 57.0f,
         { "shaman chain lightning", "primary burst cast on kill target", 10605, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isEnhancementShaman && hasHostileTarget && target && IsSpellReady(player, 17364), 56.5f,
         { "shaman stormstrike", "primary melee burst on the kill target", 17364, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -4879,8 +4894,10 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, rehgarsFuryThreat && !HasBreakableCrowdControl(rehgarsFuryThreat), 59.5f,
-        { "shaman rehgar's fury", "escape nearby melee pressure", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy, rehgarsFuryThreat ? rehgarsFuryThreat->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, enhNeedsGapClose && !enhInGhostWolf && IsSpellReady(player, 2645), 59.6f,
+        { "shaman ghost wolf", "shift to close the gap with rehgar's fury", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, enhNeedsGapClose && enhInGhostWolf && IsSpellReady(player, 81910), 59.5f,
+        { "shaman rehgar's fury", "charge the kill target while in ghost wolf form", 81910, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && purgeTarget, 53.5f,
@@ -4891,7 +4908,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman purge", "strip enemy magical effects by default", 370, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isRestoShaman && lesserHealTarget, 51.0f,
         { "shaman lesser healing wave", "restoration fallback heal", 10468, lesserHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, lesserHealTarget ? lesserHealTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, hasHostileTarget && IsSpellReady(player, 15208), isRestoShaman ? 5.0f : 39.0f,
+    AddDecisionCandidate(candidates, !isEnhancementShaman && hasHostileTarget && IsSpellReady(player, 15208), isRestoShaman ? 5.0f : 39.0f,
         { "shaman lightning bolt", "fallback ranged damage cast", 15208, playerbot::PvpClassSpellContext::TargetMode::Enemy });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, allyTarget);
