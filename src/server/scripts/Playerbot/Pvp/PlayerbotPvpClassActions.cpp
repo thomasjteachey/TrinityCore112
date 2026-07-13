@@ -3649,6 +3649,13 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
     if (!IsInHazardousLiquid(player))
         return false;
 
+    // Effect-driven charges and leaps own the highest-priority movement slot
+    // and are already moving the bot away from its current position. Hazard
+    // escape must not Clear() that slot to install a point move; doing so drops
+    // the arrival MovementInform (notably Rehgar's Ghost Wolf completion).
+    if (HasActiveMovementEffectSpline(player))
+        return true;
+
     // Preserve an already-launched escape point. Recomputing from the bot's
     // new position and clearing/reissuing every AI tick repeatedly resets the
     // spline at its origin, which looks exactly like standing still in magma.

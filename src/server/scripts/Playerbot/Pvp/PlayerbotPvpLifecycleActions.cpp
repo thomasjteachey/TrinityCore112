@@ -1087,6 +1087,16 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!IsInHazardousLiquid(player))
             return false;
 
+        // A charge/leap already owns the highest-priority movement slot and is
+        // moving the bot away from its current hazardous position. Do not wipe
+        // that effect generator to install an escape point, or its arrival
+        // MovementInform will never fire.
+        if (HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "hazard_escape_deferred_effect", 0);
+            return true;
+        }
+
         MotionMaster* motionMaster = player->GetMotionMaster();
         if (!motionMaster)
             return false;

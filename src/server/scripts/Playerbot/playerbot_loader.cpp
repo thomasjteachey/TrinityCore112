@@ -618,10 +618,10 @@ public:
             return;
 
         Player* player = target ? target->ToPlayer() : nullptr;
-        if (!playerbot::IsManagedRandomBot(player))
+        if (!playerbot::IsManagedRandomBot(player) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
             return;
 
-        damage *= 0;
+        damage = 0;
     }
 };
 
