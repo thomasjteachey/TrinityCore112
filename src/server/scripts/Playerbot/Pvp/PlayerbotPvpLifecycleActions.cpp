@@ -23,6 +23,7 @@
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
 #include "BattlegroundEY.h"
+#include "BattlegroundOBC.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "DBCStores.h"
@@ -36,6 +37,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "MovementTypedefs.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
@@ -514,6 +516,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
     float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
+    bool HasPlayerbotGapCloserInFlight(Player const* player);
     bool CanIssueBotMovement(Player* player);
     bool HunterIsHardCastingStationaryShot(Player const* player);
     void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra, uint32 throttleMs);
@@ -995,6 +998,83 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return false;
     }
 
+    bool IsInHazardousLiquid(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return false;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
+            player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        if ((status & MAP_LIQUID_STATUS_IN_CONTACT) == 0)
+            return false;
+
+        return (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+    }
+
+    bool IsHazardousLiquidDestination(Player const* player, Position const& destination)
+    {
+        if (!player)
+            return false;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return false;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+            destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        return (status & MAP_LIQUID_STATUS_IN_CONTACT) != 0 &&
+            (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+    }
+
+    bool TryMoveOutOfHazardousLiquid(Player* player)
+    {
+        if (!IsInHazardousLiquid(player))
+            return false;
+
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
+            return false;
+
+        float const baseAngle = player->GetOrientation();
+        std::array<float, 12> const probeAngles =
+        {
+            0.0f, float(M_PI), float(M_PI_2), -float(M_PI_2),
+            float(M_PI_4), -float(M_PI_4), float(3.0f * M_PI_4), -float(3.0f * M_PI_4),
+            float(M_PI / 6.0f), -float(M_PI / 6.0f), float(5.0f * M_PI / 6.0f), -float(5.0f * M_PI / 6.0f)
+        };
+        std::array<float, 4> const probeDistances = { 8.0f, 12.0f, 16.0f, 24.0f };
+
+        for (float distance : probeDistances)
+        {
+            for (float offset : probeAngles)
+            {
+                Position destination = player->GetPosition();
+                float const angle = baseAngle + offset;
+                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                destination = BuildCollisionSafeDestination(player, destination);
+                if (IsHazardousLiquidDestination(player, destination))
+                    continue;
+
+                Position segmentDestination;
+                if (TryBuildBattlegroundSegmentDestination(player, destination, segmentDestination) ||
+                    (!player->InBattleground() && player->GetDistance(destination) > 0.5f))
+                {
+                    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                    motionMaster->MovePoint(0, player->InBattleground() ? segmentDestination : destination, true);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold, uint32 minReissueMs)
     {
         if (!player || !target)
@@ -1066,7 +1146,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         MotionMaster* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-        if (player->InBattleground() && botCurrentlyMoving && currentMovement == EFFECT_MOTION_TYPE)
+        if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
             return true;
 
         if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
@@ -1077,9 +1157,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             currentMovement != IDLE_MOTION_TYPE &&
             currentMovement != CHASE_MOTION_TYPE &&
             currentMovement != POINT_MOTION_TYPE &&
-            // Charge/Intercept movement is issued through effect generators.
-            // Clear stale effect movement only once charge state has ended.
-            (currentMovement != EFFECT_MOTION_TYPE || !player->HasUnitState(UNIT_STATE_CHARGING)))
+            // Charge/Intercept/Rehgar's Fury movement is issued through effect
+            // generators. Clear stale effect movement only once its spline has
+            // actually ended; some jump-dest effects do not keep
+            // UNIT_STATE_CHARGING set for the full visual travel.
+            (currentMovement != EFFECT_MOTION_TYPE || !HasPlayerbotGapCloserInFlight(player)))
         {
             EmitBattlegroundGmDebug(player,
                 "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
@@ -1676,6 +1758,19 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return spellInfo && spellInfo->IsChanneled() && (!spellInfo->IsMoveAllowedChannel() || IsMindFlaySpell(spellInfo));
     }
 
+    bool HasPlayerbotGapCloserInFlight(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+            return false;
+
+        bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+        return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
+    }
+
     bool CanIssueBotMovement(Player* player)
     {
         if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
@@ -1719,8 +1814,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // cast, independent of movement), but the bot never visibly performs the
         // charge motion and just appears to run at the target. Withhold
         // positioning movement until the charge spline itself completes.
-        if (player->HasUnitState(UNIT_STATE_CHARGING) &&
-            player->GetMotionMaster()->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
+        if (HasPlayerbotGapCloserInFlight(player))
         {
             return false;
         }
@@ -1799,6 +1893,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     void StopVirtualPlayerbotMovement(Player* player)
     {
         if (!player)
+            return;
+
+        if (TryMoveOutOfHazardousLiquid(player))
             return;
 
         player->StopMoving();
@@ -2783,9 +2880,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return ObjectAccessor::FindConnectedPlayer(carrierGuid);
         }
 
-        if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+        auto findNeutralFlagCarrierForDirective = [&](ObjectGuid const& carrierGuid) -> Player*
         {
-            ObjectGuid const carrierGuid = bgEy->GetFlagPickerGUID();
             if (carrierGuid.IsEmpty())
                 return nullptr;
 
@@ -2797,7 +2893,15 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 return carrier;
             if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrier->GetTeamId() == botTeam)
                 return carrier;
-        }
+
+            return nullptr;
+        };
+
+        if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+            return findNeutralFlagCarrierForDirective(bgEy->GetFlagPickerGUID());
+
+        if (BattlegroundOBC* bgObc = dynamic_cast<BattlegroundOBC*>(battleground))
+            return findNeutralFlagCarrierForDirective(bgObc->GetFlagPickerGUID());
 
         return nullptr;
     }
@@ -3556,6 +3660,17 @@ namespace playerbot
         // (or rely on melee/auto attacks) can stay mounted and fail to engage.
         if (player->IsMounted())
             ForcePlayerbotDismount(player);
+
+        // Playerbots run tactical/lifecycle engagement every fast tick. That
+        // loop can select the same enemy immediately after a class gap-closer
+        // cast (Charge, Intercept, Rehgar's Fury, etc.) and call Attack() below
+        // before the EFFECT_MOTION_TYPE spline has delivered MovementInform.
+        // Attack() may install normal chase movement for virtual sessions,
+        // replacing the still-active leap/charge generator. Let the effect
+        // movement finish first; the class action code will start melee after
+        // the spline lands.
+        if (HasPlayerbotGapCloserInFlight(player))
+            return true;
 
         CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
         bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;

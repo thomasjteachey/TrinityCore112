@@ -2161,7 +2161,7 @@ void Spell::EffectOpenLock()
             // in battleground check
             if (Battleground* bg = player->GetBattleground())
             {
-                if (bg->GetTypeID(true) == BATTLEGROUND_EY)
+                if (bg->GetTypeID(true) == BATTLEGROUND_EY || bg->GetTypeID(true) == BATTLEGROUND_OBC)
                     bg->EventPlayerClickedOnFlag(player, gameObjTarget);
                 return;
             }

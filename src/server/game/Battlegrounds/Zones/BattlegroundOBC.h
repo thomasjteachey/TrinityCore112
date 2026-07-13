@@ -60,7 +60,6 @@ enum BG_OBC_Objects
     BG_OBC_OBJECT_GATE_A_4,
 
     BG_OBC_OBJECT_FLAG,               // clickable flag stand at the arena center
-    BG_OBC_OBJECT_FLAG_VISUAL,        // static flag base prop at the center
 
     // Objective light beams. Exactly one is visible while the flag is
     // carried: the light marks the ENEMY base the carrier must reach.
@@ -73,15 +72,14 @@ enum BG_OBC_Objects
 enum BG_OBC_ObjectEntries
 {
     BG_OBC_GATE_ENTRY         = 185483,
-    BG_OBC_FLAG_STAND_ENTRY   = 184141, // Netherstorm Flag (GAMEOBJECT_TYPE_FLAGSTAND)
+    BG_OBC_FLAG_STAND_ENTRY   = 300206, // OBC Netherstorm Flag (instant GAMEOBJECT_TYPE_FLAGSTAND)
     BG_OBC_FLAG_DROP_ENTRY    = 184142, // Netherstorm Flag (GAMEOBJECT_TYPE_FLAGDROP)
-    BG_OBC_FLAG_VISUAL_ENTRY  = 184493, // Netherstorm Flag base visual
     BG_OBC_LIGHT_BEAM_ENTRY   = 300010  // BG Objective Light Beam
 };
 
 enum BG_OBC_Spells
 {
-    BG_OBC_NETHERSTORM_FLAG_SPELL    = 34976, // carrier visual aura
+    BG_OBC_COLOSSEUM_FLAG_SPELL      = 89798, // Colosseum Flag carrier visual aura
     BG_OBC_PLAYER_DROPPED_FLAG_SPELL = 34991  // summons the ground flag (184142); NOT a debuff
 };
 
