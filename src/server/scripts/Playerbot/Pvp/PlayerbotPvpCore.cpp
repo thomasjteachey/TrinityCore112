@@ -22,6 +22,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundEY.h"
+#include "BattlegroundOBC.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
@@ -894,9 +895,8 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
         return;
     }
 
-    if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+    auto populateNeutralFlagCarrierValues = [&](ObjectGuid const& carrierGuid)
     {
-        ObjectGuid const carrierGuid = bgEy->GetFlagPickerGUID();
         if (carrierGuid.IsEmpty())
             return;
 
@@ -912,7 +912,16 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
             values.enemyFlagCarrierActive = true;
             values.enemyFlagCarrierNear = player->IsWithinDistInMap(carrier, 100.0f);
         }
+    };
+
+    if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+    {
+        populateNeutralFlagCarrierValues(bgEy->GetFlagPickerGUID());
+        return;
     }
+
+    if (BattlegroundOBC* bgObc = dynamic_cast<BattlegroundOBC*>(battleground))
+        populateNeutralFlagCarrierValues(bgObc->GetFlagPickerGUID());
 }
 
 struct SpellDecision
