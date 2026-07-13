@@ -53,6 +53,7 @@ namespace
 {
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra);
+bool HasActiveMovementEffectSpline(Player const* player);
 
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
@@ -1832,6 +1833,14 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     if (!motionMaster)
         return;
 
+    // See the matching guard in IssueMeleeApproachMovement: a charge/leap
+    // effect (Rehgar's Fury included) drives its own EFFECT_MOTION_TYPE
+    // motion once cast, and the very next decision tick landing here would
+    // otherwise clear that in-flight spline and replace it with an ordinary
+    // chase/follow order before the charge has actually landed.
+    if (HasActiveMovementEffectSpline(player))
+        return;
+
     struct RangedApproachStallState
     {
         ObjectGuid targetGuid = ObjectGuid::Empty;
@@ -2435,6 +2444,17 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
     MotionMaster* motionMaster = player->GetMotionMaster();
     if (!motionMaster)
+        return;
+
+    // A charge/leap-type spell (Charge, Intercept, Heroic Leap, Feral Charge,
+    // Rehgar's Fury, ...) drives its own EFFECT_MOTION_TYPE movement once
+    // cast. The spell itself goes on cooldown immediately, so the very next
+    // decision tick - often before the charge has actually landed - picks a
+    // different action and lands here wanting to close the same gap, which
+    // clears the in-flight charge spline and replaces it with an ordinary
+    // MoveChase/MoveFollow. That reads as the charge "getting hijacked"
+    // mid-flight. Let the native charge motion finish on its own.
+    if (HasActiveMovementEffectSpline(player))
         return;
 
     if (player->HasStealthAura())
