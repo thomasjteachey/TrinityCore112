@@ -621,7 +621,7 @@ public:
         if (!playerbot::IsManagedRandomBot(player))
             return;
 
-        damage /= 2;
+        damage *= 0;
     }
 };
 
