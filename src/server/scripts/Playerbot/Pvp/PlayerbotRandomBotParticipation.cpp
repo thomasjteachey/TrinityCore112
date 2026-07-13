@@ -1313,33 +1313,12 @@ bool TryLoginBotCharacter(RandomBotPoolCandidate const& candidate)
     loginPacket << playerGuid;
     session->HandlePlayerLoginOpcode(loginPacket);
 
-    Player* loggedInPlayer = session->GetPlayer();
-    if (loggedInPlayer && loggedInPlayer->GetGUID() != playerGuid)
-    {
-        TC_LOG_WARN("playerbots.population",
-            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} hasPlayer={} guidMismatch=1.",
-            playerGuid.ToString(), candidate.lowGuid, candidate.account, loggedInPlayer ? 1 : 0,
-            1);
-
-        session->KickPlayer("Random bot login verification failed");
-        return false;
-    }
-
-    if (loggedInPlayer)
-    {
-        TC_LOG_INFO("playerbots.population", "Random bot login successful: guid={} guidLow={} account={} level={}.",
-            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
-    }
-    else
-    {
-        TC_LOG_WARN("playerbots.population",
-            "Random bot login failed post-dispatch verification: guid={} guidLow={} account={} level={} (no player materialized).",
-            playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
-
-        session->KickPlayer("Random bot login verification failed (no player materialized)");
-        return false;
-    }
-
+    // HandlePlayerLoginOpcode loads the character through an asynchronous query
+    // holder. A null session player here means the login is pending, not that it
+    // failed. The session update will materialize the player on a later world
+    // tick; do not terminate the virtual session while that work is in flight.
+    TC_LOG_INFO("playerbots.population", "Random bot login dispatched: guid={} guidLow={} account={} level={}.",
+        playerGuid.ToString(), candidate.lowGuid, candidate.account, candidate.level);
     return true;
 }
 

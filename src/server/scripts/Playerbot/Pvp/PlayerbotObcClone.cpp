@@ -382,9 +382,10 @@ void PlayerbotObcCloneManager::OnStartupSweep()
     if (!g_ObcCloneConfig.cloneAccountId)
         return;
 
-    // Every character on the dedicated clone account is an ephemeral clone; wipe
-    // any that survived a crash so they do not accumulate or re-enter the world.
-    QueryResult result = CharacterDatabase.PQuery("SELECT guid FROM characters WHERE account = {}", g_ObcCloneConfig.cloneAccountId);
+    // Generated clone login names always use the reserved "Obcc" prefix. Only
+    // sweep those characters so a misconfigured/shared account can never lose
+    // its permanent playerbot characters.
+    QueryResult result = CharacterDatabase.PQuery("SELECT guid FROM characters WHERE account = {} AND name LIKE 'Obcc%'", g_ObcCloneConfig.cloneAccountId);
     if (!result)
         return;
 
