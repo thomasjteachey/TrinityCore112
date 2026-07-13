@@ -10,6 +10,7 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 #include "WorldSession.h"
+#include "Battlegrounds/BattlegroundMap.h"
 
 #include <cmath>
 
@@ -327,6 +328,12 @@ void BattlegroundOBC::UpdateObjectiveLights()
     if (_flagState == BG_OBC_FLAG_STATE_ON_PLAYER && !_flagCarrierGuid.IsEmpty())
         carrierTeam = GetPlayerTeam(_flagCarrierGuid);
 
+    // Show exactly one flag-carrier WorldStateUI row while the flag is held.
+    // When the flag is at the center, dropped, or waiting to respawn, both
+    // rows are hidden.
+    UpdateWorldState(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 1 : 0);
+    UpdateWorldState(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 1 : 0);
+
     // The light marks the base the carrier has to reach: horde carrier
     // lights the alliance base, alliance carrier lights the horde base.
     // Exactly one light (or none) is ever visible.
@@ -587,13 +594,17 @@ void BattlegroundOBC::HandleKillPlayer(Player* victim, Player* killer)
 
 void BattlegroundOBC::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)
 {
+    uint32 carrierTeam = 0;
+    if (_flagState == BG_OBC_FLAG_STATE_ON_PLAYER && !_flagCarrierGuid.IsEmpty())
+        carrierTeam = GetPlayerTeam(_flagCarrierGuid);
+
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_SHOW, 1);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_ALLIANCE_SCORE, _allianceScore);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_HORDE_SCORE, _hordeScore);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE, BG_OBC_SCORE_LIMIT);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE_UI, BG_OBC_SCORE_LIMIT);
-    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_TIMER_ACTIVE, 0);
-    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_TIMER, 0);
+    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 1 : 0);
+    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 1 : 0);
 }
 
 bool BattlegroundOBC::HandlePlayerUnderMap(Player* player)

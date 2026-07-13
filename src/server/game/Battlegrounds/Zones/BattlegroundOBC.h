@@ -14,14 +14,17 @@
 
 #include "Battleground.h"
 #include "BattlegroundScore.h"
+#include "Object.h"
 
 enum BG_OBC_WorldStates
 {
     BG_OBC_WORLDSTATE_ALLIANCE_SCORE = 9200,
     BG_OBC_WORLDSTATE_HORDE_SCORE    = 9201,
     BG_OBC_WORLDSTATE_MAX_SCORE      = 9202,
-    BG_OBC_WORLDSTATE_TIMER_ACTIVE   = 9203,
-    BG_OBC_WORLDSTATE_TIMER          = 9204,
+    // These two states are mutually exclusive. A value of 1 shows the
+    // corresponding WorldStateUI row; 0 hides it.
+    BG_OBC_WORLDSTATE_FLAG_ALLIANCE  = 9203,
+    BG_OBC_WORLDSTATE_FLAG_HORDE     = 9204,
     BG_OBC_WORLDSTATE_SHOW           = 9205,
     BG_OBC_WORLDSTATE_MAX_SCORE_UI   = 9206
 };

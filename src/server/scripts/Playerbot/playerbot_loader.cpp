@@ -26,6 +26,7 @@
 #include "Player.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
+#include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotPvpClassActions.h"
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotPvpLifecycleActions.h"
@@ -567,6 +568,7 @@ public:
         playerbot::PvpCore::LoadConfig();
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
+        playerbot::PlayerbotObcCloneManager::LoadConfig();
     }
 
     void OnStartup() override
@@ -575,6 +577,8 @@ public:
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::RandomBotParticipationManager::OnStartupBootstrap();
+        playerbot::PlayerbotObcCloneManager::LoadConfig();
+        playerbot::PlayerbotObcCloneManager::OnStartupSweep();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
         playerbot::RandomBotPopulationSnapshot const population = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
 
@@ -592,6 +596,7 @@ public:
     void OnUpdate(uint32 diff) override
     {
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
+        playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
     }
 };
 
@@ -609,6 +614,12 @@ public:
     void OnLogout(Player* player) override
     {
         playerbot::RandomBotParticipationManager::OnPlayerLogout(player);
+        playerbot::PlayerbotObcCloneManager::OnPlayerLogout(player);
+    }
+
+    void OnPVPKill(Player* killer, Player* killed) override
+    {
+        playerbot::PlayerbotObcCloneManager::OnPvpKill(killer, killed);
     }
 
     void OnDuelRequest(Player* target, Player* challenger) override
