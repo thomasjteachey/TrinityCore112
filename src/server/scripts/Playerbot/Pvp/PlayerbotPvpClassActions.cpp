@@ -80,6 +80,32 @@ bool IsSpiritOfRedemptionFreeHeal(Player const* player, SpellInfo const* spellIn
         player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION);
 }
 
+bool SpellAppliesBreakableByDamageCrowdControl(SpellInfo const* spellInfo)
+{
+    if (!spellInfo || !(spellInfo->AuraInterruptFlags & AURA_INTERRUPT_FLAG_TAKE_DAMAGE))
+        return false;
+
+    for (SpellEffectInfo const& effectInfo : spellInfo->GetEffects())
+    {
+        if (effectInfo.Effect != SPELL_EFFECT_APPLY_AURA)
+            continue;
+
+        switch (effectInfo.ApplyAuraName)
+        {
+            case SPELL_AURA_MOD_CONFUSE:
+            case SPELL_AURA_MOD_FEAR:
+            case SPELL_AURA_MOD_STUN:
+            case SPELL_AURA_MOD_ROOT:
+            case SPELL_AURA_TRANSFORM:
+                return true;
+            default:
+                break;
+        }
+    }
+
+    return false;
+}
+
 bool HasAuraInSpellChain(Unit const* unit, uint32 baseSpellId)
 {
     if (!unit || !baseSpellId)
@@ -4130,6 +4156,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if ((!target || !target->IsAlive()))
     {
         failureReason = "target_invalid_or_dead";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        target->HasBreakableByDamageCrowdControlAura() &&
+        SpellAppliesBreakableByDamageCrowdControl(spellInfo))
+    {
+        failureReason = "target_already_breakable_crowd_controlled";
         return false;
     }
 
