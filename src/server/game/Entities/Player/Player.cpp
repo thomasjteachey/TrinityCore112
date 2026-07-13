@@ -171,7 +171,7 @@ namespace
     bool IsBattlegroundEquipChangeAllowed(Player const* player, uint8 slot)
     {
         if (Battleground const* battleground = player->GetBattleground())
-            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT)
+            if (battleground->GetTypeID(true) == BATTLEGROUND_SCM || battleground->GetTypeID(true) == BATTLEGROUND_BRT || battleground->GetTypeID(true) == BATTLEGROUND_OBC)
                 return true;
 
         switch (slot)
@@ -9929,6 +9929,9 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
             battleground->FillInitialWorldStates(packet);
         // Blackrock Throne can report stock BRD zone IDs; initialize from battleground type.
         else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_BRT)
+            battleground->FillInitialWorldStates(packet);
+        // Obsidian Colosseum reports the stock Obsidian Sanctum zone ID (4493); initialize from battleground type.
+        else if (battleground && battleground->GetTypeID(true) == BATTLEGROUND_OBC)
             battleground->FillInitialWorldStates(packet);
         break;
     }
@@ -26480,7 +26483,7 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank)
     if (InBattleground())
     {
         Battleground const* battleground = GetBattleground();
-        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT))
+        if (!battleground || (battleground->GetTypeID(true) != BATTLEGROUND_SCM && battleground->GetTypeID(true) != BATTLEGROUND_BRT && battleground->GetTypeID(true) != BATTLEGROUND_OBC))
             return;
     }
 

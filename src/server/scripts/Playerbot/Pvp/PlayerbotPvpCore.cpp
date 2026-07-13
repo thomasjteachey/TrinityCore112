@@ -4126,7 +4126,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const burstPyroblastReady = arcaneBurstWindow && player->HasAura(12043) && IsSpellReady(player, 18809);
     Aura const* arcaneTravelAura = isArcaneMage ? player->GetAura(89780) : nullptr;
     bool const arcaneBlinkRefreshReady = isArcaneMage && closePressure && arcaneTravelAura &&
-        arcaneTravelAura->GetDuration() <= 1000 && IsSpellReady(player, 1953);
+        arcaneTravelAura->GetDuration() >= 4000 && IsSpellReady(player, 1953);
     return SelectFromTriggerGraph(player, target, nullptr,
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,

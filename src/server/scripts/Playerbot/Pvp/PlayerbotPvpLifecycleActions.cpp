@@ -203,6 +203,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts").count(accountId))
             return BATTLEGROUND_BRT;
 
+        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts").count(accountId))
+            return BATTLEGROUND_OBC;
+
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
             return BATTLEGROUND_BFG;
 
