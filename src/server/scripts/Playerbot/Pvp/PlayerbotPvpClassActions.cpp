@@ -494,10 +494,43 @@ Position BuildFollowDestination(Player* player, Unit* target, float desiredDista
     return BuildCollisionSafeDestination(player, destination);
 }
 
+// PathGenerator hands whatever position we give it straight to Detour's
+// nearest-poly search with no signal back if that position was ambiguous
+// (straddling a thin wall between two navmesh regions, or sampled against
+// the wrong layer of a multi-level structure). A mid-spline reissue can
+// catch the bot at exactly this kind of borderline spot - IssueStrictHumanMove
+// replans from wherever the bot's live position happens to be at that exact
+// instant, which is wherever the previous spline had carried it to, not
+// necessarily anywhere previously validated. Re-ground the bot's own current
+// position the same way BuildCollisionSafeDestination already re-grounds
+// proposed destinations, and snap back to solid ground first if it has
+// drifted meaningfully, before letting that position anchor a new path.
+void ValidateAndCorrectCurrentPosition(Player* player)
+{
+    if (!player || !player->IsInWorld() || player->IsInFlight())
+        return;
+
+    Position const current = player->GetPosition();
+    Position const corrected = BuildCollisionSafeDestination(player, current);
+
+    // GetMapHeight/UpdateAllowedPositionZ search around the input Z, so a
+    // legitimately elevated bot (a bridge, a ramp) should resolve back to
+    // very nearly its own height. Only correct on a drift large enough to
+    // indicate the sampled position landed on the wrong layer entirely, not
+    // ordinary stair-step/mesh sampling noise.
+    float const verticalDrift = std::fabs(corrected.GetPositionZ() - current.GetPositionZ());
+    if (verticalDrift < 3.0f)
+        return;
+
+    player->NearTeleportTo(corrected.GetPositionX(), corrected.GetPositionY(), corrected.GetPositionZ(), corrected.GetOrientation());
+}
+
 bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desiredDestination, Position& segmentDestination)
 {
     if (!player)
         return false;
+
+    ValidateAndCorrectCurrentPosition(player);
 
     auto const tryResolveDestination = [&](Position const& requestedDestination, Position& resolvedDestination) -> bool
     {
