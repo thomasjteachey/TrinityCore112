@@ -1857,6 +1857,22 @@ void IssueStealthOpenerMovement(Player* player, Unit* target)
     SetLastMovementDebugStatus(player, diag.str());
 }
 
+bool IsGapCloserSpell(uint32 spellId)
+{
+    switch (spellId)
+    {
+        case 11578: // Charge
+        case 20617: // Intercept
+        case 81271: // Heroic Leap
+        case 82419: // Rehgar's Fury
+        case 49376: // Feral Charge - Cat
+        case 16979: // Feral Charge - Bear
+            return true;
+        default:
+            return false;
+    }
+}
+
 void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDistance, bool forceMovementWhenAlreadyInRange = false, char const* forcedReason = nullptr)
 {
     if (!player || !target)
@@ -2602,6 +2618,75 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
 
     MotionPrimeResult meleePrimeResult = PrimeTargetRelativeMotion(player);
     meleePrimeResult.addToWorldCalled = preparedMotionMaster;
+}
+
+
+void IssueGapCloserRangeApproachMovement(Player* player, Unit* target, float maxRange)
+{
+    if (!player || !target || maxRange <= 0.0f)
+        return;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return;
+
+    if (HasActiveMovementEffectSpline(player))
+        return;
+
+    struct GapCloserApproachOrderState
+    {
+        ObjectGuid targetGuid = ObjectGuid::Empty;
+        Position destination;
+        uint32 lastIssueMs = 0;
+    };
+
+    static std::unordered_map<uint64, GapCloserApproachOrderState> stateByGuid;
+    GapCloserApproachOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+
+    // Move to a stable point safely inside the gap-closer's real max range
+    // instead of chasing all the way to melee. Reusing the point for a short
+    // window prevents the cast retry loop from clearing and rebuilding the
+    // spline every tick, which is the visible inch/stop stutter reported for
+    // Charge at 25y while the warrior was still ~36y away.
+    float const desiredRange = std::max(1.0f, maxRange - 2.0f);
+    Position const destination = BuildFollowDestination(player, target, desiredRange);
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    bool const sameTarget = state.targetGuid == target->GetGUID();
+    bool const destinationStable = sameTarget && state.lastIssueMs != 0 && state.destination.GetExactDist(destination) < 6.0f;
+    bool const activePointMove = motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE &&
+        (player->isMoving() || (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized()));
+
+    if (destinationStable && activePointMove && nowMs < state.lastIssueMs + 1000)
+        return;
+
+    bool issued = false;
+    if (RequiresStrictHumanPathing(player))
+        issued = IssueStrictHumanMove(player, destination, 8.0f, 1000);
+
+    if (!issued)
+    {
+        motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);
+        issued = true;
+    }
+
+    if (issued)
+    {
+        g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+        state.targetGuid = target->GetGUID();
+        state.destination = destination;
+        state.lastIssueMs = nowMs;
+
+        std::ostringstream diag;
+        diag << "gapcloser_range_point_move"
+             << " desired_range=" << desiredRange
+             << " max_range=" << maxRange
+             << " dist=" << player->GetDistance(target)
+             << " strict=" << (RequiresStrictHumanPathing(player) ? "yes" : "no")
+             << " motion_after=" << uint32(motionMaster->GetCurrentMovementGeneratorType())
+             << " moving_after=" << (player->isMoving() ? "yes" : "no");
+        SetLastMovementDebugStatus(player, diag.str());
+    }
 }
 
 float ComputeLosRecoveryRange(Player const* player, Unit const* target, float maxRange)
@@ -4211,8 +4296,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // so a genuinely out-of-range gap closer is indistinguishable from a
     // misselected one from the whisper log alone. This makes that branch
     // visible so the next test can tell them apart. Remove once confirmed.
-    bool const isGapCloserDiagnosticSpell = resolvedSpellId == 11578 || resolvedSpellId == 20617 ||
-        resolvedSpellId == 81271 || resolvedSpellId == 82419;
+    bool const isGapCloserDiagnosticSpell = IsGapCloserSpell(resolvedSpellId);
 
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
@@ -4270,7 +4354,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
-            if (shouldMoveBehindForEnemySpell)
+            if (isGapCloserDiagnosticSpell)
+                IssueGapCloserRangeApproachMovement(player, target, maxRange);
+            else if (shouldMoveBehindForEnemySpell)
                 IssueBehindTargetMeleeMovement(player, target);
             else if (shouldUseMeleeApproachForEnemySpell)
                 IssueMeleeApproachMovement(player, target);
