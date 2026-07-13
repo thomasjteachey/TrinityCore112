@@ -29,6 +29,8 @@
 #include "Item.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -64,6 +66,7 @@ bool HasBreakableCrowdControl(Unit const* unit);
 uint32 CountNearbyEnemies(Player const* player, float maxDistance);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget);
+bool HasActiveMovementEffectSpline(Player const* player);
 
 constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
@@ -3827,6 +3830,20 @@ Unit const* SelectFriendlyMissingBuffTarget(Player const* player, uint32 baseSpe
     return candidates[urand(0, candidates.size() - 1)];
 }
 
+
+bool HasActiveMovementEffectSpline(Player const* player)
+{
+    if (!player)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+        return false;
+
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
+}
+
 uint32 CountNearbyEnemies(Player const* player, float maxDistance)
 {
     if (!player || !player->FindMap())
@@ -4663,6 +4680,12 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* activeTarget = SelectWarriorPriorityTarget(player, target, 25.0f);
     if (!HasHostileTarget(player, activeTarget))
         activeTarget = target;
+
+    // Charge, Intercept, and Heroic Leap drive their own effect-motion spline.
+    // While that movement is resolving the warrior is locked in, so defer all
+    // spell decisions until the native gap-closer motion finishes.
+    if (HasActiveMovementEffectSpline(player))
+        return decision;
 
     bool const isProtWarrior = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isFuryWarrior = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
