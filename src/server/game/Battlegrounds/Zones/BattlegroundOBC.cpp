@@ -241,10 +241,6 @@ bool BattlegroundOBC::SetupBattleground()
             OBC_FLAG_X, OBC_FLAG_Y, OBC_FLAG_Z, OBC_FLAG_O,
             0.0f, 0.0f, std::sin(OBC_FLAG_O / 2.0f), std::cos(OBC_FLAG_O / 2.0f),
             RESPAWN_ONE_DAY)
-        || !AddObject(BG_OBC_OBJECT_FLAG_VISUAL, BG_OBC_FLAG_VISUAL_ENTRY,
-            3245.6f, 536.403f, 58.9864f, OBC_FLAG_O,
-            0.0f, 0.0f, std::sin(OBC_FLAG_O / 2.0f), std::cos(OBC_FLAG_O / 2.0f),
-            RESPAWN_IMMEDIATELY)
         || !AddObject(BG_OBC_OBJECT_LIGHT_ALLIANCE_BASE, BG_OBC_LIGHT_BEAM_ENTRY,
             OBC_LIGHT_ALLIANCE_X, OBC_LIGHT_ALLIANCE_Y, OBC_LIGHT_ALLIANCE_Z, 0.0f,
             0.0f, 0.0f, 0.0f, 1.0f,
@@ -283,9 +279,6 @@ void BattlegroundOBC::ApplyNonInteractableObjectFlags()
         if (GameObject* gate = GetBGObject(type))
             gate->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
-    if (GameObject* flagVisual = GetBGObject(BG_OBC_OBJECT_FLAG_VISUAL))
-        flagVisual->SetFlag(GO_FLAG_NOT_SELECTABLE);
-
     if (GameObject* allianceLight = GetBGObject(BG_OBC_OBJECT_LIGHT_ALLIANCE_BASE))
         allianceLight->SetFlag(GO_FLAG_NOT_SELECTABLE);
 
@@ -300,8 +293,6 @@ void BattlegroundOBC::StartingEventCloseDoors()
         DoorClose(type);
         SpawnBGObject(type, RESPAWN_IMMEDIATELY);
     }
-
-    SpawnBGObject(BG_OBC_OBJECT_FLAG_VISUAL, RESPAWN_IMMEDIATELY);
 
     // Flag and objective lights stay hidden until the match starts.
     SpawnBGObject(BG_OBC_OBJECT_FLAG, RESPAWN_ONE_DAY);
