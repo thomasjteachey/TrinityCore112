@@ -949,7 +949,14 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
     if (input.fail() && !input.eof())
         return DUMP_FILE_BROKEN;
 
-    CharacterDatabase.CommitTransaction(trans);
+    // Server-managed imports are logged in immediately after this method
+    // returns, so their rows must be visible before the asynchronous login
+    // query holder is dispatched. Normal administrative imports retain the
+    // queued commit behavior.
+    if (enforceCharacterLimit)
+        CharacterDatabase.CommitTransaction(trans);
+    else
+        CharacterDatabase.DirectCommitTransaction(trans);
 
     // in case of name conflict player has to rename at login anyway
     sCharacterCache->AddCharacterCacheEntry(ObjectGuid(HighGuid::Player, guid), account, name, gender, race, playerClass, level);
