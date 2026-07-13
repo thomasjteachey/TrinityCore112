@@ -57,6 +57,7 @@ Playerbot.PvpLifecycle.Enable = 0
 
 #    Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts
 #    Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts
+#    Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts
 #    Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts
 #    Playerbot.PvpLifecycle.QueueOnly.TwinPeaksAccounts
 #    Playerbot.PvpLifecycle.QueueOnly.ArathiBasinAccounts
@@ -70,6 +71,7 @@ Playerbot.PvpLifecycle.Enable = 0
 
 Playerbot.PvpLifecycle.QueueOnly.ScarletChapelAccounts =
 Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts =
+Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts =
 Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts =
 Playerbot.PvpLifecycle.QueueOnly.TwinPeaksAccounts =
 Playerbot.PvpLifecycle.QueueOnly.ArathiBasinAccounts =

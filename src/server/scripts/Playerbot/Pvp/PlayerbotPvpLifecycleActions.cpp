@@ -174,9 +174,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return session && session->IsVirtualSession();
     }
 
-    std::unordered_set<uint32> ParseAccountIdSetFromConfig(char const* key)
+    void AppendAccountIdsFromConfig(std::unordered_set<uint32>& accountIds, char const* key)
     {
-        std::unordered_set<uint32> accountIds;
         std::string const raw = sConfigMgr->GetStringDefault(key, "");
         for (std::string_view token : Trinity::Tokenize(raw, ',', false))
         {
@@ -184,7 +183,20 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 if (*accountId > 0)
                     accountIds.insert(*accountId);
         }
+    }
 
+    std::unordered_set<uint32> ParseAccountIdSetFromConfig(char const* key)
+    {
+        std::unordered_set<uint32> accountIds;
+        AppendAccountIdsFromConfig(accountIds, key);
+        return accountIds;
+    }
+
+    std::unordered_set<uint32> ParseAccountIdSetFromConfig(char const* primaryKey, char const* fallbackKey)
+    {
+        std::unordered_set<uint32> accountIds;
+        AppendAccountIdsFromConfig(accountIds, primaryKey);
+        AppendAccountIdsFromConfig(accountIds, fallbackKey);
         return accountIds;
     }
 
@@ -203,7 +215,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneAccounts").count(accountId))
             return BATTLEGROUND_BRT;
 
-        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts").count(accountId))
+        if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseumAccounts",
+            "Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseum").count(accountId))
             return BATTLEGROUND_OBC;
 
         if (ParseAccountIdSetFromConfig("Playerbot.PvpLifecycle.QueueOnly.BattleForGilneasAccounts").count(accountId))
