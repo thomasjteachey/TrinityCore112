@@ -56,7 +56,6 @@ constexpr uint32 kCloneTickThrottleMs = 1000;
 
 struct ObcCloneConfig
 {
-    bool enabled = false;
     uint32 cloneAccountId = 0;
 };
 
@@ -79,7 +78,7 @@ uint32 g_CloneTickAccumulatorMs = 0;
 
 bool IsObcCloneFeatureConfigured()
 {
-    return g_ObcCloneConfig.enabled && g_ObcCloneConfig.cloneAccountId != 0;
+    return g_ObcCloneConfig.cloneAccountId != 0;
 }
 
 uint32 OppositeTeam(uint32 team)
@@ -318,11 +317,10 @@ namespace playerbot
 void PlayerbotObcCloneManager::LoadConfig()
 {
     std::lock_guard<std::mutex> lock(g_ObcCloneLock);
-    g_ObcCloneConfig.enabled = sConfigMgr->GetBoolDefault("Playerbot.PvpLifecycle.QueueOnly.ObsidianColosseum", false);
     g_ObcCloneConfig.cloneAccountId = static_cast<uint32>(std::max<int32>(0, sConfigMgr->GetIntDefault("Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId", 0)));
 
     TC_LOG_INFO("server.loading", "OBC clone mirror config: enabled={} cloneAccountId={}.",
-        g_ObcCloneConfig.enabled ? "true" : "false", g_ObcCloneConfig.cloneAccountId);
+        g_ObcCloneConfig.cloneAccountId ? "true" : "false", g_ObcCloneConfig.cloneAccountId);
 }
 
 void PlayerbotObcCloneManager::OnStartupSweep()

@@ -347,6 +347,10 @@ constexpr uint32 kHunterRevivePetSpellId = 982;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kRacialNightElfShadowmeldSpellId = 20580;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
+// Environmental Magma periodically damages units standing on hazardous ground.
+// Some custom terrain does not expose the matching liquid flags, so the aura is
+// also a generic signal that the bot is currently standing in a hazard.
+constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 constexpr std::chrono::seconds kPlayerbotDispelCooldown = std::chrono::seconds(5);
 constexpr std::chrono::seconds kDruidCasterFaerieFireCooldown = std::chrono::seconds(10);
 constexpr std::chrono::seconds kPlayerbotAutoRepeatRangedStartCooldown = std::chrono::seconds(2);
@@ -3318,6 +3322,65 @@ void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
     }
 }
 
+std::string BuildRehgarsFuryMovementDiagnostic(Player const* player, Unit const* target, char const* phase, char const* extra = nullptr)
+{
+    std::ostringstream os;
+    os << "REHGAR DIAG: phase=" << (phase ? phase : "unknown");
+    if (extra && *extra)
+        os << " extra=" << extra;
+
+    if (!player)
+        return os.str();
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    bool const hasSpline = player->movespline != nullptr;
+    os << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
+       << " spline=" << (hasSpline ? "yes" : "no")
+       << " initialized=" << (hasSpline && player->movespline->Initialized() ? "yes" : "no")
+       << " finalized=" << (hasSpline && player->movespline->Finalized() ? "yes" : "no")
+       << " moving=" << (player->isMoving() ? "yes" : "no")
+       << " charging=" << (player->HasUnitState(UNIT_STATE_CHARGING) ? "yes" : "no")
+       << " jumping=" << (player->HasUnitState(UNIT_STATE_JUMPING) ? "yes" : "no")
+       << " form=" << uint32(player->GetShapeshiftForm())
+       << " fury_cd=" << (player->GetSpellHistory()->HasCooldown(82419) ? "yes" : "no")
+       << " ghost_wolf_cd=" << (player->GetSpellHistory()->HasCooldown(2645) ? "yes" : "no");
+
+    if (target)
+        os << " target=" << target->GetGUID().ToString() << " dist=" << player->GetDistance(target);
+
+    return os.str();
+}
+
+void WhisperRehgarsFuryMovementDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr)
+{
+    if (!player || player->GetClass() != CLASS_SHAMAN)
+        return;
+
+    WhisperPlayerbotDiagnostic(player, BuildRehgarsFuryMovementDiagnostic(player, target, phase, extra));
+}
+
+void ScheduleRehgarsFuryMovementDiagnostics(Player* player, Unit* target)
+{
+    if (!player)
+        return;
+
+    ObjectGuid const playerGuid = player->GetGUID();
+    ObjectGuid const targetGuid = target ? target->GetGUID() : ObjectGuid::Empty;
+    for (uint32 delayMs : { 1u, 50u, 250u, 750u, 1500u })
+    {
+        player->m_Events.AddEventAtOffset([playerGuid, targetGuid, delayMs]()
+        {
+            Player* shaman = ObjectAccessor::FindConnectedPlayer(playerGuid);
+            if (!shaman || !shaman->IsInWorld())
+                return;
+
+            Unit* chargeTarget = targetGuid ? ObjectAccessor::GetUnit(*shaman, targetGuid) : nullptr;
+            std::string const extra = "delay_ms=" + std::to_string(delayMs);
+            WhisperRehgarsFuryMovementDiagnostic(shaman, chargeTarget, "post_cast_snapshot", extra.c_str());
+        }, std::chrono::milliseconds(delayMs));
+    }
+}
+
 void NotifyWandDiagnostic(Player*, Unit*, std::string const&, uint32, char const* = nullptr)
 {
     // Intentionally silent. This hook was used for temporary wand troubleshooting
@@ -3325,6 +3388,7 @@ void NotifyWandDiagnostic(Player*, Unit*, std::string const&, uint32, char const
     // its call sites without producing player-visible diagnostics.
 }
 
+#if 0 // Temporary Aimed Shot whisper diagnostics disabled; retain for future troubleshooting.
 std::string BuildHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra = nullptr)
 {
     std::ostringstream os;
@@ -3383,13 +3447,16 @@ std::string BuildHunterCastDiagnostic(Player* player, Unit* target, char const* 
 
     return os.str();
 }
+#endif
 
 void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra = nullptr)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !IsHunterAimedShotSpellId(spellId))
-        return;
-
-    WhisperPlayerbotDiagnostic(player, BuildHunterCastDiagnostic(player, target, phase, spellId, extra));
+    (void)player;
+    (void)target;
+    (void)phase;
+    (void)spellId;
+    (void)extra;
+    // WhisperPlayerbotDiagnostic(player, BuildHunterCastDiagnostic(player, target, phase, spellId, extra));
 }
 
 
@@ -3509,8 +3576,21 @@ bool HasActiveMovementEffectSpline(Player const* player)
     if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
         return false;
 
-    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
-    return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
+    // The current generator is already known to be EFFECT_MOTION_TYPE (a charge
+    // / Heroic Leap / Rehgar's Fury jump). Treat it as active for its whole
+    // lifetime, including the brief window after MotionMaster::Add() queues the
+    // jump but before its spline is launched (movespline not yet Initialized).
+    // The old check only accepted an already-launched spline / charging / moving
+    // state, so during that pre-launch gap it returned false and the very next
+    // bot movement tick could Clear() the highest-priority jump before it ever
+    // moved the bot. For an enhancement shaman that stranded it in Ghost Wolf,
+    // re-casting Rehgar's Fury forever because the jump's arrival MovementInform
+    // (which drops Ghost Wolf and puts it on cooldown) never fired.
+    bool const splineLaunched = player->movespline && player->movespline->Initialized();
+    bool const splineActive = splineLaunched && !player->movespline->Finalized();
+    bool const splinePendingLaunch = !splineLaunched;
+    return splineActive || splinePendingLaunch ||
+        player->HasUnitState(UNIT_STATE_CHARGING | UNIT_STATE_JUMPING) || player->isMoving();
 }
 
 bool IsInHazardousLiquid(Player const* player)
@@ -3521,6 +3601,9 @@ bool IsInHazardousLiquid(Player const* player)
     Map const* map = player->FindMap();
     if (!map)
         return false;
+
+    if (player->HasAura(kEnvironmentalMagmaDamageAuraId))
+        return true;
 
     LiquidData liquidData{};
     ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
@@ -3552,6 +3635,17 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
     if (!IsInHazardousLiquid(player))
         return false;
 
+    // Preserve an already-launched escape point. Recomputing from the bot's
+    // new position and clearing/reissuing every AI tick repeatedly resets the
+    // spline at its origin, which looks exactly like standing still in magma.
+    if (MotionMaster const* motionMaster = player->GetMotionMaster())
+        if (motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+        {
+            bool const splineLaunched = player->movespline && player->movespline->Initialized();
+            if (!splineLaunched || !player->movespline->Finalized())
+                return true;
+        }
+
     float const baseAngle = player->GetOrientation();
     std::array<float, 12> const probeAngles =
     {
@@ -3572,7 +3666,7 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
             if (IsHazardousLiquidDestination(player, destination))
                 continue;
 
-            if (IssueStrictHumanMove(player, destination, 1.0f, 0))
+            if (IssueStrictHumanMove(player, destination, 6.0f, 1500))
             {
                 SetLastMovementDebugStatus(player, "hazardous_liquid_stop_prevented_move_out");
                 return true;
@@ -4814,6 +4908,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     else if (resolvedSpellId == 82419 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
     {
         Position dest = target->GetPosition();
+        WhisperRehgarsFuryMovementDiagnostic(player, target, "pre_cast");
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (itemTarget)
@@ -4824,6 +4919,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (castResult == SPELL_CAST_OK)
     {
         NotifyWandDiagnostic(player, target, "cast_ok", resolvedSpellId);
+        if (resolvedSpellId == 82419)
+        {
+            WhisperRehgarsFuryMovementDiagnostic(player, target, "cast_ok");
+            ScheduleRehgarsFuryMovementDiagnostics(player, target);
+        }
         if (isHunterStationaryCastTimeAction)
         {
             WhisperHunterCastDiagnostic(player, target, "cast_ok", resolvedSpellId);
@@ -4838,6 +4938,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     {
         EnumText const wandCastResultText = EnumUtils::ToString(castResult);
         NotifyWandDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
+        if (resolvedSpellId == 82419)
+            WhisperRehgarsFuryMovementDiagnostic(player, target, "cast_failed", wandCastResultText.Title);
         if (isHunterStationaryCastTimeAction)
             WhisperHunterCastDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
     }

@@ -83,6 +83,16 @@ Playerbot.PvpLifecycle.QueueOnly.ArenaAccounts =
 
 Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId = 0
 
+#    Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId
+#        Description: Dedicated account ID used for temporary "Dark <name>" character clones when a
+#                     real player enters Obsidian Colosseum. The account must not contain permanent
+#                     characters: all characters on it are deleted during worldserver startup and
+#                     after their mirrored player leaves the battleground.
+#                     A nonzero account ID enables OBC clones; 0 disables them.
+#        Default:     0 (disabled)
+
+Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
+
 #    Playerbot.PvpClassSpells.Enable
 #        Description: Enables Phase-4 class/spec PvP spell decision slices.
 #                     Current implementation provides reference-aligned trigger/action vocabulary

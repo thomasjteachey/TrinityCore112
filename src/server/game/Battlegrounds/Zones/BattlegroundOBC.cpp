@@ -319,11 +319,16 @@ void BattlegroundOBC::UpdateObjectiveLights()
     if (_flagState == BG_OBC_FLAG_STATE_ON_PLAYER && !_flagCarrierGuid.IsEmpty())
         carrierTeam = GetPlayerTeam(_flagCarrierGuid);
 
-    // Show exactly one flag-carrier WorldStateUI row while the flag is held.
-    // When the flag is at the center, dropped, or waiting to respawn, both
-    // rows are hidden.
-    UpdateWorldState(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 1 : 0);
-    UpdateWorldState(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 1 : 0);
+    // These worldstates are the StateVariable of the two score rows in
+    // WorldStateUI.dbc, and the client treats that value as a tri-state:
+    //   0 = hide the whole score row
+    //   1 = show the score row (icon + count), no flag
+    //   2 = show the score row AND its DynamicIcon (the flag, to the right)
+    // So a team's row is always at least 1 (score visible) and bumps to 2 only
+    // while that team is carrying (flag icon appears beside their score). Never
+    // send 0 mid-match or the scores disappear. Mirrors WSG's ON_PLAYER == 2.
+    UpdateWorldState(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 2 : 1);
+    UpdateWorldState(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 2 : 1);
 
     // The light marks the base the carrier has to reach: horde carrier
     // lights the alliance base, alliance carrier lights the horde base.

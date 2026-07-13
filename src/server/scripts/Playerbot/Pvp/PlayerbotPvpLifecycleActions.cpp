@@ -89,7 +89,7 @@ namespace
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
     std::unordered_map<uint64, int8> g_HunterKiteSideByGuid;
-    std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid;
+    // std::unordered_map<uint64, uint32> g_HunterAimedDiagLastMsByGuid; // Aimed Shot whisper diagnostics disabled.
 
     struct HunterFleeState
     {
@@ -110,6 +110,10 @@ namespace
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
+// Environmental Magma periodically damages units standing on hazardous ground.
+// Some custom terrain does not expose the matching liquid flags, so the aura is
+// also a generic signal that the bot is currently standing in a hazard.
+constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
     bool IsHunterKiteHoldActive(Player const* player, uint32 nowMs = GameTime::GetGameTimeMS())
     {
@@ -697,6 +701,49 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         (void)throttleMs;
     }
 
+    void WhisperRehgarMovementGuardDiagnostic(Player* player, char const* phase, uint32 throttleMs = 100)
+    {
+        if (!player || player->GetClass() != CLASS_SHAMAN || player->GetShapeshiftForm() != FORM_GHOSTWOLF)
+            return;
+
+        static std::unordered_map<uint64, uint32> lastWhisperMsByGuid;
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        uint32& lastMs = lastWhisperMsByGuid[player->GetGUID().GetRawValue()];
+        if (throttleMs && lastMs && nowMs < lastMs + throttleMs)
+            return;
+        lastMs = nowMs;
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        bool const hasSpline = player->movespline != nullptr;
+        std::ostringstream os;
+        os << "REHGAR DIAG: lifecycle phase=" << (phase ? phase : "unknown")
+           << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
+           << " spline=" << (hasSpline ? "yes" : "no")
+           << " initialized=" << (hasSpline && player->movespline->Initialized() ? "yes" : "no")
+           << " finalized=" << (hasSpline && player->movespline->Finalized() ? "yes" : "no")
+           << " moving=" << (player->isMoving() ? "yes" : "no")
+           << " charging=" << (player->HasUnitState(UNIT_STATE_CHARGING) ? "yes" : "no")
+           << " jumping=" << (player->HasUnitState(UNIT_STATE_JUMPING) ? "yes" : "no");
+
+        std::string const message = os.str();
+        if (player->duel && player->duel->Opponent)
+            player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
+
+        Map* map = player->FindMap();
+        if (!map)
+            return;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* observer = itr->GetSource();
+            if (!observer || !observer->IsGameMaster())
+                continue;
+            if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
+                continue;
+            player->Whisper(message, LANG_UNIVERSAL, observer);
+        }
+    }
+
     void ClearMovementBeforeBattlegroundTeleport(Player* player)
     {
         if (!player)
@@ -1007,6 +1054,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (!map)
             return false;
 
+        if (player->HasAura(kEnvironmentalMagmaDamageAuraId))
+            return true;
+
         LiquidData liquidData{};
         ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
             player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
@@ -1040,6 +1090,16 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         MotionMaster* motionMaster = player->GetMotionMaster();
         if (!motionMaster)
             return false;
+
+        // Preserve an already-launched escape point. Recomputing from the bot's
+        // new position and clearing/reissuing every AI tick repeatedly resets
+        // the spline at its origin, which looks exactly like standing still.
+        if (motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE)
+        {
+            bool const splineLaunched = player->movespline && player->movespline->Initialized();
+            if (!splineLaunched || !player->movespline->Finalized())
+                return true;
+        }
 
         float const baseAngle = player->GetOrientation();
         std::array<float, 12> const probeAngles =
@@ -1147,7 +1207,10 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         MotionMaster* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
         if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
+        {
+            WhisperRehgarMovementGuardDiagnostic(player, "movepoint_blocked_effect");
             return true;
+        }
 
         if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
         {
@@ -1767,8 +1830,16 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
             return false;
 
-        bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
-        return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
+        // MotionMaster installs an effect generator before its MoveSpline is
+        // initialized. The lifecycle loop runs in that window and used to see
+        // "not in flight", then replace the queued jump with Attack/MoveChase.
+        // Protect the generator from the moment it becomes current through the
+        // end of its spline. This is generic for every effect-driven gap closer.
+        bool const splineLaunched = player->movespline && player->movespline->Initialized();
+        bool const splineActive = splineLaunched && !player->movespline->Finalized();
+        bool const splinePendingLaunch = !splineLaunched;
+        return splineActive || splinePendingLaunch ||
+            player->HasUnitState(UNIT_STATE_CHARGING | UNIT_STATE_JUMPING) || player->isMoving();
     }
 
     bool CanIssueBotMovement(Player* player)
@@ -1816,6 +1887,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // positioning movement until the charge spline itself completes.
         if (HasPlayerbotGapCloserInFlight(player))
         {
+            WhisperRehgarMovementGuardDiagnostic(player, "movement_blocked_effect");
             return false;
         }
 
@@ -2250,6 +2322,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             player->GetGUID().ToString(), target ? target->GetGUID().ToString() : ObjectGuid::Empty.ToString(), reason ? reason : "breakable-cc");
     }
 
+#if 0 // Temporary Aimed Shot whisper diagnostics disabled; retain for future troubleshooting.
     char const* GetSpellStateLabelForAimedDiag(Spell const* spell)
     {
         if (!spell)
@@ -2266,7 +2339,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         }
     }
 
-    void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
+    void WhisperHunterAimedLifecycleDiagnosticImpl(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
     {
         if (!player || player->GetClass() != CLASS_HUNTER)
             return;
@@ -2331,6 +2404,17 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 continue;
             player->Whisper(message, LANG_UNIVERSAL, observer);
         }
+    }
+#endif
+
+    void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr, uint32 throttleMs = 0)
+    {
+        (void)player;
+        (void)target;
+        (void)phase;
+        (void)extra;
+        (void)throttleMs;
+        // WhisperHunterAimedLifecycleDiagnosticImpl(player, target, phase, extra, throttleMs);
     }
 
     bool IsHunterAimedShotSpellId(uint32 spellId)
@@ -3440,6 +3524,16 @@ namespace playerbot
         if (!player || !target || !target->IsAlive())
             return false;
 
+        // Leaving a burning floor tile outranks every combat consideration.
+        // The stop-for-cast paths only run TryMoveOutOfHazardousLiquid when a
+        // bot is halting; a bot that is meleeing (or holding a recent chase
+        // order) never hit them and simply stood in hazardous ground taking
+        // periodic damage. Drive the escape here, before the
+        // movement gate and recent-order preservation below, so an in-combat
+        // bot actually walks out of the hazard.
+        if (TryMoveOutOfHazardousLiquid(player))
+            return true;
+
         // Cast-time hunter actions such as Aimed Shot and Revive Pet must win
         // over every movement system. Check this before CanIssueBotMovement(),
         // recent-order preservation, LOS recovery, or distance-band movement so
@@ -3670,7 +3764,10 @@ namespace playerbot
         // movement finish first; the class action code will start melee after
         // the spline lands.
         if (HasPlayerbotGapCloserInFlight(player))
+        {
+            WhisperRehgarMovementGuardDiagnostic(player, "engage_blocked_effect");
             return true;
+        }
 
         CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
         bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
