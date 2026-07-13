@@ -843,6 +843,14 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     if (IsImmuneToEnvironmentalDamage())
         return 0;
 
+    if (type == DAMAGE_LAVA)
+    {
+        WorldSession const* session = GetSession();
+        Battleground const* battleground = GetBattleground();
+        if (session && session->IsVirtualSession() && battleground && battleground->GetTypeID(true) == BATTLEGROUND_OBC)
+            damage = (damage + 1) / 2;
+    }
+
     // Absorb, resist some environmental damage type
     uint32 absorb = 0;
     uint32 resist = 0;
