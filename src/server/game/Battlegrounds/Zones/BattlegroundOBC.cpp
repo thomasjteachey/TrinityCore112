@@ -392,7 +392,7 @@ void BattlegroundOBC::EventPlayerClickedOnFlag(Player* player, GameObject* targe
 
     _flagState = BG_OBC_FLAG_STATE_ON_PLAYER;
     SetFlagPicker(player->GetGUID());
-    player->CastSpell(player, BG_OBC_NETHERSTORM_FLAG_SPELL, true);
+    player->CastSpell(player, BG_OBC_COLOSSEUM_FLAG_SPELL, true);
     player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT);
 
     UpdateObjectiveLights();
@@ -420,7 +420,7 @@ void BattlegroundOBC::EventPlayerDroppedFlag(Player* player)
         if (IsFlagPickedup() && GetFlagPickerGUID() == player->GetGUID())
         {
             SetFlagPicker(ObjectGuid::Empty);
-            player->RemoveAurasDueToSpell(BG_OBC_NETHERSTORM_FLAG_SPELL);
+            player->RemoveAurasDueToSpell(BG_OBC_COLOSSEUM_FLAG_SPELL);
         }
         return;
     }
@@ -429,7 +429,7 @@ void BattlegroundOBC::EventPlayerDroppedFlag(Player* player)
         return;
 
     SetFlagPicker(ObjectGuid::Empty);
-    player->RemoveAurasDueToSpell(BG_OBC_NETHERSTORM_FLAG_SPELL);
+    player->RemoveAurasDueToSpell(BG_OBC_COLOSSEUM_FLAG_SPELL);
     _flagState = BG_OBC_FLAG_STATE_ON_GROUND;
     _flagResetTimer = BG_OBC_FLAG_RESPAWN_TIME;
 
@@ -453,7 +453,7 @@ void BattlegroundOBC::EventPlayerCapturedFlag(Player* player)
         return;
 
     SetFlagPicker(ObjectGuid::Empty);
-    player->RemoveAurasDueToSpell(BG_OBC_NETHERSTORM_FLAG_SPELL);
+    player->RemoveAurasDueToSpell(BG_OBC_COLOSSEUM_FLAG_SPELL);
     _flagState = BG_OBC_FLAG_STATE_WAIT_RESPAWN;
     _flagResetTimer = BG_OBC_FLAG_RESPAWN_TIME;
 

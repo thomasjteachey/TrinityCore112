@@ -77,7 +77,7 @@ enum BG_OBC_ObjectEntries
 
 enum BG_OBC_Spells
 {
-    BG_OBC_NETHERSTORM_FLAG_SPELL    = 34976, // carrier visual aura
+    BG_OBC_COLOSSEUM_FLAG_SPELL      = 89798, // Colosseum Flag carrier visual aura
     BG_OBC_PLAYER_DROPPED_FLAG_SPELL = 34991  // summons the ground flag (184142); NOT a debuff
 };
 
