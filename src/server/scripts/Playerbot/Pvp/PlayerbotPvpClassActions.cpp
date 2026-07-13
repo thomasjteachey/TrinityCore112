@@ -4170,8 +4170,26 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     bool const shouldMoveBehindForEnemySpell =
         shouldUseMeleeApproachForEnemySpell &&
         spellInfo->HasAttribute(SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET);
+    // TEMPORARY diagnostic: the warrior/shaman gap closers (Charge, Intercept,
+    // Heroic Leap, Rehgar's Fury) were reported as producing zero whisper output
+    // during live kiting tests. NotifyDuelDecision only fires after an actual
+    // CastSpell attempt below, but these no_los/out_of_range branches return
+    // early and substitute pure movement without ever reaching that point -
+    // so a genuinely out-of-range gap closer is indistinguishable from a
+    // misselected one from the whisper log alone. This makes that branch
+    // visible so the next test can tell them apart. Remove once confirmed.
+    bool const isGapCloserDiagnosticSpell = resolvedSpellId == 11578 || resolvedSpellId == 20617 ||
+        resolvedSpellId == 81271 || resolvedSpellId == 82419;
+
     if (!itemTarget && !player->IsWithinLOSInMap(target))
     {
+        if (isGapCloserDiagnosticSpell)
+        {
+            std::ostringstream diag;
+            diag << "GAPCLOSE DIAG: spell=" << resolvedSpellId << " phase=no_los dist=" << player->GetDistance(target);
+            WhisperPlayerbotDiagnostic(player, diag.str());
+        }
+
         if (CanIssueFollowCommands(player))
         {
             if (shouldMoveBehindForEnemySpell)
@@ -4196,6 +4214,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (!itemTarget && maxRange > 0.0f && !player->IsWithinDistInMap(target, maxRange))
     {
+        if (isGapCloserDiagnosticSpell)
+        {
+            std::ostringstream diag;
+            diag << "GAPCLOSE DIAG: spell=" << resolvedSpellId << " phase=out_of_range dist=" << player->GetDistance(target) << " maxRange=" << maxRange;
+            WhisperPlayerbotDiagnostic(player, diag.str());
+        }
+
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
             player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))
@@ -4235,6 +4260,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     float const minRange = spellInfo->GetMinRange(false);
     if (!itemTarget && minRange > 0.0f && player->IsWithinDistInMap(target, minRange))
     {
+        if (isGapCloserDiagnosticSpell)
+        {
+            std::ostringstream diag;
+            diag << "GAPCLOSE DIAG: spell=" << resolvedSpellId << " phase=too_close dist=" << player->GetDistance(target) << " minRange=" << minRange;
+            WhisperPlayerbotDiagnostic(player, diag.str());
+        }
+
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT))
             player->RemoveAurasDueToSpell(SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT);
         if (player->HasAura(SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK))

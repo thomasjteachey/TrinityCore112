@@ -5744,7 +5744,15 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
-        bool const isGapCloser = context.spellId == 11578 || context.spellId == 20617;
+        // Ground-targeted gap closers (Heroic Leap, Rehgar's Fury) belong on this
+        // allowlist just like Charge/Intercept - they are the mechanism used to
+        // reach melee range in the first place. Without them here, this generic
+        // "not in melee yet" check zeroes context.spellId and silently substitutes
+        // a plain ReachMeleeRange walk before CastDirectSpell/NotifyDuelDecision
+        // are ever reached, which reads as the bot doing nothing but walking and
+        // never whispering a decision at all.
+        bool const isGapCloser = context.spellId == 11578 || context.spellId == 20617 ||
+            context.spellId == 81271 || context.spellId == 82419 || context.spellId == 49376 || context.spellId == 16979;
         if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !isGapCloser)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),
