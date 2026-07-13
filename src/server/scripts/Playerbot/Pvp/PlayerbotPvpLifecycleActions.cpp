@@ -996,6 +996,83 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return false;
     }
 
+    bool IsInHazardousLiquid(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return false;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
+            player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        if ((status & MAP_LIQUID_STATUS_IN_CONTACT) == 0)
+            return false;
+
+        return (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+    }
+
+    bool IsHazardousLiquidDestination(Player const* player, Position const& destination)
+    {
+        if (!player)
+            return false;
+
+        Map const* map = player->FindMap();
+        if (!map)
+            return false;
+
+        LiquidData liquidData{};
+        ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+            destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+        return (status & MAP_LIQUID_STATUS_IN_CONTACT) != 0 &&
+            (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+    }
+
+    bool TryMoveOutOfHazardousLiquid(Player* player)
+    {
+        if (!IsInHazardousLiquid(player))
+            return false;
+
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
+            return false;
+
+        float const baseAngle = player->GetOrientation();
+        std::array<float, 12> const probeAngles =
+        {
+            0.0f, float(M_PI), float(M_PI_2), -float(M_PI_2),
+            float(M_PI_4), -float(M_PI_4), float(3.0f * M_PI_4), -float(3.0f * M_PI_4),
+            float(M_PI / 6.0f), -float(M_PI / 6.0f), float(5.0f * M_PI / 6.0f), -float(5.0f * M_PI / 6.0f)
+        };
+        std::array<float, 4> const probeDistances = { 8.0f, 12.0f, 16.0f, 24.0f };
+
+        for (float distance : probeDistances)
+        {
+            for (float offset : probeAngles)
+            {
+                Position destination = player->GetPosition();
+                float const angle = baseAngle + offset;
+                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                destination = BuildCollisionSafeDestination(player, destination);
+                if (IsHazardousLiquidDestination(player, destination))
+                    continue;
+
+                Position segmentDestination;
+                if (TryBuildBattlegroundSegmentDestination(player, destination, segmentDestination) ||
+                    (!player->InBattleground() && player->GetDistance(destination) > 0.5f))
+                {
+                    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                    motionMaster->MovePoint(0, player->InBattleground() ? segmentDestination : destination, true);
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold, uint32 minReissueMs)
     {
         if (!player || !target)
@@ -1810,6 +1887,9 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     void StopVirtualPlayerbotMovement(Player* player)
     {
         if (!player)
+            return;
+
+        if (TryMoveOutOfHazardousLiquid(player))
             return;
 
         player->StopMoving();
