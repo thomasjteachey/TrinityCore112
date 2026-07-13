@@ -68,6 +68,7 @@ struct ObcCloneRecord
     uint32 virtualSessionKey = 0;
     uint32 loginStartedAtMs = 0;
     bool ported = false;
+    bool invitationReserved = false;
 };
 
 std::mutex g_ObcCloneLock;
@@ -326,8 +327,19 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
     sCharacterCache->UpdateCharacterData(record.cloneGuid, "Dark " + human->GetName());
 
     // Seat the materialized clone into the human's exact instance on the
-    // opposite team. The virtual-player lifecycle acknowledges the resulting
-    // far teleport on a subsequent player update.
+    // opposite team. HandleMoveWorldportAck only registers players that carry
+    // a queue invitation, so create the same local queue-slot/invite state used
+    // by the normal battlefield-port flow.
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(BATTLEGROUND_OBC, 0);
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE || clone->AddBattlegroundQueueId(queueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES)
+    {
+        TC_LOG_ERROR("playerbots.population", "OBC clone: could not reserve a battleground queue slot for clone {}.",
+            record.cloneGuid.ToString());
+        return false;
+    }
+
+    clone->SetInviteForBattlegroundQueueType(queueTypeId, record.battlegroundInstanceId);
+    bg->IncreaseInvitedCount(record.oppositeTeam);
     clone->SetBattlegroundEntryPoint();
     clone->SetBattlegroundId(record.battlegroundInstanceId, BATTLEGROUND_OBC);
     clone->SetBGTeam(record.oppositeTeam);
@@ -340,9 +352,10 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
             return false;
 
         itr->second.ported = true;
+        itr->second.invitationReserved = true;
     }
 
-    TC_LOG_INFO("playerbots.population", "OBC clone: completed provisioning of 'Dark {}' (clone guid={}) in bg instance {}.",
+    TC_LOG_INFO("playerbots.population", "OBC clone: dispatched battleground transfer for 'Dark {}' (clone guid={}) to bg instance {}.",
         human->GetName(), record.cloneGuid.ToString(), record.battlegroundInstanceId);
     return true;
 }
@@ -360,6 +373,14 @@ void TeardownCloneForHuman(ObjectGuid humanGuid)
         g_ClonesByHuman.erase(itr);
         g_HumanByClone.erase(record.cloneGuid);
     }
+
+    // If teardown happens before the teleport ACK registers the clone with the
+    // battleground, release the synthetic invite count that AddPlayer would
+    // otherwise consume.
+    if (record.invitationReserved)
+        if (Battleground* bg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, BATTLEGROUND_OBC))
+            if (!bg->IsPlayerInBattleground(record.cloneGuid))
+                bg->DecreaseInvitedCount(record.oppositeTeam);
 
     HardDeleteCloneCharacter(record.cloneGuid, g_ObcCloneConfig.cloneAccountId, record.virtualSessionKey);
     TC_LOG_INFO("playerbots.population", "OBC clone: tore down clone {} for human {}.", record.cloneGuid.ToString(), humanGuid.ToString());
