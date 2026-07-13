@@ -4681,6 +4681,12 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     if (!HasHostileTarget(player, activeTarget))
         activeTarget = target;
 
+    // Charge, Intercept, and Heroic Leap drive their own effect-motion spline.
+    // While that movement is resolving the warrior is locked in, so defer all
+    // spell decisions until the native gap-closer motion finishes.
+    if (HasActiveMovementEffectSpline(player))
+        return decision;
+
     bool const isProtWarrior = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isFuryWarrior = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const inBattleStance = player->HasAura(2457);
