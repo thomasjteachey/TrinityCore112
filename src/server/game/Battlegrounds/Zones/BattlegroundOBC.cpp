@@ -11,7 +11,6 @@
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 #include "WorldSession.h"
-#include "Battlegrounds/BattlegroundMap.h"
 
 #include <cmath>
 
