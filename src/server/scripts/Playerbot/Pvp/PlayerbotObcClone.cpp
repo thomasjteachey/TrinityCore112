@@ -10,7 +10,7 @@
 #include "PlayerbotObcClone.h"
 
 #include "PlayerbotRandomBotParticipation.h"
-
+#include "MotionMaster.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
