@@ -25315,24 +25315,19 @@ void Player::MovementInform(uint32 type, uint32 id)
 {
     if (type == EFFECT_MOTION_TYPE && id == EVENT_JUMP)
     {
-        if (GetShapeshiftForm() == FORM_GHOSTWOLF)
+        // Rehgar's Fury can remove Ghost Wolf as its jump finishes, before
+        // MovementInform is delivered.  The pending target is the authoritative
+        // indication that this EVENT_JUMP belongs to the charge; requiring the
+        // form to still be active skips CompleteGhostWolfCharge and therefore
+        // skips Ghost Wolf's post-charge cooldown.
+        ObjectGuid targetGuid = _pendingGhostWolfChargeTarget;
+        _pendingGhostWolfChargeTarget.Clear();
+
+        if (targetGuid)
         {
-            ObjectGuid targetGuid = _pendingGhostWolfChargeTarget;
-            _pendingGhostWolfChargeTarget.Clear();
-
-            if (!targetGuid)
-            {
-                if (Unit* victim = GetVictim())
-                    targetGuid = victim->GetGUID();
-                else if (ObjectGuid selection = GetTarget())
-                    targetGuid = selection;
-            }
-
-            Unit* target = targetGuid ? ObjectAccessor::GetUnit(*this, targetGuid) : nullptr;
+            Unit* target = ObjectAccessor::GetUnit(*this, targetGuid);
             CompleteGhostWolfCharge(target);
         }
-        else
-            _pendingGhostWolfChargeTarget.Clear();
     }
 }
 
