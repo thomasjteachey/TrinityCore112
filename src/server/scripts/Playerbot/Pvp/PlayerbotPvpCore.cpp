@@ -4469,8 +4469,8 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
     // root if it is still pressured, then disengage toward a nearby ally.
     AddDecisionCandidate(candidates, isBalanceDruid && balanceMeleeRangeTarget && IsSpellReady(player, 82423), 41.5f,
         { "druid moon bash", "strike an enemy that has closed to melee range", 82423, playerbot::PvpClassSpellContext::TargetMode::Enemy, balanceMeleeRangeTarget ? balanceMeleeRangeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isBalanceDruid && balanceMeleeRangeTarget && !HasAuraFromSpellChain(player, 17329) && IsSpellReady(player, 17329), 41.0f,
-        { "druid natures grasp", "root the next melee attacker while still pressured", 17329, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isBalanceDruid && target && balanceUnderMeleePressure && !HasAuraFromSpellChain(player, 17329) && IsSpellReady(player, 17329), 41.0f,
+        { "druid natures grasp", "root the next melee attacker before casting wrath under close pressure", 17329, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBalanceDruid && balanceMeleeRangeTarget && balanceEscapeAlly && IsSpellReady(player, 83111), 40.5f,
         { "druid leap", "disengage toward a nearby ally while still under melee pressure", 83111, playerbot::PvpClassSpellContext::TargetMode::Ally, balanceEscapeAlly ? balanceEscapeAlly->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isBalanceDruid && target && balanceUnderMeleePressure && IsSpellReady(player, 5176), 40.0f,

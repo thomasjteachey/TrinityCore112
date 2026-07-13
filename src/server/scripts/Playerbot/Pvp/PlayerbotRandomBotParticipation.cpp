@@ -1809,13 +1809,15 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (didExecuteClassSpell &&
         (classSpellContext.spellId == 16166 ||
          classSpellContext.spellId == 17116 ||
-         // Amplify Curse (18288) precedes Curse of Agony, and Arcane Power
-         // (12042) / Presence of Mind (12043) precede the rest of the
-         // arcane burst chain (see SelectWarlockSpell / SelectMageSpell) -
-         // all four are off the global cooldown and are meant to land back
-         // to back with their follow-up cast rather than waiting a full
-         // cadence tick.
+         // Amplify Curse (18288) precedes Curse of Agony, Nature's Grasp
+         // (17329) precedes Balance Wrath under close pressure, and Arcane
+         // Power (12042) / Presence of Mind (12043) precede the rest of the
+         // arcane burst chain (see SelectWarlockSpell / SelectDruidSpell /
+         // SelectMageSpell) - all are off the global cooldown and are meant
+         // to land back to back with their follow-up cast rather than waiting
+         // a full cadence tick.
          classSpellContext.spellId == 18288 ||
+         classSpellContext.spellId == 17329 ||
          classSpellContext.spellId == 12042 ||
          classSpellContext.spellId == 12043 ||
          PvpClassActions::IsPetSpellAction(player, classSpellContext)))
