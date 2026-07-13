@@ -63,6 +63,7 @@
 #include <cmath>
 #include <chrono>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -707,12 +708,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             !player || player->GetClass() != CLASS_SHAMAN || player->GetShapeshiftForm() != FORM_GHOSTWOLF)
             return;
 
-        static std::unordered_map<uint64, uint32> lastWhisperMsByGuid;
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& lastMs = lastWhisperMsByGuid[player->GetGUID().GetRawValue()];
-        if (throttleMs && lastMs && nowMs < lastMs + throttleMs)
-            return;
-        lastMs = nowMs;
+        if (throttleMs)
+        {
+            static std::mutex throttleLock;
+            static std::unordered_map<uint64, uint32> lastWhisperMsByGuid;
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            std::lock_guard<std::mutex> lock(throttleLock);
+            uint32& lastMs = lastWhisperMsByGuid[player->GetGUID().GetRawValue()];
+            if (lastMs && nowMs < lastMs + throttleMs)
+                return;
+            lastMs = nowMs;
+        }
 
         MotionMaster const* motionMaster = player->GetMotionMaster();
         bool const hasSpline = player->movespline != nullptr;
