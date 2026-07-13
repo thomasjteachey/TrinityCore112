@@ -182,7 +182,7 @@ uint32 AcquireCloneVirtualSessionKey(uint32 lowGuid)
 // Queue a freshly-created clone character's virtual session. World::AddSession
 // installs it at the beginning of the next world update; login is deliberately
 // dispatched only after that registration is observable through FindSession.
-bool QueueCloneCharacterSession(ObjectGuid::LowType cloneLowGuid, uint32 accountId, uint32& virtualSessionKey)
+bool QueueCloneCharacterSession(ObjectGuid::LowType cloneLowGuid, uint32 accountId, ObjectGuid humanGuid, uint32& virtualSessionKey)
 {
     virtualSessionKey = 0;
 
@@ -205,6 +205,11 @@ bool QueueCloneCharacterSession(ObjectGuid::LowType cloneLowGuid, uint32 account
     WorldSession* session = new WorldSession(accountId, std::move(accountName), nullptr, security, expansion, 0, Minutes(0),
         LOCALE_enUS, 0, false);
     session->SetSessionMapKey(virtualSessionKey);
+    session->SetPlayerLoginResultCallback([humanGuid](bool success, std::string const& detail)
+    {
+        Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
+        SendCloneDiagnostic(human, std::string(success ? "login callback succeeded: " : "FAILED: async login rejected: ") + detail);
+    });
     sWorld->AddSession(session);
     session->AllowCharacterLogin(cloneGuid);
 
@@ -286,7 +291,7 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg, uint32 cloneAccount
         " cloneLowGuid=" + std::to_string(cloneLowGuid));
 
     uint32 virtualSessionKey = 0;
-    if (!QueueCloneCharacterSession(cloneLowGuid, cloneAccountId, virtualSessionKey))
+    if (!QueueCloneCharacterSession(cloneLowGuid, cloneAccountId, humanGuid, virtualSessionKey))
     {
         TC_LOG_ERROR("playerbots.population", "OBC clone: failed to queue virtual session for clone character {} for human {}.", cloneLowGuid, humanGuid.ToString());
         Player::DeleteFromDB(ObjectGuid::Create<HighGuid::Player>(cloneLowGuid), cloneAccountId, true, true);

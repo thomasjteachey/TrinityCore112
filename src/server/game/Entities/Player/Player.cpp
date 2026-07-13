@@ -17826,8 +17826,16 @@ bool Player::IsLoading() const
     return GetSession()->PlayerLoading();
 }
 
-bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder)
+bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, std::string* failureReason)
 {
+    auto fail = [failureReason](std::string reason)
+    {
+        if (failureReason)
+            *failureReason = std::move(reason);
+
+        return false;
+    };
+
     //                                                       0     1        2     3     4      5       6      7   8      9     10    11         12         13           14         15         16
     //QueryResult* result = CharacterDatabase.PQuery("SELECT guid, account, name, race, class, gender, level, xp, money, skin, face, hairStyle, hairColor, facialStyle, bankSlots, restState, playerFlags, "
     // 17          18          19          20   21           22        23         24         25         26          27           28                 29
@@ -17844,7 +17852,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         std::string name = "<unknown>";
         sCharacterCache->GetCharacterNameByGuid(guid, name);
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player '{}' ({}) not found in table `characters`, can't load. ", name, guid.ToString());
-        return false;
+        return fail("character row was not returned by the login query");
     }
 
     Field* fields = result->Fetch();
@@ -17856,13 +17864,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (dbAccountId != GetSession()->GetAccountId())
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) loading from wrong account (is: {}, should be: {})", guid.ToString(), GetSession()->GetAccountId(), dbAccountId);
-        return false;
+        return fail("character belongs to a different account");
     }
 
     if (holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_BANNED))
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) is banned, can't load.", guid.ToString());
-        return false;
+        return fail("character is banned");
     }
 
     Object::_Create(guid.GetCounter(), 0, HighGuid::Player);
@@ -17877,14 +17885,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         stmt->setUInt16(0, uint16(AT_LOGIN_RENAME));
         stmt->setUInt32(1, guid.GetCounter());
         CharacterDatabase.Execute(stmt);
-        return false;
+        return fail("character name is invalid or reserved: " + m_name);
     }
 
     Gender gender = Gender(fields[5].GetUInt8());
     if (!IsValidGender(gender))
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) has wrong gender ({}), can't load.", guid.ToString(), uint32(gender));
-        return false;
+        return fail("character has an invalid gender value");
     }
 
     SetRace(fields[3].GetUInt8());
@@ -17896,7 +17904,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (!info)
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) has wrong race/class ({}/{}), can't load.", guid.ToString(), GetRace(), GetClass());
-        return false;
+        return fail("character has an invalid race/class combination");
     }
 
     SetLevel(fields[6].GetUInt8(), false);
@@ -17973,7 +17981,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     // load home bind and check in same time class/race pair, it used later for restore broken positions
     if (!_LoadHomeBind(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOME_BIND)))
-        return false;
+        return fail("character homebind could not be loaded");
 
     InitPrimaryProfessions();                               // to max set before any spell loaded
 
@@ -18276,7 +18284,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         {
             TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player '{}' ({}) Map: {}, X: {}, Y: {}, Z: {}, O: {}. Invalid default map coordinates or instance couldn't be created.",
                 m_name, guid.ToString(), mapId, GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation());
-            return false;
+            return fail("the character's fallback map could not be created");
         }
     }
 
@@ -18329,7 +18337,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (HasAtLoginFlag(AT_LOGIN_RENAME))
     {
         TC_LOG_ERROR("entities.player.cheat", "Player::LoadFromDB: Player ({}) tried to login while forced to rename, can't load.'", GetGUID().ToString());
-        return false;
+        return fail("character has AT_LOGIN_RENAME set");
     }
 
     // Honor system

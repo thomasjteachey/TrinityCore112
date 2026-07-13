@@ -750,9 +750,19 @@ void WorldSession::HandleCharDeleteOpcode(WorldPacket& recvData)
 
 void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
 {
+    auto notifyLoginResult = [this](bool success, std::string const& detail)
+    {
+        if (!m_playerLoginResultCallback)
+            return;
+
+        std::function<void(bool, std::string const&)> callback = std::move(m_playerLoginResultCallback);
+        callback(success, detail);
+    };
+
     if (PlayerLoading() || GetPlayer() != nullptr)
     {
         TC_LOG_ERROR("network", "Player tries to login again, AccountId = {}", GetAccountId());
+        notifyLoginResult(false, "session was already loading or had a player");
         KickPlayer("WorldSession::HandlePlayerLoginOpcode Another client logging in");
         return;
     }
@@ -765,6 +775,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
     if (!IsLegitCharacterForAccount(playerGuid))
     {
         TC_LOG_ERROR("network", "Account ({}) can't login with that character ({}).", GetAccountId(), playerGuid.ToString());
+        notifyLoginResult(false, "character was not authorized for this session");
         KickPlayer("WorldSession::HandlePlayerLoginOpcode Trying to login with a character of another account");
         return;
     }
@@ -773,6 +784,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
     if (!holder->Initialize())
     {
         m_playerLoading = false;
+        notifyLoginResult(false, "login query holder initialization failed");
         return;
     }
 
@@ -791,8 +803,14 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
     ChatHandler chH = ChatHandler(pCurrChar->GetSession());
 
     // "GetAccountId() == db stored account id" checked in LoadFromDB (prevent login not own character using cheating tools)
-    if (!pCurrChar->LoadFromDB(playerGuid, holder))
+    std::string loadFailureReason;
+    if (!pCurrChar->LoadFromDB(playerGuid, holder, &loadFailureReason))
     {
+        if (m_playerLoginResultCallback)
+        {
+            std::function<void(bool, std::string const&)> callback = std::move(m_playerLoginResultCallback);
+            callback(false, loadFailureReason.empty() ? "Player::LoadFromDB failed without a reason" : loadFailureReason);
+        }
         SetPlayer(nullptr);
         KickPlayer("WorldSession::HandlePlayerLogin Player::LoadFromDB failed"); // disconnect client, player no set to session and it will not deleted or saved at kick
         delete pCurrChar;                                   // delete it manually
@@ -1066,6 +1084,12 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         pCurrChar->SetStandState(UNIT_STAND_STATE_STAND);
 
     m_playerLoading = false;
+
+    if (m_playerLoginResultCallback)
+    {
+        std::function<void(bool, std::string const&)> callback = std::move(m_playerLoginResultCallback);
+        callback(true, "player loaded and entered the world");
+    }
 
     // Handle Login-Achievements (should be handled after loading)
     _player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_ON_LOGIN, 1);
