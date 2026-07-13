@@ -934,7 +934,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SendSummonRequestFrom(Unit* summoner);
         void SummonIfPossible(bool agree);
 
-        bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems = true);
+        bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems = true,
+            bool validateAppearanceAsNewCharacter = true);
 
         void Update(uint32 time) override;
 

@@ -291,8 +291,8 @@ void DestroyUnseatedClone(std::unique_ptr<WorldSession>& session, Player* clone)
     if (!clone)
         return;
 
-    session->SetPlayer(nullptr);
     delete clone;
+    session->SetPlayer(nullptr);
 }
 
 bool ProvisionCloneForHuman(Player* human, Battleground* bg)
@@ -326,7 +326,10 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         .SetOutfitId(0);
 
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
-    if (!clone->Create(cloneLowGuid, &createInfo, false))
+    // This mirrors an existing character's live appearance, which may include
+    // barber-shop-only sections that are valid in game but unavailable during
+    // initial character creation.
+    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
     {
         DestroyUnseatedClone(session, clone);
         return false;
@@ -432,7 +435,6 @@ void TeardownCloneForHuman(ObjectGuid humanGuid)
         std::string cachedName;
         sCharacterCache->GetCharacterNameByGuid(record.cloneGuid, cachedName);
 
-        session->SetPlayer(nullptr);
         if (Map* map = clone->FindMap())
             map->RemovePlayerFromMap(clone, true);
         else
@@ -440,6 +442,7 @@ void TeardownCloneForHuman(ObjectGuid humanGuid)
             ObjectAccessor::RemoveObject(clone);
             delete clone;
         }
+        session->SetPlayer(nullptr);
 
         if (!cachedName.empty())
             sCharacterCache->DeleteCharacterCacheEntry(record.cloneGuid, cachedName);
