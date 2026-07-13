@@ -37,6 +37,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "MovementTypedefs.h"
 #include "Opcodes.h"
 #include "ObjectAccessor.h"
@@ -515,6 +516,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance);
     float GetAggressiveCombatScanDistance(Player const* player, float fallbackDistance);
+    bool HasPlayerbotGapCloserInFlight(Player const* player);
     bool CanIssueBotMovement(Player* player);
     bool HunterIsHardCastingStationaryShot(Player const* player);
     void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra, uint32 throttleMs);
@@ -1144,7 +1146,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 
         MotionMaster* motionMaster = player->GetMotionMaster();
         MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-        if (player->InBattleground() && botCurrentlyMoving && currentMovement == EFFECT_MOTION_TYPE)
+        if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
             return true;
 
         if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
@@ -1155,9 +1157,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             currentMovement != IDLE_MOTION_TYPE &&
             currentMovement != CHASE_MOTION_TYPE &&
             currentMovement != POINT_MOTION_TYPE &&
-            // Charge/Intercept movement is issued through effect generators.
-            // Clear stale effect movement only once charge state has ended.
-            (currentMovement != EFFECT_MOTION_TYPE || !player->HasUnitState(UNIT_STATE_CHARGING)))
+            // Charge/Intercept/Rehgar's Fury movement is issued through effect
+            // generators. Clear stale effect movement only once its spline has
+            // actually ended; some jump-dest effects do not keep
+            // UNIT_STATE_CHARGING set for the full visual travel.
+            (currentMovement != EFFECT_MOTION_TYPE || !HasPlayerbotGapCloserInFlight(player)))
         {
             EmitBattlegroundGmDebug(player,
                 "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
@@ -1760,9 +1764,11 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
 
         MotionMaster const* motionMaster = player->GetMotionMaster();
-        return motionMaster &&
-            motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE &&
-            player->HasUnitState(UNIT_STATE_CHARGING);
+        if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+            return false;
+
+        bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+        return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
     }
 
     bool CanIssueBotMovement(Player* player)
