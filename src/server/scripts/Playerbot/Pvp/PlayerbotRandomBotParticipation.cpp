@@ -1690,6 +1690,11 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(player);
 }
 
+void RandomBotParticipationManager::FinalizePendingVirtualPlayerTeleport(Player* player)
+{
+    TryFinalizePendingManagedBotTeleport(player);
+}
+
 void RandomBotParticipationManager::SetPopulationRuntimeEnabled(bool enabled)
 {
     std::lock_guard<std::mutex> lock(g_RandomPopulationLock);

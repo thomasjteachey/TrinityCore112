@@ -655,6 +655,12 @@ void WorldSession::KickPlayer(std::string const& reason)
         m_Socket->CloseSocket();
         forceExit = true;
     }
+    else if (m_virtualSession)
+    {
+        TC_LOG_INFO("network.kick", "Virtual account: {} Character: '{}' {} stopped with reason: {}", GetAccountId(), _player
+            ? _player->GetName() : "<none>", _player ? _player->GetGUID().ToString() : "", reason);
+        forceExit = true;
+    }
 }
 
 bool WorldSession::ValidateHyperlinksAndMaybeKick(std::string const& str)

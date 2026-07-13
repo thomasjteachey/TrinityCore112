@@ -71,6 +71,7 @@ public:
     static void OnWorldUpdate(uint32 diffMs);
     static void OnPlayerLogout(Player const* player);
     static void ProcessPlayerLifecycle(Player* player);
+    static void FinalizePendingVirtualPlayerTeleport(Player* player);
 
     static void SetPopulationRuntimeEnabled(bool enabled);
     static bool IsPopulationRuntimeEnabled();

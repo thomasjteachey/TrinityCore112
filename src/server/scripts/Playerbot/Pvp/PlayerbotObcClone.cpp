@@ -53,6 +53,7 @@ namespace
 constexpr uint32 kBloodlustSpellId = 2825;
 constexpr uint32 kBloodlustDurationMs = 30 * IN_MILLISECONDS;
 constexpr uint32 kCloneTickThrottleMs = 1000;
+constexpr uint32 kCloneLoginTimeoutMs = 30 * IN_MILLISECONDS;
 
 struct ObcCloneConfig
 {
@@ -63,6 +64,9 @@ struct ObcCloneRecord
 {
     ObjectGuid cloneGuid;
     uint32 oppositeTeam = 0;
+    uint32 battlegroundInstanceId = 0;
+    uint32 virtualSessionKey = 0;
+    uint32 loginStartedAtMs = 0;
     bool ported = false;
 };
 
@@ -158,22 +162,24 @@ uint32 AcquireCloneVirtualSessionKey(uint32 lowGuid)
     return 0;
 }
 
-// Log a freshly-created clone character in on its own virtual session, mirroring
-// the managed-bot login path (see TryLoginBotCharacter in
-// PlayerbotRandomBotParticipation.cpp). Returns the materialized Player* or
-// nullptr on failure.
-Player* LoginCloneCharacter(ObjectGuid::LowType cloneLowGuid, uint32 accountId)
+// Begin logging a freshly-created clone character in on its own virtual
+// session, mirroring the managed-bot login path (see TryLoginBotCharacter in
+// PlayerbotRandomBotParticipation.cpp). Character loading is asynchronous, so
+// the Player is materialized on a later world tick.
+bool StartCloneCharacterLogin(ObjectGuid::LowType cloneLowGuid, uint32 accountId, uint32& virtualSessionKey)
 {
-    if (!cloneLowGuid || !accountId)
-        return nullptr;
+    virtualSessionKey = 0;
 
-    uint32 const virtualSessionKey = AcquireCloneVirtualSessionKey(cloneLowGuid);
+    if (!cloneLowGuid || !accountId)
+        return false;
+
+    virtualSessionKey = AcquireCloneVirtualSessionKey(cloneLowGuid);
     if (!virtualSessionKey)
-        return nullptr;
+        return false;
 
     std::string accountName;
     if (!sAccountMgr->GetName(accountId, accountName))
-        return nullptr;
+        return false;
 
     ObjectGuid const cloneGuid = ObjectGuid::Create<HighGuid::Player>(cloneLowGuid);
     int32 const realmId = static_cast<int32>(realm.Id.Realm);
@@ -190,27 +196,26 @@ Player* LoginCloneCharacter(ObjectGuid::LowType cloneLowGuid, uint32 accountId)
     loginPacket << cloneGuid;
     session->HandlePlayerLoginOpcode(loginPacket);
 
-    Player* clone = session->GetPlayer();
-    if (!clone || clone->GetGUID() != cloneGuid)
-    {
-        session->KickPlayer("OBC clone login verification failed");
-        return nullptr;
-    }
-
-    return clone;
+    return true;
 }
 
-void HardDeleteCloneCharacter(ObjectGuid cloneGuid, uint32 accountId)
+void HardDeleteCloneCharacter(ObjectGuid cloneGuid, uint32 accountId, uint32 virtualSessionKey = 0)
 {
-    // If still online, log the session out first so DeleteFromDB is not racing
-    // a live in-world Player.
+    WorldSession* session = nullptr;
     if (Player* clone = ObjectAccessor::FindConnectedPlayer(cloneGuid))
+        session = clone->GetSession();
+    else if (virtualSessionKey)
+        session = sWorld->FindSession(virtualSessionKey);
+
+    // If the asynchronous login already materialized the clone, log it out
+    // before deleting its character. KickPlayer also terminates socketless
+    // virtual sessions so they do not remain in the world session map.
+    if (session)
     {
-        if (WorldSession* session = clone->GetSession())
-        {
+        if (session->GetPlayer())
             session->LogoutPlayer(true);
-            session->KickPlayer("OBC clone teardown");
-        }
+
+        session->KickPlayer("OBC clone teardown");
     }
 
     Player::DeleteFromDB(cloneGuid, accountId, true /*updateRealmChars*/, true /*deleteFinally*/);
@@ -253,62 +258,111 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg, uint32 cloneAccount
         return false;
     }
 
-    Player* clone = LoginCloneCharacter(cloneLowGuid, cloneAccountId);
-    if (!clone)
+    uint32 virtualSessionKey = 0;
+    if (!StartCloneCharacterLogin(cloneLowGuid, cloneAccountId, virtualSessionKey))
     {
-        TC_LOG_ERROR("playerbots.population", "OBC clone: failed to log in clone character {} for human {}.", cloneLowGuid, humanGuid.ToString());
+        TC_LOG_ERROR("playerbots.population", "OBC clone: failed to start login for clone character {} for human {}.", cloneLowGuid, humanGuid.ToString());
         Player::DeleteFromDB(ObjectGuid::Create<HighGuid::Player>(cloneLowGuid), cloneAccountId, true, true);
         return false;
     }
 
-    ObjectGuid const cloneGuid = clone->GetGUID();
-
-    // Display override: show "Dark <name>" to all clients without touching the
-    // varchar(12) DB name. UpdateCharacterData is an in-memory cache update that
-    // also broadcasts InvalidatePlayer so clients re-query the name.
-    sCharacterCache->UpdateCharacterData(cloneGuid, "Dark " + human->GetName());
-
-    // Seat the clone into the human's exact instance on the opposite team,
-    // following the canonical battlefield-port sequence (see
-    // WorldSession::HandleBattleFieldPortOpcode). The actual AddPlayer fires when
-    // the far teleport completes; for a virtual-session bot that finalization is
-    // driven by TryFinalizePendingManagedBotTeleport on the lifecycle tick.
-    clone->SetBattlegroundEntryPoint();
-    clone->SetBattlegroundId(bg->GetInstanceID(), BATTLEGROUND_OBC);
-    clone->SetBGTeam(oppositeTeam);
-    sBattlegroundMgr->SendToBattleground(clone, bg->GetInstanceID(), BATTLEGROUND_OBC);
+    ObjectGuid const cloneGuid = ObjectGuid::Create<HighGuid::Player>(cloneLowGuid);
 
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         ObcCloneRecord record;
         record.cloneGuid = cloneGuid;
         record.oppositeTeam = oppositeTeam;
-        record.ported = true;
+        record.battlegroundInstanceId = bg->GetInstanceID();
+        record.virtualSessionKey = virtualSessionKey;
+        record.loginStartedAtMs = GameTime::GetGameTimeMS();
         g_ClonesByHuman[humanGuid] = record;
         g_HumanByClone[cloneGuid] = humanGuid;
     }
 
-    TC_LOG_INFO("playerbots.population", "OBC clone: provisioned 'Dark {}' (clone guid={}) on team {} mirroring human {} in bg instance {}.",
+    TC_LOG_INFO("playerbots.population", "OBC clone: started async provisioning of 'Dark {}' (clone guid={}) on team {} mirroring human {} in bg instance {}.",
         human->GetName(), cloneGuid.ToString(), oppositeTeam, humanGuid.ToString(), bg->GetInstanceID());
+    return true;
+}
+
+bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
+{
+    ObcCloneRecord record;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto itr = g_ClonesByHuman.find(humanGuid);
+        if (itr == g_ClonesByHuman.end())
+            return false;
+
+        record = itr->second;
+    }
+
+    Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid);
+    if (!clone)
+    {
+        if (record.ported || GameTime::GetGameTimeMS() - record.loginStartedAtMs >= kCloneLoginTimeoutMs)
+            return false;
+
+        return true;
+    }
+
+    if (record.ported)
+    {
+        // Far-teleported socketless players cannot send the normal client ACK.
+        // Drive the generic virtual-player acknowledgement even when random
+        // population orchestration itself is disabled.
+        playerbot::RandomBotParticipationManager::FinalizePendingVirtualPlayerTeleport(clone);
+        return true;
+    }
+
+    Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
+    Battleground* bg = human ? GetHumanObcBattleground(human) : nullptr;
+    if (!bg || bg->GetInstanceID() != record.battlegroundInstanceId)
+        return false;
+
+    // Display override: show "Dark <name>" to all clients without touching the
+    // varchar(12) DB name. UpdateCharacterData is an in-memory cache update that
+    // also broadcasts InvalidatePlayer so clients re-query the name.
+    sCharacterCache->UpdateCharacterData(record.cloneGuid, "Dark " + human->GetName());
+
+    // Seat the materialized clone into the human's exact instance on the
+    // opposite team. The virtual-player lifecycle acknowledges the resulting
+    // far teleport on a subsequent player update.
+    clone->SetBattlegroundEntryPoint();
+    clone->SetBattlegroundId(record.battlegroundInstanceId, BATTLEGROUND_OBC);
+    clone->SetBGTeam(record.oppositeTeam);
+    sBattlegroundMgr->SendToBattleground(clone, record.battlegroundInstanceId, BATTLEGROUND_OBC);
+
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto itr = g_ClonesByHuman.find(humanGuid);
+        if (itr == g_ClonesByHuman.end() || itr->second.cloneGuid != record.cloneGuid)
+            return false;
+
+        itr->second.ported = true;
+    }
+
+    TC_LOG_INFO("playerbots.population", "OBC clone: completed provisioning of 'Dark {}' (clone guid={}) in bg instance {}.",
+        human->GetName(), record.cloneGuid.ToString(), record.battlegroundInstanceId);
     return true;
 }
 
 void TeardownCloneForHuman(ObjectGuid humanGuid)
 {
-    ObjectGuid cloneGuid;
+    ObcCloneRecord record;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         auto itr = g_ClonesByHuman.find(humanGuid);
         if (itr == g_ClonesByHuman.end())
             return;
 
-        cloneGuid = itr->second.cloneGuid;
+        record = itr->second;
         g_ClonesByHuman.erase(itr);
-        g_HumanByClone.erase(cloneGuid);
+        g_HumanByClone.erase(record.cloneGuid);
     }
 
-    HardDeleteCloneCharacter(cloneGuid, g_ObcCloneConfig.cloneAccountId);
-    TC_LOG_INFO("playerbots.population", "OBC clone: tore down clone {} for human {}.", cloneGuid.ToString(), humanGuid.ToString());
+    HardDeleteCloneCharacter(record.cloneGuid, g_ObcCloneConfig.cloneAccountId, record.virtualSessionKey);
+    TC_LOG_INFO("playerbots.population", "OBC clone: tore down clone {} for human {}.", record.cloneGuid.ToString(), humanGuid.ToString());
 }
 }
 
@@ -374,6 +428,8 @@ void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
     {
         Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
         if (!human || !GetHumanObcBattleground(human))
+            TeardownCloneForHuman(humanGuid);
+        else if (!TryFinalizeCloneForHuman(humanGuid))
             TeardownCloneForHuman(humanGuid);
     }
 
