@@ -822,7 +822,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
     bool IsForbiddenBattlegroundPathType(PathType pathType)
     {
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH |
+            PATHFIND_SHORT | PATHFIND_FARFROMPOLY;
         return (pathType & forbiddenPathFlags) != 0;
     }
 
@@ -879,25 +880,14 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             // meaningful navmesh progress toward distant enemies instead of
             // repeatedly selecting tiny local hops that catch on terrain.
             path.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
-            bool pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), true);
+            // Never force the requested endpoint. If Detour can only build an
+            // incomplete but connected route, its actual endpoint is useful
+            // progress around the obstacle; forcing the endpoint converts that
+            // route into a direct, non-navmesh shortcut.
+            bool const pathOk = path.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
             PathType pathType = path.GetPathType();
             Movement::PointsArray points = path.GetPath();
             G3D::Vector3 actualEnd = path.GetActualEndPosition();
-
-            if ((pathType & PATHFIND_SHORTCUT) != 0)
-            {
-                PathGenerator retryPath(player);
-                retryPath.SetPathLengthLimit(PLAYERBOT_BG_PATH_CALCULATION_LENGTH_LIMIT);
-                bool const retryOk = retryPath.CalculatePath(collisionSafeDestination.GetPositionX(), collisionSafeDestination.GetPositionY(), collisionSafeDestination.GetPositionZ(), false);
-                PathType const retryType = retryPath.GetPathType();
-                if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
-                {
-                    points = retryPath.GetPath();
-                    pathType = retryType;
-                    pathOk = true;
-                    actualEnd = retryPath.GetActualEndPosition();
-                }
-            }
 
             if (!pathOk || IsForbiddenBattlegroundPathType(pathType))
                 return false;
@@ -936,51 +926,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return true;
         };
 
-        if (tryResolveDestination(safeDestination, segmentDestination, resolvedPathType))
-            return true;
-
-        float const dx = safeDestination.GetPositionX() - player->GetPositionX();
-        float const dy = safeDestination.GetPositionY() - player->GetPositionY();
-        float const dz = safeDestination.GetPositionZ() - player->GetPositionZ();
-        float const planarDistance = std::sqrt(dx * dx + dy * dy);
-        if (planarDistance < 1.0f)
-            return false;
-
-        std::array<float, 8> const probeDistances =
-        {
-            80.0f,
-            60.0f,
-            45.0f,
-            30.0f,
-            20.0f,
-            12.0f,
-            8.0f,
-            5.0f
-        };
-
-        PathType probePathType = PathType(0);
-        for (float probeDistance : probeDistances)
-        {
-            float const cappedDistance = std::min(planarDistance - 0.25f, probeDistance);
-            if (cappedDistance <= 0.5f)
-                continue;
-
-            float const fraction = cappedDistance / planarDistance;
-            Position probeDestination(
-                player->GetPositionX() + dx * fraction,
-                player->GetPositionY() + dy * fraction,
-                player->GetPositionZ() + dz * fraction,
-                safeDestination.GetOrientation());
-
-            if (tryResolveDestination(probeDestination, segmentDestination, &probePathType))
-            {
-                if (resolvedPathType)
-                    *resolvedPathType = probePathType;
-                return true;
-            }
-        }
-
-        return false;
+        // Do not probe points along the straight line to the tactical target.
+        // A probe on the bot's side of a wall is individually reachable but
+        // says nothing about reaching the real destination; repeatedly choosing
+        // it makes the bot run into the wall instead of following the full route.
+        return tryResolveDestination(safeDestination, segmentDestination, resolvedPathType);
     }
 
     bool IsInHazardousLiquid(Player const* player)
