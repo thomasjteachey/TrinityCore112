@@ -1677,6 +1677,17 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         return spellInfo && spellInfo->IsChanneled() && (!spellInfo->IsMoveAllowedChannel() || IsMindFlaySpell(spellInfo));
     }
 
+    bool HasPlayerbotGapCloserInFlight(Player const* player)
+    {
+        if (!player)
+            return false;
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        return motionMaster &&
+            motionMaster->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE &&
+            player->HasUnitState(UNIT_STATE_CHARGING);
+    }
+
     bool CanIssueBotMovement(Player* player)
     {
         if (!player || !player->IsAlive() || player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
@@ -1720,8 +1731,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
         // cast, independent of movement), but the bot never visibly performs the
         // charge motion and just appears to run at the target. Withhold
         // positioning movement until the charge spline itself completes.
-        if (player->HasUnitState(UNIT_STATE_CHARGING) &&
-            player->GetMotionMaster()->GetCurrentMovementGeneratorType() == EFFECT_MOTION_TYPE)
+        if (HasPlayerbotGapCloserInFlight(player))
         {
             return false;
         }
@@ -3564,6 +3574,17 @@ namespace playerbot
         // (or rely on melee/auto attacks) can stay mounted and fail to engage.
         if (player->IsMounted())
             ForcePlayerbotDismount(player);
+
+        // Playerbots run tactical/lifecycle engagement every fast tick. That
+        // loop can select the same enemy immediately after a class gap-closer
+        // cast (Charge, Intercept, Rehgar's Fury, etc.) and call Attack() below
+        // before the EFFECT_MOTION_TYPE spline has delivered MovementInform.
+        // Attack() may install normal chase movement for virtual sessions,
+        // replacing the still-active leap/charge generator. Let the effect
+        // movement finish first; the class action code will start melee after
+        // the spline lands.
+        if (HasPlayerbotGapCloserInFlight(player))
+            return true;
 
         CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
         bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
