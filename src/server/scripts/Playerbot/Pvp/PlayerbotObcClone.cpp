@@ -14,7 +14,6 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
-#include "Chat.h"
 #include "Configuration/Config.h"
 #include "DataStores/DBCStores.h"
 #include "Duration.h"
@@ -45,7 +44,6 @@ namespace
 constexpr uint32 kBloodlustSpellId = 2825;
 constexpr uint32 kBloodlustDurationMs = 30 * IN_MILLISECONDS;
 constexpr uint32 kCloneTickThrottleMs = 1000;
-constexpr bool kObcClonePlayerDiagnostics = true; // Temporary; disable after clone bring-up.
 
 struct ObcCloneConfig
 {
@@ -74,14 +72,6 @@ uint32 g_CloneTickAccumulatorMs = 0;
 bool IsObcCloneFeatureConfigured()
 {
     return g_ObcCloneConfig.enabled;
-}
-
-void SendCloneDiagnostic(Player* human, std::string const& detail)
-{
-    if (!kObcClonePlayerDiagnostics || !human || !human->GetSession())
-        return;
-
-    ChatHandler(human->GetSession()).SendSysMessage("[OBC clone diag] " + detail);
 }
 
 uint32 OppositeTeam(uint32 team)
@@ -197,38 +187,26 @@ void CopySpellsTalentsAndGlyphs(Player* clone, Player* human)
     clone->ApplyGlyphAuras();
 }
 
-bool CreateHunterPetMirror(Player* clone, Pet* sourcePet, std::string& failure)
+bool CreateHunterPetMirror(Player* clone, Pet* sourcePet)
 {
     if (!clone || !sourcePet || sourcePet->getPetType() != HUNTER_PET)
         return true;
 
     CreatureTemplate const* creatureTemplate = sourcePet->GetCreatureTemplate();
     if (!creatureTemplate)
-    {
-        failure = "source hunter pet has no creature template";
         return false;
-    }
 
     Map* map = clone->FindMap();
     if (!map || !clone->IsInWorld())
-    {
-        failure = "clone is not in its battleground map yet";
         return false;
-    }
 
     PetStable& petStable = clone->GetOrInitPetStable();
     if (petStable.CurrentPet)
-    {
-        failure = "clone pet stable already contains a current pet";
         return false;
-    }
 
     std::unique_ptr<Pet> pet = std::make_unique<Pet>(clone, HUNTER_PET);
     if (!pet->CreateBaseAtCreatureInfo(creatureTemplate, clone))
-    {
-        failure = "Pet::CreateBaseAtCreatureInfo failed";
         return false;
-    }
 
     pet->SetCreatorGUID(clone->GetGUID());
     pet->SetFaction(clone->GetFaction());
@@ -237,10 +215,7 @@ bool CreateHunterPetMirror(Player* clone, Pet* sourcePet, std::string& failure)
 
     uint8 const petLevel = sourcePet->GetLevel();
     if (!pet->InitStatsForLevel(petLevel))
-    {
-        failure = "Pet::InitStatsForLevel failed";
         return false;
-    }
 
     uint32 const petNumber = sObjectMgr->GeneratePetNumber();
     pet->GetCharmInfo()->SetPetNumber(petNumber, true);
@@ -281,10 +256,7 @@ bool CreateHunterPetMirror(Player* clone, Pet* sourcePet, std::string& failure)
 
     Pet* petRaw = pet.get();
     if (!map->AddToMap(petRaw->ToCreature()))
-    {
-        failure = "battleground map rejected the hunter pet";
         return false;
-    }
 
     pet->FillPetInfo(&petStable.CurrentPet.emplace());
     clone->SetMinion(petRaw, true);
@@ -311,17 +283,7 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
     if (!sourcePet || clonePet)
         return;
 
-    std::string failure;
-    if (!CreateHunterPetMirror(clone, sourcePet, failure))
-    {
-        SendCloneDiagnostic(human, "FAILED: hunter pet mirror: " + failure);
-        return;
-    }
-
-    Pet* mirroredPet = clone->GetPet();
-    SendCloneDiagnostic(human, "hunter pet JOIN CONFIRMED: sourcePetGuid=" + sourcePet->GetGUID().ToString() +
-        " clonePetGuid=" + (mirroredPet ? mirroredPet->GetGUID().ToString() : std::string("missing")) +
-        " entry=" + std::to_string(sourcePet->GetEntry()) + " name=" + sourcePet->GetName());
+    CreateHunterPetMirror(clone, sourcePet);
 }
 
 void DestroyUnseatedClone(std::unique_ptr<WorldSession>& session, Player* clone)
@@ -342,13 +304,7 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     uint32 const oppositeTeam = OppositeTeam(human->GetBGTeam());
     std::string const internalName = GenerateCloneInternalName();
     if (internalName.empty())
-    {
-        SendCloneDiagnostic(human, "FAILED: could not allocate a unique in-memory name.");
         return false;
-    }
-
-    SendCloneDiagnostic(human, "candidate accepted for in-memory clone: humanGuid=" + humanGuid.ToString() +
-        " bgInstance=" + std::to_string(bg->GetInstanceID()) + " cloneTeam=" + std::to_string(oppositeTeam));
 
     uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
     auto session = std::make_unique<WorldSession>(0, "obc_in_memory_clone", nullptr, SEC_PLAYER, expansion, 0,
@@ -372,7 +328,6 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
     if (!clone->Create(cloneLowGuid, &createInfo, false))
     {
-        SendCloneDiagnostic(human, "FAILED: in-memory Player::Create rejected the clone appearance.");
         DestroyUnseatedClone(session, clone);
         return false;
     }
@@ -391,7 +346,6 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
 
     if (!CopyEquipment(clone, human))
     {
-        SendCloneDiagnostic(human, "FAILED: could not clone equipped items in memory.");
         DestroyUnseatedClone(session, clone);
         return false;
     }
@@ -406,7 +360,6 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     if (queueTypeId == BATTLEGROUND_QUEUE_NONE || !start ||
         clone->AddBattlegroundQueueId(queueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES)
     {
-        SendCloneDiagnostic(human, "FAILED: could not prepare the in-memory clone's OBC admission state.");
         DestroyUnseatedClone(session, clone);
         return false;
     }
@@ -422,7 +375,6 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     if (!bg->GetBgMap()->AddPlayerToMap(clone))
     {
         bg->DecreaseInvitedCount(oppositeTeam);
-        SendCloneDiagnostic(human, "FAILED: battleground map rejected the in-memory clone.");
         DestroyUnseatedClone(session, clone);
         return false;
     }
@@ -443,9 +395,6 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         g_HumanByClone[cloneGuid] = humanGuid;
     }
 
-    SendCloneDiagnostic(human, "JOIN CONFIRMED: in-memory cloneGuid=" + cloneGuid.ToString() +
-        " name=" + displayName + " bgInstance=" + std::to_string(bg->GetInstanceID()) +
-        " team=" + std::to_string(oppositeTeam));
     TC_LOG_INFO("playerbots.population", "OBC clone: created in-memory '{}' ({}) for human {} in bg instance {}.",
         displayName, cloneGuid.ToString(), humanGuid.ToString(), bg->GetInstanceID());
     return true;
