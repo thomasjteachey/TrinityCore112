@@ -54,6 +54,7 @@ namespace
 void SetLastMovementDebugStatus(Player const* player, std::string const& status);
 void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra);
 bool HasActiveMovementEffectSpline(Player const* player);
+bool TryMoveOutOfHazardousLiquid(Player* player);
 
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
@@ -1655,6 +1656,9 @@ void StopHunterDamageOnBreakableCrowdControl(Player* player, Unit* target, char 
 void StopHunterAndStartAutoShot(Player* player, Unit* target, char const* reason)
 {
     if (!player || !target || !target->IsAlive())
+        return;
+
+    if (TryMoveOutOfHazardousLiquid(player))
         return;
 
     if (target->HasBreakableByDamageCrowdControlAura())
@@ -3483,6 +3487,76 @@ bool HasActiveMovementEffectSpline(Player const* player)
     return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
 }
 
+bool IsInHazardousLiquid(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return false;
+
+    LiquidData liquidData{};
+    ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
+        player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+    if ((status & MAP_LIQUID_STATUS_IN_CONTACT) == 0)
+        return false;
+
+    return (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+}
+
+bool IsHazardousLiquidDestination(Player const* player, Position const& destination)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return false;
+
+    LiquidData liquidData{};
+    ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
+        destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+    return (status & MAP_LIQUID_STATUS_IN_CONTACT) != 0 &&
+        (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+}
+
+bool TryMoveOutOfHazardousLiquid(Player* player)
+{
+    if (!IsInHazardousLiquid(player))
+        return false;
+
+    float const baseAngle = player->GetOrientation();
+    std::array<float, 12> const probeAngles =
+    {
+        0.0f, float(M_PI), float(M_PI_2), -float(M_PI_2),
+        float(M_PI_4), -float(M_PI_4), float(3.0f * M_PI_4), -float(3.0f * M_PI_4),
+        float(M_PI / 6.0f), -float(M_PI / 6.0f), float(5.0f * M_PI / 6.0f), -float(5.0f * M_PI / 6.0f)
+    };
+    std::array<float, 4> const probeDistances = { 8.0f, 12.0f, 16.0f, 24.0f };
+
+    for (float distance : probeDistances)
+    {
+        for (float offset : probeAngles)
+        {
+            Position destination = player->GetPosition();
+            float const angle = baseAngle + offset;
+            destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+            destination = BuildCollisionSafeDestination(player, destination);
+            if (IsHazardousLiquidDestination(player, destination))
+                continue;
+
+            if (IssueStrictHumanMove(player, destination, 1.0f, 0))
+            {
+                SetLastMovementDebugStatus(player, "hazardous_liquid_stop_prevented_move_out");
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 void StopPlayerbotForStationaryCast(Player* player)
 {
     if (!player)
@@ -3500,6 +3574,13 @@ void StopPlayerbotForStationaryCast(Player* player)
     // the caller's SPELL_FAILED_MOVING retry path already handles waiting a
     // tick for a stationary cast, so this is a short defer, not a stall.
     if (HasActiveMovementEffectSpline(player))
+        return;
+
+    // Magma/slime is acceptable as a transit route when a path requires
+    // swimming through it, but it must never become a place where a bot plants
+    // for a stationary cast or ranged hold. If a stop request arrives while in
+    // hazardous liquid, convert that stop into a generic "get out" move.
+    if (TryMoveOutOfHazardousLiquid(player))
         return;
 
     player->StopMoving();
