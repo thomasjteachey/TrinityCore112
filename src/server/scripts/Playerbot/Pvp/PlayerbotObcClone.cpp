@@ -23,6 +23,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
+#include "Chat.h"
 #include "Configuration/Config.h"
 #include "DatabaseEnv.h"
 #include "Duration.h"
@@ -54,6 +55,7 @@ constexpr uint32 kBloodlustSpellId = 2825;
 constexpr uint32 kBloodlustDurationMs = 30 * IN_MILLISECONDS;
 constexpr uint32 kCloneTickThrottleMs = 1000;
 constexpr uint32 kCloneLoginTimeoutMs = 30 * IN_MILLISECONDS;
+constexpr bool kObcClonePlayerDiagnostics = true; // Temporary; disable after clone bring-up.
 
 struct ObcCloneConfig
 {
@@ -69,6 +71,9 @@ struct ObcCloneRecord
     uint32 loginStartedAtMs = 0;
     bool ported = false;
     bool invitationReserved = false;
+    bool loginMaterializedDiagnosticSent = false;
+    bool transferPendingDiagnosticSent = false;
+    bool joinedDiagnosticSent = false;
 };
 
 std::mutex g_ObcCloneLock;
@@ -84,6 +89,15 @@ uint32 g_CloneTickAccumulatorMs = 0;
 bool IsObcCloneFeatureConfigured()
 {
     return g_ObcCloneConfig.cloneAccountId != 0;
+}
+
+void SendCloneDiagnostic(Player* human, std::string const& detail)
+{
+    if (!kObcClonePlayerDiagnostics || !human || !human->GetSession())
+        return;
+
+    std::string const message = "[OBC clone diag] " + detail;
+    ChatHandler(human->GetSession()).SendSysMessage(message);
 }
 
 uint32 OppositeTeam(uint32 team)
@@ -234,6 +248,10 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg, uint32 cloneAccount
     uint32 const humanTeam = human->GetBGTeam();
     uint32 const oppositeTeam = OppositeTeam(humanTeam);
 
+    SendCloneDiagnostic(human, "candidate accepted: humanGuid=" + humanGuid.ToString() +
+        " bgInstance=" + std::to_string(bg->GetInstanceID()) + " humanTeam=" + std::to_string(humanTeam) +
+        " cloneTeam=" + std::to_string(oppositeTeam) + " cloneAccount=" + std::to_string(cloneAccountId));
+
     // Persist the human's current state so the dump reflects live gear/talents.
     human->SaveToDB();
 
@@ -241,31 +259,45 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg, uint32 cloneAccount
     if (PlayerDumpWriter().WriteDumpToString(dump, humanGuid.GetCounter()) != DUMP_SUCCESS)
     {
         TC_LOG_ERROR("playerbots.population", "OBC clone: failed to dump human {} ({}).", human->GetName(), humanGuid.ToString());
+        SendCloneDiagnostic(human, "FAILED: could not dump the human character.");
         return false;
     }
+
+    SendCloneDiagnostic(human, "character dump complete: bytes=" + std::to_string(dump.size()));
 
     std::string const loginName = GenerateCloneLoginName();
     if (loginName.empty())
     {
         TC_LOG_ERROR("playerbots.population", "OBC clone: could not allocate a unique clone login name for human {}.", humanGuid.ToString());
+        SendCloneDiagnostic(human, "FAILED: could not allocate a unique Obcc login name.");
         return false;
     }
 
     ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
 
-    if (PlayerDumpReader().LoadDumpFromString(dump, cloneAccountId, loginName, cloneLowGuid) != DUMP_SUCCESS)
+    DumpReturn const importResult = PlayerDumpReader().LoadDumpFromStringForServer(dump, cloneAccountId, loginName, cloneLowGuid);
+    if (importResult != DUMP_SUCCESS)
     {
-        TC_LOG_ERROR("playerbots.population", "OBC clone: failed to load clone dump for human {} (account {}).", humanGuid.ToString(), cloneAccountId);
+        TC_LOG_ERROR("playerbots.population", "OBC clone: failed to load clone dump for human {} (account {}, result {}).",
+            humanGuid.ToString(), cloneAccountId, uint32(importResult));
+        SendCloneDiagnostic(human, "FAILED: clone dump import result=" + std::to_string(uint32(importResult)) +
+            " account=" + std::to_string(cloneAccountId));
         return false;
     }
+
+    SendCloneDiagnostic(human, "clone import complete: dbName=" + loginName +
+        " cloneLowGuid=" + std::to_string(cloneLowGuid));
 
     uint32 virtualSessionKey = 0;
     if (!StartCloneCharacterLogin(cloneLowGuid, cloneAccountId, virtualSessionKey))
     {
         TC_LOG_ERROR("playerbots.population", "OBC clone: failed to start login for clone character {} for human {}.", cloneLowGuid, humanGuid.ToString());
         Player::DeleteFromDB(ObjectGuid::Create<HighGuid::Player>(cloneLowGuid), cloneAccountId, true, true);
+        SendCloneDiagnostic(human, "FAILED: could not dispatch the virtual-session login.");
         return false;
     }
+
+    SendCloneDiagnostic(human, "async login dispatched: virtualSessionKey=" + std::to_string(virtualSessionKey));
 
     ObjectGuid const cloneGuid = ObjectGuid::Create<HighGuid::Player>(cloneLowGuid);
 
@@ -302,9 +334,27 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
     if (!clone)
     {
         if (record.ported || GameTime::GetGameTimeMS() - record.loginStartedAtMs >= kCloneLoginTimeoutMs)
+        {
+            if (Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid))
+                SendCloneDiagnostic(human, "FAILED: clone Player did not materialize before timeout; cloneGuid=" +
+                    record.cloneGuid.ToString());
             return false;
+        }
 
         return true;
+    }
+
+    Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
+    if (!record.loginMaterializedDiagnosticSent)
+    {
+        SendCloneDiagnostic(human, "login materialized: cloneGuid=" + record.cloneGuid.ToString() +
+            " dbName=" + clone->GetName() + " map=" + std::to_string(clone->GetMapId()) +
+            " inWorld=" + std::to_string(clone->IsInWorld() ? 1 : 0));
+
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto itr = g_ClonesByHuman.find(humanGuid);
+        if (itr != g_ClonesByHuman.end() && itr->second.cloneGuid == record.cloneGuid)
+            itr->second.loginMaterializedDiagnosticSent = true;
     }
 
     if (record.ported)
@@ -313,13 +363,40 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
         // Drive the generic virtual-player acknowledgement even when random
         // population orchestration itself is disabled.
         playerbot::RandomBotParticipationManager::FinalizePendingVirtualPlayerTeleport(clone);
+
+        Battleground* targetBg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, BATTLEGROUND_OBC);
+        bool const joined = targetBg && targetBg->IsPlayerInBattleground(record.cloneGuid);
+        if (joined && !record.joinedDiagnosticSent)
+        {
+            SendCloneDiagnostic(human, "JOIN CONFIRMED: bgInstance=" + std::to_string(record.battlegroundInstanceId) +
+                " bgTeam=" + std::to_string(clone->GetBGTeam()) + " map=" + std::to_string(clone->GetMapId()));
+
+            std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+            auto itr = g_ClonesByHuman.find(humanGuid);
+            if (itr != g_ClonesByHuman.end() && itr->second.cloneGuid == record.cloneGuid)
+                itr->second.joinedDiagnosticSent = true;
+        }
+        else if (!joined && !record.transferPendingDiagnosticSent)
+        {
+            SendCloneDiagnostic(human, "transfer ACK processed but battleground registration is pending: farTeleport=" +
+                std::to_string(clone->IsBeingTeleportedFar() ? 1 : 0) + " map=" + std::to_string(clone->GetMapId()) +
+                " invited=" + std::to_string(clone->IsInvitedForBattlegroundInstance(record.battlegroundInstanceId) ? 1 : 0));
+
+            std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+            auto itr = g_ClonesByHuman.find(humanGuid);
+            if (itr != g_ClonesByHuman.end() && itr->second.cloneGuid == record.cloneGuid)
+                itr->second.transferPendingDiagnosticSent = true;
+        }
+
         return true;
     }
 
-    Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
     Battleground* bg = human ? GetHumanObcBattleground(human) : nullptr;
     if (!bg || bg->GetInstanceID() != record.battlegroundInstanceId)
+    {
+        SendCloneDiagnostic(human, "FAILED: human no longer resolves to the expected OBC instance.");
         return false;
+    }
 
     // Display override: show "Dark <name>" to all clients without touching the
     // varchar(12) DB name. UpdateCharacterData is an in-memory cache update that
@@ -335,6 +412,7 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
     {
         TC_LOG_ERROR("playerbots.population", "OBC clone: could not reserve a battleground queue slot for clone {}.",
             record.cloneGuid.ToString());
+        SendCloneDiagnostic(human, "FAILED: could not reserve OBC queue slot; queueType=" + std::to_string(uint32(queueTypeId)));
         return false;
     }
 
@@ -344,6 +422,9 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
     clone->SetBattlegroundId(record.battlegroundInstanceId, BATTLEGROUND_OBC);
     clone->SetBGTeam(record.oppositeTeam);
     sBattlegroundMgr->SendToBattleground(clone, record.battlegroundInstanceId, BATTLEGROUND_OBC);
+    SendCloneDiagnostic(human, "transfer dispatched: queueType=" + std::to_string(uint32(queueTypeId)) +
+        " invited=1 bgInstance=" + std::to_string(record.battlegroundInstanceId) +
+        " destinationTeam=" + std::to_string(record.oppositeTeam));
 
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);

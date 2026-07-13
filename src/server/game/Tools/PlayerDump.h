@@ -102,8 +102,13 @@ class TC_GAME_API PlayerDumpReader : public PlayerDump
         DumpReturn LoadDumpFromFile(std::string const& file, uint32 account, std::string name, ObjectGuid::LowType guid);
         DumpReturn LoadDumpFromString(std::string const& dump, uint32 account, std::string name, ObjectGuid::LowType guid);
 
+        // Server-owned virtual characters are not presented in the character
+        // selection UI and therefore are not constrained by its 10-character
+        // display limit.
+        DumpReturn LoadDumpFromStringForServer(std::string const& dump, uint32 account, std::string name, ObjectGuid::LowType guid);
+
     private:
-        DumpReturn LoadDump(std::istream& input, uint32 account, std::string name, ObjectGuid::LowType guid);
+        DumpReturn LoadDump(std::istream& input, uint32 account, std::string name, ObjectGuid::LowType guid, bool enforceCharacterLimit);
 };
 
 #endif

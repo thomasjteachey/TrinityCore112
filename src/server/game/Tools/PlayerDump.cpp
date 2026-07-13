@@ -761,10 +761,9 @@ inline void FixNULLfields(std::string& line)
     }
 }
 
-DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::string name, ObjectGuid::LowType guid)
+DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::string name, ObjectGuid::LowType guid, bool enforceCharacterLimit)
 {
-    uint32 charcount = AccountMgr::GetCharactersCount(account);
-    if (charcount >= 10)
+    if (enforceCharacterLimit && AccountMgr::GetCharactersCount(account) >= 10)
         return DUMP_TOO_MANY_CHARS;
 
     std::string newguid, chraccount;
@@ -971,7 +970,13 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
 DumpReturn PlayerDumpReader::LoadDumpFromString(std::string const& dump, uint32 account, std::string name, ObjectGuid::LowType guid)
 {
     std::istringstream input(dump);
-    return LoadDump(input, account, name, guid);
+    return LoadDump(input, account, name, guid, true);
+}
+
+DumpReturn PlayerDumpReader::LoadDumpFromStringForServer(std::string const& dump, uint32 account, std::string name, ObjectGuid::LowType guid)
+{
+    std::istringstream input(dump);
+    return LoadDump(input, account, name, guid, false);
 }
 
 DumpReturn PlayerDumpReader::LoadDumpFromFile(std::string const& file, uint32 account, std::string name, ObjectGuid::LowType guid)
@@ -979,5 +984,5 @@ DumpReturn PlayerDumpReader::LoadDumpFromFile(std::string const& file, uint32 ac
     std::ifstream input(file);
     if (!input)
         return DUMP_FILE_OPEN_ERROR;
-    return LoadDump(input, account, name, guid);
+    return LoadDump(input, account, name, guid, true);
 }
