@@ -24,6 +24,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "ObjectMgr.h"
+#include "Pet.h"
 #include "Player.h"
 #include "SharedDefines.h"
 #include "SpellAuras.h"
@@ -196,6 +197,133 @@ void CopySpellsTalentsAndGlyphs(Player* clone, Player* human)
     clone->ApplyGlyphAuras();
 }
 
+bool CreateHunterPetMirror(Player* clone, Pet* sourcePet, std::string& failure)
+{
+    if (!clone || !sourcePet || sourcePet->getPetType() != HUNTER_PET)
+        return true;
+
+    CreatureTemplate const* creatureTemplate = sourcePet->GetCreatureTemplate();
+    if (!creatureTemplate)
+    {
+        failure = "source hunter pet has no creature template";
+        return false;
+    }
+
+    Map* map = clone->FindMap();
+    if (!map || !clone->IsInWorld())
+    {
+        failure = "clone is not in its battleground map yet";
+        return false;
+    }
+
+    PetStable& petStable = clone->GetOrInitPetStable();
+    if (petStable.CurrentPet)
+    {
+        failure = "clone pet stable already contains a current pet";
+        return false;
+    }
+
+    std::unique_ptr<Pet> pet = std::make_unique<Pet>(clone, HUNTER_PET);
+    if (!pet->CreateBaseAtCreatureInfo(creatureTemplate, clone))
+    {
+        failure = "Pet::CreateBaseAtCreatureInfo failed";
+        return false;
+    }
+
+    pet->SetCreatorGUID(clone->GetGUID());
+    pet->SetFaction(clone->GetFaction());
+    pet->SetCreatedBySpell(sourcePet->GetUInt32Value(UNIT_CREATED_BY_SPELL));
+    pet->ReplaceAllUnitFlags(UNIT_FLAG_PLAYER_CONTROLLED);
+
+    uint8 const petLevel = sourcePet->GetLevel();
+    if (!pet->InitStatsForLevel(petLevel))
+    {
+        failure = "Pet::InitStatsForLevel failed";
+        return false;
+    }
+
+    uint32 const petNumber = sObjectMgr->GeneratePetNumber();
+    pet->GetCharmInfo()->SetPetNumber(petNumber, true);
+    pet->GetCharmInfo()->InitPetActionBar();
+    pet->SetName(sourcePet->GetName());
+    pet->SetNativeDisplayId(sourcePet->GetNativeDisplayId());
+    pet->SetDisplayId(sourcePet->GetDisplayId());
+    pet->SetReactState(sourcePet->GetReactState());
+    pet->SetPetNameTimestamp(sourcePet->GetUInt32Value(UNIT_FIELD_PET_NAME_TIMESTAMP));
+    pet->SetPetExperience(sourcePet->GetUInt32Value(UNIT_FIELD_PETEXPERIENCE));
+    pet->SetPetNextLevelExperience(sourcePet->GetUInt32Value(UNIT_FIELD_PETNEXTLEVELEXP));
+
+    pet->RemoveAllAuras();
+    pet->m_spells.clear();
+    pet->m_autospells.clear();
+    pet->m_teachspells = sourcePet->m_teachspells;
+    pet->m_usedTalentCount = 0;
+    for (auto const& [spellId, petSpell] : sourcePet->m_spells)
+    {
+        if (petSpell.state == PETSPELL_REMOVED)
+            continue;
+
+        pet->addSpell(spellId, petSpell.active, PETSPELL_NEW, petSpell.type);
+    }
+
+    for (uint8 slot = ACTION_BAR_INDEX_START; slot < ACTION_BAR_INDEX_END; ++slot)
+    {
+        UnitActionBarEntry const* sourceAction = sourcePet->GetCharmInfo()->GetActionBarEntry(slot);
+        pet->GetCharmInfo()->SetActionBar(slot, sourceAction->GetAction(), sourceAction->GetType());
+    }
+
+    pet->CastPetAuras(false);
+    pet->SetFullHealth();
+    for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
+        if (pet->GetMaxPower(Powers(power)))
+            pet->SetFullPower(Powers(power));
+    pet->SetPower(POWER_HAPPINESS, sourcePet->GetPower(POWER_HAPPINESS));
+
+    Pet* petRaw = pet.get();
+    if (!map->AddToMap(petRaw->ToCreature()))
+    {
+        failure = "battleground map rejected the hunter pet";
+        return false;
+    }
+
+    pet->FillPetInfo(&petStable.CurrentPet.emplace());
+    clone->SetMinion(petRaw, true);
+    pet.release();
+    return true;
+}
+
+void SynchronizeHunterPetMirror(Player* human, Player* clone)
+{
+    if (!human || !clone || human->GetClass() != CLASS_HUNTER || clone->GetClass() != CLASS_HUNTER)
+        return;
+
+    Pet* sourcePet = human->GetPet();
+    if (sourcePet && sourcePet->getPetType() != HUNTER_PET)
+        sourcePet = nullptr;
+
+    Pet* clonePet = clone->GetPet();
+    if (clonePet && (!sourcePet || clonePet->GetEntry() != sourcePet->GetEntry()))
+    {
+        clone->RemovePet(clonePet, PET_SAVE_AS_DELETED);
+        clonePet = nullptr;
+    }
+
+    if (!sourcePet || clonePet)
+        return;
+
+    std::string failure;
+    if (!CreateHunterPetMirror(clone, sourcePet, failure))
+    {
+        SendCloneDiagnostic(human, "FAILED: hunter pet mirror: " + failure);
+        return;
+    }
+
+    Pet* mirroredPet = clone->GetPet();
+    SendCloneDiagnostic(human, "hunter pet JOIN CONFIRMED: sourcePetGuid=" + sourcePet->GetGUID().ToString() +
+        " clonePetGuid=" + (mirroredPet ? mirroredPet->GetGUID().ToString() : std::string("missing")) +
+        " entry=" + std::to_string(sourcePet->GetEntry()) + " name=" + sourcePet->GetName());
+}
+
 void DestroyUnseatedClone(std::unique_ptr<WorldSession>& session, Player* clone)
 {
     if (!clone)
@@ -306,6 +434,7 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
+    SynchronizeHunterPetMirror(human, clone);
 
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
@@ -454,6 +583,24 @@ void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
         {
             TC_LOG_WARN("playerbots.population", "OBC clone: human {} changed battleground instances unexpectedly; rebuilding clone.", humanGuid.ToString());
             TeardownCloneForHuman(humanGuid);
+        }
+        else
+        {
+            ObcCloneRecord record;
+            bool foundRecord = false;
+            {
+                std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+                auto itr = g_ClonesByHuman.find(humanGuid);
+                if (itr != g_ClonesByHuman.end())
+                {
+                    record = itr->second;
+                    foundRecord = true;
+                }
+            }
+
+            if (foundRecord)
+                if (Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid))
+                    SynchronizeHunterPetMirror(human, clone);
         }
     }
 

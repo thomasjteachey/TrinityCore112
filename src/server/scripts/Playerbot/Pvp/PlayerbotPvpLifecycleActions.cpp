@@ -701,9 +701,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         (void)throttleMs;
     }
 
-    void WhisperRehgarMovementGuardDiagnostic(Player* player, char const* phase, uint32 throttleMs = 100)
+    void EmitRehgarMovementGuardServerDiagnostic(Player* player, char const* phase, uint32 throttleMs = 100)
     {
-        if (!player || player->GetClass() != CLASS_SHAMAN || player->GetShapeshiftForm() != FORM_GHOSTWOLF)
+        if (!playerbot::PvpClassActions::AreRehgarMovementDiagnosticsEnabled() ||
+            !player || player->GetClass() != CLASS_SHAMAN || player->GetShapeshiftForm() != FORM_GHOSTWOLF)
             return;
 
         static std::unordered_map<uint64, uint32> lastWhisperMsByGuid;
@@ -717,6 +718,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         bool const hasSpline = player->movespline != nullptr;
         std::ostringstream os;
         os << "REHGAR DIAG: lifecycle phase=" << (phase ? phase : "unknown")
+           << " bot=" << player->GetName()
+           << " guid=" << player->GetGUID().ToString()
            << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
            << " spline=" << (hasSpline ? "yes" : "no")
            << " initialized=" << (hasSpline && player->movespline->Initialized() ? "yes" : "no")
@@ -726,21 +729,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
            << " jumping=" << (player->HasUnitState(UNIT_STATE_JUMPING) ? "yes" : "no");
 
         std::string const message = os.str();
-        if (player->duel && player->duel->Opponent)
-            player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
-
-        Map* map = player->FindMap();
-        if (!map)
-            return;
-
-        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
         {
-            Player* observer = itr->GetSource();
-            if (!observer || !observer->IsGameMaster())
-                continue;
-            if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
-                continue;
-            player->Whisper(message, LANG_UNIVERSAL, observer);
+            WorldSession* session = sessionPair.second;
+            Player* observer = session ? session->GetPlayer() : nullptr;
+            if (observer && (observer->IsGameMaster() || session->GetSecurity() > SEC_PLAYER))
+                ChatHandler(session).SendSysMessage(message);
         }
     }
 
@@ -1208,7 +1202,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
         if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
         {
-            WhisperRehgarMovementGuardDiagnostic(player, "movepoint_blocked_effect");
+            EmitRehgarMovementGuardServerDiagnostic(player, "movepoint_blocked_effect");
             return true;
         }
 
@@ -1887,7 +1881,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // positioning movement until the charge spline itself completes.
         if (HasPlayerbotGapCloserInFlight(player))
         {
-            WhisperRehgarMovementGuardDiagnostic(player, "movement_blocked_effect");
+            EmitRehgarMovementGuardServerDiagnostic(player, "movement_blocked_effect");
             return false;
         }
 
@@ -3765,7 +3759,7 @@ namespace playerbot
         // the spline lands.
         if (HasPlayerbotGapCloserInFlight(player))
         {
-            WhisperRehgarMovementGuardDiagnostic(player, "engage_blocked_effect");
+            EmitRehgarMovementGuardServerDiagnostic(player, "engage_blocked_effect");
             return true;
         }
 

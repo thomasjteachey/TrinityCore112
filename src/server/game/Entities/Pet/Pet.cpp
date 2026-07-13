@@ -472,6 +472,8 @@ void Pet::SavePetToDB(PetSaveMode mode)
         return;
 
     Player* owner = GetOwner();
+    if (owner && owner->GetSession() && owner->GetSession()->IsTransientPlayerSession())
+        return;
 
     // not save pet as current if another pet temporary unsummoned
     if (mode == PET_SAVE_AS_CURRENT && owner->GetTemporaryUnsummonedPetNumber() &&

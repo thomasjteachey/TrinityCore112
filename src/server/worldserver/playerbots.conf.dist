@@ -106,6 +106,14 @@ Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
 
 Playerbot.PvpClassSpells.Enable = 0
 
+#    Playerbot.PvpClassSpells.RehgarMovementDiagnostics
+#        Description: Sends Rehgar's Fury movement diagnostics as server system messages
+#                     to every online GM. Disable after capturing the live movement trace.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+Playerbot.PvpClassSpells.RehgarMovementDiagnostics = 1
+
 #    Playerbot.RandomPopulation.Enable
 #        Description: Enables random-bot population manager orchestration. When enabled and runtime started,
 #                     periodic rebalance ticks evaluate online random-bot count (bots are always identified as

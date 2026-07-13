@@ -31,6 +31,8 @@ namespace playerbot
 class PvpClassActions
 {
 public:
+    static bool AreRehgarMovementDiagnosticsEnabled();
+
     static bool Execute(Player* player, PvpClassSpellContext const& context);
     static bool IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId);
     static void RegisterWarlockCurseTargetCooldown(Player const* player, Unit const* target, uint32 spellId, std::chrono::seconds cooldown);

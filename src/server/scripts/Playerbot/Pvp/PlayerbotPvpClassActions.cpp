@@ -16,6 +16,8 @@
  */
 
 #include "PlayerbotPvpClassActions.h"
+#include "Chat.h"
+#include "Configuration/Config.h"
 #include "GameTime.h"
 #include "Item.h"
 #include "ObjectAccessor.h"
@@ -38,6 +40,7 @@
 #include "SpellMgr.h"
 #include "SpellHistory.h"
 #include "Unit.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <array>
@@ -3334,7 +3337,9 @@ std::string BuildRehgarsFuryMovementDiagnostic(Player const* player, Unit const*
 
     MotionMaster const* motionMaster = player->GetMotionMaster();
     bool const hasSpline = player->movespline != nullptr;
-    os << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
+    os << " bot=" << player->GetName()
+       << " guid=" << player->GetGUID().ToString()
+       << " motion=" << uint32(motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE)
        << " spline=" << (hasSpline ? "yes" : "no")
        << " initialized=" << (hasSpline && player->movespline->Initialized() ? "yes" : "no")
        << " finalized=" << (hasSpline && player->movespline->Finalized() ? "yes" : "no")
@@ -3343,7 +3348,8 @@ std::string BuildRehgarsFuryMovementDiagnostic(Player const* player, Unit const*
        << " jumping=" << (player->HasUnitState(UNIT_STATE_JUMPING) ? "yes" : "no")
        << " form=" << uint32(player->GetShapeshiftForm())
        << " fury_cd=" << (player->GetSpellHistory()->HasCooldown(82419) ? "yes" : "no")
-       << " ghost_wolf_cd=" << (player->GetSpellHistory()->HasCooldown(2645) ? "yes" : "no");
+       << " ghost_wolf_cd=" << (player->GetSpellHistory()->HasCooldown(2645) ? "yes" : "no")
+       << " pos=" << player->GetPositionX() << ',' << player->GetPositionY() << ',' << player->GetPositionZ();
 
     if (target)
         os << " target=" << target->GetGUID().ToString() << " dist=" << player->GetDistance(target);
@@ -3351,12 +3357,20 @@ std::string BuildRehgarsFuryMovementDiagnostic(Player const* player, Unit const*
     return os.str();
 }
 
-void WhisperRehgarsFuryMovementDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr)
+void EmitRehgarsFuryServerDiagnostic(Player* player, Unit* target, char const* phase, char const* extra = nullptr)
 {
-    if (!player || player->GetClass() != CLASS_SHAMAN)
+    if (!playerbot::PvpClassActions::AreRehgarMovementDiagnosticsEnabled() ||
+        !player || player->GetClass() != CLASS_SHAMAN)
         return;
 
-    WhisperPlayerbotDiagnostic(player, BuildRehgarsFuryMovementDiagnostic(player, target, phase, extra));
+    std::string const message = BuildRehgarsFuryMovementDiagnostic(player, target, phase, extra);
+    for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
+    {
+        WorldSession* session = sessionPair.second;
+        Player* observer = session ? session->GetPlayer() : nullptr;
+        if (observer && (observer->IsGameMaster() || session->GetSecurity() > SEC_PLAYER))
+            ChatHandler(session).SendSysMessage(message);
+    }
 }
 
 void ScheduleRehgarsFuryMovementDiagnostics(Player* player, Unit* target)
@@ -3376,7 +3390,7 @@ void ScheduleRehgarsFuryMovementDiagnostics(Player* player, Unit* target)
 
             Unit* chargeTarget = targetGuid ? ObjectAccessor::GetUnit(*shaman, targetGuid) : nullptr;
             std::string const extra = "delay_ms=" + std::to_string(delayMs);
-            WhisperRehgarsFuryMovementDiagnostic(shaman, chargeTarget, "post_cast_snapshot", extra.c_str());
+            EmitRehgarsFuryServerDiagnostic(shaman, chargeTarget, "post_cast_snapshot", extra.c_str());
         }, std::chrono::milliseconds(delayMs));
     }
 }
@@ -4908,7 +4922,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     else if (resolvedSpellId == 82419 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && target)
     {
         Position dest = target->GetPosition();
-        WhisperRehgarsFuryMovementDiagnostic(player, target, "pre_cast");
+        EmitRehgarsFuryServerDiagnostic(player, target, "pre_cast");
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
     }
     else if (itemTarget)
@@ -4921,7 +4935,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         NotifyWandDiagnostic(player, target, "cast_ok", resolvedSpellId);
         if (resolvedSpellId == 82419)
         {
-            WhisperRehgarsFuryMovementDiagnostic(player, target, "cast_ok");
+            EmitRehgarsFuryServerDiagnostic(player, target, "cast_ok");
             ScheduleRehgarsFuryMovementDiagnostics(player, target);
         }
         if (isHunterStationaryCastTimeAction)
@@ -4939,7 +4953,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         EnumText const wandCastResultText = EnumUtils::ToString(castResult);
         NotifyWandDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
         if (resolvedSpellId == 82419)
-            WhisperRehgarsFuryMovementDiagnostic(player, target, "cast_failed", wandCastResultText.Title);
+            EmitRehgarsFuryServerDiagnostic(player, target, "cast_failed", wandCastResultText.Title);
         if (isHunterStationaryCastTimeAction)
             WhisperHunterCastDiagnostic(player, target, "cast_failed", resolvedSpellId, wandCastResultText.Title);
     }
@@ -5130,10 +5144,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     }
 
     // Charge/Intercept target switching: preserve the intended enemy target in
-    // selection/combat context, but do not immediately override an active
-    // charge movement generator. For playerbot sessions an eager Attack() call
-    // can replace the charge spline with chase in the same tick, which looks
-    // like "charge debuff landed but the warrior never moved".
+    // selection/combat context, but do not override effect movement with the
+    // melee chase installed by Attack(). In particular, the old fixed 250 ms
+    // callback did not re-check the movement generator when it fired, so longer
+    // Rehgar's Fury jumps were consistently replaced mid-flight.
     if (hasChargeEffect &&
         context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
         target && target->IsAlive())
@@ -5141,7 +5155,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         player->SetSelection(target->GetGUID());
         if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
         {
-            if (HasActiveMovementEffectSpline(player))
+            WorldSession* session = player->GetSession();
+            if (session && session->IsVirtualSession())
             {
                 ObjectGuid const playerGuid = player->GetGUID();
                 ObjectGuid const targetGuid = target->GetGUID();
@@ -5155,9 +5170,23 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     if (!delayedTarget || !delayedTarget->IsAlive())
                         return;
 
+                    // Arrival handlers and the normal playerbot lifecycle start
+                    // melee after the effect completes. Never replace a queued
+                    // or active effect generator just because this timer fired.
+                    if (HasActiveMovementEffectSpline(delayedAttacker))
+                    {
+                        EmitRehgarsFuryServerDiagnostic(delayedAttacker, delayedTarget,
+                            "delayed_attack_suppressed_active_effect");
+                        return;
+                    }
+
                     if (delayedAttacker->GetVictim() != delayedTarget || !delayedAttacker->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
+                    {
+                        EmitRehgarsFuryServerDiagnostic(delayedAttacker, delayedTarget,
+                            "delayed_attack_started_no_effect");
                         delayedAttacker->Attack(delayedTarget, true);
-                }, std::chrono::milliseconds(250));
+                    }
+                }, std::chrono::milliseconds(100));
             }
             else
                 player->Attack(target, true);
@@ -5266,6 +5295,11 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
 
 namespace playerbot
 {
+bool PvpClassActions::AreRehgarMovementDiagnosticsEnabled()
+{
+    return sConfigMgr->GetBoolDefault("Playerbot.PvpClassSpells.RehgarMovementDiagnostics", true);
+}
+
 bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, Unit const* target, uint32 spellId)
 {
     if (!player || !target || !spellId)
