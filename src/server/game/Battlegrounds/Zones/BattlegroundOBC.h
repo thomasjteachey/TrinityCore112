@@ -14,6 +14,7 @@
 
 #include "Battleground.h"
 #include "BattlegroundScore.h"
+#include "Object.h"
 
 enum BG_OBC_WorldStates
 {

@@ -4,6 +4,7 @@
 #include "DBCStores.h"
 #include "GameObject.h"
 #include "Log.h"
+#include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "World.h"
