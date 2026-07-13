@@ -84,7 +84,10 @@ bool IsCrowdControlledForLifecyclePause(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    return player->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
+    // UNIT_STATE_LOST_CONTROL also includes CHARGING and JUMPING. Those are
+    // legitimate effect-driven movement states, not crowd control; treating
+    // them as CC makes the 50 ms lifecycle tick clear charge/leap generators.
+    return player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||

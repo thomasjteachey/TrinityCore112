@@ -2769,7 +2769,9 @@ bool IsCrowdControlledForAction(Player const* player)
         (1u << MECHANIC_HORROR) |
         (1u << MECHANIC_SAPPED);
 
-    bool const hasLostControlState = player->HasUnitState(UNIT_STATE_LOST_CONTROL);
+    // LOST_CONTROL includes the normal CHARGING/JUMPING states used by
+    // effect movement. Only the actual controlled/possessed subset is CC.
+    bool const hasControlState = player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED);
     bool const hasHardCcState = player->HasUnitState(UNIT_STATE_STUNNED) ||
         player->HasUnitState(UNIT_STATE_CONFUSED) ||
         player->HasUnitState(UNIT_STATE_FLEEING);
@@ -2777,7 +2779,7 @@ bool IsCrowdControlledForAction(Player const* player)
         player->HasAuraWithMechanic(ccMechanicMask) ||
         player->IsPolymorphed();
 
-    return hasLostControlState || hasHardCcState || hasCcAura;
+    return hasControlState || hasHardCcState || hasCcAura;
 }
 
 
