@@ -536,7 +536,7 @@ void Player::CleanupsBeforeDelete(bool finalCleanup)
             itr->second.save->RemovePlayer(this);
 }
 
-bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo)
+bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems)
 {
     //FIXME: outfitId not used in player creating
     /// @todo need more checks against packet modifications
@@ -675,75 +675,78 @@ bool Player::Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo
         addActionButton(action_itr->button, action_itr->action, action_itr->type);
 
     // original items
-    if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
+    if (createStarterItems)
     {
-        for (int j = 0; j < MAX_OUTFIT_ITEMS; ++j)
+        if (CharStartOutfitEntry const* oEntry = GetCharStartOutfitEntry(createInfo->Race, createInfo->Class, createInfo->Gender))
         {
-            if (oEntry->ItemID[j] <= 0)
-                continue;
-
-            uint32 itemId = oEntry->ItemID[j];
-
-            // just skip, reported in ObjectMgr::LoadItemTemplates
-            ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
-            if (!iProto)
-                continue;
-
-            // BuyCount by default
-            uint32 count = iProto->BuyCount;
-
-            // special amount for food/drink
-            if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
+            for (int j = 0; j < MAX_OUTFIT_ITEMS; ++j)
             {
-                switch (iProto->Spells[0].SpellCategory)
+                if (oEntry->ItemID[j] <= 0)
+                    continue;
+
+                uint32 itemId = oEntry->ItemID[j];
+
+                // just skip, reported in ObjectMgr::LoadItemTemplates
+                ItemTemplate const* iProto = sObjectMgr->GetItemTemplate(itemId);
+                if (!iProto)
+                    continue;
+
+                // BuyCount by default
+                uint32 count = iProto->BuyCount;
+
+                // special amount for food/drink
+                if (iProto->Class == ITEM_CLASS_CONSUMABLE && iProto->SubClass == ITEM_SUBCLASS_FOOD)
                 {
-                case SPELL_CATEGORY_FOOD:                                // food
-                    count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
-                    break;
-                case SPELL_CATEGORY_DRINK:                                // drink
-                    count = 2;
-                    break;
+                    switch (iProto->Spells[0].SpellCategory)
+                    {
+                    case SPELL_CATEGORY_FOOD:                                // food
+                        count = GetClass() == CLASS_DEATH_KNIGHT ? 10 : 4;
+                        break;
+                    case SPELL_CATEGORY_DRINK:                                // drink
+                        count = 2;
+                        break;
+                    }
+                    if (iProto->GetMaxStackSize() < count)
+                        count = iProto->GetMaxStackSize();
                 }
-                if (iProto->GetMaxStackSize() < count)
-                    count = iProto->GetMaxStackSize();
+                StoreNewItemInBestSlots(itemId, count);
             }
-            StoreNewItemInBestSlots(itemId, count);
         }
-    }
 
-    for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
-        StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
+        for (PlayerCreateInfoItems::const_iterator item_id_itr = info->item.begin(); item_id_itr != info->item.end(); ++item_id_itr)
+            StoreNewItemInBestSlots(item_id_itr->item_id, item_id_itr->item_amount);
 
-    // bags and main-hand weapon must equipped at this moment
-    // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
-    // or ammo not equipped in special bag
-    for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; i++)
-    {
-        if (Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
+        // bags and main-hand weapon must equipped at this moment
+        // now second pass for not equipped (offhand weapon/shield if it attempt equipped before main-hand weapon)
+        // or ammo not equipped in special bag
+        for (uint8 i = INVENTORY_SLOT_ITEM_START; i < INVENTORY_SLOT_ITEM_END; i++)
         {
-            uint16 eDest;
-            // equip offhand weapon/shield if it attempt equipped before main-hand weapon
-            InventoryResult msg = CanEquipItem(NULL_SLOT, eDest, pItem, false);
-            if (msg == EQUIP_ERR_OK)
+            if (Item* pItem = GetItemByPos(INVENTORY_SLOT_BAG_0, i))
             {
-                RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
-                EquipItem(eDest, pItem, true);
-            }
-            // move other items to more appropriate slots (ammo not equipped in special bag)
-            else
-            {
-                ItemPosCountVec sDest;
-                msg = CanStoreItem(NULL_BAG, NULL_SLOT, sDest, pItem, false);
+                uint16 eDest;
+                // equip offhand weapon/shield if it attempt equipped before main-hand weapon
+                InventoryResult msg = CanEquipItem(NULL_SLOT, eDest, pItem, false);
                 if (msg == EQUIP_ERR_OK)
                 {
                     RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
-                    StoreItem(sDest, pItem, true);
+                    EquipItem(eDest, pItem, true);
                 }
+                // move other items to more appropriate slots (ammo not equipped in special bag)
+                else
+                {
+                    ItemPosCountVec sDest;
+                    msg = CanStoreItem(NULL_BAG, NULL_SLOT, sDest, pItem, false);
+                    if (msg == EQUIP_ERR_OK)
+                    {
+                        RemoveItem(INVENTORY_SLOT_BAG_0, i, true);
+                        StoreItem(sDest, pItem, true);
+                    }
 
-                // if  this is ammo then use it
-                msg = CanUseAmmo(pItem->GetEntry());
-                if (msg == EQUIP_ERR_OK)
-                    SetAmmo(pItem->GetEntry());
+                    // if  this is ammo then use it
+                    msg = CanUseAmmo(pItem->GetEntry());
+                    if (msg == EQUIP_ERR_OK)
+                        SetAmmo(pItem->GetEntry());
+                }
             }
         }
     }
@@ -7263,6 +7266,9 @@ void Player::ModifyHonorPoints(int32 value, CharacterDatabaseTransaction trans, 
     if (value > 0)
         AddWeeklyHonorPoints(uint32(value), trans);
 
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_HONOR_POINTS);
     stmt->setUInt32(0, newValue);
     stmt->setUInt32(1, GetGUID().GetCounter());
@@ -7299,6 +7305,9 @@ void Player::ModifyArenaPoints(int32 value, CharacterDatabaseTransaction trans)
     if (newValue < 0)
         newValue = 0;
     SetArenaPoints(uint32(newValue));
+
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
 
     if (trans)
     {
@@ -17826,16 +17835,8 @@ bool Player::IsLoading() const
     return GetSession()->PlayerLoading();
 }
 
-bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, std::string* failureReason)
+bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder)
 {
-    auto fail = [failureReason](std::string reason)
-    {
-        if (failureReason)
-            *failureReason = std::move(reason);
-
-        return false;
-    };
-
     //                                                       0     1        2     3     4      5       6      7   8      9     10    11         12         13           14         15         16
     //QueryResult* result = CharacterDatabase.PQuery("SELECT guid, account, name, race, class, gender, level, xp, money, skin, face, hairStyle, hairColor, facialStyle, bankSlots, restState, playerFlags, "
     // 17          18          19          20   21           22        23         24         25         26          27           28                 29
@@ -17852,7 +17853,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         std::string name = "<unknown>";
         sCharacterCache->GetCharacterNameByGuid(guid, name);
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player '{}' ({}) not found in table `characters`, can't load. ", name, guid.ToString());
-        return fail("character row was not returned by the login query");
+        return false;
     }
 
     Field* fields = result->Fetch();
@@ -17864,13 +17865,13 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (dbAccountId != GetSession()->GetAccountId())
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) loading from wrong account (is: {}, should be: {})", guid.ToString(), GetSession()->GetAccountId(), dbAccountId);
-        return fail("character belongs to a different account");
+        return false;
     }
 
     if (holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_BANNED))
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) is banned, can't load.", guid.ToString());
-        return fail("character is banned");
+        return false;
     }
 
     Object::_Create(guid.GetCounter(), 0, HighGuid::Player);
@@ -17885,14 +17886,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         stmt->setUInt16(0, uint16(AT_LOGIN_RENAME));
         stmt->setUInt32(1, guid.GetCounter());
         CharacterDatabase.Execute(stmt);
-        return fail("character name is invalid or reserved: " + m_name);
+        return false;
     }
 
     Gender gender = Gender(fields[5].GetUInt8());
     if (!IsValidGender(gender))
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) has wrong gender ({}), can't load.", guid.ToString(), uint32(gender));
-        return fail("character has an invalid gender value");
+        return false;
     }
 
     SetRace(fields[3].GetUInt8());
@@ -17904,7 +17905,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (!info)
     {
         TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player ({}) has wrong race/class ({}/{}), can't load.", guid.ToString(), GetRace(), GetClass());
-        return fail("character has an invalid race/class combination");
+        return false;
     }
 
     SetLevel(fields[6].GetUInt8(), false);
@@ -17981,7 +17982,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
 
     // load home bind and check in same time class/race pair, it used later for restore broken positions
     if (!_LoadHomeBind(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_HOME_BIND)))
-        return fail("character homebind could not be loaded");
+        return false;
 
     InitPrimaryProfessions();                               // to max set before any spell loaded
 
@@ -18284,7 +18285,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
         {
             TC_LOG_ERROR("entities.player.loading", "Player::LoadFromDB: Player '{}' ({}) Map: {}, X: {}, Y: {}, Z: {}, O: {}. Invalid default map coordinates or instance couldn't be created.",
                 m_name, guid.ToString(), mapId, GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation());
-            return fail("the character's fallback map could not be created");
+            return false;
         }
     }
 
@@ -18337,7 +18338,7 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     if (HasAtLoginFlag(AT_LOGIN_RENAME))
     {
         TC_LOG_ERROR("entities.player.cheat", "Player::LoadFromDB: Player ({}) tried to login while forced to rename, can't load.'", GetGUID().ToString());
-        return fail("character has AT_LOGIN_RENAME set");
+        return false;
     }
 
     // Honor system
@@ -19986,6 +19987,11 @@ bool Player::_LoadHomeBind(PreparedQueryResult result)
 
 void Player::SaveToDB(bool create /*=false*/)
 {
+    // In-memory server actors deliberately have no character row. This guard
+    // also protects them from periodic ObjectAccessor::SaveAllPlayers calls.
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
 
     SaveToDB(trans, create);
@@ -19995,6 +20001,9 @@ void Player::SaveToDB(bool create /*=false*/)
 
 void Player::SaveToDB(CharacterDatabaseTransaction trans, bool create /* = false */)
 {
+    if (GetSession() && GetSession()->IsTransientPlayerSession())
+        return;
+
     // delay auto save at any saves (manual, in code, or autosave)
     m_nextSave = sWorld->getIntConfig(CONFIG_INTERVAL_SAVE);
 
@@ -23366,6 +23375,9 @@ void Player::ReportedAfkBy(Player* reporter)
         return;
 
     WorldSession const* session = GetSession();
+    if (session && session->IsTransientPlayerSession())
+        return;
+
     if (session && session->IsVirtualSession())
     {
         if (!HasAura(SPELL_BATTLEGROUND_IDLE) && !HasAura(SPELL_BATTLEGROUND_INACTIVE))

@@ -934,7 +934,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void SendSummonRequestFrom(Unit* summoner);
         void SummonIfPossible(bool agree);
 
-        bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo);
+        bool Create(ObjectGuid::LowType guidlow, CharacterCreateInfo* createInfo, bool createStarterItems = true);
 
         void Update(uint32 time) override;
 
@@ -1360,7 +1360,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         /***                   LOAD SYSTEM                     ***/
         /*********************************************************/
 
-        bool LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, std::string* failureReason = nullptr);
+        bool LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder);
         bool IsLoading() const override;
 
         void Initialize(ObjectGuid::LowType guid);
@@ -1501,6 +1501,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void LoadActions(PreparedQueryResult result);
 
         void InitGlyphsForLevel();
+        void ApplyGlyphAuras() { _LoadGlyphAuras(); }
         void SetGlyphSlot(uint8 slot, uint32 slottype) { SetUInt32Value(PLAYER_FIELD_GLYPH_SLOTS_1 + slot, slottype); }
         uint32 GetGlyphSlot(uint8 slot) { return GetUInt32Value(PLAYER_FIELD_GLYPH_SLOTS_1 + slot); }
         void SetGlyph(uint8 slot, uint32 glyph);

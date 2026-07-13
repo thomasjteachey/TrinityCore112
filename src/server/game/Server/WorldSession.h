@@ -31,7 +31,6 @@
 #include "Packet.h"
 #include "SharedDefines.h"
 #include <boost/circular_buffer_fwd.hpp>
-#include <functional>
 #include <string>
 #include <map>
 #include <memory>
@@ -444,9 +443,10 @@ class TC_GAME_API WorldSession
         bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
         bool PlayerDisconnected() const { return !m_Socket; }
         bool IsVirtualSession() const { return m_virtualSession; }
+        bool IsTransientPlayerSession() const { return m_transientPlayerSession; }
+        void SetTransientPlayerSession(bool transient = true) { m_transientPlayerSession = transient; }
         uint32 GetSessionMapKey() const { return m_sessionMapKey; }
         void SetSessionMapKey(uint32 key) { m_sessionMapKey = key; }
-        void SetPlayerLoginResultCallback(std::function<void(bool, std::string const&)> callback) { m_playerLoginResultCallback = std::move(callback); }
 
         void ReadAddonsInfo(ByteBuffer& data);
         void SendAddonsInfo();
@@ -1230,6 +1230,7 @@ class TC_GAME_API WorldSession
         Player* _player;
         std::shared_ptr<WorldSocket> m_Socket;
         bool m_virtualSession;
+        bool m_transientPlayerSession;
         std::string m_Address;                              // Current Remote Address
      // std::string m_LAddress;                             // Last Attempted Remote Adress - we can not set attempted ip for a non-existing session!
 
@@ -1245,7 +1246,6 @@ class TC_GAME_API WorldSession
         time_t _logoutTime;
         bool m_inQueue;                                     // session wait in auth.queue
         bool m_playerLoading;                               // code processed in LoginPlayer
-        std::function<void(bool, std::string const&)> m_playerLoginResultCallback;
         bool m_playerLogout;                                // code processed in LogoutPlayer
         bool m_playerRecentlyLogout;
         bool m_playerSave;

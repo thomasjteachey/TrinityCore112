@@ -83,13 +83,16 @@ Playerbot.PvpLifecycle.QueueOnly.ArenaAccounts =
 
 Playerbot.PvpLifecycle.QueueOnly.BlackrockThroneBgTypeId = 0
 
-#    Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId
-#        Description: Account ID used for temporary "Dark <name>" character clones when a real player
-#                     enters Obsidian Colosseum. A dedicated account is recommended. Cleanup only
-#                     deletes generated clone characters whose login names begin with "Obcc".
-#                     A nonzero account ID enables OBC clones; 0 disables them.
+#    Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable
+#        Description: Creates transient "Dark <name>" player clones entirely in memory when a real
+#                     player enters Obsidian Colosseum. No account or character database rows are used.
+#                     The legacy CloneAccountId setting is accepted only as an enable/disable fallback;
+#                     its numeric value is never used as an account ID.
 #        Default:     0 (disabled)
 
+Playerbot.PvpLifecycle.ObsidianColosseum.Clone.Enable = 0
+
+# Legacy enable fallback. Nonzero enables clones only when Clone.Enable is absent.
 Playerbot.PvpLifecycle.ObsidianColosseum.CloneAccountId = 0
 
 #    Playerbot.PvpClassSpells.Enable

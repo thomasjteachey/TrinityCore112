@@ -761,9 +761,10 @@ inline void FixNULLfields(std::string& line)
     }
 }
 
-DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::string name, ObjectGuid::LowType guid, bool enforceCharacterLimit)
+DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::string name, ObjectGuid::LowType guid)
 {
-    if (enforceCharacterLimit && AccountMgr::GetCharactersCount(account) >= 10)
+    uint32 charcount = AccountMgr::GetCharactersCount(account);
+    if (charcount >= 10)
         return DUMP_TOO_MANY_CHARS;
 
     std::string newguid, chraccount;
@@ -949,14 +950,7 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
     if (input.fail() && !input.eof())
         return DUMP_FILE_BROKEN;
 
-    // Server-managed imports are logged in immediately after this method
-    // returns, so their rows must be visible before the asynchronous login
-    // query holder is dispatched. Normal administrative imports retain the
-    // queued commit behavior.
-    if (enforceCharacterLimit)
-        CharacterDatabase.CommitTransaction(trans);
-    else
-        CharacterDatabase.DirectCommitTransaction(trans);
+    CharacterDatabase.CommitTransaction(trans);
 
     // in case of name conflict player has to rename at login anyway
     sCharacterCache->AddCharacterCacheEntry(ObjectGuid(HighGuid::Player, guid), account, name, gender, race, playerClass, level);
@@ -977,13 +971,7 @@ DumpReturn PlayerDumpReader::LoadDump(std::istream& input, uint32 account, std::
 DumpReturn PlayerDumpReader::LoadDumpFromString(std::string const& dump, uint32 account, std::string name, ObjectGuid::LowType guid)
 {
     std::istringstream input(dump);
-    return LoadDump(input, account, name, guid, true);
-}
-
-DumpReturn PlayerDumpReader::LoadDumpFromStringForServer(std::string const& dump, uint32 account, std::string name, ObjectGuid::LowType guid)
-{
-    std::istringstream input(dump);
-    return LoadDump(input, account, name, guid, false);
+    return LoadDump(input, account, name, guid);
 }
 
 DumpReturn PlayerDumpReader::LoadDumpFromFile(std::string const& file, uint32 account, std::string name, ObjectGuid::LowType guid)
@@ -991,5 +979,5 @@ DumpReturn PlayerDumpReader::LoadDumpFromFile(std::string const& file, uint32 ac
     std::ifstream input(file);
     if (!input)
         return DUMP_FILE_OPEN_ERROR;
-    return LoadDump(input, account, name, guid, true);
+    return LoadDump(input, account, name, guid);
 }

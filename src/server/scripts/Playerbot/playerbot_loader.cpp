@@ -598,6 +598,11 @@ public:
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
         playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
     }
+
+    void OnShutdown() override
+    {
+        playerbot::PlayerbotObcCloneManager::OnShutdown();
+    }
 };
 
 class PlayerbotLifecyclePlayerScript final : public PlayerScript

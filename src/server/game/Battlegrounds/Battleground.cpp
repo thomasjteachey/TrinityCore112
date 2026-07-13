@@ -838,7 +838,8 @@ void Battleground::EndBattleground(uint32 winner)
         uint32 loser_money = sWorld->getIntConfig(CONFIG_CENTURION_BG_REWARD_MONEY_LOSER);
         uint32 winner_arena = player->GetRandomWinner() ? sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_LAST) : sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_FIRST);
 
-        if (isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
+        bool const transientPlayer = player->GetSession() && player->GetSession()->IsTransientPlayerSession();
+        if (!transientPlayer && isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
         {
             BattlegroundScoreMap::const_iterator score = PlayerScores.find(player->GetGUID().GetCounter());
             if (score == PlayerScores.end())

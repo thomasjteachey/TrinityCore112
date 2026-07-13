@@ -48,6 +48,7 @@
 #include "Weather.h"
 #include "WeatherMgr.h"
 #include "World.h"
+#include "WorldSession.h"
 #include <boost/heap/fibonacci_heap.hpp>
 #include <unordered_set>
 #include <vector>
@@ -4636,12 +4637,18 @@ Corpse* Map::ConvertCorpseToBones(ObjectGuid const& ownerGuid, bool insignia /*=
     if (!corpse)
         return nullptr;
 
+    Player* owner = ObjectAccessor::FindConnectedPlayer(ownerGuid);
+    bool transientOwner = owner && owner->GetSession() && owner->GetSession()->IsTransientPlayerSession();
+
     RemoveCorpse(corpse);
 
     // remove corpse from DB
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    corpse->DeleteFromDB(trans);
-    CharacterDatabase.CommitTransaction(trans);
+    if (!transientOwner)
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        corpse->DeleteFromDB(trans);
+        CharacterDatabase.CommitTransaction(trans);
+    }
 
     Corpse* bones = nullptr;
 

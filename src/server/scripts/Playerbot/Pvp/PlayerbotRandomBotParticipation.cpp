@@ -17,6 +17,7 @@
 
 #include "PlayerbotRandomBotParticipation.h"
 
+#include "PlayerbotObcClone.h"
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
@@ -937,6 +938,9 @@ ManagedBotAccountIds GetManagedBotAccountIdsSnapshot()
 
 bool IsRandomBotCandidate(Player const* player, ManagedBotAccountIds const& botAccounts)
 {
+    if (playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+        return false;
+
     return IsManagedRandomBotImpl(player, botAccounts);
 }
 
@@ -1328,6 +1332,12 @@ bool TryLogoutRandomBot(ObjectGuid const& guid)
     if (!player)
     {
         TC_LOG_WARN("playerbots.population", "Random bot logout skipped: guid {} is no longer online.", guid.ToString());
+        return false;
+    }
+
+    if (playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+    {
+        TC_LOG_WARN("playerbots.population", "Random bot logout skipped: guid {} is an in-memory OBC clone.", guid.ToString());
         return false;
     }
 

@@ -27,13 +27,13 @@ namespace playerbot
 // Obsidian Colosseum "Dark <name>" clone mirror.
 //
 // When a real human joins an in-progress Obsidian Colosseum (BATTLEGROUND_OBC)
-// instance, this manager provisions a throwaway copy of that human's character
-// - identical gear, talents, level, spells - onto a dedicated bot account, logs
-// it in on the OPPOSITE team of the same instance under normal playerbot PvP
-// control, and displays it as "Dark <name>". When the human leaves the
-// battleground (or logs out, or the match ends) the clone is removed and its
-// throwaway character is hard-deleted. A killing blow between a human and their
-// own clone grants the killer Bloodlust (2825) for 30 seconds.
+// instance, this manager creates a transient in-memory copy of that human's
+// character - gear, active talents, glyphs, level, skills, and spells - on the
+// OPPOSITE team of the same instance under normal playerbot PvP control, and
+// displays it as "Dark <name>". It has no account or character-database row.
+// When the human leaves, logs out, or the match ends, the clone is destroyed.
+// A killing blow between counterparts grants the killer Bloodlust (2825) for
+// 30 seconds.
 //
 // Everything lives in the scripts/playerbot lib and is driven by the world
 // update tick plus the OnPVPKill / OnLogout player-script hooks, so the
@@ -43,10 +43,11 @@ class PlayerbotObcCloneManager
 public:
     static void LoadConfig();
 
-    // Delete any clone characters left over from a previous run (e.g. a crash
-    // mid-match). Safe because the dedicated clone account only ever holds
-    // ephemeral clones.
+    // Compatibility hook; transient clones cannot survive a process restart.
     static void OnStartupSweep();
+
+    // Destroy transient clones while map and battleground services are still alive.
+    static void OnShutdown();
 
     // World-thread tick: provision clones for un-mirrored humans and tear down
     // clones whose human counterpart has left.
