@@ -77,6 +77,7 @@ namespace playerbot
     uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
     Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers = nullptr, uint32* attackableEnemies = nullptr);
     bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
+    bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
 }
 
 namespace
@@ -522,7 +523,6 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
     void WhisperHunterAimedLifecycleDiagnostic(Player* player, Unit* target, char const* phase, char const* extra, uint32 throttleMs);
     bool BreakExpiredHunterFeignDeath(Player* player);
     bool IssueMovePointThrottled(Player* player, Position const& destination, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
-    bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
     Position BuildFollowDestination(Player* player, Unit* target, float desiredDistance);
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold = 6.0f, uint32 minReissueMs = 2000);
     void EmitBattlegroundGmDebug(Player* bot, std::string const& detail, uint32 throttleMs);
@@ -617,7 +617,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return false;
 
         Position destination;
-        if (!TryGetObjectivePosition(battleground, player, destination))
+        if (!playerbot::TryGetObjectivePosition(battleground, player, destination))
             return false;
 
         if (player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
