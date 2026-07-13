@@ -1089,7 +1089,7 @@ std::vector<RandomBotPoolCandidate> QueryOfflinePool(RandomBotPopulationConfig c
 
     QueryResult result = CharacterDatabase.PQuery(
         "SELECT guid, account, level, race FROM characters "
-        "WHERE online = 0 AND account IN ({}) AND level >= {} AND level <= {}",
+        "WHERE online = 0 AND account IN ({}) AND name NOT LIKE 'Obcc%' AND level >= {} AND level <= {}",
         accountList, config.minLevel, config.maxLevel);
 
     if (!result)

@@ -68,7 +68,9 @@ struct ObcCloneRecord
     uint32 oppositeTeam = 0;
     uint32 battlegroundInstanceId = 0;
     uint32 virtualSessionKey = 0;
+    uint32 sessionQueuedAtMs = 0;
     uint32 loginStartedAtMs = 0;
+    bool loginDispatched = false;
     bool ported = false;
     bool invitationReserved = false;
     bool loginMaterializedDiagnosticSent = false;
@@ -177,11 +179,10 @@ uint32 AcquireCloneVirtualSessionKey(uint32 lowGuid)
     return 0;
 }
 
-// Begin logging a freshly-created clone character in on its own virtual
-// session, mirroring the managed-bot login path (see TryLoginBotCharacter in
-// PlayerbotRandomBotParticipation.cpp). Character loading is asynchronous, so
-// the Player is materialized on a later world tick.
-bool StartCloneCharacterLogin(ObjectGuid::LowType cloneLowGuid, uint32 accountId, uint32& virtualSessionKey)
+// Queue a freshly-created clone character's virtual session. World::AddSession
+// installs it at the beginning of the next world update; login is deliberately
+// dispatched only after that registration is observable through FindSession.
+bool QueueCloneCharacterSession(ObjectGuid::LowType cloneLowGuid, uint32 accountId, uint32& virtualSessionKey)
 {
     virtualSessionKey = 0;
 
@@ -206,10 +207,6 @@ bool StartCloneCharacterLogin(ObjectGuid::LowType cloneLowGuid, uint32 accountId
     session->SetSessionMapKey(virtualSessionKey);
     sWorld->AddSession(session);
     session->AllowCharacterLogin(cloneGuid);
-
-    WorldPacket loginPacket(CMSG_PLAYER_LOGIN, 8);
-    loginPacket << cloneGuid;
-    session->HandlePlayerLoginOpcode(loginPacket);
 
     return true;
 }
@@ -289,15 +286,15 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg, uint32 cloneAccount
         " cloneLowGuid=" + std::to_string(cloneLowGuid));
 
     uint32 virtualSessionKey = 0;
-    if (!StartCloneCharacterLogin(cloneLowGuid, cloneAccountId, virtualSessionKey))
+    if (!QueueCloneCharacterSession(cloneLowGuid, cloneAccountId, virtualSessionKey))
     {
-        TC_LOG_ERROR("playerbots.population", "OBC clone: failed to start login for clone character {} for human {}.", cloneLowGuid, humanGuid.ToString());
+        TC_LOG_ERROR("playerbots.population", "OBC clone: failed to queue virtual session for clone character {} for human {}.", cloneLowGuid, humanGuid.ToString());
         Player::DeleteFromDB(ObjectGuid::Create<HighGuid::Player>(cloneLowGuid), cloneAccountId, true, true);
-        SendCloneDiagnostic(human, "FAILED: could not dispatch the virtual-session login.");
+        SendCloneDiagnostic(human, "FAILED: could not queue the virtual session.");
         return false;
     }
 
-    SendCloneDiagnostic(human, "async login dispatched: virtualSessionKey=" + std::to_string(virtualSessionKey));
+    SendCloneDiagnostic(human, "virtual session queued: virtualSessionKey=" + std::to_string(virtualSessionKey));
 
     ObjectGuid const cloneGuid = ObjectGuid::Create<HighGuid::Player>(cloneLowGuid);
 
@@ -308,7 +305,7 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg, uint32 cloneAccount
         record.oppositeTeam = oppositeTeam;
         record.battlegroundInstanceId = bg->GetInstanceID();
         record.virtualSessionKey = virtualSessionKey;
-        record.loginStartedAtMs = GameTime::GetGameTimeMS();
+        record.sessionQueuedAtMs = GameTime::GetGameTimeMS();
         g_ClonesByHuman[humanGuid] = record;
         g_HumanByClone[cloneGuid] = humanGuid;
     }
@@ -330,21 +327,57 @@ bool TryFinalizeCloneForHuman(ObjectGuid humanGuid)
         record = itr->second;
     }
 
+    Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
+
+    if (!record.loginDispatched)
+    {
+        WorldSession* session = sWorld->FindSession(record.virtualSessionKey);
+        if (!session)
+        {
+            if (GameTime::GetGameTimeMS() - record.sessionQueuedAtMs >= kCloneLoginTimeoutMs)
+            {
+                SendCloneDiagnostic(human, "FAILED: virtual session was never registered; sessionKey=" +
+                    std::to_string(record.virtualSessionKey));
+                return false;
+            }
+
+            return true;
+        }
+
+        WorldPacket loginPacket(CMSG_PLAYER_LOGIN, 8);
+        loginPacket << record.cloneGuid;
+        session->HandlePlayerLoginOpcode(loginPacket);
+
+        {
+            std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+            auto itr = g_ClonesByHuman.find(humanGuid);
+            if (itr == g_ClonesByHuman.end() || itr->second.cloneGuid != record.cloneGuid)
+                return false;
+
+            itr->second.loginDispatched = true;
+            itr->second.loginStartedAtMs = GameTime::GetGameTimeMS();
+        }
+
+        SendCloneDiagnostic(human, "async login dispatched after session registration: sessionKey=" +
+            std::to_string(record.virtualSessionKey) + " playerLoading=" + std::to_string(session->PlayerLoading() ? 1 : 0));
+        return true;
+    }
+
     Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid);
     if (!clone)
     {
         if (record.ported || GameTime::GetGameTimeMS() - record.loginStartedAtMs >= kCloneLoginTimeoutMs)
         {
-            if (Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid))
-                SendCloneDiagnostic(human, "FAILED: clone Player did not materialize before timeout; cloneGuid=" +
-                    record.cloneGuid.ToString());
+            WorldSession* session = sWorld->FindSession(record.virtualSessionKey);
+            SendCloneDiagnostic(human, "FAILED: clone Player did not materialize before timeout; cloneGuid=" +
+                record.cloneGuid.ToString() + " sessionPresent=" + std::to_string(session ? 1 : 0) +
+                " playerLoading=" + std::to_string(session && session->PlayerLoading() ? 1 : 0));
             return false;
         }
 
         return true;
     }
 
-    Player* human = ObjectAccessor::FindConnectedPlayer(humanGuid);
     if (!record.loginMaterializedDiagnosticSent)
     {
         SendCloneDiagnostic(human, "login materialized: cloneGuid=" + record.cloneGuid.ToString() +
