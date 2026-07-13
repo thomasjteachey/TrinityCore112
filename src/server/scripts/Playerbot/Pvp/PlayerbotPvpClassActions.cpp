@@ -4521,6 +4521,19 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         }
     }
 
+    // Starfire (and anything else IsPlayerbotMovableCastTimeSpell allows) can
+    // be cast while moving via the caster-side snare mechanic in Spell.cpp,
+    // so unlike a normal cast-time spell the bot is not necessarily already
+    // stationary and facing the target when the cast starts - it could still
+    // be turned toward whatever direction it was last kiting. Force facing
+    // immediately before the cast attempt instead of relying on whatever
+    // orientation movement last left the bot in.
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && IsPlayerbotMovableCastTimeSpell(player, spellInfo))
+    {
+        player->SetFacingToObject(target);
+        player->SetInFront(target);
+    }
+
     NotifyWandDiagnostic(player, target, "pre_cast", resolvedSpellId);
     if (isHunterStationaryCastTimeAction)
         WhisperHunterCastDiagnostic(player, target, "pre_cast", resolvedSpellId);
@@ -5025,6 +5038,46 @@ bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player,
 bool PvpClassActions::IsPetSpellAction(Player const* player, PvpClassSpellContext const& context)
 {
     return player && context.spellId != 0 && ResolveKnownPetSpellInChain(player, context.spellId) != 0;
+}
+
+// 89784 - Shadow Wraith ("Fade"). Casting it roots the priest's own body
+// (see spell_pri_shadow_wraith_aura::OnApply in spell_priest.cpp) and hands
+// control to a summoned wraith creature via possession instead. A real
+// client automatically starts steering whatever it is possessing the moment
+// control transfers, but playerbot movement code only ever issues motion
+// orders to the Player* - the wraith itself never gets one, so it just sits
+// still, defeating the entire point of using Fade to escape melee pressure.
+// Move the possessed wraith away from the threat directly.
+bool PvpClassActions::TryIssueShadowWraithFleeMovement(Player* player, Unit* threat)
+{
+    if (!player || !player->HasAura(89784) || !threat)
+        return false;
+
+    Unit* wraith = player->GetCharmed();
+    if (!wraith || !wraith->IsAlive())
+        return false;
+
+    // Re-steering every tick would fight the wraith's own in-flight spline
+    // for no reason once it has already put real distance between itself
+    // and the threat. Only reissue while still uncomfortably close.
+    constexpr float kWraithFleeDistance = 15.0f;
+    if (wraith->GetDistance(threat) > kWraithFleeDistance)
+        return false;
+
+    float const awayAngle = wraith->GetAbsoluteAngle(threat->GetPosition()) + static_cast<float>(M_PI);
+    Position destination = wraith->GetPosition();
+    destination.RelocateOffset({ std::cos(awayAngle) * kWraithFleeDistance, std::sin(awayAngle) * kWraithFleeDistance, 0.0f, 0.0f });
+
+    float adjustedZ = destination.GetPositionZ();
+    wraith->UpdateAllowedPositionZ(destination.GetPositionX(), destination.GetPositionY(), adjustedZ);
+    destination.Relocate(destination.GetPositionX(), destination.GetPositionY(), adjustedZ, destination.GetOrientation());
+
+    MotionMaster* wraithMotionMaster = wraith->GetMotionMaster();
+    if (!wraithMotionMaster)
+        return false;
+
+    wraithMotionMaster->MovePoint(0, destination, true);
+    return true;
 }
 
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)

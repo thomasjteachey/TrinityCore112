@@ -4114,10 +4114,12 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
         (IsSpellReady(player, 12826) && !AnyEnemyPolymorphed(player, 40.0f)) ? SelectPolymorphTarget(player, target, 30.0f) : nullptr;
     // Arcane Power and Presence of Mind are off the global cooldown, so a
     // human player fires all three of these back to back. This engine can
-    // only return one decision per tick, so the three steps are sequenced by
-    // priority/aura-state instead: each becomes castable only once the
-    // previous one has landed, so they resolve across consecutive ticks
-    // rather than a single frame.
+    // only return one decision per Execute() call, so the three steps are
+    // sequenced by priority/aura-state instead: each becomes castable only
+    // once the previous one has landed. ProcessLifecycleEntryPoint's cadence
+    // bypass (triggered on spellId 12042/12043) collapses those separate
+    // calls back-to-back within the same overall update instead of waiting
+    // out the normal decision cadence between them.
     bool const arcaneBurstWindow = isArcaneMage && target && target->HealthBelowPct(50);
     bool const arcanePowerReady = arcaneBurstWindow && !HasAuraFromSpellChain(player, 12042) && IsSpellReady(player, 12042);
     bool const presenceOfMindReady = arcaneBurstWindow && player->HasAura(12042) && !player->HasAura(12043) && IsSpellReady(player, 12043);
@@ -4196,6 +4198,23 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             return { "priest flash heal", "heal lowest-health ally during spirit of redemption", 10917, playerbot::PvpClassSpellContext::TargetMode::Ally, spiritHealTarget->GetGUID() };
 
         return {};
+    }
+
+    // While Fade/Shadow Wraith (89784) is active, the priest's own body is
+    // rooted and control has transferred to a possessed wraith creature (see
+    // spell_pri_shadow_wraith_aura in spell_priest.cpp). The whole point of
+    // using it is to escape melee pressure, but nothing in the normal
+    // decision graph below ever issues the wraith a movement order - only
+    // the (now rooted) player - so steer it explicitly here instead. The
+    // drain life visual/channel during this window is already handled by
+    // the aura script itself, so there is nothing else useful to decide
+    // while shifted.
+    if (player->HasAura(89784))
+    {
+        Unit const* wraithThreat = SelectNearbyMeleeTarget(player, target, 20.0f);
+        playerbot::PvpClassActions::TryIssueShadowWraithFleeMovement(const_cast<Player*>(player),
+            const_cast<Unit*>(wraithThreat ? wraithThreat : target));
+        return decision;
     }
 
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
@@ -4633,8 +4652,15 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, isDestructionWarlock && !HasAuraFromSpellChain(target, 11722) &&
             !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11722) && IsSpellReady(player, 11722), 35.5f,
         { "warlock curse of the elements", "keep the kill target cursed", 11722, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !isDestructionWarlock && !IsCasterClass(target) && !HasAuraFromSpellChain(target, 11713) && !HasAuraFromSpellChain(target, 11719) &&
-            !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713), 35.0f,
+    bool const shouldApplyCurseOfAgony = !isDestructionWarlock && !IsCasterClass(target) && !HasAuraFromSpellChain(target, 11713) && !HasAuraFromSpellChain(target, 11719) &&
+        !playerbot::PvpClassActions::IsWarlockCurseTargetCooldownActive(player, target, 11713) && IsSpellReady(player, 11713);
+    // Amplify Curse boosts whatever curse lands next and is off the global
+    // cooldown, so it should land immediately before Curse of Agony rather
+    // than being sequenced across ticks like a normal candidate - see the
+    // cadence-bypass whitelist in ProcessLifecycleEntryPoint (18288 there).
+    AddDecisionCandidate(candidates, shouldApplyCurseOfAgony && !HasAuraFromSpellChain(player, 18288) && IsSpellReady(player, 18288), 35.2f,
+        { "warlock amplify curse", "boost the curse about to land on the kill target", 18288, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, shouldApplyCurseOfAgony, 35.0f,
         { "warlock curse of agony", "apply curse of agony pressure to non-caster players", 11713, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, shouldUseSpellstone, 56.7f,
         { "warlock spellstone", "use spellstone to remove magic debuffs", 0, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), spellstoneItemEntry });
@@ -4658,7 +4684,14 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
         { "warlock shoot wand", "fallback to wand pressure while low on mana", kWandShootSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->HasAura(17941) && IsSpellReady(player, 25307), 20.0f,
         { "warlock shadow bolt", "consume nightfall proc for instant pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !isAfflictionWarlock && IsSpellReady(player, 25307), 19.0f,
+    // Destruction should never default-cast Shadow Bolt - only ever on a
+    // Nightfall proc (above). Its own filler is Searing Pain once Immolate
+    // is already ticking and both Conflagrate and Shadowburn are on
+    // cooldown, not a Shadow Bolt spam loop.
+    AddDecisionCandidate(candidates, isDestructionWarlock && HasAuraFromSpellChain(target, 25309) &&
+            !IsSpellReady(player, 18932) && !IsSpellReady(player, 18871) && IsSpellReady(player, 17923), 19.5f,
+        { "warlock searing pain", "filler pressure while conflagrate and shadowburn are both on cooldown", 17923, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, !isAfflictionWarlock && !isDestructionWarlock && IsSpellReady(player, 25307), 19.0f,
         { "warlock shadow bolt", "default ranged pressure", 25307, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isAfflictionWarlock && IsSpellReady(player, 11700), 18.0f,
         { "warlock drain life", "fallback affliction channel", 11700, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -4999,7 +5032,12 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman ghost wolf", "shift to close the gap with rehgar's fury", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, enhNeedsGapClose && enhInGhostWolf && canUseRehgarsFury, 59.5f,
         { "shaman rehgar's fury", "charge the kill target while in ghost wolf form", 82419, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
+    // Enhancement only gets Lesser Healing Wave weaving from the Maelstrom
+    // Weapon-style talent (89745, "blurry") that makes it a fast/free-ish
+    // proc-consumer - without that aura up, this was letting an Enhancement
+    // shaman self-heal on the normal, full-cost cast whenever health dropped
+    // below 50 percent regardless of whether the proc was actually active.
+    AddDecisionCandidate(candidates, (!isEnhancementShaman || player->HasAura(89745)) && player->HealthBelowPct(50) && IsSpellReady(player, 10468), 52.0f,
         { "shaman lesser healing wave", "self-sustain while focused", 10468, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && purgeTarget, 53.5f,
         { "shaman purge", "purge enemy magic buffs", 81325, playerbot::PvpClassSpellContext::TargetMode::Enemy, purgeTarget ? purgeTarget->GetGUID() : ObjectGuid::Empty });
