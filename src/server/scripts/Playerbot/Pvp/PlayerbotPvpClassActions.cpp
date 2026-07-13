@@ -4425,10 +4425,23 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // failure mode: PB move diag had a live CHASE/FOLLOW order, then a
     // stop_moving_request reason=cast_time_or_autorepeat killed the spline and
     // left the bot inching or stuck.
+    // spellInfo->CalcCastTime() with no Spell* skips Unit::ModSpellCastTime
+    // entirely and only ever returns the raw DBC base cast time. Casters with
+    // a talent/aura that reduces a spell's effective cast time (including a
+    // flat -100% "instant cast" aura, which resolves through
+    // Unit::CanInstantCast() rather than changing the spell's own listed cast
+    // time) still got treated as needing a stationary cast here, forcing an
+    // unnecessary stop-to-cast for something that would have completed
+    // instantly while moving. Fold the caster's actual cast-speed mods in
+    // before deciding - ModSpellCastTime accepts a null Spell* for this kind
+    // of preview/dry-run calculation.
+    int32 effectiveCastTimeMs = static_cast<int32>(spellInfo->CalcCastTime());
+    player->ModSpellCastTime(spellInfo, effectiveCastTimeMs);
+
     bool const isFoodOrDrinkSpell = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT || resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
     bool const isHunterStationaryCastTimeAction = player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
     bool const movableCastTimeSpell = IsPlayerbotMovableCastTimeSpell(player, spellInfo);
-    bool const requiresStationaryCast = (spellInfo->CalcCastTime() > 0 && !movableCastTimeSpell) || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
+    bool const requiresStationaryCast = (effectiveCastTimeMs > 0 && !movableCastTimeSpell) || spellInfo->IsAutoRepeatRangedSpell() || isFoodOrDrinkSpell ||
         isHunterStationaryCastTimeAction || IsPlayerbotStationaryChannel(spellInfo);
 
     if (isHunterStationaryCastTimeAction)

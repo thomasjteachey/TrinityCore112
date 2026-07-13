@@ -4933,6 +4933,18 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         if (canUseRehgarsFury)
             return { "shaman rehgar's fury", "only allowed action while in ghost wolf form", 82419, playerbot::PvpClassSpellContext::TargetMode::Enemy };
 
+        // Do not cancel Ghost Wolf just because Rehgar's Fury isn't castable
+        // on this exact tick (its own cooldown, a brief LOS blip, target
+        // sitting inside the charge's min-range band, etc.) while the shaman
+        // still has a genuine reason to be closing distance - that reads as
+        // flickering in and out of the form instead of committing to the
+        // chase. Only unshift once the gap-close reason itself is gone
+        // (target dead/invalid or already in melee range). Rehgar's Fury
+        // landing still removes the form on its own via
+        // Unit::CompleteGhostWolfCharge.
+        if (enhNeedsGapClose)
+            return decision;
+
         const_cast<Player*>(player)->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
         return decision;
     }
