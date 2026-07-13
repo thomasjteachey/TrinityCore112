@@ -335,6 +335,16 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         return false;
     }
 
+    // Player::Create initializes display IDs before it writes PLAYER_BYTES_3,
+    // which is where Player::GetNativeGender reads from. Persistent characters
+    // get another display initialization during loading, but these transient
+    // clones do not, so explicitly synchronize gender and rebuild the native
+    // model after creation.
+    Gender const nativeGender = human->GetNativeGender();
+    clone->SetGender(nativeGender);
+    clone->SetNativeGender(nativeGender);
+    clone->InitDisplayIds();
+
     // WorldSession::SetPlayer reads the player's GUID immediately. Player's
     // update-field storage and GUID do not exist until Player::Create succeeds.
     session->SetPlayer(clone);
