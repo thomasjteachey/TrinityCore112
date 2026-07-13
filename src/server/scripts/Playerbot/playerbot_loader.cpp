@@ -49,6 +49,8 @@ using namespace Trinity::ChatCommands;
 
 namespace
 {
+constexpr uint32 PLAYERBOT_REDUCED_MAGMA_DAMAGE_SPELL_ID = 57634;
+
 bool IsChromieWhisperFacade(Player const* player)
 {
     if (!player)
@@ -605,6 +607,24 @@ public:
     }
 };
 
+class PlayerbotDamageUnitScript final : public UnitScript
+{
+public:
+    PlayerbotDamageUnitScript() : UnitScript("PlayerbotDamageUnitScript") { }
+
+    void ModifyPeriodicDamageAurasTick(Unit* target, Unit* /*attacker*/, uint32& damage, SpellInfo const* spellInfo) override
+    {
+        if (!spellInfo || spellInfo->Id != PLAYERBOT_REDUCED_MAGMA_DAMAGE_SPELL_ID)
+            return;
+
+        Player* player = target ? target->ToPlayer() : nullptr;
+        if (!playerbot::IsManagedRandomBot(player))
+            return;
+
+        damage /= 2;
+    }
+};
+
 class PlayerbotLifecyclePlayerScript final : public PlayerScript
 {
 public:
@@ -833,6 +853,7 @@ public:
 void AddPlayerbotScripts()
 {
     new PlayerbotBootstrapWorldScript();
+    new PlayerbotDamageUnitScript();
     new PlayerbotLifecyclePlayerScript();
     new PlayerbotLifecycleCommandScript();
 }
