@@ -4178,6 +4178,17 @@ namespace playerbot
         if (!player->IsAlive())
             return false;
 
+        // The battleground fast tactical tick runs every 50 ms and is a
+        // separate entry point from lifecycle combat positioning. It must
+        // yield at its top-level boundary while an effect-driven charge/leap
+        // owns movement; otherwise objective/pursuit actions can Clear() the
+        // effect generator before its arrival MovementInform is delivered.
+        if (HasPlayerbotGapCloserInFlight(player))
+        {
+            EmitRehgarMovementGuardServerDiagnostic(player, "tactical_tick_blocked_effect", 0);
+            return true;
+        }
+
         BreakExpiredHunterFeignDeath(player);
 
         ClearStaleWaitingForResurrectAura(player);
