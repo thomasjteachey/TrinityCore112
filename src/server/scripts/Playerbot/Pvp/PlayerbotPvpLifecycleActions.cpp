@@ -23,6 +23,7 @@
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
 #include "BattlegroundEY.h"
+#include "BattlegroundOBC.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "DBCStores.h"
@@ -2783,9 +2784,8 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
             return ObjectAccessor::FindConnectedPlayer(carrierGuid);
         }
 
-        if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+        auto findNeutralFlagCarrierForDirective = [&](ObjectGuid const& carrierGuid) -> Player*
         {
-            ObjectGuid const carrierGuid = bgEy->GetFlagPickerGUID();
             if (carrierGuid.IsEmpty())
                 return nullptr;
 
@@ -2797,7 +2797,15 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
                 return carrier;
             if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrier->GetTeamId() == botTeam)
                 return carrier;
-        }
+
+            return nullptr;
+        };
+
+        if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
+            return findNeutralFlagCarrierForDirective(bgEy->GetFlagPickerGUID());
+
+        if (BattlegroundOBC* bgObc = dynamic_cast<BattlegroundOBC*>(battleground))
+            return findNeutralFlagCarrierForDirective(bgObc->GetFlagPickerGUID());
 
         return nullptr;
     }
