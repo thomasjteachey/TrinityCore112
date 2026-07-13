@@ -599,8 +599,8 @@ void BattlegroundOBC::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_HORDE_SCORE, _hordeScore);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE, BG_OBC_SCORE_LIMIT);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE_UI, BG_OBC_SCORE_LIMIT);
-    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 1 : 0);
-    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 1 : 0);
+    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 2 : 1);
+    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 2 : 1);
 }
 
 bool BattlegroundOBC::HandlePlayerUnderMap(Player* player)

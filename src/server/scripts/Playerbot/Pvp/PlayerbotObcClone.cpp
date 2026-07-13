@@ -228,7 +228,6 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
     session->SetTransientPlayerSession();
 
     Player* clone = new Player(session.get());
-    session->SetPlayer(clone);
 
     CharacterCreateInfo createInfo;
     createInfo.SetName(internalName)
@@ -249,6 +248,10 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
         DestroyUnseatedClone(session, clone);
         return false;
     }
+
+    // WorldSession::SetPlayer reads the player's GUID immediately. Player's
+    // update-field storage and GUID do not exist until Player::Create succeeds.
+    session->SetPlayer(clone);
 
     clone->GetMotionMaster()->Initialize();
     clone->SetLevel(human->GetLevel(), false);
