@@ -42,7 +42,7 @@
 namespace
 {
 constexpr uint32 kBloodlustSpellId = 2825;
-constexpr uint32 kBloodlustDurationMs = 30 * IN_MILLISECONDS;
+constexpr uint32 kBloodlustDurationMs = 60 * IN_MILLISECONDS;
 constexpr uint32 kCloneTickThrottleMs = 1000;
 
 struct ObcCloneConfig
@@ -612,7 +612,10 @@ void PlayerbotObcCloneManager::OnPvpKill(Player* killer, Player* killed)
 
     if (areCounterparts)
         if (Aura* aura = killer->AddAura(kBloodlustSpellId, killer))
+        {
+            aura->SetMaxDuration(kBloodlustDurationMs);
             aura->SetDuration(kBloodlustDurationMs);
+        }
 }
 
 void PlayerbotObcCloneManager::OnPlayerLogout(Player const* player)

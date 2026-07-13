@@ -33,7 +33,7 @@ namespace playerbot
 // displays it as "Dark <name>". It has no account or character-database row.
 // When the human leaves, logs out, or the match ends, the clone is destroyed.
 // A killing blow between counterparts grants the killer Bloodlust (2825) for
-// 30 seconds.
+// 60 seconds.
 //
 // Everything lives in the scripts/playerbot lib and is driven by the world
 // update tick plus the OnPVPKill / OnLogout player-script hooks, so the
