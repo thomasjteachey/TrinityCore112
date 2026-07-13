@@ -29,6 +29,8 @@
 #include "Item.h"
 #include "Log.h"
 #include "Map.h"
+#include "MotionMaster.h"
+#include "MoveSpline.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -64,6 +66,7 @@ bool HasBreakableCrowdControl(Unit const* unit);
 uint32 CountNearbyEnemies(Player const* player, float maxDistance);
 SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player);
 SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit const* allyTarget);
+bool HasActiveMovementEffectSpline(Player const* player);
 
 constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
@@ -3827,6 +3830,20 @@ Unit const* SelectFriendlyMissingBuffTarget(Player const* player, uint32 baseSpe
     return candidates[urand(0, candidates.size() - 1)];
 }
 
+
+bool HasActiveMovementEffectSpline(Player const* player)
+{
+    if (!player)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster || motionMaster->GetCurrentMovementGeneratorType() != EFFECT_MOTION_TYPE)
+        return false;
+
+    bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+    return hasActiveSpline || player->HasUnitState(UNIT_STATE_CHARGING) || player->isMoving();
+}
+
 uint32 CountNearbyEnemies(Player const* player, float maxDistance)
 {
     if (!player || !player->FindMap())
@@ -4669,6 +4686,9 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     bool const inBattleStance = player->HasAura(2457);
     bool const inDefensiveStance = player->HasAura(71);
     bool const inBerserkerStance = player->HasAura(2458);
+    // Charge, Intercept, and Heroic Leap drive their own effect-motion spline.
+    // Do not pick stance-swap actions while that spline is still resolving.
+    bool const warriorGapCloserInFlight = HasActiveMovementEffectSpline(player);
     Unit const* gapCloseTarget = HasHostileTarget(player, target) ? target : activeTarget;
     SpellInfo const* chargeInfo = sSpellMgr->GetSpellInfo(11578);
     SpellInfo const* interceptInfo = sSpellMgr->GetSpellInfo(20617);
@@ -4709,7 +4729,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         !HasAuraFromSpellChain(nearbyMeleeTarget, 676);
 
     std::vector<PrioritizedSpellDecision> candidates;
-    AddDecisionCandidate(candidates, player->HasAuraWithMechanic(1 << MECHANIC_FEAR) && !inBerserkerStance && IsSpellReady(player, 2458), 60.5f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && player->HasAuraWithMechanic(1 << MECHANIC_FEAR) && !inBerserkerStance && IsSpellReady(player, 2458), 60.5f,
         { "warrior berserker stance", "swap to berserker stance to break fear", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, player->HasAuraWithMechanic(1 << MECHANIC_FEAR) && inBerserkerStance && IsSpellReady(player, 18499), 60.0f,
         { "warrior berserker rage", "break fear-like control while in berserker stance", 18499, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -4721,11 +4741,11 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior pummel", "interrupt nearby spellcasts", 6552, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyCastingTarget ? nearbyCastingTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && inDefensiveStance && IsSpellReady(player, 81492), 58.0f,
         { "warrior disarm", "disarm threatening melee weapon users", 81492, playerbot::PvpClassSpellContext::TargetMode::Enemy, nearbyMeleeTarget ? nearbyMeleeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 81492) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && canDisarmNearbyMeleeThreat && !inDefensiveStance && IsSpellReady(player, 81492) && IsSpellReady(player, 71) && player->GetPower(POWER_RAGE) >= 200, 57.0f,
         { "warrior defensive stance", "swap defensive before disarm against melee", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, tauntTarget && !inDefensiveStance && !shouldUseInterceptGapCloser && IsSpellReady(player, 71), 57.2f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && tauntTarget && !inDefensiveStance && !shouldUseInterceptGapCloser && IsSpellReady(player, 71), 57.2f,
         { "warrior defensive stance", "swap defensive before taunt", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, revengeReady && !inDefensiveStance && IsSpellReady(player, 71), 57.1f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && revengeReady && !inDefensiveStance && IsSpellReady(player, 71), 57.1f,
         { "warrior defensive stance", "swap defensive before revenge", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, tauntTarget && inDefensiveStance, 56.8f,
         { "warrior taunt", "taunt enemy pressuring an ally or current kill target", 355, playerbot::PvpClassSpellContext::TargetMode::Enemy, tauntTarget ? tauntTarget->GetGUID() : ObjectGuid::Empty });
@@ -4736,13 +4756,13 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, !gapCloseUrgent && (IsSpellReady(player, 6552) || IsSpellReady(player, 81492) || IsSpellReady(player, 20617) || IsSpellReady(player, 1680) || IsSpellReady(player, meleeFinisherSpellId)) &&
             player->GetPower(POWER_RAGE) < 150 && IsSpellReady(player, 2687), 54.0f,
         { "warrior bloodrage", "generate rage to unlock rotational abilities", 2687, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !isProtWarrior && inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && !isProtWarrior && inDefensiveStance && (!IsSpellReady(player, 81492) || !hasNearbyMeleeThreat) && IsSpellReady(player, 2458), 53.0f,
         { "warrior berserker stance", "leave defensive stance when disarm is unavailable or no melee threat is nearby", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, shouldUseChargeGapCloser && !inBattleStance && IsSpellReady(player, 2457), 52.5f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && shouldUseChargeGapCloser && !inBattleStance && IsSpellReady(player, 2457), 52.5f,
         { "warrior battle stance", "switch to battle stance before out-of-combat charge", 2457, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseChargeGapCloser, 52.0f,
         { "warrior charge", "close gap to target from out of combat", 11578, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, shouldUseInterceptGapCloser && !inBerserkerStance && IsSpellReady(player, 2458), 51.5f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && shouldUseInterceptGapCloser && !inBerserkerStance && IsSpellReady(player, 2458), 51.5f,
         { "warrior berserker stance", "switch to berserker stance before intercept gap close", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, shouldUseInterceptGapCloser, 51.0f,
         { "warrior intercept", "close gap to target while in combat", 20617, playerbot::PvpClassSpellContext::TargetMode::Enemy, gapCloseTarget ? gapCloseTarget->GetGUID() : ObjectGuid::Empty });
@@ -4752,7 +4772,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     // Without this, the generic shapeshift-compatibility check silently
     // rejects Heroic Leap whenever the warrior isn't already in Berserker
     // Stance, and the bot falls back to Charge (which doesn't need it).
-    AddDecisionCandidate(candidates, (shouldUseHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458), 1000.0f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && (shouldUseHeroicLeapGapCloser || furyInDanger) && !inBerserkerStance && IsSpellReady(player, 2458), 1000.0f,
         { "warrior berserker stance", "switch to berserker stance before heroic leap", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     // TEMPORARY: forced to top priority (above everything, including
     // emergency defensives) at the user's explicit request to isolate and
@@ -4764,10 +4784,10 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior heroic leap", "leap away from danger instead of intercept", 81271, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, furyRecentGapCloser && !HasAuraFromSpellChain(player, 12328) && IsSpellReady(player, 12328), 49.5f,
         { "warrior death wish", "pop death wish right after closing with charge or heroic leap", 12328, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !isProtWarrior && player->IsWithinMeleeRange(activeTarget) && !inBerserkerStance &&
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && !isProtWarrior && player->IsWithinMeleeRange(activeTarget) && !inBerserkerStance &&
             IsSpellReady(player, 1680) && IsSpellReady(player, 2458), 50.4f,
         { "warrior berserker stance", "switch to berserker stance to enable whirlwind in melee", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, executeReady && !inBerserkerStance && IsSpellReady(player, 2458), 50.2f,
+    AddDecisionCandidate(candidates, !warriorGapCloserInFlight && executeReady && !inBerserkerStance && IsSpellReady(player, 2458), 50.2f,
         { "warrior berserker stance", "switch to berserker stance before execute", 2458, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, executeReady && inBerserkerStance, 50.0f,
         { "warrior execute", "finisher at low enemy health while in berserker stance", 20662, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
