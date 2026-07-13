@@ -3648,8 +3648,24 @@ bool IsHazardousLiquidDestination(Player const* player, Position const& destinat
 
 bool TryMoveOutOfHazardousLiquid(Player* player)
 {
-    if (!IsInHazardousLiquid(player))
+    if (!player)
         return false;
+
+    struct HazardEscapeState
+    {
+        Position lastSafePosition;
+        bool hasLastSafePosition = false;
+    };
+
+    static std::unordered_map<uint64, HazardEscapeState> stateByGuid;
+    HazardEscapeState& state = stateByGuid[player->GetGUID().GetRawValue()];
+
+    if (!IsInHazardousLiquid(player))
+    {
+        state.lastSafePosition = player->GetPosition();
+        state.hasLastSafePosition = true;
+        return false;
+    }
 
     // Effect-driven charges and leaps own the highest-priority movement slot
     // and are already moving the bot away from its current position. Hazard
@@ -3668,6 +3684,17 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
             if (!splineLaunched || !player->movespline->Finalized())
                 return true;
         }
+
+    // If a route ended while the bot was still taking environmental damage,
+    // return to the last position observed without a hazard aura. Active point
+    // routes are preserved above, so a necessary crossing can still complete;
+    // this only prevents choosing the hazardous stopping point as a cast spot.
+    if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f &&
+        IssueStrictHumanMove(player, state.lastSafePosition, 2.0f, 750))
+    {
+        SetLastMovementDebugStatus(player, "hazardous_liquid_return_to_last_safe");
+        return true;
+    }
 
     float const baseAngle = player->GetOrientation();
     std::array<float, 12> const probeAngles =
@@ -5464,6 +5491,27 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
+    // Hazard escape remains the movement owner, but instant spells that are
+    // already valid at the current position may still fire while the bot runs.
+    // Cast-time spells, channels, items, and movement directives must yield so
+    // they cannot stop or replace the escape route.
+    bool const escapingHazard = TryMoveOutOfHazardousLiquid(player);
+    bool allowInstantSpellWhileEscaping = false;
+    if (escapingHazard && context.spellId)
+    {
+        uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+        SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+        Unit* target = ResolveTarget(player, context);
+        allowInstantSpellWhileEscaping = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
+            IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+    }
+
+    if (escapingHazard && !allowInstantSpellWhileEscaping)
+    {
+        SetLastExecutionStatus(player, "hazard_escape_before_class_action");
+        return true;
+    }
+
     bool const hasCastIntent = context.spellId != 0 || context.itemEntry != 0;
     bool const shouldExecuteMovementBeforeCast =
         !hasCastIntent || (
@@ -5472,7 +5520,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
             context.movementDirective != PvpClassSpellContext::MovementDirective::FleeTooCloseForSpell &&
             context.movementDirective != PvpClassSpellContext::MovementDirective::FaceSpellTarget);
 
-    if (context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
+    if (!escapingHazard && context.movementDirective != PvpClassSpellContext::MovementDirective::None && shouldExecuteMovementBeforeCast)
     {
         if (ShouldThrottleDirective(player, context))
         {
@@ -5650,7 +5698,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     // explicit re-positioning before retrying the same cast. Without this,
     // caster bots can repeatedly fail with LOS while remaining idle when
     // class-selection keeps returning a spell action without a move directive.
-    if (hasCastIntent &&
+    if (!escapingHazard && hasCastIntent &&
         context.movementDirective == PvpClassSpellContext::MovementDirective::None &&
         CanIssueFollowCommands(player))
     {

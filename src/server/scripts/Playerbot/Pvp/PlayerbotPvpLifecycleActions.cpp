@@ -1086,8 +1086,24 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
     bool TryMoveOutOfHazardousLiquid(Player* player)
     {
-        if (!IsInHazardousLiquid(player))
+        if (!player)
             return false;
+
+        struct HazardEscapeState
+        {
+            Position lastSafePosition;
+            bool hasLastSafePosition = false;
+        };
+
+        static std::unordered_map<uint64, HazardEscapeState> stateByGuid;
+        HazardEscapeState& state = stateByGuid[player->GetGUID().GetRawValue()];
+
+        if (!IsInHazardousLiquid(player))
+        {
+            state.lastSafePosition = player->GetPosition();
+            state.hasLastSafePosition = true;
+            return false;
+        }
 
         // A charge/leap already owns the highest-priority movement slot and is
         // moving the bot away from its current hazardous position. Do not wipe
@@ -1111,6 +1127,22 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             bool const splineLaunched = player->movespline && player->movespline->Initialized();
             if (!splineLaunched || !player->movespline->Finalized())
                 return true;
+        }
+
+        // A point route may cross hazardous ground when necessary. If it ends
+        // while the damage aura remains, backtrack to the last observed safe
+        // position instead of treating the hazardous endpoint as a place to
+        // stop and cast.
+        if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f)
+        {
+            Position segmentDestination;
+            if (TryBuildBattlegroundSegmentDestination(player, state.lastSafePosition, segmentDestination) ||
+                (!player->InBattleground() && player->GetDistance(state.lastSafePosition) > 0.5f))
+            {
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                motionMaster->MovePoint(0, player->InBattleground() ? segmentDestination : state.lastSafePosition, true);
+                return true;
+            }
         }
 
         float const baseAngle = player->GetOrientation();
@@ -4206,6 +4238,12 @@ namespace playerbot
             EmitRehgarMovementGuardServerDiagnostic(player, "tactical_tick_blocked_effect", 0);
             return true;
         }
+
+        // Tactical actions include buff use, pursuit, and objective movement;
+        // none should establish a stationary action position on hazardous
+        // ground. Continue an active crossing or escape before doing anything.
+        if (TryMoveOutOfHazardousLiquid(player))
+            return true;
 
         BreakExpiredHunterFeignDeath(player);
 
