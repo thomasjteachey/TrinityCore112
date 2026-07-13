@@ -3853,7 +3853,6 @@ enum AreaId : uint32
     AREA_THE_CHILLED_QUAGMIRE       = 4589,
     AREA_WESTPARK_WORKSHOP          = 4611,
     AREA_EASTPARK_WORKSHOP          = 4612,
-    AREA_OBSIDIAN_COLOSSEUM         = 30233,
 };
 
 enum WorldState : uint32

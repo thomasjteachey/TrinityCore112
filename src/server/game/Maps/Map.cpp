@@ -41,7 +41,6 @@
 #include "Pet.h"
 #include "PoolMgr.h"
 #include "ScriptMgr.h"
-#include "SharedDefines.h"
 #include "Transport.h"
 #include "Vehicle.h"
 #include "VMapFactory.h"
@@ -2604,12 +2603,6 @@ bool Map::GetAreaInfo(uint32 phaseMask, float x, float y, float z, uint32& flags
 
 uint32 Map::GetAreaId(uint32 phaseMask, float x, float y, float z) const
 {
-    // Map 1615 reuses Obsidian Sanctum's terrain, whose grid area data points
-    // at stock area 4493. Keep the original raid untouched while exposing the
-    // battleground's own AreaTable entry to the client.
-    if (GetId() == 1615)
-        return AREA_OBSIDIAN_COLOSSEUM;
-
     uint32 mogpFlags;
     int32 adtId, rootId, groupId;
     float vmapZ = z;
