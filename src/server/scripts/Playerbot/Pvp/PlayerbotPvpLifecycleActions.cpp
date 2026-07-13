@@ -22,8 +22,6 @@
 #include "BattlegroundMgr.h"
 #include "Battleground.h"
 #include "BattlegroundQueue.h"
-#include "BattlegroundEY.h"
-#include "BattlegroundOBC.h"
 #include "BattlegroundTP.h"
 #include "BattlegroundWS.h"
 #include "DBCStores.h"
@@ -3017,21 +3015,16 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             if (!carrier)
                 return nullptr;
 
-            if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier && carrier->GetTeamId() != botTeam)
+            TeamId const carrierTeam = ResolveBotTeamId(carrier);
+            if (directive == playerbot::FlagCarrierDirective::AttackEnemyCarrier && carrierTeam != botTeam)
                 return carrier;
-            if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrier->GetTeamId() == botTeam)
+            if (directive == playerbot::FlagCarrierDirective::ProtectTeamCarrier && carrierTeam == botTeam)
                 return carrier;
 
             return nullptr;
         };
 
-        if (BattlegroundEY* bgEy = dynamic_cast<BattlegroundEY*>(battleground))
-            return findNeutralFlagCarrierForDirective(bgEy->GetFlagPickerGUID());
-
-        if (BattlegroundOBC* bgObc = dynamic_cast<BattlegroundOBC*>(battleground))
-            return findNeutralFlagCarrierForDirective(bgObc->GetFlagPickerGUID());
-
-        return nullptr;
+        return findNeutralFlagCarrierForDirective(battleground->GetFlagPickerGUID());
     }
 
     bool MoveTowardUnit(Player* player, Unit* target, float desiredDistance)
@@ -3075,6 +3068,83 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return IssueHumanLikeFollow(player, target, desiredDistance, 6.0f, 500);
         }
 
+        return true;
+    }
+
+    struct DroppedFlagPickupDelay
+    {
+        ObjectGuid flagGuid = ObjectGuid::Empty;
+        uint32 pickupNotBeforeMs = 0;
+    };
+
+    std::unordered_map<uint64, DroppedFlagPickupDelay> g_DroppedFlagPickupDelayByBotGuid;
+    constexpr uint32 PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS = 1 * IN_MILLISECONDS;
+
+    bool TryAdvanceFlagObjective(Player* player, Battleground* battleground)
+    {
+        if (!player || !battleground || !player->FindMap())
+            return false;
+
+        uint64 const botGuidRaw = player->GetGUID().GetRawValue();
+
+        Position capturePosition;
+        if (battleground->GetFlagCapturePosition(player->GetGUID(), capturePosition))
+        {
+            g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+
+            if (player->IsWithinDist3d(capturePosition.GetPositionX(), capturePosition.GetPositionY(), capturePosition.GetPositionZ(), 8.0f))
+                return true;
+
+            bool const moved = IssueMovePointThrottled(player, capturePosition, 6.0f, 500);
+            if (moved)
+            {
+                TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                    "Playerbot PvP flag capture path: guid={} destination=({}, {}, {}).",
+                    player->GetGUID().ToString(), capturePosition.GetPositionX(), capturePosition.GetPositionY(),
+                    capturePosition.GetPositionZ());
+            }
+            return moved || player->isMoving();
+        }
+
+        ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
+        if (pickupGuid.IsEmpty())
+        {
+            g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+            return false;
+        }
+
+        GameObject* flag = player->FindMap()->GetGameObject(pickupGuid);
+        if (!flag || !flag->IsInWorld())
+            return false;
+
+        bool const isDroppedFlag = flag->GetGoType() == GAMEOBJECT_TYPE_FLAGDROP;
+        if (isDroppedFlag)
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            DroppedFlagPickupDelay& delay = g_DroppedFlagPickupDelayByBotGuid[botGuidRaw];
+            if (delay.flagGuid != pickupGuid)
+            {
+                delay.flagGuid = pickupGuid;
+                delay.pickupNotBeforeMs = nowMs + PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS;
+            }
+
+            if (player->IsWithinDistInMap(flag, 8.0f) && nowMs < delay.pickupNotBeforeMs)
+                return true;
+        }
+        else
+            g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+
+        if (!player->IsWithinDistInMap(flag, 8.0f))
+            return IssueMovePointThrottled(player, flag->GetPosition(), 6.0f, 500) || player->isMoving();
+
+        // Use the object through the normal interaction path so flag-drop
+        // cleanup, form/stealth handling, and battleground eligibility checks
+        // remain identical to a player click.
+        flag->Use(player);
+        g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP flag pickup attempted: guid={} flag_guid={}.",
+            player->GetGUID().ToString(), pickupGuid.ToString());
         return true;
     }
 
@@ -4333,6 +4403,13 @@ namespace playerbot
             return true;
         }
         }
+
+        // Prefer a live flag pickup/capture route over tactical enemy pursuit.
+        // Class actions separately reserve movement only for the actual carrier;
+        // bots that are merely approaching a loose flag continue casting normally.
+        if (context.objective.type == BattlegroundObjectiveType::CaptureFlag &&
+            TryAdvanceFlagObjective(player, battleground))
+            return true;
 
         if (player->IsInCombat())
         {

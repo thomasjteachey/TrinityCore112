@@ -352,6 +352,33 @@ void BattlegroundOBC::UpdateObjectiveLights()
     ApplyNonInteractableObjectFlags();
 }
 
+ObjectGuid BattlegroundOBC::GetFlagPickupGUID(ObjectGuid /*playerGuid*/) const
+{
+    if (_flagState == BG_OBC_FLAG_STATE_ON_BASE)
+        return BgObjects[BG_OBC_OBJECT_FLAG];
+
+    if (_flagState == BG_OBC_FLAG_STATE_ON_GROUND)
+        return _droppedFlagGuid;
+
+    return ObjectGuid::Empty;
+}
+
+bool BattlegroundOBC::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const
+{
+    if (_flagState != BG_OBC_FLAG_STATE_ON_PLAYER || carrierGuid.IsEmpty() || carrierGuid != _flagCarrierGuid)
+        return false;
+
+    uint32 const carrierTeam = GetPlayerTeam(carrierGuid);
+    if (carrierTeam == ALLIANCE)
+        position.Relocate(OBC_LIGHT_HORDE_X, OBC_LIGHT_HORDE_Y, OBC_LIGHT_HORDE_Z, 0.0f);
+    else if (carrierTeam == HORDE)
+        position.Relocate(OBC_LIGHT_ALLIANCE_X, OBC_LIGHT_ALLIANCE_Y, OBC_LIGHT_ALLIANCE_Z, 0.0f);
+    else
+        return false;
+
+    return true;
+}
+
 void BattlegroundOBC::RespawnFlag()
 {
     _flagState = BG_OBC_FLAG_STATE_ON_BASE;
@@ -442,7 +469,7 @@ void BattlegroundOBC::EventPlayerDroppedFlag(Player* player)
     SetFlagPicker(ObjectGuid::Empty);
     player->RemoveAurasDueToSpell(BG_OBC_COLOSSEUM_FLAG_SPELL);
     _flagState = BG_OBC_FLAG_STATE_ON_GROUND;
-    _flagResetTimer = BG_OBC_FLAG_RESPAWN_TIME;
+    _flagResetTimer = BG_OBC_FLAG_DROP_RETURN_TIME;
 
     // Deliberately NO SPELL_RECENTLY_DROPPED_FLAG and no pickup-lockout
     // debuff: the dropper is allowed to grab the flag right back up. 34991

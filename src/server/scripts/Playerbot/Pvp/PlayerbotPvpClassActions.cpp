@@ -5512,6 +5512,60 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         return true;
     }
 
+    // Only the flag carrier's capture path owns class movement. Preserve
+    // combat activity with spells that are already usable while moving, while
+    // cast times, channels, items, and class movement directives yield to the
+    // carrier route. Bots merely approaching a loose flag cast normally.
+    if (context.preserveFlagCarrierMovement)
+    {
+        bool allowInstantSpell = false;
+        if (context.spellId)
+        {
+            uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+            SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
+            Unit* target = ResolveTarget(player, context);
+            bool repositionsCaster = false;
+            if (spellInfo)
+            {
+                for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
+                {
+                    switch (spellInfo->GetEffect(SpellEffIndex(effectIndex)).Effect)
+                    {
+                        case SPELL_EFFECT_TELEPORT_UNITS:
+                        case SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER:
+                        case SPELL_EFFECT_LEAP:
+                        case SPELL_EFFECT_JUMP:
+                        case SPELL_EFFECT_JUMP_DEST:
+                        case SPELL_EFFECT_LEAP_BACK:
+                        case SPELL_EFFECT_CHARGE:
+                        case SPELL_EFFECT_CHARGE_DEST:
+                            repositionsCaster = true;
+                            break;
+                        default:
+                            break;
+                    }
+
+                    if (repositionsCaster)
+                        break;
+                }
+            }
+
+            bool const stopsForHunterShot = spellInfo && player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo);
+            bool const stopsForRecovery = resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT ||
+                resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
+            allowInstantSpell = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
+                !spellInfo->IsAutoRepeatRangedSpell() && !stopsForHunterShot && !stopsForRecovery && !repositionsCaster &&
+                resolvedSpellId != kRacialNightElfShadowmeldSpellId &&
+                IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
+        }
+
+        if (!allowInstantSpell)
+        {
+            SetLastExecutionStatus(player, "flag_objective_movement_before_class_action");
+            return true;
+        }
+    }
+
     bool const hasCastIntent = context.spellId != 0 || context.itemEntry != 0;
     bool const shouldExecuteMovementBeforeCast =
         !hasCastIntent || (

@@ -113,8 +113,11 @@ enum BG_OBC_Constants
 {
     BG_OBC_SCORE_LIMIT        = 30,
     BG_OBC_POINTS_PER_KILL    = 1,
-    BG_OBC_POINTS_PER_CAPTURE = 2,
-    BG_OBC_FLAG_RESPAWN_TIME  = (8 * IN_MILLISECONDS)
+    BG_OBC_POINTS_PER_CAPTURE = 3,
+    BG_OBC_FLAG_RESPAWN_TIME     = (8 * IN_MILLISECONDS),
+    // A dropped flag remains contestable long enough for nearby players and
+    // bots to reach it before it returns to the center stand.
+    BG_OBC_FLAG_DROP_RETURN_TIME = (30 * IN_MILLISECONDS)
 };
 
 float constexpr BG_OBC_CAPTURE_RADIUS = 10.0f;
@@ -150,6 +153,8 @@ public:
     void EventPlayerDroppedFlag(Player* player) override;
     ObjectGuid GetFlagPickerGUID(int32 /*team*/ = -1) const override { return _flagCarrierGuid; }
     void SetDroppedFlagGUID(ObjectGuid guid, int32 /*team*/ = -1) override { _droppedFlagGuid = guid; }
+    ObjectGuid GetFlagPickupGUID(ObjectGuid playerGuid) const override;
+    bool GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const override;
 
     WorldSafeLocsEntry const* GetClosestGraveyard(Player* player) override;
     void HandleKillPlayer(Player* victim, Player* killer) override;

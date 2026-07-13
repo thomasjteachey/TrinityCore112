@@ -60,6 +60,7 @@ struct PvpValues
     bool hasArenaInvite = false;
     bool hasArenaTeamInvite = false;
     bool playerHasFlag = false;
+    bool flagPickupAvailable = false;
     bool enemyFlagCarrierActive = false;
     bool enemyFlagCarrierNear = false;
     bool teamFlagCarrierNear = false;
@@ -76,6 +77,7 @@ enum class PvpTrigger : uint8
     BgInviteActive,
     InBattlegroundWithoutFlag,
     PlayerHasFlag,
+    FlagPickupAvailable,
     EnemyFlagCarrierActive,
     EnemyFlagCarrierNear,
     TeamFlagCarrierNear
@@ -179,6 +181,7 @@ struct PvpClassSpellContext
     ObjectGuid movementTargetGuid = ObjectGuid::Empty;
     float movementFollowRange = 0.0f;
     float movementPriority = 0.0f;
+    bool preserveFlagCarrierMovement = false;
     uint32 itemEntry = 0;
 };
 
