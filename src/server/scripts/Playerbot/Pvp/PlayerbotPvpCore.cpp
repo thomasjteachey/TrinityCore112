@@ -4577,7 +4577,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* repentanceTarget = (isRetPaladin && IsSpellReady(player, 20066)) ? SelectEnemyCastingTarget(player, 20.0f, executeTarget) : nullptr;
     Unit const* stunnedJudgementTarget = (isRetPaladin && HasAuraFromSpellChain(player, 20375)) ? SelectStunnedEnemyTarget(player, executeTarget, 30.0f) : nullptr;
     Unit const* protectionTarget = (isRetPaladin && IsSpellReady(player, 10278)) ? SelectFriendlyMeleePressureTarget(player, 40.0f, 50.0f) : nullptr;
-    if (protectionTarget && PvpCore::IsBattlegroundFlagCarrier(protectionTarget->ToPlayer()))
+    if (protectionTarget && playerbot::PvpCore::IsBattlegroundFlagCarrier(protectionTarget->ToPlayer()))
         protectionTarget = nullptr;
     Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
     ObjectGuid const mightTargetGuid = IsSpellReady(player, 25291) ? SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f) : ObjectGuid::Empty;
