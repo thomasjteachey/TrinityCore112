@@ -49,9 +49,29 @@
 
 namespace
 {
+constexpr uint32 SPELL_ROGUE_NEILYO_IMMUNITY = 81439;
+constexpr uint32 SPELL_ROGUE_VANISH_IMMUNITY = 89783;
+
 bool IsArenaShadowSightObject(uint32 entry)
 {
     return entry == 184663 || entry == 184664;
+}
+
+void BreakVanishProtectionForFlagUse(Player* player, GameObjectTemplate const* gameObjectInfo)
+{
+    if (!player || !gameObjectInfo ||
+        (gameObjectInfo->type != GAMEOBJECT_TYPE_FLAGSTAND && gameObjectInfo->type != GAMEOBJECT_TYPE_FLAGDROP))
+        return;
+
+    if (!player->HasAura(SPELL_ROGUE_NEILYO_IMMUNITY) && !player->HasAura(SPELL_ROGUE_VANISH_IMMUNITY))
+        return;
+
+    // Flag pickup already breaks stealth below, but noDamageImmune is checked
+    // first. Break only the Vanish/Neilyo stealth package here, then let the
+    // normal immunity gate run again. A separate immunity such as Ice Block or
+    // Divine Shield keeps UNIT_FLAG_IMMUNE set and still blocks the flag.
+    player->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+    player->RemoveAurasByType(SPELL_AURA_MOD_INVISIBILITY);
 }
 }
 
@@ -1664,7 +1684,11 @@ void GameObject::Use(Unit* user)
     if (Player* playerUser = user->ToPlayer())
     {
         if (m_goInfo->CannotBeUsedUnderImmunity() && playerUser->HasUnitFlag(UNIT_FLAG_IMMUNE))
-            return;
+        {
+            BreakVanishProtectionForFlagUse(playerUser, m_goInfo);
+            if (playerUser->HasUnitFlag(UNIT_FLAG_IMMUNE))
+                return;
+        }
 
         if (!m_goInfo->IsUsableMounted())
             playerUser->RemoveAurasByType(SPELL_AURA_MOUNTED);
