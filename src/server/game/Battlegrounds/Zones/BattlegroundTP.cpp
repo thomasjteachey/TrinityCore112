@@ -87,6 +87,57 @@ BattlegroundTP::BattlegroundTP()
 
 BattlegroundTP::~BattlegroundTP() { }
 
+ObjectGuid BattlegroundTP::GetFlagPickupGUID(ObjectGuid playerGuid) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || playerGuid.IsEmpty())
+        return ObjectGuid::Empty;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return ObjectGuid::Empty;
+
+    TeamId const ownFlagTeam = GetTeamIndexByTeamId(playerTeam);
+    TeamId const enemyFlagTeam = GetOtherTwinPeaksTeamId(ownFlagTeam);
+
+    if (_flagKeepers[enemyFlagTeam] == playerGuid)
+        return ObjectGuid::Empty;
+
+    if (_flagState[ownFlagTeam] == BG_TP_FLAG_STATE_ON_GROUND)
+        return _droppedFlagGUID[ownFlagTeam];
+
+    if (_flagState[enemyFlagTeam] == BG_TP_FLAG_STATE_ON_BASE)
+        return BgObjects[enemyFlagTeam == TEAM_ALLIANCE ? BG_TP_OBJECT_A_FLAG : BG_TP_OBJECT_H_FLAG];
+
+    if (_flagState[enemyFlagTeam] == BG_TP_FLAG_STATE_ON_GROUND)
+        return _droppedFlagGUID[enemyFlagTeam];
+
+    return ObjectGuid::Empty;
+}
+
+bool BattlegroundTP::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || carrierGuid.IsEmpty())
+        return false;
+
+    uint32 const carrierTeam = GetPlayerTeam(carrierGuid);
+    if (carrierTeam != ALLIANCE && carrierTeam != HORDE)
+        return false;
+
+    TeamId const carrierTeamId = GetTeamIndexByTeamId(carrierTeam);
+    TeamId const carriedFlagTeam = GetOtherTwinPeaksTeamId(carrierTeamId);
+    if (_flagState[carriedFlagTeam] != BG_TP_FLAG_STATE_ON_PLAYER || _flagKeepers[carriedFlagTeam] != carrierGuid)
+        return false;
+
+    // These are the same capture triggers used by HandleFlagRoomCapturePoint.
+    uint32 const areaTriggerId = carriedFlagTeam == TEAM_ALLIANCE ? 5905 : 5904;
+    AreaTriggerEntry const* areaTrigger = sAreaTriggerStore.LookupEntry(areaTriggerId);
+    if (!areaTrigger)
+        return false;
+
+    position.Relocate(areaTrigger->Pos.X, areaTrigger->Pos.Y, areaTrigger->Pos.Z, 0.0f);
+    return true;
+}
+
 char const* BattlegroundTP::GetCTFFlagStateToken(uint8 flagState) const
 {
     switch (flagState)

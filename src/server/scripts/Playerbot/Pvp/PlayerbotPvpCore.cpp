@@ -114,6 +114,16 @@ bool IsPriestFlashHealSpell(uint32 spellId)
     return firstRankSpellId == 2061; // Flash Heal (rank 1)
 }
 
+bool IsShamanFrostShockSpell(uint32 spellId)
+{
+    if (!spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    uint32 const firstRankSpellId = spellInfo && spellInfo->GetFirstRankSpell() ? spellInfo->GetFirstRankSpell()->Id : spellId;
+    return firstRankSpellId == 8056;
+}
+
 bool IsPriestInSpiritOfRedemption(Player const* player)
 {
     return player && player->GetClass() == CLASS_PRIEST &&
@@ -863,6 +873,17 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
     TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
     ObjectGuid const playerGuid = player->GetGUID();
     values.flagPickupAvailable = !battleground->GetFlagPickupGUID(playerGuid).IsEmpty();
+
+    BattlegroundNodeObjective nodeObjective;
+    if (battleground->GetNodeObjective(playerGuid, nodeObjective))
+    {
+        values.nodeObjectiveId = nodeObjective.NodeId;
+        bool const isDefense = nodeObjective.Status == BattlegroundNodeStatus::FriendlyControlled ||
+            nodeObjective.Status == BattlegroundNodeStatus::FriendlyContested ||
+            nodeObjective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
+        values.nodeDefenseAvailable = isDefense;
+        values.nodeAssaultAvailable = !isDefense;
+    }
 
     if (BattlegroundWS* bgWs = dynamic_cast<BattlegroundWS*>(battleground))
     {
@@ -5015,8 +5036,10 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman lesser healing wave", "weave a heal on a low-health ally", 10468, enhLowHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, enhLowHealTarget ? enhLowHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, hasHostileTarget && IsMeleeClass(target) && player->IsWithinDistInMap(target, 10.0f) && !HasActiveEarthTotem(player) && IsSpellReady(player, 2484), 56.0f,
         { "shaman earthbind totem", "kite nearby melee pressure", 2484, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, hasHostileTarget && IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f) && IsSpellReady(player, 10473), 55.0f,
-        { "shaman frost shock", "snare medium-range melee threats", 10473, playerbot::PvpClassSpellContext::TargetMode::Enemy });
+    AddDecisionCandidate(candidates, hasHostileTarget && IsSpellReady(player, 10473) &&
+        ((isEnhancementShaman && enhNeedsGapClose) || (IsMeleeClass(target) && player->IsWithinDistInMap(target, 20.0f))), 55.0f,
+        { "shaman frost shock", isEnhancementShaman && enhNeedsGapClose ? "snare the kill target while chasing" : "snare medium-range melee threats",
+            10473, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     Unit const* poisonedAllyInTotemRange = IsSpellReady(player, 8170) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 20.0f) : nullptr;
     AddDecisionCandidate(candidates, poisonedAllyInTotemRange && !HasActiveWaterTotem(player), 54.0f,
         { "shaman poison cleansing totem", "answer rogue poison pressure with a nearby water totem", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5321,13 +5344,15 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
     bool const enemyFlagCarrierActive = values.enemyFlagCarrierActive;
     bool const teamFlagCarrierNear = values.teamFlagCarrierNear;
 
-    std::array<TacticalRule, 8> const rules =
+    std::array<TacticalRule, 10> const rules =
     {{
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
         { "player has flag", bgActive && values.playerHasFlag, "bg move to objective", 100.0f },
         { "enemy flag carrier active", bgActive && enemyFlagCarrierActive, "attack enemy flag carrier", 95.0f },
         { "flag pickup available", bgActive && values.flagPickupAvailable, "bg move to objective", 90.0f },
         { "team flag carrier near", bgActive && teamFlagCarrierNear, "bg protect fc", 80.0f },
+        { "node assault available", bgActive && values.nodeAssaultAvailable, "bg move to objective", 75.0f },
+        { "node defense available", bgActive && values.nodeDefenseAvailable, "bg move to objective", 74.0f },
         { "bg active", bgActive, "bg pursue enemy", 60.0f },
         { "low health", lowHealth, "bg use buff", 45.0f },
         { "low mana", lowMana, "bg use buff", 45.0f }
@@ -5467,6 +5492,10 @@ bool PvpCore::IsTriggerActive(PvpTrigger trigger, PvpValues const& values)
             return values.enemyFlagCarrierNear;
         case PvpTrigger::TeamFlagCarrierNear:
             return values.teamFlagCarrierNear;
+        case PvpTrigger::NodeAssaultAvailable:
+            return values.nodeAssaultAvailable;
+        case PvpTrigger::NodeDefenseAvailable:
+            return values.nodeDefenseAvailable;
         default:
             break;
     }
@@ -5829,16 +5858,17 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
-        // Ground-targeted gap closers (Heroic Leap, Rehgar's Fury) belong on this
-        // allowlist just like Charge/Intercept - they are the mechanism used to
-        // reach melee range in the first place. Without them here, this generic
+        // Gap closers and ranged chase tools belong on this allowlist: they are
+        // the mechanism used to reach or hold melee range in the first place.
+        // Without them here, this generic
         // "not in melee yet" check zeroes context.spellId and silently substitutes
         // a plain ReachMeleeRange walk before CastDirectSpell/NotifyDuelDecision
         // are ever reached, which reads as the bot doing nothing but walking and
         // never whispering a decision at all.
-        bool const isGapCloser = context.spellId == 11578 || context.spellId == 20617 ||
-            context.spellId == 81271 || context.spellId == 82419 || context.spellId == 49376 || context.spellId == 16979;
-        if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !isGapCloser)
+        bool const canCastOutsideMelee = context.spellId == 11578 || context.spellId == 20617 ||
+            context.spellId == 81271 || context.spellId == 82419 || context.spellId == 49376 || context.spellId == 16979 ||
+            IsShamanFrostShockSpell(context.spellId);
+        if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !canCastOutsideMelee)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::ReachMeleeRange, meleeTarget->GetGUID(),
                 std::max(1.0f, GetConfiguredMeleeRange() - 1.0f), "reach melee", "enemy out of melee", 85.0f);
@@ -6138,6 +6168,16 @@ BattlegroundObjectiveSelection PvpCore::SelectObjectiveSkeleton(PvpValues const&
         objective.type = BattlegroundObjectiveType::AttackFlagCarrier;
     else if (IsTriggerActive(PvpTrigger::TeamFlagCarrierNear, values))
         objective.type = BattlegroundObjectiveType::ProtectFlagCarrier;
+    else if (IsTriggerActive(PvpTrigger::NodeAssaultAvailable, values))
+    {
+        objective.type = BattlegroundObjectiveType::AssaultNode;
+        objective.objectiveId = values.nodeObjectiveId;
+    }
+    else if (IsTriggerActive(PvpTrigger::NodeDefenseAvailable, values))
+    {
+        objective.type = BattlegroundObjectiveType::DefendNode;
+        objective.objectiveId = values.nodeObjectiveId;
+    }
 
     return objective;
 }

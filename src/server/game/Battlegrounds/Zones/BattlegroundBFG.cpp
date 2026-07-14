@@ -63,6 +63,39 @@ BattlegroundBFG::BattlegroundBFG()
 
 BattlegroundBFG::~BattlegroundBFG() {}
 
+bool BattlegroundBFG::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    if (nodeId >= GILNEAS_BG_DYNAMIC_NODES_COUNT)
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    TeamId const teamId = GetTeamIndexByTeamId(playerTeam);
+    uint8 const state = _capturePointInfo[nodeId]._state;
+
+    node.NodeId = nodeId;
+    node.Location.Relocate(GILNEAS_BG_NodePositions[nodeId][0], GILNEAS_BG_NodePositions[nodeId][1],
+        GILNEAS_BG_NodePositions[nodeId][2], GILNEAS_BG_NodePositions[nodeId][3]);
+    node.BannerGuid = BgObjects[nodeId * GILNEAS_BG_OBJECT_PER_NODE + state];
+
+    if (state == GILNEAS_BG_NODE_TYPE_NEUTRAL)
+        node.Status = BattlegroundNodeStatus::Neutral;
+    else if (state == uint8(GILNEAS_BG_NODE_STATUS_ALLY_OCCUPIED) + uint8(teamId))
+        node.Status = BattlegroundNodeStatus::FriendlyControlled;
+    else if (state == uint8(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + uint8(teamId))
+        node.Status = BattlegroundNodeStatus::FriendlyContested;
+    else if (state >= GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED && _capturePointInfo[nodeId]._captured)
+        node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
+    else if (state <= GILNEAS_BG_NODE_STATUS_HORDE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::EnemyControlled;
+    else
+        node.Status = BattlegroundNodeStatus::EnemyContested;
+
+    return true;
+}
+
 void BattlegroundBFG::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)

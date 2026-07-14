@@ -64,6 +64,9 @@ struct PvpValues
     bool enemyFlagCarrierActive = false;
     bool enemyFlagCarrierNear = false;
     bool teamFlagCarrierNear = false;
+    bool nodeAssaultAvailable = false;
+    bool nodeDefenseAvailable = false;
+    uint32 nodeObjectiveId = 0;
     uint32 battlegroundTeamHumanCount = 0;
     bool battlegroundTeamHasHumans = false;
 };
@@ -80,7 +83,9 @@ enum class PvpTrigger : uint8
     FlagPickupAvailable,
     EnemyFlagCarrierActive,
     EnemyFlagCarrierNear,
-    TeamFlagCarrierNear
+    TeamFlagCarrierNear,
+    NodeAssaultAvailable,
+    NodeDefenseAvailable
 };
 
 enum class BattlegroundObjectiveType : uint8

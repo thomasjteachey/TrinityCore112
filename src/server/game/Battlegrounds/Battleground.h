@@ -48,6 +48,24 @@ struct BattlegroundScore;
 struct PvPDifficultyEntry;
 struct WorldSafeLocsEntry;
 
+enum class BattlegroundNodeStatus : uint8
+{
+    Neutral = 0,
+    FriendlyControlled,
+    EnemyControlled,
+    FriendlyContested,
+    EnemyContested,
+    FriendlyUnderAttack
+};
+
+struct BattlegroundNodeObjective
+{
+    uint32 NodeId = 0;
+    BattlegroundNodeStatus Status = BattlegroundNodeStatus::Neutral;
+    Position Location;
+    ObjectGuid BannerGuid = ObjectGuid::Empty;
+};
+
 enum BattlegroundDesertionType
 {
     BG_DESERTION_TYPE_LEAVE_BG        = 0, // player leaves the BG
@@ -516,12 +534,15 @@ class TC_GAME_API Battleground
 
         virtual ObjectGuid GetFlagPickerGUID(int32 /*team*/ = -1) const { return ObjectGuid::Empty; }
         virtual void SetDroppedFlagGUID(ObjectGuid /*guid*/, int32 /*team*/ = -1) { }
-        // Neutral-flag battlegrounds can expose their currently available
-        // pickup and the scoring destination for a specific carrier. Keeping
+        // Flag battlegrounds can expose their currently available pickup and
+        // the scoring destination for a specific carrier. Keeping
         // this in the battleground contract lets objective consumers remain
         // independent of individual battleground layouts.
         virtual ObjectGuid GetFlagPickupGUID(ObjectGuid /*playerGuid*/) const { return ObjectGuid::Empty; }
         virtual bool GetFlagCapturePosition(ObjectGuid /*carrierGuid*/, Position& /*position*/) const { return false; }
+        virtual uint32 GetDynamicNodeCount() const { return 0; }
+        virtual bool GetDynamicNodeInfo(ObjectGuid /*playerGuid*/, uint32 /*nodeId*/, BattlegroundNodeObjective& /*node*/) const { return false; }
+        bool GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const;
         virtual void HandleQuestComplete(uint32 /*questid*/, Player* /*player*/) { }
         virtual bool CanActivateGO(int32 /*entry*/, uint32 /*team*/) const { return true; }
         virtual bool IsSpellAllowed(uint32 /*spellId*/, Player const* /*player*/) const { return true; }

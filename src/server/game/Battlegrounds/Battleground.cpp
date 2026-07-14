@@ -46,6 +46,7 @@
 #include "Item.h"
 #include <algorithm>
 #include <cstdarg>
+#include <vector>
 
 namespace
 {
@@ -2030,6 +2031,53 @@ uint32 Battleground::GetPlayerTeam(ObjectGuid guid) const
     if (itr != m_Players.end())
         return itr->second.Team;
     return 0;
+}
+
+bool Battleground::GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const
+{
+    if (playerGuid.IsEmpty())
+        return false;
+
+    std::vector<BattlegroundNodeObjective> assaultNodes;
+    std::vector<BattlegroundNodeObjective> defenseNodes;
+    std::vector<BattlegroundNodeObjective> urgentDefenseNodes;
+    for (uint32 nodeId = 0; nodeId < GetDynamicNodeCount(); ++nodeId)
+    {
+        BattlegroundNodeObjective node;
+        if (!GetDynamicNodeInfo(playerGuid, nodeId, node))
+            continue;
+
+        if (node.Status == BattlegroundNodeStatus::FriendlyUnderAttack)
+            urgentDefenseNodes.push_back(node);
+        else if (node.Status == BattlegroundNodeStatus::FriendlyControlled ||
+            node.Status == BattlegroundNodeStatus::FriendlyContested)
+            defenseNodes.push_back(node);
+        else
+            assaultNodes.push_back(node);
+    }
+
+    // Keep a stable one-third of participants on defense. Stable role and
+    // node selection prevent every update from sending the same bot toward a
+    // different base as ownership changes elsewhere on the map.
+    uint64 const seed = playerGuid.GetRawValue();
+    bool const prefersDefense = (seed % 3) == 0;
+    std::vector<BattlegroundNodeObjective> const* candidates = nullptr;
+    if (prefersDefense && !urgentDefenseNodes.empty())
+        candidates = &urgentDefenseNodes;
+    else if (prefersDefense && !defenseNodes.empty())
+        candidates = &defenseNodes;
+    else if (!assaultNodes.empty())
+        candidates = &assaultNodes;
+    else if (!defenseNodes.empty())
+        candidates = &defenseNodes;
+    else if (!urgentDefenseNodes.empty())
+        candidates = &urgentDefenseNodes;
+
+    if (!candidates || candidates->empty())
+        return false;
+
+    objective = (*candidates)[(seed / 3) % candidates->size()];
+    return true;
 }
 
 uint32 Battleground::GetOtherTeam(uint32 teamId) const

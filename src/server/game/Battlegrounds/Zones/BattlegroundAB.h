@@ -318,6 +318,8 @@ class BattlegroundAB : public Battleground
 
         /* Nodes occupying */
         void EventPlayerClickedOnFlag(Player* source, GameObject* target_obj) override;
+        uint32 GetDynamicNodeCount() const override { return BG_AB_DYNAMIC_NODES_COUNT; }
+        bool GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const override;
 
         /* achievement req. */
         bool IsAllNodesControlledByTeam(uint32 team) const override;

@@ -77,6 +77,7 @@ namespace playerbot
     uint64 BuildBattlegroundInstanceKey(Battleground const* battleground);
     Player* FindNearestEnemyBattlegroundPlayer(Player* player, float maxDistance, uint32* scannedPlayers = nullptr, uint32* attackableEnemies = nullptr);
     bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
+    void ApplyDeterministicObjectiveOffset(Battleground const* battleground, Player const* player, Position& destination);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
 }
 
@@ -2967,6 +2968,47 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
+    bool TryAdvanceNodeObjective(Player* player, Battleground* battleground)
+    {
+        if (!player || !battleground || !player->FindMap())
+            return false;
+
+        BattlegroundNodeObjective objective;
+        if (!battleground->GetNodeObjective(player->GetGUID(), objective))
+            return false;
+
+        bool const isDefense = objective.Status == BattlegroundNodeStatus::FriendlyControlled ||
+            objective.Status == BattlegroundNodeStatus::FriendlyContested ||
+            objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
+        bool const needsInteraction = !isDefense || objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
+        Position destination = objective.Location;
+        if (isDefense && !needsInteraction)
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+
+        float const arrivalRange = needsInteraction ? 8.0f : 12.0f;
+        if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), arrivalRange))
+            return IssueMovePointThrottled(player, destination, 6.0f, 500) || player->isMoving();
+
+        // Friendly/claimed nodes are defended by holding nearby and engaging
+        // attackers. Assault targets and friendly nodes under attack require a
+        // normal banner click.
+        if (!needsInteraction)
+            return true;
+
+        GameObject* banner = player->FindMap()->GetGameObject(objective.BannerGuid);
+        if (!banner || !banner->IsInWorld() || !banner->isSpawned())
+            return true;
+
+        if (!player->IsWithinDistInMap(banner, 8.0f))
+            return IssueMovePointThrottled(player, banner->GetPosition(), 6.0f, 500) || player->isMoving();
+
+        banner->Use(player);
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP node interaction attempted: guid={} node={} status={} banner_guid={}.",
+            player->GetGUID().ToString(), objective.NodeId, static_cast<uint8>(objective.Status), objective.BannerGuid.ToString());
+        return true;
+    }
+
     std::unordered_map<uint64, uint32> g_WsgReturnAttemptNotBeforeMsByGuid;
 
     GameObject* GetFriendlyDroppedWsgFlag(Player* player, BattlegroundWS* bgWs)
@@ -3790,6 +3832,14 @@ namespace playerbot
         if (!battleground || !player)
             return false;
 
+        BattlegroundNodeObjective nodeObjective;
+        if (battleground->GetNodeObjective(player->GetGUID(), nodeObjective))
+        {
+            destination = nodeObjective.Location;
+            ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            return true;
+        }
+
         if (IsWarsongGulch(player))
         {
             // Midfield brawl behavior for WSG: collapse both teams toward center map.
@@ -4238,6 +4288,17 @@ namespace playerbot
                         return true;
 
             return EngageNearestEnemyPlayer(player, GetAggressiveCombatScanDistance(player, 100.0f));
+        }
+
+        if ((context.objective.type == BattlegroundObjectiveType::AssaultNode ||
+            context.objective.type == BattlegroundObjectiveType::DefendNode))
+        {
+            // Fight threats already near the assigned base, but do not let the
+            // generic map-wide enemy chase pull node attackers/defenders away.
+            if (EngageNearestEnemyPlayer(player, 35.0f))
+                return true;
+            if (TryAdvanceNodeObjective(player, battleground))
+                return true;
         }
 
         if (TryPursueNearestEnemyInBattleground(player))

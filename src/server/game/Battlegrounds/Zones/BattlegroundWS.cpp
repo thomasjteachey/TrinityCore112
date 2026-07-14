@@ -82,6 +82,60 @@ void BattlegroundWGScore::BuildObjectivesBlock(WorldPacket& data)
 
 BattlegroundWS::~BattlegroundWS() { }
 
+ObjectGuid BattlegroundWS::GetFlagPickupGUID(ObjectGuid playerGuid) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || playerGuid.IsEmpty())
+        return ObjectGuid::Empty;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return ObjectGuid::Empty;
+
+    TeamId const ownFlagTeam = GetTeamIndexByTeamId(playerTeam);
+    TeamId const enemyFlagTeam = ownFlagTeam == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+
+    // A carrier's objective is the capture point, not another interactable flag.
+    if (_flagKeepers[enemyFlagTeam] == playerGuid)
+        return ObjectGuid::Empty;
+
+    // Returning a friendly dropped flag is immediately useful and uses the
+    // same normal GameObject interaction path as taking an enemy flag.
+    if (_flagState[ownFlagTeam] == BG_WS_FLAG_STATE_ON_GROUND)
+        return m_DroppedFlagGUID[ownFlagTeam];
+
+    if (_flagState[enemyFlagTeam] == BG_WS_FLAG_STATE_ON_BASE)
+        return BgObjects[enemyFlagTeam == TEAM_ALLIANCE ? BG_WS_OBJECT_A_FLAG : BG_WS_OBJECT_H_FLAG];
+
+    if (_flagState[enemyFlagTeam] == BG_WS_FLAG_STATE_ON_GROUND)
+        return m_DroppedFlagGUID[enemyFlagTeam];
+
+    return ObjectGuid::Empty;
+}
+
+bool BattlegroundWS::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& position) const
+{
+    if (GetStatus() != STATUS_IN_PROGRESS || carrierGuid.IsEmpty())
+        return false;
+
+    uint32 const carrierTeam = GetPlayerTeam(carrierGuid);
+    if (carrierTeam != ALLIANCE && carrierTeam != HORDE)
+        return false;
+
+    TeamId const carrierTeamId = GetTeamIndexByTeamId(carrierTeam);
+    TeamId const carriedFlagTeam = carrierTeamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
+    if (_flagState[carriedFlagTeam] != BG_WS_FLAG_STATE_ON_PLAYER || _flagKeepers[carriedFlagTeam] != carrierGuid)
+        return false;
+
+    // These are the same capture triggers used by HandleFlagRoomCapturePoint.
+    uint32 const areaTriggerId = carriedFlagTeam == TEAM_ALLIANCE ? 3647 : 3646;
+    AreaTriggerEntry const* areaTrigger = sAreaTriggerStore.LookupEntry(areaTriggerId);
+    if (!areaTrigger)
+        return false;
+
+    position.Relocate(areaTrigger->Pos.X, areaTrigger->Pos.Y, areaTrigger->Pos.Z, 0.0f);
+    return true;
+}
+
 char const* BattlegroundWS::GetWSGFlagStateToken(uint8 flagState)
 {
     switch (flagState)

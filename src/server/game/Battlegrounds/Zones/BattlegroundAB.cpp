@@ -65,6 +65,39 @@ BattlegroundAB::BattlegroundAB()
 
 BattlegroundAB::~BattlegroundAB() { }
 
+bool BattlegroundAB::GetDynamicNodeInfo(ObjectGuid playerGuid, uint32 nodeId, BattlegroundNodeObjective& node) const
+{
+    if (nodeId >= BG_AB_DYNAMIC_NODES_COUNT)
+        return false;
+
+    uint32 const playerTeam = GetPlayerTeam(playerGuid);
+    if (playerTeam != ALLIANCE && playerTeam != HORDE)
+        return false;
+
+    TeamId const teamId = GetTeamIndexByTeamId(playerTeam);
+    uint8 const state = m_Nodes[nodeId];
+
+    node.NodeId = nodeId;
+    node.Location = BG_AB_NodePositions[nodeId];
+    node.BannerGuid = BgObjects[nodeId * 8 + state];
+
+    if (state == BG_AB_NODE_TYPE_NEUTRAL)
+        node.Status = BattlegroundNodeStatus::Neutral;
+    else if (state == uint8(teamId) + BG_AB_NODE_TYPE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::FriendlyControlled;
+    else if (state == uint8(teamId) + BG_AB_NODE_TYPE_CONTESTED)
+        node.Status = BattlegroundNodeStatus::FriendlyContested;
+    else if (state < BG_AB_NODE_TYPE_OCCUPIED &&
+        m_prevNodes[nodeId] == uint8(teamId) + BG_AB_NODE_TYPE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::FriendlyUnderAttack;
+    else if (state >= BG_AB_NODE_TYPE_OCCUPIED)
+        node.Status = BattlegroundNodeStatus::EnemyControlled;
+    else
+        node.Status = BattlegroundNodeStatus::EnemyContested;
+
+    return true;
+}
+
 void BattlegroundAB::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)
