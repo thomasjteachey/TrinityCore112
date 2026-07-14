@@ -3015,7 +3015,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!isAtInteractDistance)
             return IssueMovePointThrottled(player, banner->GetPosition(), 6.0f, 500) || player->isMoving();
 
-        if (PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+        if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
 
         StopVirtualPlayerbotMovement(player);
@@ -4222,7 +4222,7 @@ namespace playerbot
         // The node-capture OPEN_LOCK spell owns the bot until it completes or
         // is interrupted by normal spell rules. Tactical movement and combat
         // otherwise restart/cancel the ten-second interaction every fast tick.
-        if (PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+        if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
 
         BreakExpiredHunterFeignDeath(player);
