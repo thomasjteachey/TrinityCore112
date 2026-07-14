@@ -517,7 +517,7 @@ public:
         }
         if (!playerbotClone && managedBot)
         {
-            Notify(player, "Use the playerbot-copy option for that character.");
+            Notify(player, "Use the playerbot option for that character.");
             return false;
         }
 
@@ -589,7 +589,7 @@ public:
 
         lobby->CloneRequests.push_back({ sourceGuid, characterInfo->Name, team, true });
         RefreshLobbyClonePreviews(*lobby);
-        Notify(player, "Added playerbot copy " + characterInfo->Name + " to team " + TeamName(team) + ".");
+        Notify(player, "Added playerbot " + characterInfo->Name + " to team " + TeamName(team) + ".");
         return true;
     }
 
@@ -614,7 +614,7 @@ public:
             return true;
         }
 
-        Notify(player, "That copy is no longer in the team roster.");
+        Notify(player, "That playerbot or player clone is no longer in the team roster.");
         return false;
     }
 
@@ -745,7 +745,7 @@ public:
 
         if (!blueCount || !redCount)
         {
-            Notify(owner, "Both teams need at least one player or requested copy.");
+            Notify(owner, "Both teams need at least one player, playerbot, or player clone.");
             return false;
         }
 
@@ -886,6 +886,8 @@ public:
             if (player->IsSpectator())
                 player->SetIsSpectator(false);
 
+            player->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+
             auto teamItr = lobby->Teams.find(player->GetGUID());
             ApplyTeamVisual(player, teamItr == lobby->Teams.end() ? 0 : teamItr->second);
             return;
@@ -928,6 +930,13 @@ public:
             player->TradeCancel(true);
         if (player->duel)
             player->DuelComplete(DUEL_INTERRUPTED);
+
+        if (player->HasAuraType(SPELL_AURA_MOD_STEALTH))
+        {
+            player->RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+            auto teamItr = lobby->Teams.find(player->GetGUID());
+            ApplyTeamVisual(player, teamItr == lobby->Teams.end() ? 0 : teamItr->second);
+        }
 
         if (player->GetDistance(LobbyArrival) > LOBBY_MAX_DISTANCE || player->GetPositionZ() < -80.0f || player->GetPositionZ() > -45.0f)
             player->NearTeleportTo(LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(), LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
@@ -1275,7 +1284,7 @@ public:
                 if (request.Team == team)
                     ++copyCount;
             AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                std::string(TeamName(team)) + " roster: " + std::to_string(realCount) + " players, " + std::to_string(copyCount) + " copies",
+                std::string(TeamName(team)) + " roster: " + std::to_string(realCount) + " players, " + std::to_string(copyCount) + " bots/clones",
                 team, ACTION_STATUS);
 
             auto itr = lobby->Teams.find(player->GetGUID());
@@ -1284,11 +1293,11 @@ public:
             else
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, std::string("Join team ") + TeamName(team), team, ACTION_JOIN_TEAM);
 
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot copy...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random playerbot", team, ACTION_ADD_RANDOM_BOT);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot copy...", team, ACTION_REMOVE_BOT);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add Dark player copy...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove Dark player copy...", team, ACTION_REMOVE_DARK);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot...", team, ACTION_REMOVE_BOT);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add player clone...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove player clone...", team, ACTION_REMOVE_DARK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
@@ -1313,7 +1322,7 @@ public:
 
             if (!filteredIndex)
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    playerbotClone ? "No playerbot copies are on this team." : "No Dark player copies are on this team.",
+                    playerbotClone ? "No playerbots are on this team." : "No player clones are on this team.",
                     team, ACTION_STATUS);
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", team, ACTION_REMOVE_LIST_BACK);

@@ -5564,6 +5564,13 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS) && IsTrapGameObject(trapCaster);
     bool deferAutoDismountForRunMount = false;
 
+    // Stealth removes the custom-lobby team flag visual. The staging lobby is
+    // deliberately non-combat, so reject stealth at validation time while
+    // leaving stealth behavior unchanged once the participant enters a match.
+    if (Player* playerCaster = m_caster->ToPlayer())
+        if (playerCaster->IsInCustomGameLobby() && m_spellInfo->HasAura(SPELL_AURA_MOD_STEALTH))
+            return SPELL_FAILED_NOT_HERE;
+
     // check death state
     if (m_caster->ToUnit() && !m_caster->ToUnit()->IsAlive() && !m_spellInfo->IsPassive() && !(m_spellInfo->HasAttribute(SPELL_ATTR0_CASTABLE_WHILE_DEAD) || (IsTriggered() && !m_triggeredByAuraSpell)))
         return SPELL_FAILED_CASTER_DEAD;
