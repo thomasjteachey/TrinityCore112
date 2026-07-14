@@ -74,7 +74,6 @@ constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
-constexpr float kPlayerbotMountEnemyAwarenessRange = 100.0f;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
@@ -122,6 +121,10 @@ constexpr uint32 kRacialDwarfStoneformSpellId = 20594;
 constexpr uint32 kRacialGnomeSurpriseSpellId = 89160;
 constexpr uint32 kRacialHumanPerceptionSpellId = 20600;
 constexpr float kPlayerbotTotemRefreshDistance = 30.0f;
+// Carrier auras are a second source of truth for the short interval between a
+// flag click and the next collected battleground-state snapshot. Keep this
+// centralized rather than teaching class selectors about individual BGs.
+constexpr std::array<uint32, 4> kBattlegroundFlagCarrierAuraIds = { 23333, 23335, 34976, 89798 };
 std::unordered_map<ObjectGuid, bool> g_HunterRangedModeByBot;
 std::mutex g_HunterRangedModeByBotLock;
 std::unordered_map<ObjectGuid, uint8> g_CombatNoTargetTicksByBot;
@@ -918,7 +921,12 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
         (botTeamValue == HORDE || botTeamValue == TEAM_HORDE) ? TEAM_HORDE : player->GetTeamId();
     TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
     ObjectGuid const playerGuid = player->GetGUID();
-    values.flagPickupAvailable = !battleground->GetFlagPickupGUID(playerGuid).IsEmpty();
+    ObjectGuid const flagPickupGuid = battleground->GetFlagPickupGUID(playerGuid);
+    values.flagPickupAvailable = !flagPickupGuid.IsEmpty();
+    if (values.flagPickupAvailable)
+        if (Map* map = player->FindMap())
+            if (GameObject* flag = map->GetGameObject(flagPickupGuid))
+                values.flagPickupNearby = flag->IsInWorld() && player->IsWithinDistInMap(flag, 10.0f);
 
     // Use one local-pressure boundary for tactical objective selection and
     // class movement ownership. A midfield bot should break off its flag route
@@ -1122,7 +1130,7 @@ SpellDecision MaybeSelectUtilitySpell(Player const* player, Unit const* hostileT
     // floor, keep utility selection available so drink remains sticky instead
     // of immediately breaking back into combat posture.
     if (HasHostileTarget(player, hostileTarget) &&
-        player->IsWithinDistInMap(hostileTarget, kPlayerbotMountEnemyAwarenessRange) && !maintainExistingDrink)
+        player->IsWithinDistInMap(hostileTarget, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE) && !maintainExistingDrink)
         return {};
 
     return SelectOutOfCombatEatDrinkOrMountSpell(player);
@@ -1973,7 +1981,7 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     // Keep pressure logic responsive outside the prep phase: don't choose an
     // out-of-combat mount action while hostile players are already within
     // practical engage range.
-    if (!inBattlegroundPreparation && HasNearbyAttackableEnemyPlayer(player, kPlayerbotMountEnemyAwarenessRange))
+    if (!inBattlegroundPreparation && HasNearbyAttackableEnemyPlayer(player, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE))
         return decision;
 
     return SelectMountSpell(player, mountReason);
@@ -5594,10 +5602,11 @@ TacticalDecision SelectBattlegroundTacticalDecision(Player const* player, player
     bool const enemyFlagCarrierActive = values.enemyFlagCarrierActive;
     bool const teamFlagCarrierNear = values.teamFlagCarrierNear;
 
-    std::array<TacticalRule, 10> const rules =
+    std::array<TacticalRule, 11> const rules =
     {{
         { "bg waiting", bgWaiting, "bg move to start", 50.0f },
         { "player has flag", bgActive && values.playerHasFlag, "bg move to objective", 100.0f },
+        { "flag pickup nearby", bgActive && values.flagPickupNearby, "bg move to objective", 99.0f },
         { "enemy flag carrier active", bgActive && enemyFlagCarrierActive, "attack enemy flag carrier", 95.0f },
         { "flag pickup available", bgActive && values.flagPickupAvailable, "bg move to objective", 90.0f },
         { "team flag carrier near", bgActive && teamFlagCarrierNear, "bg protect fc", 80.0f },
@@ -5766,9 +5775,13 @@ bool PvpCore::IsBattlegroundFlagCarrier(Player const* player)
         return false;
 
     ObjectGuid const playerGuid = player->GetGUID();
-    return battleground->GetFlagPickerGUID(TEAM_ALLIANCE) == playerGuid ||
+    if (battleground->GetFlagPickerGUID(TEAM_ALLIANCE) == playerGuid ||
         battleground->GetFlagPickerGUID(TEAM_HORDE) == playerGuid ||
-        battleground->GetFlagPickerGUID() == playerGuid;
+        battleground->GetFlagPickerGUID() == playerGuid)
+        return true;
+
+    return std::any_of(kBattlegroundFlagCarrierAuraIds.begin(), kBattlegroundFlagCarrierAuraIds.end(),
+        [player](uint32 spellId) { return player->HasAura(spellId); });
 }
 
 bool PvpCore::SpellWouldBreakFlagCarry(uint32 spellId)
@@ -5787,10 +5800,13 @@ bool PvpCore::SpellWouldBreakFlagCarry(uint32 spellId)
             {
                 case SPELL_AURA_MOD_STEALTH:
                 case SPELL_AURA_MOD_INVISIBILITY:
+                case SPELL_AURA_FEIGN_DEATH:
                 case SPELL_AURA_SCHOOL_IMMUNITY:
                 case SPELL_AURA_DAMAGE_IMMUNITY:
                 case SPELL_AURA_MOUNTED:
                 case SPELL_AURA_MOD_UNATTACKABLE:
+                case SPELL_AURA_PHASE:
+                case SPELL_AURA_SPIRIT_OF_REDEMPTION:
                     return true;
                 default:
                     break;
@@ -5861,6 +5877,11 @@ PvpValues PvpCore::CollectValues(Player const* player)
         values.battlegroundTypeId = player->GetBattlegroundTypeId();
 
     PopulateObjectiveStateTriggers(player, values);
+    // Re-evaluate from live keeper/aura state as well. The values object can be
+    // collected immediately before a flag click and then reused later in the
+    // same update, so relying only on its original objective snapshot lets a
+    // pre-pickup stealth/Feign decision survive after the bot becomes carrier.
+    values.playerHasFlag = values.playerHasFlag || IsBattlegroundFlagCarrier(player);
     values.battlegroundTeamHumanCount = CountHumanPlayersOnBattlegroundTeam(player);
     values.battlegroundTeamHasHumans = values.battlegroundTeamHumanCount > 0;
 
@@ -5970,7 +5991,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // class range/facing and tactical navmesh movement replace each other on
     // alternating cadences and produce the visible run/turn/stop loop.
     context.preserveFlagObjectiveMovement = inActiveBattleground &&
-        (values.playerHasFlag || (values.flagPickupAvailable && !values.nearbyEnemyActive));
+        (values.playerHasFlag || values.flagPickupNearby ||
+            (values.flagPickupAvailable && !values.nearbyEnemyActive));
     context.preserveFlagCarrierMovement = inActiveBattleground && values.playerHasFlag;
     bool const inBattlegroundPreparation = player->InBattleground() &&
         (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));

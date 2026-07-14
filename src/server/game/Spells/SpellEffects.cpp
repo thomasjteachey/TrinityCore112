@@ -1368,7 +1368,7 @@ void Spell::EffectJumpDest()
         else
             speedXY = 0.0f;
 
-        // Real clients execute JumpTo from the knockback movement packet they
+mymy         // Real clients execute JumpTo from the knockback movement packet they
         // receive. Virtual player sessions have no client movement loop to
         // acknowledge that packet, so drive their jump from the server's
         // MotionMaster instead. This also gives playerbot movement guards an

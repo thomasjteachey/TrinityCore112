@@ -27,6 +27,8 @@ class GameObject;
 
 namespace playerbot
 {
+constexpr float PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE = 100.0f;
+
 struct PvpCoreConfig
 {
     bool moduleEnabled = false;
@@ -62,6 +64,7 @@ struct PvpValues
     bool hasArenaTeamInvite = false;
     bool playerHasFlag = false;
     bool flagPickupAvailable = false;
+    bool flagPickupNearby = false;
     bool nearbyEnemyActive = false;
     bool enemyFlagCarrierActive = false;
     bool enemyFlagCarrierNear = false;

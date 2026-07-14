@@ -3115,13 +3115,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                     delay.pickupNotBeforeMs = nowMs + PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS;
             }
 
-            if (player->IsWithinDistInMap(flag, 8.0f) && nowMs < delay.pickupNotBeforeMs)
+            if (flag->IsAtInteractDistance(player) && nowMs < delay.pickupNotBeforeMs)
                 return true;
         }
         else
             g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
 
-        if (!player->IsWithinDistInMap(flag, 8.0f))
+        if (!flag->IsAtInteractDistance(player))
             return IssueMovePointThrottled(player, flag->GetPosition(), 6.0f, 500) || player->isMoving();
 
         // Use the object through the normal interaction path so flag-drop
@@ -3920,9 +3920,20 @@ namespace playerbot
         if (HoldHunterStationaryCast(player, target, "engage-selected-enemy"))
             return true;
 
-        // Ensure mounted bots immediately transition into combat posture once an
-        // enemy target is acquired. Without this, bots that don't cast right away
-        // (or rely on melee/auto attacks) can stay mounted and fail to engage.
+        // A map-wide objective (most visibly an enemy flag carrier) can select
+        // a target well beyond the range used by mount selection. Keep using
+        // mount speed for that travel instead of dismounting merely because a
+        // distant target exists; otherwise the mount selector sees a clear
+        // 100-yard area and remounts on the next class tick forever.
+        if (player->IsMounted() &&
+            !player->IsWithinDistInMap(target, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE))
+        {
+            player->AttackStop();
+            return MoveTowardUnit(player, target, playerbot::PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE) || player->isMoving();
+        }
+
+        // Inside the same awareness envelope that suppresses mounting, switch
+        // to combat posture for casts, melee attacks, and normal positioning.
         if (player->IsMounted())
             ForcePlayerbotDismount(player);
 
@@ -4399,6 +4410,27 @@ namespace playerbot
         // otherwise restart/cancel the ten-second interaction every fast tick.
         if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
+
+        // Combat does not make a nearby flag optional. Once an eligible flag
+        // is within ten yards, keep its approach/click route ahead of combat
+        // positioning. Class execution uses the matching nearby value to allow
+        // instant attacks while preventing range movement from replacing this
+        // short objective move.
+        if (Battleground* battleground = player->GetBattleground();
+            battleground && battleground->GetStatus() == STATUS_IN_PROGRESS &&
+            !playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
+        {
+            ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
+            if (!pickupGuid.IsEmpty())
+            {
+                GameObject* flag = player->FindMap() ? player->FindMap()->GetGameObject(pickupGuid) : nullptr;
+                if (flag && flag->IsInWorld() && player->IsWithinDistInMap(flag, 10.0f))
+                {
+                    TryAdvanceFlagObjective(player, battleground);
+                    return true;
+                }
+            }
+        }
 
         // Stock up during the preparation window (or shortly afterward if a
         // bot joined late). This uses the summoned object's owner, range, raid

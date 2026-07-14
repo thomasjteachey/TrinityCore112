@@ -5589,6 +5589,19 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
 
+    // The context may have been selected just before a synchronous flag click
+    // in the tactical pass. Recheck live carrier state before any spell can
+    // stop, turn, or otherwise disturb the carrier's capture movement.
+    if (context.spellId && PvpCore::IsBattlegroundFlagCarrier(player))
+    {
+        uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+        if (resolvedSpellId && PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId))
+        {
+            SetLastExecutionStatus(player, "flag_carrier_forbidden_live_recheck");
+            return true;
+        }
+    }
+
     // Hazard escape remains the movement owner, but instant spells that are
     // already valid at the current position may still fire while the bot runs.
     // Cast-time spells, channels, items, and movement directives must yield so
