@@ -230,6 +230,8 @@ public:
     static uint32 CountHumanPlayersOnBattlegroundTeam(Player const* player);
     static GameObject* FindUsableLightwell(Player const* player, float maxDistance);
     static bool ShouldSeekLightwell(Player const* player);
+    static GameObject* FindUsableSoulwell(Player const* player, float maxDistance);
+    static bool HasHealthstone(Player const* player);
     static bool IsBattlegroundFlagCarrier(Player const* player);
     static bool SpellWouldBreakFlagCarry(uint32 spellId);
     static bool TeamHasHumanPlayers(Player const* player);

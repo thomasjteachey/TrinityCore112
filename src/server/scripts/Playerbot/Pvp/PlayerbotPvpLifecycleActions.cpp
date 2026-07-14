@@ -164,6 +164,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     std::unordered_map<uint64, uint32> g_BattlegroundOverstackRequeueCooldownUntilMsByGuid;
     std::unordered_map<uint64, uint32> g_BattlegroundOverstackInstanceNextDepartureMsByInstance;
     std::unordered_map<uint64, uint32> g_BattlegroundQueuedNoInviteSinceMsByGuid;
+    std::unordered_set<uint64> g_BattlegroundDeadBotGuids;
+    std::unordered_set<uint64> g_BattlegroundSpiritQueuedBotGuids;
     uint32 g_LastHumanInterestPopulationRebalanceAttemptMs = 0;
     uint32 g_LastScmSlotRefillAttemptMs = 0;
     bool BattlegroundHasAnyRealHumanPlayers(Player const* player);
@@ -417,7 +419,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         PositionFullTerrainStatus terrainStatus;
         map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
             terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-        return player->IsOutdoors() || terrainStatus.outdoors;
+        return player->IsOutdoors() && terrainStatus.outdoors;
     }
 
     bool ShouldForceIndoorDismount(Player const* player, bool outdoors, uint32 lingerMs = 1500)
@@ -1556,14 +1558,49 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return spiritGuide;
         };
 
-        if (!player || !player->InBattleground())
+        if (!player)
             return false;
+
+        uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
+        if (!player->InBattleground())
+        {
+            g_BattlegroundDeadBotGuids.erase(playerGuidRaw);
+            g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw);
+            return false;
+        }
 
         if (player->IsAlive())
         {
-            queuedSinceMsByGuid.erase(player->GetGUID().GetRawValue());
+            queuedSinceMsByGuid.erase(playerGuidRaw);
+            bool const wasDead = g_BattlegroundDeadBotGuids.erase(playerGuidRaw) != 0;
+            bool const wasSpiritQueued = g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw) != 0;
+            if (wasDead && wasSpiritQueued && player->GetMapId() == 726)
+            {
+                // Twin Peaks' middle graveyards resurrect playerbots on cliff
+                // geometry that is disconnected from the useful downhill
+                // navmesh. Relocate only bots revived by the spirit queue, and
+                // use the explicit team exits supplied for this battleground.
+                TeamId const team = ResolveBotTeamId(player);
+                if (team == TEAM_NEUTRAL)
+                    return false;
+
+                Position const downhillExit = team == TEAM_HORDE ?
+                    Position(1876.978149f, 431.659607f, -6.087340f, 0.421625f) :
+                    Position(1874.352905f, 422.770020f, -17.006735f, 4.763416f);
+                if (MotionMaster* motionMaster = player->GetMotionMaster())
+                    motionMaster->Clear();
+                ForcePlayerbotDismount(player);
+                player->NearTeleportTo(downhillExit);
+                TC_LOG_INFO("playerbots.pvp.lifecycle",
+                    "Playerbot Twin Peaks graveyard exit relocation: guid={} team={} destination=({},{},{}).",
+                    player->GetGUID().ToString(), uint32(team), downhillExit.GetPositionX(), downhillExit.GetPositionY(),
+                    downhillExit.GetPositionZ());
+                return true;
+            }
             return false;
         }
+
+        g_BattlegroundDeadBotGuids.insert(playerGuidRaw);
 
         if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
@@ -1581,7 +1618,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         if (battleground->IsPlayerInResurrectQueue(player->GetGUID()))
         {
-            uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
+            g_BattlegroundSpiritQueuedBotGuids.insert(playerGuidRaw);
             uint32 const nowMs = GameTime::GetGameTimeMS();
             uint32& queuedSinceMs = queuedSinceMsByGuid[playerGuidRaw];
             if (!queuedSinceMs)
@@ -1624,6 +1661,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return true;
 
         battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
+        g_BattlegroundSpiritQueuedBotGuids.insert(playerGuidRaw);
         queuedSinceMsByGuid[player->GetGUID().GetRawValue()] = GameTime::GetGameTimeMS();
         sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(player, battleground, spiritGuide->GetGUID());
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -1643,6 +1681,47 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return actionName && expected && std::strcmp(actionName, expected) == 0;
     }
 
+    void StopVirtualPlayerbotMovement(Player* player);
+
+    bool TryAcquireHealthstoneFromSoulwell(Player* player)
+    {
+        if (!player || player->IsInCombat() || playerbot::PvpCore::HasHealthstone(player))
+            return false;
+
+        GameObject* soulwell = playerbot::PvpCore::FindUsableSoulwell(player, 60.0f);
+        if (!soulwell)
+            return false;
+
+        if (!soulwell->IsAtInteractDistance(player))
+            return IssueMovePointThrottled(player, soulwell->GetPosition(), 4.0f, 500) || player->isMoving();
+
+        Player* warlockOwner = soulwell->GetOwner() ? soulwell->GetOwner()->ToPlayer() : nullptr;
+        if (!warlockOwner)
+            return false;
+
+        // The level-60 Soulwell creates Major Healthstones. Select the exact
+        // create-item spell from the summoning warlock's Improved Healthstone
+        // rank so the resulting 9421/19012/19013 item matches normal gameplay.
+        uint32 createHealthstoneSpellId = 23819;
+        if (warlockOwner->HasSpell(18693) || warlockOwner->HasAura(18693))
+            createHealthstoneSpellId = 23821;
+        else if (warlockOwner->HasSpell(18692) || warlockOwner->HasAura(18692))
+            createHealthstoneSpellId = 23820;
+
+        ForcePlayerbotDismount(player);
+        StopVirtualPlayerbotMovement(player);
+        SpellCastResult const castResult = player->CastSpell(player, createHealthstoneSpellId, true);
+        if (castResult != SPELL_CAST_OK || !playerbot::PvpCore::HasHealthstone(player))
+            return false;
+
+        soulwell->AddUse();
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot acquired healthstone from Soulwell: guid={} owner={} createSpell={} uses={}",
+            player->GetGUID().ToString(), warlockOwner->GetGUID().ToString(), createHealthstoneSpellId,
+            soulwell->GetUseCount());
+        return true;
+    }
+
     void ClearActiveMovementForControlLoss(Player* player)
     {
         if (!player)
@@ -1658,8 +1737,6 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (MotionMaster* motionMaster = player->GetMotionMaster())
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
-
-    void StopVirtualPlayerbotMovement(Player* player);
 
     bool IsMindFlaySpell(SpellInfo const* spellInfo)
     {
@@ -3018,6 +3095,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
 
+        // Mount auras prevent the node's interruptible OPEN_LOCK interaction.
+        // Dismount only after the bot has reached the banner so travel to the
+        // objective can still benefit from mount speed.
+        if (player->IsMounted())
+            ForcePlayerbotDismount(player);
+
         StopVirtualPlayerbotMovement(player);
         player->AttackStop();
 
@@ -4054,7 +4137,11 @@ namespace playerbot
 
         if (battleground->GetStatus() == STATUS_WAIT_JOIN)
         {
-            ForceHoldPlayerAtStartDuringWaitJoin(player);
+            // Soulwell pickup temporarily owns prep-room movement; otherwise
+            // the ordinary start-position hold would drag bots away from the
+            // well every lifecycle tick.
+            if (!TryAcquireHealthstoneFromSoulwell(player))
+                ForceHoldPlayerAtStartDuringWaitJoin(player);
 
             if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
             {
@@ -4223,6 +4310,12 @@ namespace playerbot
         // is interrupted by normal spell rules. Tactical movement and combat
         // otherwise restart/cancel the ten-second interaction every fast tick.
         if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+            return true;
+
+        // Stock up during the preparation window (or shortly afterward if a
+        // bot joined late). This uses the summoned object's owner, range, raid
+        // restriction, lifetime, and 25-charge counter.
+        if (TryAcquireHealthstoneFromSoulwell(player))
             return true;
 
         // Lightwell recovery owns movement for injured teammates, regardless of

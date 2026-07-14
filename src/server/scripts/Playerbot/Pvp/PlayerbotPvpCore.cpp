@@ -90,6 +90,19 @@ constexpr uint32 kPriestShadowWordPainSpellId = 589;
 constexpr uint32 kPriestLightwellSpellId = 27871;
 constexpr uint32 kPriestLightwellRenewSpellId = 27874;
 constexpr uint32 kPriestLightwellGameObjectEntry = 181106;
+constexpr uint32 kWarlockCreateSoulwellSpellId = 29886;
+constexpr uint32 kWarlockRitualOfSoulsSpellId = 29893;
+constexpr std::array<uint32, 6> kWarlockSoulwellGameObjectEntries = { 181621, 183510, 183511, 193169, 193170, 193171 };
+constexpr std::array<uint32, 24> kHealthstoneItemEntries =
+{
+    36894, 36893, 36892, 36891, 36890, 36889,
+    22105, 22104, 22103,
+    19013, 19012, 9421,
+    19011, 19010, 5510,
+    19009, 19008, 5509,
+    19007, 19006, 5511,
+    19005, 19004, 5512
+};
 constexpr uint32 kWarlockFirestoneItemEntry = 13701;
 constexpr uint32 kWarlockFirestoneUseSpellId = 81334;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
@@ -328,6 +341,18 @@ bool IsOnUseItemReady(Player const* player, uint32 itemEntry)
         return false;
 
     return true;
+}
+
+uint32 SelectReadyHealthstoneItemEntry(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    for (uint32 itemEntry : kHealthstoneItemEntries)
+        if (IsOnUseItemReady(player, itemEntry))
+            return itemEntry;
+
+    return 0;
 }
 
 bool IsWarlockSpellstoneItemEntry(uint32 itemEntry)
@@ -1174,7 +1199,10 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (IsHunterCastTimeActionLocked(player))
         return false;
 
-    uint32 const knownPlayerSpellId = ResolveKnownPlayerSpellInChain(player, decision.spellId);
+    bool const canUseRitualSoulwellEffect = player->GetClass() == CLASS_WARLOCK &&
+        decision.spellId == kWarlockCreateSoulwellSpellId && player->HasSpell(kWarlockRitualOfSoulsSpellId);
+    uint32 const knownPlayerSpellId = canUseRitualSoulwellEffect ? kWarlockCreateSoulwellSpellId :
+        ResolveKnownPlayerSpellInChain(player, decision.spellId);
     bool const knownByPlayer = knownPlayerSpellId != 0;
     bool const knownByPet = IsPetSpellReady(player, decision.spellId);
     if (!knownByPlayer && !knownByPet)
@@ -1631,9 +1659,10 @@ bool IsEffectivelyOutdoors(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    // Travel-state checks should tolerate brief map flag flickers around
-    // battleground ramps/fences, so treat either signal as outdoors.
-    return player->IsOutdoors() || terrainStatus.outdoors;
+    // Mounting must be conservative around WMO boundaries. A stale cached
+    // outdoor bit must not override fresh terrain/WMO indoor classification (or
+    // vice versa), otherwise bots mount inside bases and tunnels.
+    return player->IsOutdoors() && terrainStatus.outdoors;
 }
 
 bool IsStrictlyOutdoorsForMount(Player const* player)
@@ -1732,10 +1761,11 @@ bool CanCastMountSpellAtCurrentLocation(Player const* player, SpellInfo const* m
     if (!CanAttemptMount(player, mountSpellInfo))
         return false;
 
-    // Let custom/playerbot mount spells that do not carry the outdoors-only
-    // attribute work in battleground prep rooms where the map permits mounting.
-    // Regular mounts still honor Spell::CheckCast's outdoors-only requirement.
-    return !mountSpellInfo->HasAttribute(SPELL_ATTR0_OUTDOORS_ONLY) || player->IsOutdoors();
+    // Playerbot mount selection must honor current terrain/WMO classification
+    // even for custom mount spells that omitted the normal outdoors-only spell
+    // attribute. Otherwise the AI repeatedly chooses those spells in indoor
+    // battleground bases although a normal player cannot mount there.
+    return IsEffectivelyOutdoors(player);
 }
 
 bool IsHardControlled(Player const* player)
@@ -2336,17 +2366,27 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
         case CLASS_WARLOCK:
         {
             Pet const* pet = player->GetPet();
-            if (pet && pet->IsAlive())
-                break;
+            if (!pet || !pet->IsAlive())
+            {
+                ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+                bool const isAfflictionWarlock = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
+                bool const isDestructionWarlock = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
+                uint32 const summonPetSpell = isAfflictionWarlock ? 691 : (isDestructionWarlock ? 712 : 697);
+                char const* summonPetName = isAfflictionWarlock ? "warlock summon felhunter prep" : (isDestructionWarlock ? "warlock summon succubus prep" : "warlock summon voidwalker prep");
+                char const* summonPetReason = isAfflictionWarlock ? "summon felhunter before gates open" : (isDestructionWarlock ? "summon succubus before gates open" : "summon voidwalker before gates open");
+                if (IsSpellReady(player, summonPetSpell))
+                    return { summonPetName, summonPetReason, summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+            }
 
-            ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
-            bool const isAfflictionWarlock = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
-            bool const isDestructionWarlock = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
-            uint32 const summonPetSpell = isAfflictionWarlock ? 691 : (isDestructionWarlock ? 712 : 697);
-            char const* summonPetName = isAfflictionWarlock ? "warlock summon felhunter prep" : (isDestructionWarlock ? "warlock summon succubus prep" : "warlock summon voidwalker prep");
-            char const* summonPetReason = isAfflictionWarlock ? "summon felhunter before gates open" : (isDestructionWarlock ? "summon succubus before gates open" : "summon voidwalker before gates open");
-            if (IsSpellReady(player, summonPetSpell))
-                return { summonPetName, summonPetReason, summonPetSpell, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
+            // The player knows Ritual of Souls; its triggered Create Soulwell
+            // effect is selected directly so virtual teammates do not have to
+            // emulate a three-client summoning ritual during the short prep
+            // window. The normal summoned Soulwell object, ownership, lifetime,
+            // and charge counter are still used.
+            if (player->HasSpell(kWarlockRitualOfSoulsSpellId) &&
+                !playerbot::PvpCore::FindUsableSoulwell(player, 60.0f))
+                return { "warlock create soulwell prep", "create a team healthstone well before gates open",
+                    kWarlockCreateSoulwellSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             break;
         }
@@ -4105,7 +4145,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     bool const trapSetupThreat = HasHostileTarget(player, trapSetupTarget);
     bool const enemyNear = player->IsWithinDistInMap(target, GetConfiguredCloseRange());
     bool const rangedMode = IsHunterInRangedMode(player);
-    uint32 const preferredTrapSpellId = isSurvivalHunter && trapSetupTarget && HasDotAura(trapSetupTarget) ? uint32(13809) : uint32(14311);
+    uint32 const preferredTrapSpellId = trapSetupTarget && HasDotAura(trapSetupTarget) ? uint32(13809) : uint32(14311);
     bool const preferredTrapReady = IsSpellReady(player, preferredTrapSpellId);
     // Traps are only legal out of combat. Feign Death is allowed as a quick
     // defensive/trap-setup attempt, but it must never put hunter movement into a
@@ -4333,11 +4373,29 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     Unit const* rogueTarget = selectedRogueTarget ? selectedRogueTarget : (shadowWordPainReady ? SelectEnemyClassTarget(player, CLASS_ROGUE, GetConfiguredLongRange()) : nullptr);
     bool const isHolyPriest = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isShadowPriest = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
-    bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest;
+    bool const holySchoolLocked = player->GetSpellHistory()->IsSchoolLocked(SPELL_SCHOOL_MASK_HOLY);
+    bool const shadowSchoolLocked = player->GetSpellHistory()->IsSchoolLocked(SPELL_SCHOOL_MASK_SHADOW);
+    bool const shadowHealingFallback = isShadowPriest && shadowSchoolLocked;
+    bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest || shadowHealingFallback;
+
+    // A shadow-locked shadow priest cannot heal while Shadowform remains active.
+    // Drop the form immediately, reuse the normal healing-priest decision tree
+    // for the lockout window, then the high-priority Shadowform candidate below
+    // restores normal behavior as soon as Shadow becomes available again.
+    if (shadowHealingFallback && player->HasAura(15473))
+        const_cast<Player*>(player)->RemoveAurasDueToSpell(15473);
+
+    if (isHolyPriest && holySchoolLocked)
+    {
+        Unit const* mindBlastTarget = IsSpellReady(player, 10947) ? SelectEnemyTargetInSpellRange(player, target, 10947) : nullptr;
+        if (mindBlastTarget)
+            return { "priest mind blast", "use shadow offense during a holy-school lockout", 10947,
+                playerbot::PvpClassSpellContext::TargetMode::Enemy, mindBlastTarget->GetGUID() };
+    }
     bool const isHumanPriest = player->GetRace() == RACE_HUMAN;
     Unit const* chastiseTarget = (isHumanPriest && IsSpellReady(player, 81350)) ?
         SelectEnemyTargetInSpellRange(player, target, 81350) : nullptr;
-    bool const shouldCastLightwell = isHolyPriest &&
+    bool const shouldCastLightwell = isHolyPriest && player->IsInCombat() &&
         CountNearbyFriendlyPlayers(player, 10.0f, false, false) >= 2 && IsSpellReady(player, kPriestLightwellSpellId);
     Unit const* spiritHealTarget = (isHolyPriest && IsPriestInSpiritOfRedemption(player) && IsSpellReady(player, 10917)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 99.5f, 0, false) : nullptr;
     Unit const* fearWardTarget = (player->GetRace() == RACE_DWARF && IsSpellReady(player, 6346)) ? SelectFriendlyMissingBuffTarget(player, 6346, 40.0f) : nullptr;
@@ -4358,7 +4416,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     if (isHealingPriest)
     {
         AddDecisionCandidate(candidates, shouldCastLightwell, 48.0f,
-            { "priest lightwell", "place a lightwell when at least two allies are within ten yards", kPriestLightwellSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+            { "priest lightwell", "place a lightwell in combat when at least two allies are within ten yards", kPriestLightwellSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(candidates, emergencyLowAlly, 47.0f,
             { "priest flash heal", "prioritize healing for any nearby ally below 75 percent health", 10917, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !emergencyLowAlly && debuffedAlly, 46.0f,
@@ -4381,7 +4439,7 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             { "priest flash heal", "heal party members below 75 percent health with flash heal", 10917, healTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, healTarget ? healTarget->GetGUID() : ObjectGuid::Empty });
     }
 
-    if (isShadowPriest)
+    if (isShadowPriest && !shadowHealingFallback)
     {
         AddDecisionCandidate(candidates, !HasAuraFromSpellChain(player, 15473) && IsSpellReady(player, 15473), 58.0f,
             { "priest shadowform", "stay in shadowform", 15473, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5239,11 +5297,36 @@ SpellDecision SelectClassOrUtilitySpell(Player const* player, Unit const* target
         return holdDecision;
     }
 
+    if (player && player->HealthBelowPct(50))
+    {
+        if (uint32 const healthstoneItemEntry = SelectReadyHealthstoneItemEntry(player))
+            return { "use healthstone", "restore health below fifty percent", 0,
+                playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID(), healthstoneItemEntry };
+    }
+
     // Spirit of Redemption must run the priest healing selector even with no
     // selected hostile/ally target; the selector finds the lowest-health ally
     // itself and Flash Heal is free during this aura.
     if (IsPriestInSpiritOfRedemption(player))
         return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
+
+    // School-lockout fallbacks are combat recovery, not ordinary utility.
+    // Run them before racial/mount/eat-drink selection so a shadow-locked
+    // shadow priest drops Shadowform and begins healing immediately, and a
+    // holy-locked holy priest can answer with Mind Blast without losing a
+    // decision tick to unrelated utility.
+    if (player && player->GetClass() == CLASS_PRIEST)
+    {
+        bool const holyPriestHolyLocked = profileSelection.profile == ClassicClassProfile::SecondaryClassic &&
+            player->GetSpellHistory()->IsSchoolLocked(SPELL_SCHOOL_MASK_HOLY);
+        bool const isShadowPriest = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
+        bool const shadowPriestShadowLocked = isShadowPriest &&
+            player->GetSpellHistory()->IsSchoolLocked(SPELL_SCHOOL_MASK_SHADOW);
+        bool const shadowPriestNeedsForm = isShadowPriest && !shadowPriestShadowLocked &&
+            !HasAuraFromSpellChain(player, 15473) && IsSpellReady(player, 15473);
+        if (holyPriestHolyLocked || shadowPriestShadowLocked || shadowPriestNeedsForm)
+            return SelectClassicClassSpell(player, target, allyTarget, profileSelection);
+    }
 
     // Hunter cast-time actions (especially Aimed Shot and Revive Pet) must be
     // exclusive. Lifecycle movement already holds the hunter still, but the
@@ -5554,7 +5637,59 @@ bool PvpCore::ShouldSeekLightwell(Player const* player)
 {
     return player && player->InBattleground() && player->IsAlive() &&
         !IsBattlegroundFlagCarrier(player) && player->GetHealthPct() < 65.0f &&
+        !(player->GetHealthPct() < 50.0f && SelectReadyHealthstoneItemEntry(player)) &&
         !player->HasAura(kPriestLightwellRenewSpellId) && FindUsableLightwell(player, 20.0f) != nullptr;
+}
+
+bool PvpCore::HasHealthstone(Player const* player)
+{
+    if (!player)
+        return false;
+
+    for (uint32 itemEntry : kHealthstoneItemEntries)
+        if (player->GetItemByEntry(itemEntry))
+            return true;
+
+    return false;
+}
+
+GameObject* PvpCore::FindUsableSoulwell(Player const* player, float maxDistance)
+{
+    if (!player || !player->IsAlive() || !player->FindMap() || maxDistance <= 0.0f)
+        return nullptr;
+
+    GameObject* nearest = nullptr;
+    float nearestDistance = maxDistance;
+    for (uint32 soulwellEntry : kWarlockSoulwellGameObjectEntries)
+    {
+        std::list<GameObject*> soulwells;
+        player->GetGameObjectListWithEntryInGrid(soulwells, soulwellEntry, maxDistance);
+        for (GameObject* soulwell : soulwells)
+        {
+            if (!soulwell || !soulwell->IsInWorld() || !soulwell->isSpawned() ||
+                soulwell->GetGoType() != GAMEOBJECT_TYPE_SPELLCASTER)
+                continue;
+
+            GameObjectTemplate const* soulwellTemplate = soulwell->GetGOInfo();
+            if (!soulwellTemplate || (soulwellTemplate->spellcaster.charges &&
+                soulwell->GetUseCount() >= soulwellTemplate->spellcaster.charges))
+                continue;
+
+            Unit* owner = soulwell->GetOwner();
+            Player* ownerPlayer = owner ? owner->ToPlayer() : nullptr;
+            if (!ownerPlayer || !player->IsInSameRaidWith(ownerPlayer))
+                continue;
+
+            float const distance = player->GetExactDist(soulwell);
+            if (distance <= nearestDistance)
+            {
+                nearest = soulwell;
+                nearestDistance = distance;
+            }
+        }
+    }
+
+    return nearest;
 }
 
 bool PvpCore::IsBattlegroundFlagCarrier(Player const* player)

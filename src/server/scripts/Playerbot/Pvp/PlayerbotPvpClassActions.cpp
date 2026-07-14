@@ -59,6 +59,8 @@ void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase
 bool HasActiveMovementEffectSpline(Player const* player);
 bool TryMoveOutOfHazardousLiquid(Player* player);
 constexpr uint32 kWarlockFirestoneItemEntry = 13701;
+constexpr uint32 kWarlockCreateSoulwellSpellId = 29886;
+constexpr uint32 kWarlockRitualOfSoulsSpellId = 29893;
 
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
@@ -458,7 +460,7 @@ bool IsEffectivelyOutdoors(Player const* player)
     PositionFullTerrainStatus terrainStatus;
     map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ(),
         terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-    return player->IsOutdoors() || terrainStatus.outdoors;
+    return player->IsOutdoors() && terrainStatus.outdoors;
 }
 
 bool IsStrictlyOutdoorsForMount(Player const* player)
@@ -4229,7 +4231,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return false;
     }
 
-    uint32 resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
+    bool const canUseRitualSoulwellEffect = player->GetClass() == CLASS_WARLOCK &&
+        context.spellId == kWarlockCreateSoulwellSpellId && player->HasSpell(kWarlockRitualOfSoulsSpellId);
+    uint32 resolvedSpellId = canUseRitualSoulwellEffect ? kWarlockCreateSoulwellSpellId :
+        ResolveKnownSpellInChain(player, context.spellId);
     bool castFromPet = false;
     Pet* petCaster = nullptr;
     if (!resolvedSpellId)
