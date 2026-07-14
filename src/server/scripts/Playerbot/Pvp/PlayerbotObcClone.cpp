@@ -671,8 +671,14 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         clone->SetFullPower(Powers(power));
 
     clone->SetBGTeam(team);
-    clone->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+    // Lobby previews are roster mannequins: players must be able to target them,
+    // see their names, and inspect their copied gear/talents.  A friendly faction
+    // exposes the normal player interaction menu regardless of the source race;
+    // the team flag remains the visual indication of the assigned custom team.
+    clone->SetFaction(FACTION_FRIENDLY);
+    clone->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
     clone->AddUnitState(UNIT_STATE_ROOT);
+    clone->SetWorldSubMap(mapId, lobbyInstanceId);
     clone->ResetMap();
     clone->Relocate(position);
     clone->SetMap(lobbyMap);
@@ -1223,7 +1229,19 @@ void PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(uint32 lobbyInsta
     }
 
     if (Player* clone = ObjectAccessor::FindConnectedPlayer(cloneGuid))
-        clone->NearTeleportTo(position);
+    {
+        // These server-owned preview players have no client to acknowledge a
+        // normal Player::NearTeleportTo.  Relocate them immediately and only
+        // when their roster slot actually changed; the teleport packet keeps
+        // nearby real clients visually synchronized without setting a pending
+        // player-teleport semaphore.
+        if (clone->GetExactDistSq(position) > 0.01f)
+        {
+            clone->SendTeleportPacket(position);
+            clone->UpdatePosition(position, true);
+            clone->UpdateObjectVisibility();
+        }
+    }
 }
 
 void PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(uint32 lobbyInstanceId, ObjectGuid sourceGuid,

@@ -933,8 +933,19 @@ bool IsManagedRandomBotImpl(Player const* player, ManagedBotAccountIds const& bo
     if (IsChromieWhisperFacade(player))
         return false;
 
-    if (WorldSession const* session = player->GetSession(); session && session->IsVirtualSession())
-        return true;
+    if (WorldSession const* session = player->GetSession())
+    {
+        // In-memory clone players and temporary database-only clone sources
+        // deliberately use socketless sessions, but they are not managed
+        // playerbots.  Sending them through login/teleport recovery assumes
+        // account, social, and other runtime state that transient players do
+        // not own.
+        if (session->IsTransientPlayerSession())
+            return false;
+
+        if (session->IsVirtualSession())
+            return true;
+    }
 
     if (botAccounts.empty())
         return false;

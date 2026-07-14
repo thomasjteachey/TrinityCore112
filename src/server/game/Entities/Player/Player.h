@@ -943,6 +943,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 GetWorldSubMapInstanceId(uint32 mapId) const { return m_worldSubMapId == mapId ? m_worldSubMapInstanceId : 0; }
         bool HasWorldSubMap() const { return m_worldSubMapInstanceId != 0; }
         bool IsInCustomGameLobby() const { return GetMapId() == 1 && HasWorldSubMap(); }
+        bool IsInSameCustomGameLobby(Player const* other) const
+        {
+            return other && IsInCustomGameLobby() && other->IsInCustomGameLobby() &&
+                m_worldSubMapId == other->m_worldSubMapId && m_worldSubMapInstanceId == other->m_worldSubMapInstanceId;
+        }
 
         bool HasSummonPending() const;
         void SendSummonRequestFrom(Unit* summoner);

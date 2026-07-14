@@ -920,7 +920,8 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
     if (!GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
         return;
 
-    if (GetPlayer()->IsValidAttackTarget(player))
+    bool const sameCustomGameLobby = GetPlayer()->IsInSameCustomGameLobby(player);
+    if (GetPlayer()->IsValidAttackTarget(player) && !sameCustomGameLobby)
         return;
 
     uint32 talent_points = 0x47;
@@ -928,7 +929,8 @@ void WorldSession::HandleInspectOpcode(WorldPacket& recvData)
     WorldPacket data(SMSG_INSPECT_TALENT, guid_size+4+talent_points);
     data << player->GetPackGUID();
 
-    if (GetPlayer()->CanBeGameMaster() || sWorld->getIntConfig(CONFIG_TALENTS_INSPECTING) + (GetPlayer()->GetTeamId() == player->GetTeamId()) > 1)
+    if (GetPlayer()->CanBeGameMaster() || sameCustomGameLobby ||
+        sWorld->getIntConfig(CONFIG_TALENTS_INSPECTING) + (GetPlayer()->GetTeamId() == player->GetTeamId()) > 1)
         player->BuildPlayerTalentsInfoData(&data);
     else
     {
@@ -957,7 +959,7 @@ void WorldSession::HandleInspectHonorStatsOpcode(WorldPacket& recvData)
     if (!GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
         return;
 
-    if (GetPlayer()->IsValidAttackTarget(player))
+    if (GetPlayer()->IsValidAttackTarget(player) && !GetPlayer()->IsInSameCustomGameLobby(player))
         return;
 
     WorldPacket data(MSG_INSPECT_HONOR_STATS, 8+1+4*4);
@@ -1309,7 +1311,7 @@ void WorldSession::HandleQueryInspectAchievements(WorldPacket& recvData)
     if (!GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
         return;
 
-    if (GetPlayer()->IsValidAttackTarget(player))
+    if (GetPlayer()->IsValidAttackTarget(player) && !GetPlayer()->IsInSameCustomGameLobby(player))
         return;
 
     player->SendRespondInspectAchievements(_player);

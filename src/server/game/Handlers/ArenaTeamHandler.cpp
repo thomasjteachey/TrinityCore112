@@ -45,7 +45,7 @@ void WorldSession::HandleInspectArenaTeamsOpcode(WorldPacket& recvData)
     if (!GetPlayer()->IsWithinDistInMap(player, INSPECT_DISTANCE, false))
         return;
 
-    if (GetPlayer()->IsValidAttackTarget(player))
+    if (GetPlayer()->IsValidAttackTarget(player) && !GetPlayer()->IsInSameCustomGameLobby(player))
         return;
 
     for (uint8 i = 0; i < MAX_ARENA_SLOT; ++i)
