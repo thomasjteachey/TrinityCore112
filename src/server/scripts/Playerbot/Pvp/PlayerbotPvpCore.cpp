@@ -25,6 +25,7 @@
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
+#include "GameObject.h"
 #include "Group.h"
 #include "Item.h"
 #include "Log.h"
@@ -48,6 +49,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <list>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -85,6 +87,11 @@ constexpr uint32 kDruidThornsSpellId = 9910;
 constexpr uint32 kDruidMassThornsSpellId = 89762;
 constexpr uint32 kPriestWeakenedSoulSpellId = 6788;
 constexpr uint32 kPriestShadowWordPainSpellId = 589;
+constexpr uint32 kPriestLightwellSpellId = 27871;
+constexpr uint32 kPriestLightwellRenewSpellId = 27874;
+constexpr uint32 kPriestLightwellGameObjectEntry = 181106;
+constexpr uint32 kWarlockFirestoneItemEntry = 13701;
+constexpr uint32 kWarlockFirestoneUseSpellId = 81334;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
 constexpr uint32 kMageManaRubyItemId = 8008;
 constexpr uint32 kRacialOrcBloodFurySpellId = 20572;
@@ -524,8 +531,15 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
         case 4987: // Cleanse
             return true;
         default:
-            return false;
+            break;
     }
+
+    if (spellInfo)
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.Effect == SPELL_EFFECT_DISPEL)
+                return true;
+
+    return false;
 }
 
 bool IsHunterInRangedMode(Player const* player)
@@ -1152,7 +1166,7 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
         return false;
 
     if (decision.itemEntry)
-        return IsOnUseItemReady(player, decision.itemEntry);
+        return !playerbot::PvpCore::ShouldSeekLightwell(player) && IsOnUseItemReady(player, decision.itemEntry);
 
     if (!decision.spellId)
         return false;
@@ -1183,6 +1197,30 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(knownByPlayer ? knownPlayerSpellId : decision.spellId);
     if (!spellInfo)
         return false;
+
+    if (playerbot::PvpCore::ShouldSeekLightwell(player))
+    {
+        if (spellInfo->CalcCastTime() > 0 || spellInfo->IsChanneled() || spellInfo->IsAutoRepeatRangedSpell())
+            return false;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            switch (effect.Effect)
+            {
+                case SPELL_EFFECT_TELEPORT_UNITS:
+                case SPELL_EFFECT_TELEPORT_UNITS_FACE_CASTER:
+                case SPELL_EFFECT_LEAP:
+                case SPELL_EFFECT_JUMP:
+                case SPELL_EFFECT_JUMP_DEST:
+                case SPELL_EFFECT_LEAP_BACK:
+                case SPELL_EFFECT_CHARGE:
+                case SPELL_EFFECT_CHARGE_DEST:
+                    return false;
+                default:
+                    break;
+            }
+        }
+    }
 
     bool const breaksFlagCarry = playerbot::PvpCore::SpellWouldBreakFlagCarry(spellInfo->Id);
     if (breaksFlagCarry && playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
@@ -3948,7 +3986,7 @@ uint32 CountNearbyMeleeThreats(Player const* player, float maxDistance)
     return count;
 }
 
-uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
+uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance, bool includeSelf = true, bool requireLineOfSight = true)
 {
     if (!player || !player->FindMap())
         return 0;
@@ -3960,9 +3998,11 @@ uint32 CountNearbyFriendlyPlayers(Player const* player, float maxDistance)
         Player* candidate = itr->GetSource();
         if (!candidate || !candidate->IsAlive())
             continue;
+        if (!includeSelf && candidate == player)
+            continue;
         if (!IsFriendlySupportTarget(player, candidate))
             continue;
-        if (!player->IsWithinLOSInMap(candidate) || !player->IsWithinDistInMap(candidate, maxDistance))
+        if ((requireLineOfSight && !player->IsWithinLOSInMap(candidate)) || !player->IsWithinDistInMap(candidate, maxDistance))
             continue;
         ++count;
     }
@@ -4185,8 +4225,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const presenceOfMindReady = arcaneBurstWindow && player->HasAura(12042) && !player->HasAura(12043) && IsSpellReady(player, 12043);
     bool const burstPyroblastReady = arcaneBurstWindow && player->HasAura(12043) && IsSpellReady(player, 18809);
     Aura const* arcaneTravelAura = isArcaneMage ? player->GetAura(89780) : nullptr;
-    bool const arcaneBlinkRefreshReady = isArcaneMage && closePressure && arcaneTravelAura &&
-        arcaneTravelAura->GetDuration() >= 4000 && IsSpellReady(player, 1953);
+    bool const arcaneBlinkRefreshReady = isArcaneMage && arcaneTravelAura &&
+        arcaneTravelAura->GetDuration() > 0 && arcaneTravelAura->GetDuration() < 2000 && IsSpellReady(player, 1953);
     return SelectFromTriggerGraph(player, target, nullptr,
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
@@ -4199,8 +4239,8 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage presence of mind", "queue an instant pyroblast during the burst window", 12043, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "arcane burst window", burstPyroblastReady, 56.6f,
             { "mage pyroblast", "instant burst finisher under presence of mind", 18809, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
-        { "mage blink refresh", arcaneBlinkRefreshReady, 45.5f,
-            { "mage blink", "reblink before the time travel window expires under melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "mage blink refresh", arcaneBlinkRefreshReady, 62.0f,
+            { "mage blink", "reblink before the time travel window expires", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
             { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
@@ -4294,6 +4334,11 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     bool const isHolyPriest = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isShadowPriest = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isHealingPriest = profileSelection.profile == ClassicClassProfile::PrimaryClassic || isHolyPriest;
+    bool const isHumanPriest = player->GetRace() == RACE_HUMAN;
+    Unit const* chastiseTarget = (isHumanPriest && IsSpellReady(player, 81350)) ?
+        SelectEnemyTargetInSpellRange(player, target, 81350) : nullptr;
+    bool const shouldCastLightwell = isHolyPriest &&
+        CountNearbyFriendlyPlayers(player, 10.0f, false, false) >= 2 && IsSpellReady(player, kPriestLightwellSpellId);
     Unit const* spiritHealTarget = (isHolyPriest && IsPriestInSpiritOfRedemption(player) && IsSpellReady(player, 10917)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 99.5f, 0, false) : nullptr;
     Unit const* fearWardTarget = (player->GetRace() == RACE_DWARF && IsSpellReady(player, 6346)) ? SelectFriendlyMissingBuffTarget(player, 6346, 40.0f) : nullptr;
     Unit const* shadowSilenceTarget = isShadowPriest && IsSpellReady(player, 15487) ? SelectEnemyCastingTarget(player, GetConfiguredSpellRange(), target) : nullptr;
@@ -4303,6 +4348,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
     bool const isTrollPriest = player->GetRace() == RACE_TROLL;
 
     std::vector<PrioritizedSpellDecision> candidates;
+    AddDecisionCandidate(candidates, isHumanPriest && player->HealthBelowPct(35) && IsSpellReady(player, 19243), 61.0f,
+        { "priest desperate prayer", "emergency human-priest self heal below 35 percent health", 19243, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, spiritHealTarget, 60.5f,
         { "priest flash heal", "spam flash heal during spirit of redemption", 10917, spiritHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, spiritHealTarget ? spiritHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, fearWardTarget, 60.2f,
@@ -4310,6 +4357,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
 
     if (isHealingPriest)
     {
+        AddDecisionCandidate(candidates, shouldCastLightwell, 48.0f,
+            { "priest lightwell", "place a lightwell when at least two allies are within ten yards", kPriestLightwellSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(candidates, emergencyLowAlly, 47.0f,
             { "priest flash heal", "prioritize healing for any nearby ally below 75 percent health", 10917, emergencyLowAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, emergencyLowAlly ? emergencyLowAlly->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !emergencyLowAlly && debuffedAlly, 46.0f,
@@ -4355,6 +4404,8 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
 
     AddDecisionCandidate(candidates, rogueTarget && !HasAuraFromSpellChain(rogueTarget, kPriestShadowWordPainSpellId), 35.0f,
         { "priest shadow word pain", "maintain dot pressure on rogues", kPriestShadowWordPainSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, chastiseTarget, 39.0f,
+        { "priest chastise", "human priest damage and root on an enemy target", 81350, playerbot::PvpClassSpellContext::TargetMode::Enemy, chastiseTarget ? chastiseTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isHolyPriest && manaBurnTarget, 21.0f,
         { "priest mana burn", "burn mana from enemy casters", 10876, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaBurnTarget ? manaBurnTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isHolyPriest && hasHostileTarget && IsSpellReady(player, 10934), 21.0f,
@@ -4576,7 +4627,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* stunTarget = IsSpellReady(player, 10308) ? SelectEnemyCastingTarget(player, 10.0f, executeTarget) : nullptr;
     Unit const* repentanceTarget = (isRetPaladin && IsSpellReady(player, 20066)) ? SelectEnemyCastingTarget(player, 20.0f, executeTarget) : nullptr;
     Unit const* stunnedJudgementTarget = (isRetPaladin && HasAuraFromSpellChain(player, 20375)) ? SelectStunnedEnemyTarget(player, executeTarget, 30.0f) : nullptr;
-    Unit const* protectionTarget = (isRetPaladin && IsSpellReady(player, 10278)) ? SelectFriendlyMeleePressureTarget(player, 40.0f, 50.0f) : nullptr;
+    Unit const* protectionTarget = IsSpellReady(player, 10278) ? SelectFriendlyMeleePressureTarget(player, 40.0f, 50.0f) : nullptr;
     if (protectionTarget && playerbot::PvpCore::IsBattlegroundFlagCarrier(protectionTarget->ToPlayer()))
         protectionTarget = nullptr;
     Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
@@ -4680,6 +4731,13 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
     Unit const* spellLockTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19647)) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* devourEnemyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, 30.0f) : nullptr;
     Unit const* devourFriendlyTarget = (isAfflictionWarlock && IsPetSpellReady(player, 19736)) ? SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 30.0f) : nullptr;
+    Item const* equippedOffhand = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    bool const firestoneEquipped = equippedOffhand && equippedOffhand->GetEntry() == kWarlockFirestoneItemEntry;
+    SpellInfo const* firestoneSpellInfo = sSpellMgr->GetSpellInfo(kWarlockFirestoneUseSpellId);
+    float const firestoneRange = firestoneSpellInfo ? firestoneSpellInfo->GetMaxRange(false) : 0.0f;
+    Unit const* firestoneTarget = (isDestructionWarlock && firestoneEquipped && IsOnUseItemReady(player, kWarlockFirestoneItemEntry) &&
+        firestoneRange > 0.0f && !playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken)) ?
+        SelectEnemyDispelTarget(player, DISPEL_MAGIC, target, firestoneRange) : nullptr;
     uint32 const spellstoneItemEntry = isAfflictionWarlock ? SelectReadyWarlockSpellstoneItemEntry(player) : 0;
     bool const hasSelfMagicDebuff = SelectFriendlyDispelTarget(player, DISPEL_MAGIC, 0.0f) == player;
     bool const shouldUseSpellstone = spellstoneItemEntry != 0 && hasSelfMagicDebuff;
@@ -4700,6 +4758,8 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
         { "warlock devour magic ally", "felhunter dispels friendly magic debuffs", 19736, playerbot::PvpClassSpellContext::TargetMode::Ally, devourFriendlyTarget ? devourFriendlyTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, devourEnemyTarget, 56.0f,
         { "warlock devour magic enemy", "felhunter dispels enemy magic buffs", 19736, playerbot::PvpClassSpellContext::TargetMode::Enemy, devourEnemyTarget ? devourEnemyTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, firestoneTarget, 56.2f,
+        { "warlock firestone", "use the equipped offhand firestone to purge enemy magic buffs", kWarlockFirestoneUseSpellId, playerbot::PvpClassSpellContext::TargetMode::Enemy, firestoneTarget ? firestoneTarget->GetGUID() : ObjectGuid::Empty, kWarlockFirestoneItemEntry });
     AddDecisionCandidate(candidates, fearTarget, 53.0f,
         { "warlock fear", "prioritize fear control on paladin/priest targets in range", 6215, playerbot::PvpClassSpellContext::TargetMode::Enemy, fearTarget ? fearTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !isAfflictionWarlock && !player->IsInCombat() && needsPetSummon && !player->HasAura(18708) && IsSpellReady(player, 18708), 52.0f,
@@ -5451,6 +5511,50 @@ uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
 bool PvpCore::TeamHasHumanPlayers(Player const* player)
 {
     return CountHumanPlayersOnBattlegroundTeam(player) > 0;
+}
+
+GameObject* PvpCore::FindUsableLightwell(Player const* player, float maxDistance)
+{
+    if (!player || !player->IsAlive() || !player->FindMap() || maxDistance <= 0.0f)
+        return nullptr;
+
+    std::list<GameObject*> lightwells;
+    player->GetGameObjectListWithEntryInGrid(lightwells, kPriestLightwellGameObjectEntry, maxDistance);
+
+    GameObject* nearest = nullptr;
+    float nearestDistance = maxDistance;
+    for (GameObject* lightwell : lightwells)
+    {
+        if (!lightwell || !lightwell->IsInWorld() || !lightwell->isSpawned() ||
+            lightwell->GetGoType() != GAMEOBJECT_TYPE_SPELLCASTER)
+            continue;
+
+        GameObjectTemplate const* lightwellTemplate = lightwell->GetGOInfo();
+        if (!lightwellTemplate || (lightwellTemplate->spellcaster.charges &&
+            lightwell->GetUseCount() >= lightwellTemplate->spellcaster.charges))
+            continue;
+
+        Unit* owner = lightwell->GetOwner();
+        Player* ownerPlayer = owner ? owner->ToPlayer() : nullptr;
+        if (!ownerPlayer || !player->IsInSameRaidWith(ownerPlayer))
+            continue;
+
+        float const distance = player->GetExactDist(lightwell);
+        if (distance <= nearestDistance)
+        {
+            nearest = lightwell;
+            nearestDistance = distance;
+        }
+    }
+
+    return nearest;
+}
+
+bool PvpCore::ShouldSeekLightwell(Player const* player)
+{
+    return player && player->InBattleground() && player->IsAlive() &&
+        !IsBattlegroundFlagCarrier(player) && player->GetHealthPct() < 65.0f &&
+        !player->HasAura(kPriestLightwellRenewSpellId) && FindUsableLightwell(player, 20.0f) != nullptr;
 }
 
 bool PvpCore::IsBattlegroundFlagCarrier(Player const* player)

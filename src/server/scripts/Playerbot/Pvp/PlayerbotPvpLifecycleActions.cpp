@@ -4225,6 +4225,23 @@ namespace playerbot
         if (playerbot::PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
 
+        // Lightwell recovery owns movement for injured teammates, regardless of
+        // their current combat objective. Use the actual summoned spellcaster
+        // object so its party restriction, charges, and Renew cast stay in the
+        // normal GameObject::Use path. Class execution separately permits only
+        // instant spells while this path is active.
+        if (playerbot::PvpCore::ShouldSeekLightwell(player))
+        {
+            if (GameObject* lightwell = playerbot::PvpCore::FindUsableLightwell(player, 20.0f))
+            {
+                if (!lightwell->IsAtInteractDistance(player))
+                    return IssueMovePointThrottled(player, lightwell->GetPosition(), 4.0f, 500) || player->isMoving();
+
+                lightwell->Use(player);
+                return true;
+            }
+        }
+
         BreakExpiredHunterFeignDeath(player);
 
         ClearStaleWaitingForResurrectAura(player);

@@ -58,6 +58,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
 void WhisperHunterCastDiagnostic(Player* player, Unit* target, char const* phase, uint32 spellId, char const* extra);
 bool HasActiveMovementEffectSpline(Player const* player);
 bool TryMoveOutOfHazardousLiquid(Player* player);
+constexpr uint32 kWarlockFirestoneItemEntry = 13701;
 
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
@@ -377,8 +378,15 @@ bool IsPlayerbotDispelSpell(uint32 spellId)
         case 4987: // Cleanse
             return true;
         default:
-            return false;
+            break;
     }
+
+    if (spellInfo)
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+            if (effect.Effect == SPELL_EFFECT_DISPEL)
+                return true;
+
+    return false;
 }
 
 SpellInfo const* GetFirstOnUseItemSpellInfo(Item const* item)
@@ -5273,10 +5281,19 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
-    Item* item = player->GetItemByEntry(context.itemEntry);
+    Item* item = nullptr;
+    if (context.itemEntry == kWarlockFirestoneItemEntry)
+    {
+        item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+        if (item && item->GetEntry() != kWarlockFirestoneItemEntry)
+            item = nullptr;
+    }
+    else
+        item = player->GetItemByEntry(context.itemEntry);
+
     if (!item)
     {
-        failureReason = "item_missing";
+        failureReason = context.itemEntry == kWarlockFirestoneItemEntry ? "firestone_not_equipped_offhand" : "item_missing";
         return false;
     }
 
@@ -5301,14 +5318,37 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         return false;
     }
 
+    Unit* target = ResolveTarget(player, context);
+    if (!target || !target->IsAlive())
+    {
+        failureReason = "item_target_invalid_or_dead";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !player->IsValidAttackTarget(target, itemSpellInfo))
+    {
+        failureReason = "item_enemy_target_invalid";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally &&
+        target != player && !player->IsValidAssistTarget(target, itemSpellInfo))
+    {
+        failureReason = "item_ally_target_invalid";
+        return false;
+    }
+
     SpellCastTargets targets;
-    targets.SetUnitTarget(player);
+    targets.SetUnitTarget(target);
     player->CastItemUseSpell(item, targets, 1, 0);
 
     // CastItemUseSpell queues the Spell and does not return the prepare result.
     // Give the PvP decision layer a tiny local throttle so this item action cannot
     // monopolize several AI ticks if the item spell was rejected internally.
     playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, context.spellId ? context.spellId : itemSpellInfo->Id, std::chrono::seconds(2));
+    if (IsPlayerbotDispelSpell(itemSpellInfo->Id))
+        playerbot::PvpClassActions::RegisterCasterSpellCooldown(player, kPlayerbotDispelCooldownToken, kPlayerbotDispelCooldown);
     return true;
 }
 }
@@ -5518,11 +5558,12 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         return true;
     }
 
-    // Only the flag carrier's capture path owns class movement. Preserve
-    // combat activity with spells that are already usable while moving, while
-    // cast times, channels, items, and class movement directives yield to the
-    // carrier route. Bots merely approaching a loose flag cast normally.
-    if (context.preserveFlagCarrierMovement)
+    // Flag capture and injured-player Lightwell recovery own class movement.
+    // Preserve combat activity with spells that are already usable while
+    // moving, while cast times, channels, items, and class movement directives
+    // yield to the active route.
+    bool const seekingLightwell = PvpCore::ShouldSeekLightwell(player);
+    if (context.preserveFlagCarrierMovement || seekingLightwell)
     {
         bool allowInstantSpell = false;
         if (context.spellId)
@@ -5561,13 +5602,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
             allowInstantSpell = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
                 !spellInfo->IsAutoRepeatRangedSpell() && !stopsForHunterShot && !stopsForRecovery && !repositionsCaster &&
-                resolvedSpellId != kRacialNightElfShadowmeldSpellId && !PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId) &&
+                resolvedSpellId != kRacialNightElfShadowmeldSpellId &&
+                (!context.preserveFlagCarrierMovement || !PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId)) &&
                 IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
         }
 
         if (!allowInstantSpell)
         {
-            SetLastExecutionStatus(player, "flag_objective_movement_before_class_action");
+            SetLastExecutionStatus(player, seekingLightwell ? "lightwell_recovery_movement_before_class_action" :
+                "flag_objective_movement_before_class_action");
             return true;
         }
     }

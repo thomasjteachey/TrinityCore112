@@ -23,6 +23,7 @@
 #include "SharedDefines.h"
 
 class Player;
+class GameObject;
 
 namespace playerbot
 {
@@ -227,6 +228,8 @@ public:
     static PvpClassSpellContext BuildClassSpellContext(Player const* player, PvpValues const& values);
     static RandomBotParticipationHooks BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values);
     static uint32 CountHumanPlayersOnBattlegroundTeam(Player const* player);
+    static GameObject* FindUsableLightwell(Player const* player, float maxDistance);
+    static bool ShouldSeekLightwell(Player const* player);
     static bool IsBattlegroundFlagCarrier(Player const* player);
     static bool SpellWouldBreakFlagCarry(uint32 spellId);
     static bool TeamHasHumanPlayers(Player const* player);
