@@ -736,7 +736,8 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    if (!playerbot::IsManagedRandomBot(player) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+    bool const activeClone = playerbot::PlayerbotObcCloneManager::IsActiveClone(player);
+    if (!playerbot::IsManagedRandomBot(player) && !activeClone)
         return;
 
     if (!player->IsInWorld() || !player->InBattleground())
@@ -770,7 +771,25 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     bool const shouldForcePetSpellTick = classContext.classSpellsEnabled &&
         classContext.shouldExecute &&
         playerbot::PvpClassActions::IsPetSpellAction(player, classContext);
-    bool const didExecuteClassSpell = (shouldForceClassMovementTick || shouldForcePetSpellTick) &&
+
+    // Persistent bots reach the full lifecycle below on its normal cadence.
+    // Transient custom-game copies deliberately return before queue/lifecycle
+    // ownership, so give only those copies an equivalent class-decision cadence
+    // here instead of limiting them to autoattacks and movement/pet actions.
+    bool runCloneClassDecision = false;
+    if (activeClone)
+    {
+        LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+        std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+        LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[player->GetGUID().GetRawValue()];
+        if (nextProcessTime <= now)
+        {
+            nextProcessTime = now + RandomBotLifecycleCadenceInterval;
+            runCloneClassDecision = true;
+        }
+    }
+
+    bool const didExecuteClassSpell = (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick) &&
         playerbot::PvpClassActions::Execute(player, classContext);
 
     playerbot::BattlegroundLifecycleContext inProgressContext;
@@ -785,6 +804,7 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
     tickDetail << "bg-fasttick tactical=" << (didExecuteTactical ? 1 : 0)
                << " class_force=" << (shouldForceClassMovementTick ? 1 : 0)
+               << " clone_class_tick=" << (runCloneClassDecision ? 1 : 0)
                << " pet_spell_force=" << (shouldForcePetSpellTick ? 1 : 0)
                << " class_exec=" << (didExecuteClassSpell ? 1 : 0)
                << " class_directive=" << static_cast<uint32>(classContext.movementDirective)

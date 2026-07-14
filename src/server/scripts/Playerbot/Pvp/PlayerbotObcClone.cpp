@@ -544,6 +544,8 @@ void TeardownCustomGameClone(ObjectGuid cloneGuid)
     if (!clone)
         return;
 
+    playerbot::RandomBotParticipationManager::OnPlayerLogout(clone);
+
     if (Battleground* bg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, record.battlegroundType))
         if (bg->IsPlayerInBattleground(cloneGuid))
             bg->RemovePlayerAtLeave(cloneGuid, false, false);
@@ -677,6 +679,9 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     // the team flag remains the visual indication of the assigned custom team.
     clone->SetFaction(FACTION_FRIENDLY);
     clone->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+    clone->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 |
+        UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE);
+    clone->ClearUnitState(UNIT_STATE_UNATTACKABLE);
     clone->AddUnitState(UNIT_STATE_ROOT);
     clone->SetWorldSubMap(mapId, lobbyInstanceId);
     clone->ResetMap();
@@ -695,6 +700,11 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
     ObjectAccessor::AddObject(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     clone->CastSpell(clone, team == ALLIANCE ? 32609 : 32610, true);
+    // Reassert this after the flag aura is applied as well. Any aura-side
+    // targeting state must not turn the roster mannequin into scenery.
+    clone->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 |
+        UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE);
+    clone->ClearUnitState(UNIT_STATE_UNATTACKABLE);
 
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);

@@ -5786,40 +5786,8 @@ bool PvpCore::IsBattlegroundFlagCarrier(Player const* player)
 
 bool PvpCore::SpellWouldBreakFlagCarry(uint32 spellId)
 {
-    auto spellWouldBreakFlagCarry = [&](auto const& self, SpellInfo const* spellInfo, uint8 depth) -> bool
-    {
-        if (!spellInfo || depth > 4)
-            return false;
-
-        if (spellInfo->Mechanic == MECHANIC_MOUNT)
-            return true;
-
-        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
-        {
-            switch (effect.ApplyAuraName)
-            {
-                case SPELL_AURA_MOD_STEALTH:
-                case SPELL_AURA_MOD_INVISIBILITY:
-                case SPELL_AURA_FEIGN_DEATH:
-                case SPELL_AURA_SCHOOL_IMMUNITY:
-                case SPELL_AURA_DAMAGE_IMMUNITY:
-                case SPELL_AURA_MOUNTED:
-                case SPELL_AURA_MOD_UNATTACKABLE:
-                case SPELL_AURA_PHASE:
-                case SPELL_AURA_SPIRIT_OF_REDEMPTION:
-                    return true;
-                default:
-                    break;
-            }
-
-            if (effect.TriggerSpell && self(self, sSpellMgr->GetSpellInfo(effect.TriggerSpell), depth + 1))
-                return true;
-        }
-
-        return false;
-    };
-
-    return spellWouldBreakFlagCarry(spellWouldBreakFlagCarry, sSpellMgr->GetSpellInfo(spellId), 0);
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    return spellInfo && spellInfo->WouldDropBattlegroundFlag();
 }
 
 void PvpCore::LoadConfig()

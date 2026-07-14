@@ -97,6 +97,7 @@ enum GossipAction : uint32
     ACTION_KICK_PLAYER = 470,
     ACTION_START = 500,
     ACTION_CLOSE,
+    ACTION_LEAVE_LOBBY,
     ACTION_REMOVE_LIST_BACK
 };
 
@@ -856,6 +857,27 @@ public:
             }
     }
 
+    bool LeaveLobbyForGurubashi(Player* player)
+    {
+        CustomGameLobby* lobby = GetLobby(player);
+        if (!player || !lobby || IsOwner(player, lobby))
+            return false;
+
+        if (lobby->ActiveBattlegroundId)
+        {
+            Notify(player, "The custom match has already started.");
+            return false;
+        }
+
+        RemoveLobbyMember(player, *lobby, false);
+        player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+        player->SetBGTeam(0);
+        player->SetPendingSpectatorForBG(0);
+        Notify(player, "You left the custom-game lobby.");
+        player->TeleportTo(GurubashiGamesmasterLocation);
+        return true;
+    }
+
     void OnMapChanged(Player* player)
     {
         CustomGameLobby* lobby = GetLobby(player);
@@ -876,8 +898,7 @@ public:
             }
 
             player->SetVisible(true);
-            player->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
-                UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+            ApplyLobbySafetyFlags(player);
             player->CombatStopWithPets(true);
             if (player->GetTradeData())
                 player->TradeCancel(true);
@@ -918,8 +939,7 @@ public:
         if (!lobby || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId)
             return;
 
-        player->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
-            UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+        ApplyLobbySafetyFlags(player);
         if (!player->IsAlive())
         {
             player->ResurrectPlayer(1.0f);
@@ -1244,6 +1264,17 @@ private:
                 sMapMgr->DestroyWorldSubMap(CUSTOM_GAME_MAP_ID, oldInstanceId);
     }
 
+    static void ApplyLobbySafetyFlags(Player* player)
+    {
+        if (!player)
+            return;
+
+        player->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+        player->RemoveUnitFlag(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_ATTACKABLE_1 |
+            UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_UNINTERACTIBLE);
+        player->ClearUnitState(UNIT_STATE_UNATTACKABLE);
+    }
+
     static void ApplyTeamVisual(Player* player, uint32 team)
     {
         if (!player)
@@ -1339,6 +1370,8 @@ public:
             {
                 AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Current: " + BattlegroundName(*lobby), GOSSIP_SENDER_MAIN, ACTION_STATUS);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Only the lobby host can configure or start the match.", GOSSIP_SENDER_MAIN, ACTION_STATUS);
+                AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Leave custom lobby", GOSSIP_SENDER_MAIN, ACTION_LEAVE_LOBBY,
+                    "Leave this lobby and return to Gurubashi Arena?", 0, false);
                 SendGossipMenuFor(player, 1, me->GetGUID());
                 return;
             }
@@ -1544,6 +1577,7 @@ public:
                     return true;
                 case ACTION_START: manager.StartGame(player); break;
                 case ACTION_CLOSE: manager.CloseLobby(player); break;
+                case ACTION_LEAVE_LOBBY: manager.LeaveLobbyForGurubashi(player); break;
                 case ACTION_STATUS:
                     if (me->GetEntry() == CUSTOM_GAME_CHROMIE_ENTRY)
                         ShowChromieMenu(player);

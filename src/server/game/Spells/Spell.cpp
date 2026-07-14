@@ -5564,11 +5564,11 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     bool trapSuccessDebugPending = sWorld->getBoolConfig(CONFIG_TRAP_DEBUG_WHISPER_ON_SUCCESS) && IsTrapGameObject(trapCaster);
     bool deferAutoDismountForRunMount = false;
 
-    // Stealth removes the custom-lobby team flag visual. The staging lobby is
-    // deliberately non-combat, so reject stealth at validation time while
-    // leaving stealth behavior unchanged once the participant enters a match.
+    // The staging lobby uses battleground flag auras as team visuals. Reject
+    // every spell category that would normally force a WSG carrier to drop
+    // the flag, while leaving those spells unchanged inside the actual match.
     if (Player* playerCaster = m_caster->ToPlayer())
-        if (playerCaster->IsInCustomGameLobby() && m_spellInfo->HasAura(SPELL_AURA_MOD_STEALTH))
+        if (playerCaster->IsInCustomGameLobby() && m_spellInfo->WouldDropBattlegroundFlag())
             return SPELL_FAILED_NOT_HERE;
 
     // check death state

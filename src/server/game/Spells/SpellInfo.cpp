@@ -1317,6 +1317,50 @@ bool SpellInfo::IsBreakingStealth() const
     return !HasAttribute(SPELL_ATTR1_NOT_BREAK_STEALTH);
 }
 
+bool SpellInfo::WouldDropBattlegroundFlag() const
+{
+    // Rocket Boots drops a carried flag from its SpellScript rather than from
+    // a DBC aura effect, so it cannot be discovered through the effect scan.
+    if (Id == 51582)
+        return true;
+
+    auto wouldDropFlag = [&](auto const& self, SpellInfo const* spellInfo, uint8 depth) -> bool
+    {
+        if (!spellInfo || depth > 4)
+            return false;
+
+        if (spellInfo->Mechanic == MECHANIC_MOUNT)
+            return true;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            switch (effect.ApplyAuraName)
+            {
+                case SPELL_AURA_MOD_STEALTH:
+                case SPELL_AURA_MOD_INVISIBILITY:
+                case SPELL_AURA_FEIGN_DEATH:
+                case SPELL_AURA_SCHOOL_IMMUNITY:
+                case SPELL_AURA_DAMAGE_IMMUNITY:
+                case SPELL_AURA_MOUNTED:
+                case SPELL_AURA_MOD_UNATTACKABLE:
+                case SPELL_AURA_PHASE:
+                case SPELL_AURA_SPIRIT_OF_REDEMPTION:
+                case SPELL_AURA_CONTROL_VEHICLE:
+                    return true;
+                default:
+                    break;
+            }
+
+            if (effect.TriggerSpell && self(self, sSpellMgr->GetSpellInfo(effect.TriggerSpell), depth + 1))
+                return true;
+        }
+
+        return false;
+    };
+
+    return wouldDropFlag(wouldDropFlag, this, 0);
+}
+
 bool SpellInfo::IsRangedWeaponSpell() const
 {
     return (SpellFamilyName == SPELLFAMILY_HUNTER && !(SpellFamilyFlags[1] & 0x10000000)) // for 53352, cannot find better way
