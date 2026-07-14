@@ -736,7 +736,7 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     if (!player || !IsLifecycleGateEnabled())
         return;
 
-    if (!playerbot::IsManagedRandomBot(player))
+    if (!playerbot::IsManagedRandomBot(player) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
         return;
 
     if (!player->IsInWorld() || !player->InBattleground())
@@ -1740,6 +1740,11 @@ bool RandomBotParticipationManager::TriggerImmediateRebalance()
     g_RandomPopulation.rebalanceRequested = true;
     g_RandomPopulation.rebalanceTimerMs = g_RandomPopulation.config.rebalanceIntervalMs;
     return RebalanceRandomPopulation(g_RandomPopulation);
+}
+
+std::vector<uint32> RandomBotParticipationManager::GetConfiguredBotAccountIds()
+{
+    return GetManagedBotAccountIdsSnapshot();
 }
 
 LifecycleObservationSnapshot RandomBotParticipationManager::GetLifecycleObservationSnapshot()

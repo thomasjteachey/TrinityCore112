@@ -56,6 +56,7 @@ enum GossipAction : uint32
     ACTION_JOIN_TEAM = 200,
     ACTION_LEAVE_TEAM,
     ACTION_ADD_BOT,
+    ACTION_ADD_RANDOM_BOT,
     ACTION_REMOVE_BOT,
     ACTION_ADD_DARK,
     ACTION_REMOVE_DARK,
@@ -506,10 +507,12 @@ public:
         }
 
         Player* source = ObjectAccessor::FindConnectedPlayer(sourceGuid);
-        bool const managedBot = source && playerbot::IsManagedRandomBot(source);
+        std::vector<uint32> const botAccountIds = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+        bool const configuredBotAccount = std::find(botAccountIds.begin(), botAccountIds.end(), characterInfo->AccountId) != botAccountIds.end();
+        bool const managedBot = configuredBotAccount || (source && playerbot::IsManagedRandomBot(source));
         if (playerbotClone && !managedBot)
         {
-            Notify(player, "That character must be an online managed playerbot.");
+            Notify(player, "That character does not belong to a configured playerbot account.");
             return false;
         }
         if (!playerbotClone && managedBot)
@@ -530,6 +533,63 @@ public:
             RefreshLobbyClonePreviews(*lobby);
         }
 
+        return true;
+    }
+
+    bool AddRandomPlayerbotClone(Player* player, uint32 team)
+    {
+        CustomGameLobby* lobby = GetLobby(player);
+        if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
+            return false;
+
+        uint32 teamSize = 0;
+        for (auto const& [guid, assignedTeam] : lobby->Teams)
+            if (assignedTeam == team)
+                ++teamSize;
+        for (CloneRequest const& request : lobby->CloneRequests)
+            if (request.Team == team)
+                ++teamSize;
+        if (teamSize >= CUSTOM_GAME_MAX_PLAYERS_PER_TEAM)
+        {
+            Notify(player, std::string("Team ") + TeamName(team) + " already has the maximum of " +
+                std::to_string(CUSTOM_GAME_MAX_PLAYERS_PER_TEAM) + " participants.");
+            return false;
+        }
+
+        std::vector<uint32> const botAccountIds = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
+        if (botAccountIds.empty())
+        {
+            Notify(player, "No playerbot account IDs are configured.");
+            return false;
+        }
+
+        std::vector<ObjectGuid> candidates = sCharacterCache->GetCharacterGuidsByAccountIds(botAccountIds);
+        candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&](ObjectGuid sourceGuid)
+        {
+            CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
+            if (!characterInfo || characterInfo->Name.rfind("Obcm", 0) == 0)
+                return true;
+
+            return std::any_of(lobby->CloneRequests.begin(), lobby->CloneRequests.end(), [&](CloneRequest const& request)
+            {
+                return request.SourceGuid == sourceGuid && request.IsPlayerbot;
+            });
+        }), candidates.end());
+
+        if (candidates.empty())
+        {
+            Notify(player, "Every configured playerbot is already represented in this lobby.");
+            return false;
+        }
+
+        ObjectGuid const sourceGuid = candidates[urand(0u, static_cast<uint32>(candidates.size() - 1))];
+        CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
+        if (!characterInfo)
+            return false;
+
+        lobby->CloneRequests.push_back({ sourceGuid, characterInfo->Name, team, true });
+        RefreshLobbyClonePreviews(*lobby);
+        Notify(player, "Added playerbot copy " + characterInfo->Name + " to team " + TeamName(team) + ".");
         return true;
     }
 
@@ -938,16 +998,8 @@ public:
                             }
 
                     for (CloneRequest const& request : lobby.CloneRequests)
-                    {
-                        if (request.IsPlayerbot)
-                        {
-                            if (Player* source = ObjectAccessor::FindConnectedPlayer(request.SourceGuid))
-                                playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, request.Team, "Echo ");
-                        }
-                        else
-                            playerbot::PlayerbotObcCloneManager::QueueCustomGameClone(request.SourceGuid, callbackSession,
-                                bg, request.Team, "Dark ");
-                    }
+                        playerbot::PlayerbotObcCloneManager::QueueCustomGameClone(request.SourceGuid, callbackSession,
+                            bg, request.Team, request.IsPlayerbot ? "" : "Dark ");
                     lobby.ClonesSpawned = true;
                 }
 
@@ -1029,7 +1081,7 @@ private:
             Position const position = LobbyClonePosition(request.Team, teamIndex);
             playerbot::PlayerbotObcCloneManager::QueueCustomGameLobbyClone(request.SourceGuid, callbackSession,
                 CUSTOM_GAME_MAP_ID, lobby.InstanceId, request.Team, request.IsPlayerbot, position,
-                request.IsPlayerbot ? "Echo " : "Dark ");
+                request.IsPlayerbot ? "" : "Dark ");
             playerbot::PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(lobby.InstanceId,
                 request.SourceGuid, request.Team, request.IsPlayerbot, position);
         }
@@ -1233,6 +1285,7 @@ public:
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, std::string("Join team ") + TeamName(team), team, ACTION_JOIN_TEAM);
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot copy...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random playerbot", team, ACTION_ADD_RANDOM_BOT);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot copy...", team, ACTION_REMOVE_BOT);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add Dark player copy...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove Dark player copy...", team, ACTION_REMOVE_DARK);
@@ -1446,6 +1499,7 @@ public:
                 case ACTION_CREATE: manager.CreateLobby(player); break;
                 case ACTION_JOIN_TEAM: manager.SetTeam(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
+                case ACTION_ADD_RANDOM_BOT: manager.AddRandomPlayerbotClone(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_REMOVE_BOT: ShowCloneRemovalMenu(player, sender, true); return true;
                 case ACTION_REMOVE_DARK: ShowCloneRemovalMenu(player, sender, false); return true;
                 case ACTION_REMOVE_LIST_BACK: ShowTeamMenu(player, sender); return true;

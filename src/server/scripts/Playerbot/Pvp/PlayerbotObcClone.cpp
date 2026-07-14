@@ -690,10 +690,8 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
 
     ObjectGuid const cloneGuid = clone->GetGUID();
     std::string displayName = displayPrefix + source->GetName();
-    if (sCharacterCache->GetCharacterCacheByName(displayName))
-        displayName += " " + std::to_string(lobbyInstanceId);
     sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(),
-        clone->GetClass(), clone->GetLevel());
+        clone->GetClass(), clone->GetLevel(), false);
     ObjectAccessor::AddObject(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());
     clone->CastSpell(clone, team == ALLIANCE ? 32609 : 32610, true);
@@ -1039,9 +1037,7 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
 
     ObjectGuid const cloneGuid = clone->GetGUID();
     std::string displayName = displayPrefix + source->GetName();
-    if (sCharacterCache->GetCharacterCacheByName(displayName))
-        displayName += " " + std::to_string(bg->GetInstanceID());
-    sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(), clone->GetClass(), clone->GetLevel());
+    sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(), clone->GetClass(), clone->GetLevel(), false);
     ObjectAccessor::AddObject(clone);
     bg->AddPlayer(clone);
     clone->SetInGameTime(GameTime::GetGameTimeMS());

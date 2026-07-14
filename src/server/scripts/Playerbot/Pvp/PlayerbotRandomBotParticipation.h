@@ -19,6 +19,7 @@
 #define TRINITY_PLAYERBOT_RANDOM_BOT_PARTICIPATION_H
 
 #include "Define.h"
+#include <vector>
 
 class Player;
 
@@ -76,6 +77,7 @@ public:
     static void SetPopulationRuntimeEnabled(bool enabled);
     static bool IsPopulationRuntimeEnabled();
     static bool TriggerImmediateRebalance();
+    static std::vector<uint32> GetConfiguredBotAccountIds();
 
     static LifecycleObservationSnapshot GetLifecycleObservationSnapshot();
     static RandomBotPopulationSnapshot GetPopulationSnapshot();

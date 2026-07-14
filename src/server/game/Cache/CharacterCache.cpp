@@ -24,6 +24,7 @@
 #include "Timer.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include <algorithm>
 #include <unordered_map>
 
 namespace
@@ -92,7 +93,8 @@ void CharacterCache::LoadCharacterCacheStorage()
 /*
 Modifying functions
 */
-void CharacterCache::AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accountId, std::string const& name, uint8 gender, uint8 race, uint8 playerClass, uint8 level)
+void CharacterCache::AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accountId, std::string const& name, uint8 gender, uint8 race, uint8 playerClass, uint8 level,
+    bool indexByName)
 {
     CharacterCacheEntry& data = _characterCacheStore[guid];
     data.Guid = guid;
@@ -106,14 +108,20 @@ void CharacterCache::AddCharacterCacheEntry(ObjectGuid const& guid, uint32 accou
     for (uint8 i = 0; i < MAX_ARENA_SLOT; ++i)
         data.ArenaTeamId[i] = 0;                // Will be set in arena teams loading
 
-    // Fill Name to Guid Store
-    _characterCacheByNameStore[name] = &data;
+    // Transient copies need GUID-to-name query data, but may intentionally use
+    // the same visible name as their source character. Do not replace the real
+    // character's global name lookup entry in that case.
+    if (indexByName)
+        _characterCacheByNameStore[name] = &data;
 }
 
 void CharacterCache::DeleteCharacterCacheEntry(ObjectGuid const& guid, std::string const& name)
 {
+    auto nameItr = _characterCacheByNameStore.find(name);
+    if (nameItr != _characterCacheByNameStore.end() && nameItr->second && nameItr->second->Guid == guid)
+        _characterCacheByNameStore.erase(nameItr);
+
     _characterCacheStore.erase(guid);
-    _characterCacheByNameStore.erase(name);
 }
 
 void CharacterCache::UpdateCharacterData(ObjectGuid const& guid, std::string const& name, Optional<uint8> gender /*= {}*/, Optional<uint8> race /*= {}*/)
@@ -246,6 +254,19 @@ uint32 CharacterCache::GetCharacterAccountIdByName(std::string const& name) cons
         return itr->second->AccountId;
 
     return 0;
+}
+
+std::vector<ObjectGuid> CharacterCache::GetCharacterGuidsByAccountIds(std::vector<uint32> const& accountIds) const
+{
+    std::vector<ObjectGuid> characterGuids;
+    if (accountIds.empty())
+        return characterGuids;
+
+    for (auto const& [guid, characterInfo] : _characterCacheStore)
+        if (std::find(accountIds.begin(), accountIds.end(), characterInfo.AccountId) != accountIds.end())
+            characterGuids.push_back(guid);
+
+    return characterGuids;
 }
 
 uint8 CharacterCache::GetCharacterLevelByGuid(ObjectGuid guid) const
