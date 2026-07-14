@@ -1585,7 +1585,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                     return false;
 
                 Position const downhillExit = team == TEAM_HORDE ?
-                    Position(1876.978149f, 431.659607f, -6.087340f, 0.421625f) :
+                    Position(1827.342041f, 191.699814f, -19.907791f, 4.655410f) :
                     Position(1874.352905f, 422.770020f, -17.006735f, 4.763416f);
                 if (MotionMaster* motionMaster = player->GetMotionMaster())
                     motionMaster->Clear();
