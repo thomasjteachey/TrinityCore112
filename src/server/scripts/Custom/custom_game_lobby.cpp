@@ -7,10 +7,12 @@
 #include "BattlegroundMgr.h"
 #include "Chat.h"
 #include "Creature.h"
+#include "DBCStores.h"
 #include "Group.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
+#include "ObjectMgr.h"
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
@@ -78,6 +80,8 @@ enum GossipAction : uint32
     ACTION_RULE_RESOURCE_RATE,
     ACTION_RULE_KILLS,
     ACTION_RULE_REZ_TIME,
+    ACTION_RULE_NODE_FLAG_TIME,
+    ACTION_RULE_NODE_BASE_TIME,
     ACTION_TOGGLE_ENEMY_FLAG = 450,
     ACTION_TOGGLE_ALLY_FLAG,
     ACTION_CYCLE_WEATHER,
@@ -372,6 +376,8 @@ public:
             case ACTION_RULE_RESOURCE_RATE: lobby->Rules.ResourceGainPercent = std::clamp(value, 25u, 1000u); break;
             case ACTION_RULE_KILLS: lobby->Rules.DeathmatchKillLimit = value ? std::clamp(value, 1u, 1000u) : 0; break;
             case ACTION_RULE_REZ_TIME: lobby->Rules.ResurrectionIntervalMs = value ? std::clamp(value, 5u, 120u) * IN_MILLISECONDS : 0; break;
+            case ACTION_RULE_NODE_FLAG_TIME: lobby->Rules.NodeFlagCaptureTimeMs = value ? std::clamp(value, 1u, 120u) * IN_MILLISECONDS : 0; break;
+            case ACTION_RULE_NODE_BASE_TIME: lobby->Rules.NodeBaseCaptureTimeMs = value ? std::clamp(value, 1u, 600u) * IN_MILLISECONDS : 0; break;
             default: return false;
         }
         return true;
@@ -435,6 +441,8 @@ public:
 
         Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(lobby->SelectedType);
         PvPDifficultyEntry const* bracket = bgTemplate ? GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), owner->GetLevel()) : nullptr;
+        if (!bracket && bgTemplate)
+            bracket = GetBattlegroundBracketById(bgTemplate->GetMapId(), BG_BRACKET_ID_FIRST);
         if (!bracket)
         {
             Notify(owner, "That battleground has no bracket for your level.");
@@ -527,6 +535,17 @@ public:
 
         if (player->GetMapId() == CUSTOM_GAME_MAP_ID && player->GetInstanceId() == lobby->InstanceId)
         {
+            if (lobby->ActiveBattlegroundId)
+            {
+                Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType);
+                if (bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS) &&
+                    player->GetBattlegroundId() != lobby->ActiveBattlegroundId)
+                {
+                    RemoveLobbyMember(player, *lobby, true);
+                    return;
+                }
+            }
+
             player->SetVisible(true);
             player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
             if (player->IsSpectator())
@@ -537,9 +556,23 @@ public:
             return;
         }
 
-        if (!lobby->Closing && (!lobby->ActiveBattlegroundId || player->GetBattlegroundId() != lobby->ActiveBattlegroundId))
-            player->TeleportTo(CUSTOM_GAME_MAP_ID, LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(),
-                LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
+        if (lobby->ActiveBattlegroundId && player->GetBattlegroundId() == lobby->ActiveBattlegroundId)
+        {
+            Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType);
+            if (bg && player->GetMapId() == bg->GetMapId() && player->GetInstanceId() == bg->GetInstanceID())
+                return;
+
+            // A direct teleport can move a player out without first sending
+            // the normal leave opcode. Remove that character from the combat
+            // roster as well as the retained lobby roster.
+            if (bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS))
+                bg->RemovePlayerAtLeave(player->GetGUID(), false, true);
+        }
+
+        // A teleport out of the staging box is an individual lobby leave. Do
+        // not pull that character back, and tear the lobby down when the last
+        // retained member has left.
+        RemoveLobbyMember(player, *lobby, false);
     }
 
     void OnPlayerUpdate(Player* player)
@@ -558,8 +591,7 @@ public:
         if (!lobby)
             return;
 
-        if (lobby->OwnerGuid == player->GetGUID() && !lobby->ActiveBattlegroundId)
-            lobby->Closing = true;
+        RemoveLobbyMember(player, *lobby, false);
     }
 
     void OnLogin(Player* player)
@@ -580,9 +612,20 @@ public:
     void Update()
     {
         std::vector<uint32> eraseIds;
+        std::vector<uint32> completedMatchIds;
         for (auto& [instanceId, lobbyPtr] : _lobbies)
         {
             CustomGameLobby& lobby = *lobbyPtr;
+            if (lobby.Closing && lobby.Members.empty() && lobby.ActiveBattlegroundId)
+            {
+                playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(lobby.ActiveBattlegroundId);
+                if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.SelectedType))
+                    if (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS)
+                        bg->EndBattleground(PVP_TEAM_NEUTRAL);
+                lobby.ActiveBattlegroundId = 0;
+                lobby.ClonesSpawned = false;
+            }
+
             if (lobby.ActiveBattlegroundId)
             {
                 Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.SelectedType);
@@ -597,41 +640,8 @@ public:
 
                 if (!bg || bg->GetStatus() == STATUS_NONE || bg->GetStatus() == STATUS_WAIT_LEAVE)
                 {
-                    playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(lobby.ActiveBattlegroundId);
-
-                    // Spectators are deliberately not part of the combat
-                    // roster, so the normal battleground leave loop does not
-                    // see them. Return them explicitly when the match ends.
-                    for (auto const& [guid, member] : lobby.Members)
-                        if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-                            if (player->GetBattlegroundId() == lobby.ActiveBattlegroundId && player->IsSpectator())
-                            {
-                                if (bg)
-                                    bg->RemovePlayerAtLeave(guid, true, true);
-                                else
-                                {
-                                    player->SetVisible(true);
-                                    player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
-                                    player->SetIsSpectator(false);
-                                    player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
-                                    player->SetBGTeam(0);
-                                    player->TeleportToBGEntryPoint();
-                                }
-                            }
-
-                    bool anyoneStillInside = false;
-                    for (auto const& [guid, member] : lobby.Members)
-                        if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-                            if (player->InBattleground())
-                                anyoneStillInside = true;
-
-                    if (!anyoneStillInside)
-                    {
-                        lobby.ActiveBattlegroundId = 0;
-                        lobby.ClonesSpawned = false;
-                        if (!ObjectAccessor::FindConnectedPlayer(lobby.OwnerGuid))
-                            lobby.Closing = true;
-                    }
+                    completedMatchIds.push_back(instanceId);
+                    continue;
                 }
             }
 
@@ -655,11 +665,138 @@ public:
             }
         }
 
+        for (uint32 instanceId : completedMatchIds)
+            RecreateLobbyAfterMatch(instanceId);
+
         for (uint32 instanceId : eraseIds)
             _lobbies.erase(instanceId);
     }
 
 private:
+    void RemoveLobbyMember(Player* player, CustomGameLobby& lobby, bool returnToOriginal)
+    {
+        if (!player)
+            return;
+
+        auto memberItr = lobby.Members.find(player->GetGUID());
+        if (memberItr == lobby.Members.end())
+            return;
+
+        WorldLocation const returnLocation = memberItr->second.ReturnLocation;
+        bool const wasOwner = lobby.OwnerGuid == player->GetGUID();
+        lobby.Members.erase(memberItr);
+        lobby.Teams.erase(player->GetGUID());
+
+        ApplyTeamVisual(player, 0);
+        player->SetVisible(true);
+        player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+        if (player->IsSpectator())
+            player->SetIsSpectator(false);
+        player->ClearWorldSubMap();
+
+        if (returnToOriginal)
+            player->TeleportTo(returnLocation);
+
+        if (wasOwner && !lobby.Members.empty())
+            lobby.OwnerGuid = lobby.Members.begin()->first;
+        if (lobby.Members.empty())
+            lobby.Closing = true;
+    }
+
+    void RecreateLobbyAfterMatch(uint32 oldInstanceId)
+    {
+        auto lobbyItr = _lobbies.find(oldInstanceId);
+        if (lobbyItr == _lobbies.end())
+            return;
+
+        CustomGameLobby& lobby = *lobbyItr->second;
+        uint32 const battlegroundId = lobby.ActiveBattlegroundId;
+        Battleground* bg = sBattlegroundMgr->GetBattleground(battlegroundId, lobby.SelectedType);
+        playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(battlegroundId);
+
+        std::vector<ObjectGuid> returningGuids;
+        for (auto const& [guid, member] : lobby.Members)
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                if (player->GetBattlegroundId() == battlegroundId)
+                    returningGuids.push_back(guid);
+
+        if (returningGuids.empty())
+        {
+            lobby.Members.clear();
+            lobby.Teams.clear();
+            lobby.ActiveBattlegroundId = 0;
+            lobby.Closing = true;
+            return;
+        }
+
+        Map* newLobbyMap = sMapMgr->CreateWorldSubMap(CUSTOM_GAME_MAP_ID);
+        if (!newLobbyMap)
+        {
+            for (ObjectGuid guid : returningGuids)
+                if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                {
+                    if (bg)
+                        bg->RemovePlayerAtLeave(guid, false, true);
+                    player->ClearWorldSubMap();
+                    player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
+                }
+            lobby.ActiveBattlegroundId = 0;
+            lobby.Closing = true;
+            return;
+        }
+
+        uint32 const newInstanceId = newLobbyMap->GetInstanceId();
+        std::unordered_map<ObjectGuid, LobbyMember> returningMembers;
+        std::unordered_map<ObjectGuid, uint32> returningTeams;
+        for (ObjectGuid guid : returningGuids)
+        {
+            returningMembers.emplace(guid, lobby.Members.at(guid));
+            if (auto teamItr = lobby.Teams.find(guid); teamItr != lobby.Teams.end())
+                returningTeams.emplace(guid, teamItr->second);
+        }
+
+        lobby.Members = std::move(returningMembers);
+        lobby.Teams = std::move(returningTeams);
+        lobby.InstanceId = newInstanceId;
+        lobby.ActiveBattlegroundId = 0;
+        lobby.ClonesSpawned = false;
+        lobby.Closing = false;
+        if (lobby.Members.find(lobby.OwnerGuid) == lobby.Members.end())
+            lobby.OwnerGuid = lobby.Members.begin()->first;
+
+        auto lobbyNode = _lobbies.extract(lobbyItr);
+        lobbyNode.key() = newInstanceId;
+        _lobbies.insert(std::move(lobbyNode));
+
+        newLobbyMap->SummonCreature(CUSTOM_GAME_BLUE_ENTRY, BlueNpcPosition);
+        newLobbyMap->SummonCreature(CUSTOM_GAME_RED_ENTRY, RedNpcPosition);
+        newLobbyMap->SummonCreature(CUSTOM_GAME_CHROMIE_ENTRY, ChromieNpcPosition);
+
+        for (ObjectGuid guid : returningGuids)
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+            {
+                if (bg)
+                    bg->RemovePlayerAtLeave(guid, false, true);
+                else
+                {
+                    player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+                    player->SetBGTeam(0);
+                    player->SetVisible(true);
+                    player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+                    if (player->IsSpectator())
+                        player->SetIsSpectator(false);
+                }
+
+                player->SetWorldSubMap(CUSTOM_GAME_MAP_ID, newInstanceId);
+                player->TeleportTo(CUSTOM_GAME_MAP_ID, LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(),
+                    LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
+            }
+
+        if (Map* oldLobbyMap = sMapMgr->FindMap(CUSTOM_GAME_MAP_ID, oldInstanceId))
+            if (!oldLobbyMap->HavePlayers())
+                sMapMgr->DestroyWorldSubMap(CUSTOM_GAME_MAP_ID, oldInstanceId);
+    }
+
     static void ApplyTeamVisual(Player* player, uint32 team)
     {
         if (!player)
@@ -753,6 +890,15 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Resource gain: " + std::to_string(lobby->Rules.ResourceGainPercent) + "%", GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCE_RATE, "Percent (100 is normal)", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Deathmatch kills: " + std::to_string(lobby->Rules.DeathmatchKillLimit) + " (0 = default)", GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Resurrection: " + std::to_string(lobby->Rules.ResurrectionIntervalMs / IN_MILLISECONDS) + " sec (0 = default)", GOSSIP_SENDER_MAIN, ACTION_RULE_REZ_TIME, "Seconds (5-120)", 0, true);
+            if (lobby->SelectedType == BATTLEGROUND_AB || lobby->SelectedType == BATTLEGROUND_BFG)
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Flag interaction: " + std::to_string(lobby->Rules.NodeFlagCaptureTimeMs / IN_MILLISECONDS) + " sec (0 = default)",
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_FLAG_TIME, "Seconds (1-120)", 0, true);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Base capture after assault: " + std::to_string(lobby->Rules.NodeBaseCaptureTimeMs / IN_MILLISECONDS) + " sec (0 = default)",
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_BASE_TIME, "Seconds (1-600)", 0, true);
+            }
             if (lobby->SelectedType == BATTLEGROUND_WS || lobby->SelectedType == BATTLEGROUND_TP)
             {
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
@@ -846,7 +992,7 @@ public:
             auto& manager = CustomGameLobbyManager::Instance();
             std::string value = code ? code : "";
 
-            if (action >= ACTION_RULE_FLAG_CAPS && action <= ACTION_RULE_REZ_TIME)
+            if (action >= ACTION_RULE_FLAG_CAPS && action <= ACTION_RULE_NODE_BASE_TIME)
             {
                 manager.SetRule(player, action, value);
                 ShowChromieMenu(player);

@@ -86,6 +86,8 @@ struct BattlegroundCustomRules
     uint32 ResourceGainPercent = 100;
     uint32 DeathmatchKillLimit = 0;
     uint32 ResurrectionIntervalMs = 0;
+    uint32 NodeFlagCaptureTimeMs = 0;
+    uint32 NodeBaseCaptureTimeMs = 0;
     bool ShowEnemyFlagOnMap = true;
     bool ShowAllyFlagOnMap = true;
     BattlegroundCustomWeather Weather = BattlegroundCustomWeather::Normal;
@@ -405,6 +407,8 @@ class TC_GAME_API Battleground
         uint32 GetFlagCaptureLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.FlagCaptureLimit ? m_CustomRules.FlagCaptureLimit : defaultValue; }
         uint32 GetResourceLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResourceLimit ? m_CustomRules.ResourceLimit : defaultValue; }
         uint32 GetDeathmatchKillLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.DeathmatchKillLimit ? m_CustomRules.DeathmatchKillLimit : defaultValue; }
+        uint32 GetNodeFlagCaptureTime(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.NodeFlagCaptureTimeMs ? m_CustomRules.NodeFlagCaptureTimeMs : defaultValue; }
+        uint32 GetNodeBaseCaptureTime(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.NodeBaseCaptureTimeMs ? m_CustomRules.NodeBaseCaptureTimeMs : defaultValue; }
         uint32 ScaleResourceGain(uint32 value) const { return m_IsCustomGame ? std::max<uint32>(1, value * m_CustomRules.ResourceGainPercent / 100) : value; }
 
         typedef std::map<ObjectGuid, BattlegroundPlayer> BattlegroundPlayerMap;

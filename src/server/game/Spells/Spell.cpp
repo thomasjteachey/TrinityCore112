@@ -3429,6 +3429,17 @@ SpellCastResult Spell::prepare(SpellCastTargets const& targets, AuraEffect const
     else
         m_casttime = m_spellInfo->CalcCastTime(this);
 
+    // AB/BFG node banners use the normal Opening spell for both clients and
+    // playerbots. Override that real cast here so the client cast bar, server
+    // completion, and bot interaction wait all stay on the same timer.
+    if (playerCaster && m_casttime)
+        if (Battleground* battleground = playerCaster->GetBattleground())
+            if (battleground->IsCustomGame() &&
+                (battleground->GetTypeID(true) == BATTLEGROUND_AB || battleground->GetTypeID(true) == BATTLEGROUND_BFG))
+                if (GameObject* gameObject = m_targets.GetGOTarget())
+                    if (gameObject->GetSpellForLock(playerCaster) == m_spellInfo)
+                        m_casttime = battleground->GetNodeFlagCaptureTime(m_casttime);
+
     bool const isStarfire = m_spellInfo->IsStarfire();
     bool const isHurricane = m_spellInfo->IsHurricane();
     bool const isArcaneMissiles = m_spellInfo->IsArcaneMissiles();

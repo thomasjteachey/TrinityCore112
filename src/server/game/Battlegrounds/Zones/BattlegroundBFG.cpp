@@ -391,7 +391,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
         UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1);
         _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
         _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
-        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
+        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GetNodeBaseCaptureTime(GILNEAS_BG_FLAG_CAPTURING_TIME)));
         sound = GILNEAS_BG_SOUND_NODE_CLAIMED;
         message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceClaims : BFGNodes[node].TextHordeClaims;
     }
@@ -402,7 +402,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
             UpdatePlayerScore(player, SCORE_BASES_ASSAULTED, 1);
             _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
             _capturePointInfo[node]._ownerTeamId = TEAM_NEUTRAL;
-            _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
+            _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GetNodeBaseCaptureTime(GILNEAS_BG_FLAG_CAPTURING_TIME)));
             message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceAssaulted : BFGNodes[node].TextHordeAssaulted;
         }
         else
@@ -424,7 +424,7 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
         _capturePointInfo[node]._state = static_cast<uint8>(GILNEAS_BG_NODE_STATUS_ALLY_CONTESTED) + player->GetTeamId();
 
         ApplyPhaseMask();
-        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GILNEAS_BG_FLAG_CAPTURING_TIME));
+        _bgEvents.RescheduleEvent(BG_BFG_EVENT_CAPTURE_LIGHTHOUSE + node, Milliseconds(GetNodeBaseCaptureTime(GILNEAS_BG_FLAG_CAPTURING_TIME)));
         message = player->GetTeamId() == TEAM_ALLIANCE ? BFGNodes[node].TextAllianceAssaulted : BFGNodes[node].TextHordeAssaulted;
         sound = player->GetTeamId() == TEAM_ALLIANCE ? GILNEAS_BG_SOUND_NODE_ASSAULTED_ALLIANCE : GILNEAS_BG_SOUND_NODE_ASSAULTED_HORDE;
     }

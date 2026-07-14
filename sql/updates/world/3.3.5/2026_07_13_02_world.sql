@@ -4,11 +4,11 @@
 -- shared flag.
 
 DROP TEMPORARY TABLE IF EXISTS `obc_worldstateui`;
-CREATE TEMPORARY TABLE `obc_worldstateui` LIKE `worldstateui_lplus`;
+CREATE TEMPORARY TABLE `obc_worldstateui` LIKE `dbc`.`worldstateui_lplus`;
 
 INSERT INTO `obc_worldstateui`
 SELECT *
-FROM `worldstateui_lplus`
+FROM `dbc`.`worldstateui_lplus`
 WHERE (`ID` = 2 AND `MapID` = 489)
    OR (`ID` = 3 AND `MapID` = 489);
 
@@ -83,10 +83,10 @@ SET
     `DynamicTooltip_Lang_Mask` = 0,
     `ID` = CASE `ID` WHEN 2 THEN 9400 ELSE 9401 END;
 
-DELETE FROM `worldstateui_lplus`
+DELETE FROM `dbc`.`worldstateui_lplus`
 WHERE `ID` IN (9400, 9401);
 
-INSERT INTO `worldstateui_lplus`
+INSERT INTO `dbc`.`worldstateui_lplus`
 SELECT * FROM `obc_worldstateui`;
 
 DROP TEMPORARY TABLE `obc_worldstateui`;

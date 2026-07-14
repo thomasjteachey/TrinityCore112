@@ -486,7 +486,7 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
         // create new contested banner
         _CreateBanner(node, BG_AB_NODE_TYPE_CONTESTED, teamIndex, true);
         _SendNodeUpdate(node);
-        m_NodeTimers[node] = BG_AB_FLAG_CAPTURING_TIME;
+        m_NodeTimers[node] = GetNodeBaseCaptureTime(BG_AB_FLAG_CAPTURING_TIME);
 
         if (teamIndex == TEAM_ALLIANCE)
             SendBroadcastText(ABNodes[node].TextAllianceClaims, CHAT_MSG_BG_SYSTEM_ALLIANCE, source);
@@ -509,7 +509,7 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
             // create new contested banner
             _CreateBanner(node, BG_AB_NODE_TYPE_CONTESTED, teamIndex, true);
             _SendNodeUpdate(node);
-            m_NodeTimers[node] = BG_AB_FLAG_CAPTURING_TIME;
+            m_NodeTimers[node] = GetNodeBaseCaptureTime(BG_AB_FLAG_CAPTURING_TIME);
 
             if (teamIndex == TEAM_ALLIANCE)
                 SendBroadcastText(ABNodes[node].TextAllianceAssaulted, CHAT_MSG_BG_SYSTEM_ALLIANCE, source);
@@ -549,7 +549,7 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
         _CreateBanner(node, BG_AB_NODE_TYPE_CONTESTED, teamIndex, true);
         _SendNodeUpdate(node);
         _NodeDeOccupied(node);
-        m_NodeTimers[node] = BG_AB_FLAG_CAPTURING_TIME;
+        m_NodeTimers[node] = GetNodeBaseCaptureTime(BG_AB_FLAG_CAPTURING_TIME);
 
         if (teamIndex == TEAM_ALLIANCE)
             SendBroadcastText(ABNodes[node].TextAllianceAssaulted, CHAT_MSG_BG_SYSTEM_ALLIANCE, source);
