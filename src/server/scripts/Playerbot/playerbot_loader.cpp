@@ -24,6 +24,7 @@
 #include "MoveSpline.h"
 #include "Movement/AbstractFollower.h"
 #include "Player.h"
+#include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
@@ -689,8 +690,31 @@ public:
         if (IsChromieWhisperFacade(sender) || IsChromieWhisperFacade(receiver))
             return;
 
-        if (!playerbot::IsManagedRandomBot(receiver))
+        if (!playerbot::IsManagedRandomBot(receiver) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(receiver))
             return;
+
+        std::string command = msg;
+        command.erase(command.begin(), std::find_if(command.begin(), command.end(), [](unsigned char character)
+        {
+            return !std::isspace(character);
+        }));
+        command.erase(std::find_if(command.rbegin(), command.rend(), [](unsigned char character)
+        {
+            return !std::isspace(character);
+        }).base(), command.end());
+        std::transform(command.begin(), command.end(), command.begin(), [](unsigned char character)
+        {
+            return static_cast<char>(std::tolower(character));
+        });
+
+        if (command == "drop")
+        {
+            if (Battleground* battleground = receiver->GetBattleground())
+                battleground->EventPlayerDroppedFlag(receiver);
+
+            receiver->Whisper("Flag drop requested.", LANG_UNIVERSAL, sender);
+            return;
+        }
 
         receiver->Whisper(BuildManagedBotStatusLine(receiver), LANG_UNIVERSAL, sender);
         receiver->Whisper(std::string("PB move diag: ") + playerbot::PvpClassActions::GetLastMovementDebugStatus(receiver), LANG_UNIVERSAL, sender);

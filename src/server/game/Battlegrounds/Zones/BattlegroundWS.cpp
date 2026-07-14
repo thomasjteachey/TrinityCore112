@@ -95,7 +95,7 @@ ObjectGuid BattlegroundWS::GetFlagPickupGUID(ObjectGuid playerGuid) const
     TeamId const enemyFlagTeam = ownFlagTeam == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
 
     // A carrier's objective is the capture point, not another interactable flag.
-    if (_flagKeepers[enemyFlagTeam] == playerGuid)
+    if (m_FlagKeepers[enemyFlagTeam] == playerGuid)
         return ObjectGuid::Empty;
 
     // Returning a friendly dropped flag is immediately useful and uses the
@@ -123,7 +123,7 @@ bool BattlegroundWS::GetFlagCapturePosition(ObjectGuid carrierGuid, Position& po
 
     TeamId const carrierTeamId = GetTeamIndexByTeamId(carrierTeam);
     TeamId const carriedFlagTeam = carrierTeamId == TEAM_ALLIANCE ? TEAM_HORDE : TEAM_ALLIANCE;
-    if (_flagState[carriedFlagTeam] != BG_WS_FLAG_STATE_ON_PLAYER || _flagKeepers[carriedFlagTeam] != carrierGuid)
+    if (_flagState[carriedFlagTeam] != BG_WS_FLAG_STATE_ON_PLAYER || m_FlagKeepers[carriedFlagTeam] != carrierGuid)
         return false;
 
     // These are the same capture triggers used by HandleFlagRoomCapturePoint.

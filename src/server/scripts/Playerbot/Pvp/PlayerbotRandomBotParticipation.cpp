@@ -111,6 +111,19 @@ void ClearActiveMovementForControlLoss(Player* player)
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 }
 
+bool TryMageBlinkOutOfControl(Player* player)
+{
+    if (!playerbot::PvpCore::CanMageBlinkOutOfControl(player))
+        return false;
+
+    playerbot::PvpValues const values = playerbot::PvpCore::CollectValues(player);
+    playerbot::PvpClassSpellContext const classContext = playerbot::PvpCore::BuildClassSpellContext(player, values);
+    if (!classContext.classSpellsEnabled || !classContext.shouldExecute || classContext.spellId != 1953)
+        return false;
+
+    return playerbot::PvpClassActions::Execute(player, classContext);
+}
+
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -739,7 +752,8 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     if (IsCrowdControlledForLifecyclePause(player))
     {
         ClearActiveMovementForControlLoss(player);
-        EmitLifecycleGmDebug(player, "bg-fasttick paused crowd-controlled", 1000);
+        bool const didBlink = TryMageBlinkOutOfControl(player);
+        EmitLifecycleGmDebug(player, didBlink ? "bg-fasttick escaped crowd-control with Blink" : "bg-fasttick paused crowd-controlled", 1000);
         return;
     }
 
@@ -1780,9 +1794,11 @@ void RandomBotParticipationLifecycle::ProcessLifecycleEntryPoint(Player* player)
     if (IsCrowdControlledForLifecyclePause(player))
     {
         ClearActiveMovementForControlLoss(player);
+        bool const didBlink = TryMageBlinkOutOfControl(player);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Lifecycle paused: guid={} reason=crowd-control",
-            guidRaw);
+            "Lifecycle paused: guid={} reason=crowd-control blinkExecuted={}",
+            guidRaw,
+            didBlink ? 1 : 0);
         return;
     }
 

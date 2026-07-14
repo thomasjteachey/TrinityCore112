@@ -25,6 +25,7 @@
 #include "BattlegroundWS.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
+#include "Group.h"
 #include "Item.h"
 #include "Log.h"
 #include "Map.h"
@@ -1405,6 +1406,31 @@ ClassicProfileSelection DetectClassicClassProfile(Player const* player)
     }
 
     return selection;
+}
+
+bool PartyBenefitsFromWindfuryTotem(Player const* player)
+{
+    Group const* group = player ? player->GetGroup() : nullptr;
+    if (!group)
+        return false;
+
+    for (GroupReference const* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+    {
+        Player const* member = itr->GetSource();
+        if (!member || member == player)
+            continue;
+
+        ClassicProfileSelection const memberProfile = DetectClassicClassProfile(member);
+        if (member->GetClass() == CLASS_WARRIOR &&
+            (memberProfile.profile == ClassicClassProfile::PrimaryClassic ||
+             memberProfile.profile == ClassicClassProfile::SecondaryClassic))
+            return true;
+
+        if (member->GetClass() == CLASS_PALADIN && memberProfile.profile == ClassicClassProfile::TertiaryClassic)
+            return true;
+    }
+
+    return false;
 }
 
 uint32 ResolveKnownPlayerSpellInChain(Player const* player, uint32 spellId)
@@ -4156,7 +4182,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
             { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "mage is stunned or rooted", blinkableControl && IsSpellReady(player, 1953), 59.0f,
+        { "mage is stunned or rooted", blinkableControl && IsSpellReady(player, 1953), 61.0f,
             { "mage blink", "escape stun/root control", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "arcane burst window", arcanePowerReady, 57.0f,
             { "mage arcane power", "open the sub-50-percent burst window", 12042, playerbot::PvpClassSpellContext::TargetMode::Self } },
@@ -4536,6 +4562,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* freedomTarget = IsSpellReady(player, 1044) ? SelectFriendlySnaredTarget(player, 40.0f) : nullptr;
     Unit const* sacrificeTarget = IsSpellReady(player, 6940) ? SelectFriendlyHealthTarget(player, 40.0f, 95.0f) : nullptr;
     Unit const* executeTarget = SelectNearbyEnemyTarget(player, target, 30.0f);
+    Unit const* compelTarget = (isProtPaladin && IsSpellReady(player, 62124)) ?
+        SelectEnemyTargetInSpellRange(player, target, 62124) : nullptr;
     Unit const* stunTarget = IsSpellReady(player, 10308) ? SelectEnemyCastingTarget(player, 10.0f, executeTarget) : nullptr;
     Unit const* repentanceTarget = (isRetPaladin && IsSpellReady(player, 20066)) ? SelectEnemyCastingTarget(player, 20.0f, executeTarget) : nullptr;
     Unit const* stunnedJudgementTarget = (isRetPaladin && HasAuraFromSpellChain(player, 20375)) ? SelectStunnedEnemyTarget(player, executeTarget, 30.0f) : nullptr;
@@ -4559,8 +4587,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin divine shield", "emergency immunity under lethal pressure", 1020, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, rebukeTarget, 59.7f,
         { "paladin rebuke", "interrupt a nearby enemy cast", 81276, playerbot::PvpClassSpellContext::TargetMode::Enemy, rebukeTarget ? rebukeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isProtPaladin && executeTarget && IsSpellReady(player, 62124), 58.5f,
-        { "paladin compel", "pull the kill target onto the tank", 62124, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, compelTarget, 58.5f,
+        { "paladin compel", "pull a target from Compel range onto the tank", 62124, playerbot::PvpClassSpellContext::TargetMode::Enemy, compelTarget ? compelTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isProtPaladin && executeTarget && IsSpellReady(player, 32699), 45.5f,
         { "paladin avengers shield", "ranged pressure and silence on the kill target", 32699, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, emergencyLowAlly && IsSpellReady(player, 19943), 56.0f,
@@ -4959,8 +4987,10 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     bool const hasHostileTarget = HasHostileTarget(player, target);
     bool const isRestoShaman = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isEnhancementShaman = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
-    if (!hasHostileTarget && !allyTarget && !isRestoShaman)
+    if (!hasHostileTarget && !allyTarget && !isRestoShaman && !isEnhancementShaman)
         return decision;
+
+    bool const enhancementUsesWindfury = isEnhancementShaman && PartyBenefitsFromWindfuryTotem(player);
 
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     // 89745 lets an enhancement shaman weave in a low-priority heal.
@@ -5013,7 +5043,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasHostileTarget && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 10414), 60.0f,
         { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, !isRestoShaman && hasHostileTarget && target->GetPowerType() == POWER_MANA && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
+    AddDecisionCandidate(candidates, !isRestoShaman && !isEnhancementShaman && hasHostileTarget && target->GetPowerType() == POWER_MANA && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
         { "shaman grounding totem", "counter incoming caster pressure", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 16166), 58.0f,
         { "shaman elemental mastery", "trigger burst throughput cooldown", 16166, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5047,12 +5077,14 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && player->GetPowerPct(POWER_MANA) < 50.0f && !HasActiveWaterTotem(player) && IsSpellReady(player, 16190), 52.8f,
         { "shaman mana tide totem", "restore mana below half", 16190, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
+    AddDecisionCandidate(candidates, (isRestoShaman || isEnhancementShaman) && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
         { "shaman tremor totem", "maintain a nearby tremor totem", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
+    AddDecisionCandidate(candidates, (isRestoShaman || isEnhancementShaman) && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
         { "shaman poison cleansing totem", "maintain a nearby poison cleansing totem", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isRestoShaman && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
+    AddDecisionCandidate(candidates, (isRestoShaman || (isEnhancementShaman && !enhancementUsesWindfury)) && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
         { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isEnhancementShaman && enhancementUsesWindfury && !HasActiveAirTotem(player) && IsSpellReady(player, 10614), 52.5f,
+        { "shaman windfury totem", "support an arms/fury warrior or retribution paladin", 10614, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, enhNeedsGapClose && !enhInGhostWolf && canUseRehgarsFury && IsSpellReady(player, 2645), 59.6f,
@@ -5427,6 +5459,11 @@ void PvpCore::LoadConfig()
 PvpCoreConfig const& PvpCore::GetConfig()
 {
     return g_PvpCoreConfig;
+}
+
+bool PvpCore::CanMageBlinkOutOfControl(Player const* player)
+{
+    return IsMageBlinkableControl(player) && IsSpellReady(player, 1953);
 }
 
 PvpValues PvpCore::CollectValues(Player const* player)
@@ -5865,7 +5902,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         // a plain ReachMeleeRange walk before CastDirectSpell/NotifyDuelDecision
         // are ever reached, which reads as the bot doing nothing but walking and
         // never whispering a decision at all.
-        bool const canCastOutsideMelee = context.spellId == 11578 || context.spellId == 20617 ||
+        bool const canCastOutsideMelee = context.spellId == 11578 || context.spellId == 20617 || context.spellId == 62124 ||
             context.spellId == 81271 || context.spellId == 82419 || context.spellId == 49376 || context.spellId == 16979 ||
             IsShamanFrostShockSpell(context.spellId);
         if (meleeTarget && !player->IsWithinMeleeRange(meleeTarget) && !canCastOutsideMelee)

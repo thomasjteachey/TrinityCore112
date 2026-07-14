@@ -219,6 +219,7 @@ public:
     static PvpCoreConfig const& GetConfig();
 
     static PvpValues CollectValues(Player const* player);
+    static bool CanMageBlinkOutOfControl(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);
     static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
     static BattlegroundLifecycleContext BuildBattlegroundLifecycleContext(Player const* player, PvpValues const& values);
