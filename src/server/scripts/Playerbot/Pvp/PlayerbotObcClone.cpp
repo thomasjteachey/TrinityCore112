@@ -326,6 +326,14 @@ void DestroyUnseatedClone(std::unique_ptr<WorldSession>& session, Player* clone)
     if (!clone)
         return;
 
+    // Offline clone sources are populated through Player::LoadFromDB, which
+    // restores persistent auras and may establish cross-unit references even
+    // though the temporary Player is never added to the world. Run the same
+    // pre-destruction cleanup used by normal logout/map removal before the
+    // Unit destructor asserts that every applied aura has been detached.
+    if (clone->GetGUID())
+        clone->CleanupsBeforeDelete();
+
     delete clone;
     session->SetPlayer(nullptr);
 }

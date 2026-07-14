@@ -1899,6 +1899,24 @@ void ScriptMgr::OnPlayerDuelEnd(Player* winner, Player* loser, DuelCompleteType 
     FOREACH_SCRIPT(PlayerScript)->OnDuelEnd(winner, loser, type);
 }
 
+bool ScriptMgr::OnPlayerCustomGameInvite(Player* inviter, Player* invitee)
+{
+    FOR_SCRIPTS_RET(PlayerScript, itr, end, false)
+        if (itr->second->OnCustomGameInvite(inviter, invitee))
+            return true;
+
+    return false;
+}
+
+bool ScriptMgr::OnPlayerCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree)
+{
+    FOR_SCRIPTS_RET(PlayerScript, itr, end, false)
+        if (itr->second->OnCustomGameSummonResponse(invitee, summonerGuid, agree))
+            return true;
+
+    return false;
+}
+
 void ScriptMgr::OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg)
 {
     FOREACH_SCRIPT(PlayerScript)->OnChat(player, type, lang, msg);
@@ -2657,6 +2675,16 @@ void PlayerScript::OnDuelStart(Player* /*player1*/, Player* /*player2*/)
 
 void PlayerScript::OnDuelEnd(Player* /*winner*/, Player* /*loser*/, DuelCompleteType /*type*/)
 {
+}
+
+bool PlayerScript::OnCustomGameInvite(Player* /*inviter*/, Player* /*invitee*/)
+{
+    return false;
+}
+
+bool PlayerScript::OnCustomGameSummonResponse(Player* /*invitee*/, ObjectGuid /*summonerGuid*/, bool /*agree*/)
+{
+    return false;
 }
 
 void PlayerScript::OnChat(Player* /*player*/, uint32 /*type*/, uint32 /*lang*/, std::string& /*msg*/)

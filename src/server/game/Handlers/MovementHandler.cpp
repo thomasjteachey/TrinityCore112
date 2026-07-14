@@ -31,6 +31,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "Transport.h"
 #include "Vehicle.h"
 #include "World.h"
@@ -1074,13 +1075,16 @@ void WorldSession::HandleMoveSetCollisionHgtAck(WorldPacket& recvData)
 
 void WorldSession::HandleSummonResponseOpcode(WorldPacket& recvData)
 {
-    if (!_player->IsAlive() || _player->IsInCombat())
-        return;
-
     ObjectGuid summoner_guid;
     bool agree;
     recvData >> summoner_guid;
     recvData >> agree;
+
+    if (sScriptMgr->OnPlayerCustomGameSummonResponse(_player, summoner_guid, agree))
+        return;
+
+    if (!_player->IsAlive() || _player->IsInCombat())
+        return;
 
     _player->SummonIfPossible(agree);
 }

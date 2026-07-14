@@ -10,6 +10,7 @@
 #include "Creature.h"
 #include "DBCStores.h"
 #include "Group.h"
+#include "GameTime.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
@@ -94,8 +95,13 @@ enum GossipAction : uint32
     ACTION_CYCLE_WEATHER,
     ACTION_KICK_PLAYER = 470,
     ACTION_START = 500,
-    ACTION_CLOSE
+    ACTION_CLOSE,
+    ACTION_REMOVE_LIST_BACK
 };
+
+constexpr uint32 ACTION_REMOVE_BOT_CHOICE_BASE = 1000;
+constexpr uint32 ACTION_REMOVE_DARK_CHOICE_BASE = 1100;
+constexpr uint32 ACTION_REMOVE_CHOICE_LIMIT = 100;
 
 struct CloneRequest
 {
@@ -108,6 +114,14 @@ struct CloneRequest
 struct LobbyMember
 {
     WorldLocation ReturnLocation;
+};
+
+struct PendingLobbyInvite
+{
+    uint32 InstanceId = 0;
+    ObjectGuid HostGuid;
+    time_t ExpireTime = 0;
+    bool Invalidated = false;
 };
 
 struct CustomGameLobby
@@ -324,6 +338,133 @@ public:
         return true;
     }
 
+    bool InvitePlayer(Player* host, Player* invited)
+    {
+        CustomGameLobby* lobby = GetLobby(host);
+        if (!IsOwner(host, lobby) || !invited || invited == host || lobby->ActiveBattlegroundId || lobby->Closing)
+            return false;
+
+        if (GetLobby(invited) || invited->IsInCustomGameLobby() || invited->InBattleground() ||
+            invited->InBattlegroundQueue() || playerbot::IsManagedRandomBot(invited))
+        {
+            Notify(host, invited->GetName() + " cannot join this custom-game lobby.");
+            return false;
+        }
+
+        auto pendingItr = _pendingInvites.find(invited->GetGUID());
+        if (pendingItr != _pendingInvites.end() && pendingItr->second.ExpireTime < GameTime::GetGameTime())
+            pendingItr = _pendingInvites.erase(pendingItr);
+        if (pendingItr != _pendingInvites.end())
+        {
+            Notify(host, invited->GetName() + " already has a pending custom-game invitation.");
+            return false;
+        }
+
+        _pendingInvites.emplace(invited->GetGUID(), PendingLobbyInvite{
+            lobby->InstanceId, lobby->OwnerGuid, GameTime::GetGameTime() + MAX_PLAYER_SUMMON_DELAY, false });
+        return true;
+    }
+
+    bool HandleSummonResponse(Player* invited, ObjectGuid summonerGuid, bool agree)
+    {
+        if (!invited)
+            return false;
+
+        auto inviteItr = _pendingInvites.find(invited->GetGUID());
+        if (inviteItr == _pendingInvites.end() || inviteItr->second.HostGuid != summonerGuid)
+            return false;
+
+        if (inviteItr->second.ExpireTime < GameTime::GetGameTime())
+        {
+            _pendingInvites.erase(inviteItr);
+            Notify(invited, "That custom-game invitation has expired.");
+            return true;
+        }
+
+        // Retain invalidated requests until their client popup expires so a
+        // late response cannot fall through into an unrelated normal summon.
+        if (inviteItr->second.Invalidated)
+        {
+            _pendingInvites.erase(inviteItr);
+            return true;
+        }
+
+        return agree ? AcceptInvite(invited) : DeclineInvite(invited);
+    }
+
+    bool AcceptInvite(Player* invited)
+    {
+        if (!invited)
+            return false;
+
+        auto inviteItr = _pendingInvites.find(invited->GetGUID());
+        if (inviteItr == _pendingInvites.end())
+            return false;
+
+        PendingLobbyInvite const invitation = inviteItr->second;
+        _pendingInvites.erase(inviteItr);
+
+        auto lobbyItr = _lobbies.find(invitation.InstanceId);
+        CustomGameLobby* lobby = lobbyItr == _lobbies.end() ? nullptr : lobbyItr->second.get();
+        Player* host = ObjectAccessor::FindConnectedPlayer(invitation.HostGuid);
+        if (!lobby || lobby->OwnerGuid != invitation.HostGuid || lobby->Closing ||
+            lobby->ActiveBattlegroundId || !host || !IsOwner(host, lobby) ||
+            host->GetMapId() != CUSTOM_GAME_MAP_ID || host->GetInstanceId() != lobby->InstanceId)
+        {
+            Notify(invited, "The custom game lobby has been destroyed.");
+            return true;
+        }
+
+        if (GetLobby(invited) || invited->IsInCustomGameLobby() || invited->InBattleground() ||
+            invited->InBattlegroundQueue() || playerbot::IsManagedRandomBot(invited))
+        {
+            Notify(invited, "You cannot join that custom-game lobby right now.");
+            Notify(host, invited->GetName() + " could not join the custom-game lobby.");
+            return true;
+        }
+
+        Map* lobbyMap = sMapMgr->FindMap(CUSTOM_GAME_MAP_ID, lobby->InstanceId);
+        if (!lobbyMap)
+        {
+            Notify(invited, "The custom game lobby has been destroyed.");
+            return true;
+        }
+
+        LobbyMember snapshot;
+        snapshot.ReturnLocation = WorldLocation(invited->GetMapId(), invited->GetPositionX(), invited->GetPositionY(),
+            invited->GetPositionZ(), invited->GetOrientation());
+        lobby->Members.emplace(invited->GetGUID(), snapshot);
+
+        if (invited->GetGroupInvite())
+            invited->UninviteFromGroup();
+        if (invited->GetGroup())
+            invited->RemoveFromGroup(GROUP_REMOVEMETHOD_LEAVE);
+
+        invited->CombatStopWithPets(true);
+        invited->SetWorldSubMap(CUSTOM_GAME_MAP_ID, lobby->InstanceId);
+        invited->TeleportTo(CUSTOM_GAME_MAP_ID, LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(),
+            LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
+        Notify(invited, "You joined " + host->GetName() + "'s custom-game lobby.");
+        Notify(host, invited->GetName() + " accepted your custom-game invitation.");
+        return true;
+    }
+
+    bool DeclineInvite(Player* invited)
+    {
+        if (!invited)
+            return false;
+
+        auto inviteItr = _pendingInvites.find(invited->GetGUID());
+        if (inviteItr == _pendingInvites.end())
+            return false;
+
+        ObjectGuid const hostGuid = inviteItr->second.HostGuid;
+        _pendingInvites.erase(inviteItr);
+        if (Player* host = ObjectAccessor::FindConnectedPlayer(hostGuid))
+            Notify(host, invited->GetName() + " declined your custom-game invitation.");
+        return true;
+    }
+
     void SetTeam(Player* player, uint32 team)
     {
         CustomGameLobby* lobby = GetLobby(player);
@@ -346,27 +487,11 @@ public:
         Notify(player, "You are now unteamed and will spectate when the match starts.");
     }
 
-    bool ChangeCloneRequest(Player* player, uint32 team, std::string name, bool playerbotClone, bool add)
+    bool AddCloneRequest(Player* player, uint32 team, std::string name, bool playerbotClone)
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || !normalizePlayerName(name))
             return false;
-
-        if (!add)
-        {
-            auto itr = std::find_if(lobby->CloneRequests.begin(), lobby->CloneRequests.end(), [&](CloneRequest const& request)
-            {
-                return request.SourceName == name && request.Team == team && request.IsPlayerbot == playerbotClone;
-            });
-            if (itr != lobby->CloneRequests.end())
-            {
-                playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(lobby->InstanceId,
-                    itr->SourceGuid, itr->Team, itr->IsPlayerbot);
-                lobby->CloneRequests.erase(itr);
-                RefreshLobbyClonePreviews(*lobby);
-            }
-            return true;
-        }
 
         ObjectGuid const sourceGuid = sCharacterCache->GetCharacterGuidByName(name);
         CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
@@ -402,6 +527,31 @@ public:
         }
 
         return true;
+    }
+
+    bool RemoveCloneRequest(Player* player, uint32 team, bool playerbotClone, uint32 filteredIndex)
+    {
+        CustomGameLobby* lobby = GetLobby(player);
+        if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
+            return false;
+
+        uint32 currentIndex = 0;
+        for (auto itr = lobby->CloneRequests.begin(); itr != lobby->CloneRequests.end(); ++itr)
+        {
+            if (itr->Team != team || itr->IsPlayerbot != playerbotClone)
+                continue;
+            if (currentIndex++ != filteredIndex)
+                continue;
+
+            playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(lobby->InstanceId,
+                itr->SourceGuid, itr->Team, itr->IsPlayerbot);
+            lobby->CloneRequests.erase(itr);
+            RefreshLobbyClonePreviews(*lobby);
+            return true;
+        }
+
+        Notify(player, "That copy is no longer in the team roster.");
+        return false;
     }
 
     bool IsOwner(Player const* player, CustomGameLobby const* lobby) const
@@ -574,6 +724,7 @@ public:
 
         lobby->ActiveBattlegroundId = bg->GetInstanceID();
         lobby->ClonesSpawned = false;
+        InvalidateLobbyInvites(lobby->InstanceId);
 
         for (auto const& [guid, member] : lobby->Members)
         {
@@ -627,6 +778,7 @@ public:
             return;
 
         playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(lobby->InstanceId);
+        InvalidateLobbyInvites(lobby->InstanceId);
         lobby->Closing = true;
         for (auto const& [guid, member] : lobby->Members)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
@@ -719,6 +871,8 @@ public:
 
     void OnLogout(Player* player)
     {
+        _pendingInvites.erase(player->GetGUID());
+
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby)
             return;
@@ -743,6 +897,13 @@ public:
 
     void Update()
     {
+        time_t const now = GameTime::GetGameTime();
+        for (auto itr = _pendingInvites.begin(); itr != _pendingInvites.end();)
+            if (itr->second.ExpireTime < now)
+                itr = _pendingInvites.erase(itr);
+            else
+                ++itr;
+
         std::vector<uint32> eraseIds;
         std::vector<uint32> completedMatchIds;
         for (auto& [instanceId, lobbyPtr] : _lobbies)
@@ -829,6 +990,19 @@ public:
     }
 
 private:
+    void InvalidateLobbyInvites(uint32 instanceId)
+    {
+        for (auto& [invitedGuid, invitation] : _pendingInvites)
+        {
+            if (invitation.InstanceId != instanceId || invitation.Invalidated)
+                continue;
+
+            invitation.Invalidated = true;
+            if (Player* invited = ObjectAccessor::FindConnectedPlayer(invitedGuid))
+                Notify(invited, "The custom game lobby has been destroyed.");
+        }
+    }
+
     void RefreshLobbyClonePreviews(CustomGameLobby& lobby)
     {
         if (lobby.ActiveBattlegroundId || lobby.Closing)
@@ -883,6 +1057,7 @@ private:
 
         if (wasOwner)
         {
+            InvalidateLobbyInvites(lobby.InstanceId);
             lobby.Closing = true;
             for (auto const& [guid, member] : lobby.Members)
                 if (Player* remaining = ObjectAccessor::FindConnectedPlayer(guid))
@@ -1017,6 +1192,7 @@ private:
     }
 
     std::unordered_map<uint32, std::unique_ptr<CustomGameLobby>> _lobbies;
+    std::unordered_map<ObjectGuid, PendingLobbyInvite> _pendingInvites;
 };
 
 class custom_game_lobby_npc : public CreatureScript
@@ -1053,9 +1229,37 @@ public:
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, std::string("Join team ") + TeamName(team), team, ACTION_JOIN_TEAM);
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot copy...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot copy...", team, ACTION_REMOVE_BOT, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot copy...", team, ACTION_REMOVE_BOT);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add Dark player copy...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove Dark player copy...", team, ACTION_REMOVE_DARK, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove Dark player copy...", team, ACTION_REMOVE_DARK);
+            SendGossipMenuFor(player, 1, me->GetGUID());
+        }
+
+        void ShowCloneRemovalMenu(Player* player, uint32 team, bool playerbotClone)
+        {
+            CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
+            if (!lobby || (team != ALLIANCE && team != HORDE))
+                return;
+
+            uint32 const actionBase = playerbotClone ? ACTION_REMOVE_BOT_CHOICE_BASE : ACTION_REMOVE_DARK_CHOICE_BASE;
+            uint32 filteredIndex = 0;
+            for (CloneRequest const& request : lobby->CloneRequests)
+            {
+                if (request.Team != team || request.IsPlayerbot != playerbotClone)
+                    continue;
+
+                if (filteredIndex < ACTION_REMOVE_CHOICE_LIMIT)
+                    AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove " + request.SourceName,
+                        team, actionBase + filteredIndex);
+                ++filteredIndex;
+            }
+
+            if (!filteredIndex)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    playerbotClone ? "No playerbot copies are on this team." : "No Dark player copies are on this team.",
+                    team, ACTION_STATUS);
+
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", team, ACTION_REMOVE_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
@@ -1220,11 +1424,30 @@ public:
             player->PlayerTalkClass->ClearMenus();
             auto& manager = CustomGameLobbyManager::Instance();
 
+            if (action >= ACTION_REMOVE_BOT_CHOICE_BASE &&
+                action < ACTION_REMOVE_BOT_CHOICE_BASE + ACTION_REMOVE_CHOICE_LIMIT)
+            {
+                manager.RemoveCloneRequest(player, sender, true, action - ACTION_REMOVE_BOT_CHOICE_BASE);
+                ShowCloneRemovalMenu(player, sender, true);
+                return true;
+            }
+
+            if (action >= ACTION_REMOVE_DARK_CHOICE_BASE &&
+                action < ACTION_REMOVE_DARK_CHOICE_BASE + ACTION_REMOVE_CHOICE_LIMIT)
+            {
+                manager.RemoveCloneRequest(player, sender, false, action - ACTION_REMOVE_DARK_CHOICE_BASE);
+                ShowCloneRemovalMenu(player, sender, false);
+                return true;
+            }
+
             switch (action)
             {
                 case ACTION_CREATE: manager.CreateLobby(player); break;
                 case ACTION_JOIN_TEAM: manager.SetTeam(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
+                case ACTION_REMOVE_BOT: ShowCloneRemovalMenu(player, sender, true); return true;
+                case ACTION_REMOVE_DARK: ShowCloneRemovalMenu(player, sender, false); return true;
+                case ACTION_REMOVE_LIST_BACK: ShowTeamMenu(player, sender); return true;
                 case ACTION_SELECT_GAME_MENU: ShowGameSelectionMenu(player); return true;
                 case ACTION_SELECT_ARENA_MENU: ShowArenaSelectionMenu(player); return true;
                 case ACTION_SELECT_BATTLEGROUND_MENU: ShowBattlegroundSelectionMenu(player); return true;
@@ -1292,9 +1515,9 @@ public:
             }
             else
             {
-                bool const add = action == ACTION_ADD_BOT || action == ACTION_ADD_DARK;
-                bool const bot = action == ACTION_ADD_BOT || action == ACTION_REMOVE_BOT;
-                manager.ChangeCloneRequest(player, sender, value, bot, add);
+                bool const bot = action == ACTION_ADD_BOT;
+                if (bot || action == ACTION_ADD_DARK)
+                    manager.AddCloneRequest(player, sender, value, bot);
                 ShowTeamMenu(player, sender);
                 return true;
             }
@@ -1312,6 +1535,11 @@ public:
     void OnMapChanged(Player* player) override { CustomGameLobbyManager::Instance().OnMapChanged(player); }
     void OnUpdate(Player* player, uint32) override { CustomGameLobbyManager::Instance().OnPlayerUpdate(player); }
     void OnLogout(Player* player) override { CustomGameLobbyManager::Instance().OnLogout(player); }
+    bool OnCustomGameInvite(Player* inviter, Player* invitee) override { return CustomGameLobbyManager::Instance().InvitePlayer(inviter, invitee); }
+    bool OnCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree) override
+    {
+        return CustomGameLobbyManager::Instance().HandleSummonResponse(invitee, summonerGuid, agree);
+    }
 };
 
 class custom_game_lobby_unit_script : public UnitScript

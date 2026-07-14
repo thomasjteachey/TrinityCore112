@@ -27,6 +27,7 @@
 #include "ObjectMgr.h"
 #include "Pet.h"
 #include "Player.h"
+#include "ScriptMgr.h"
 #include "SocialMgr.h"
 #include "SpellAuras.h"
 #include "Util.h"
@@ -89,12 +90,6 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     }
 
     Player* invitingPlayer = GetPlayer();
-    if (IsPlayerInsideCustomGameLobby(invitingPlayer))
-    {
-        SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
-        return;
-    }
-
     if (IsPlayerInsideStockades(invitingPlayer))
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
@@ -134,6 +129,26 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     if (!sWorld->getBoolConfig(CONFIG_ALLOW_GM_GROUP) && !invitingPlayer->IsGameMaster() && invitedPlayer->IsGameMaster())
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_BAD_PLAYER_NAME_S);
+        return;
+    }
+
+    if (IsPlayerInsideCustomGameLobby(invitingPlayer))
+    {
+        if (invitedPlayer->GetSocial()->HasIgnore(invitingPlayer->GetGUID()) ||
+            !sScriptMgr->OnPlayerCustomGameInvite(invitingPlayer, invitedPlayer))
+        {
+            SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
+            return;
+        }
+
+        // The summon request has its own response opcode carrying the
+        // summoner GUID, so it can coexist safely with ordinary party invites.
+        WorldPacket data(SMSG_SUMMON_REQUEST, 8 + 4 + 4);
+        data << uint64(invitingPlayer->GetGUID());
+        data << uint32(invitingPlayer->GetZoneId());
+        data << uint32(MAX_PLAYER_SUMMON_DELAY * IN_MILLISECONDS);
+        invitedPlayer->SendDirectMessage(&data);
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_PARTY_RESULT_OK);
         return;
     }
 

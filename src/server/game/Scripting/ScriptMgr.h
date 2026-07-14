@@ -664,6 +664,11 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a duel ends
         virtual void OnDuelEnd(Player* winner, Player* loser, DuelCompleteType type);
 
+        // Called by the group-invite opcodes so scripts can provide a
+        // non-group invitation flow.
+        virtual bool OnCustomGameInvite(Player* inviter, Player* invitee);
+        virtual bool OnCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree);
+
         // The following methods are called when a player sends a chat message.
         virtual void OnChat(Player* player, uint32 type, uint32 lang, std::string& msg);
 
@@ -1025,6 +1030,8 @@ class TC_GAME_API ScriptMgr
         void OnPlayerDuelRequest(Player* target, Player* challenger);
         void OnPlayerDuelStart(Player* player1, Player* player2);
         void OnPlayerDuelEnd(Player* winner, Player* loser, DuelCompleteType type);
+        bool OnPlayerCustomGameInvite(Player* inviter, Player* invitee);
+        bool OnPlayerCustomGameSummonResponse(Player* invitee, ObjectGuid summonerGuid, bool agree);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Player* receiver);
         void OnPlayerChat(Player* player, uint32 type, uint32 lang, std::string& msg, Group* group);
