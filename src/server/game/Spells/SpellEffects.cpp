@@ -4132,6 +4132,12 @@ void Spell::EffectDuel()
     Player* caster = m_caster->ToPlayer();
     Player* target = unitTarget->ToPlayer();
 
+    if (caster->IsInCustomGameLobby() || target->IsInCustomGameLobby())
+    {
+        SendCastResult(SPELL_FAILED_NO_DUELING);
+        return;
+    }
+
     // caster or target already have requested duel
     // bots may not have social data, so only enforce ignore checks when social data exists
     if (caster->duel || target->duel || (target->GetSocial() && target->GetSocial()->HasIgnore(caster->GetGUID())))

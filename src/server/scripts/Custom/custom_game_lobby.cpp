@@ -5,6 +5,7 @@
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CharacterCache.h"
 #include "Chat.h"
 #include "Creature.h"
 #include "DBCStores.h"
@@ -44,6 +45,7 @@ Position const LobbyArrival = { 16218.700195f, 16403.599609f, -64.378899f, 6.283
 Position const BlueNpcPosition = { 16229.862305f, 16415.587891f, -64.378716f, 3.132112f };
 Position const RedNpcPosition = { 16230.437500f, 16391.000000f, -64.378792f, 3.014295f };
 Position const ChromieNpcPosition = { 16240.280273f, 16402.792969f, -64.378471f, 3.104628f };
+WorldLocation const GurubashiGamesmasterLocation(0, -13235.707031f, 214.336441f, 31.276190f, 1.010225f);
 constexpr float LOBBY_MAX_DISTANCE = 32.0f;
 
 enum GossipAction : uint32
@@ -52,12 +54,15 @@ enum GossipAction : uint32
     ACTION_STATUS = 199,
     ACTION_JOIN_TEAM = 200,
     ACTION_LEAVE_TEAM,
-    ACTION_ADD_PARTY,
-    ACTION_REMOVE_PARTY,
     ACTION_ADD_BOT,
     ACTION_REMOVE_BOT,
     ACTION_ADD_DARK,
     ACTION_REMOVE_DARK,
+    ACTION_SELECT_GAME_MENU = 280,
+    ACTION_SELECT_ARENA_MENU,
+    ACTION_SELECT_BATTLEGROUND_MENU,
+    ACTION_SELECT_GAME_BACK,
+    ACTION_SELECT_LIST_BACK,
     ACTION_SELECT_WS = 300,
     ACTION_SELECT_TP,
     ACTION_SELECT_AB,
@@ -75,6 +80,8 @@ enum GossipAction : uint32
     ACTION_SELECT_NL,
     ACTION_SELECT_TV,
     ACTION_SELECT_TTP,
+    ACTION_BATTLEGROUND_OPTIONS = 380,
+    ACTION_BATTLEGROUND_OPTIONS_BACK,
     ACTION_RULE_FLAG_CAPS = 400,
     ACTION_RULE_RESOURCES,
     ACTION_RULE_RESOURCE_RATE,
@@ -85,6 +92,7 @@ enum GossipAction : uint32
     ACTION_TOGGLE_ENEMY_FLAG = 450,
     ACTION_TOGGLE_ALLY_FLAG,
     ACTION_CYCLE_WEATHER,
+    ACTION_KICK_PLAYER = 470,
     ACTION_START = 500,
     ACTION_CLOSE
 };
@@ -100,7 +108,6 @@ struct CloneRequest
 struct LobbyMember
 {
     WorldLocation ReturnLocation;
-    uint8 OriginalSubgroup = 0;
 };
 
 struct CustomGameLobby
@@ -163,6 +170,62 @@ char const* WeatherName(BattlegroundCustomWeather weather)
     }
 }
 
+Position LobbyClonePosition(uint32 team, uint32 teamIndex)
+{
+    // Five tidy columns per side, expanding away from the central aisle.
+    // Forty previews still fit within the jail's enforced lobby boundary.
+    uint32 const column = teamIndex % 5;
+    uint32 const row = teamIndex / 5;
+    constexpr float columnX[5] = { 16223.8f, 16226.4f, 16233.2f, 16235.8f, 16238.4f };
+    float const x = columnX[column];
+    float const y = team == ALLIANCE ? 16411.8f + 1.30f * row : 16395.2f - 1.30f * row;
+    return Position(x, y, -64.3788f, 3.141593f);
+}
+
+bool IsArenaSelection(BattlegroundTypeId type)
+{
+    switch (type)
+    {
+        case BATTLEGROUND_NA:
+        case BATTLEGROUND_BE:
+        case BATTLEGROUND_RL:
+        case BATTLEGROUND_NL:
+        case BATTLEGROUND_TV:
+        case BATTLEGROUND_TTP:
+            return true;
+        default:
+            return false;
+    }
+}
+
+uint32 DefaultResourceLimit(BattlegroundTypeId type)
+{
+    switch (type)
+    {
+        case BATTLEGROUND_AB:
+        case BATTLEGROUND_EY: return 1600;
+        case BATTLEGROUND_BFG: return 2000;
+        default: return 0;
+    }
+}
+
+std::string ConfiguredValue(uint32 configured, uint32 defaultValue)
+{
+    return std::to_string(configured ? configured : defaultValue) + (configured ? "" : " (default)");
+}
+
+std::string ConfiguredSeconds(uint32 configuredMs, uint32 defaultMs)
+{
+    uint32 const valueMs = configuredMs ? configuredMs : defaultMs;
+    std::string value;
+    if (valueMs % IN_MILLISECONDS)
+        value = std::to_string(valueMs / IN_MILLISECONDS) + "." +
+            std::to_string((valueMs % IN_MILLISECONDS) / 100) + " sec";
+    else
+        value = std::to_string(valueMs / IN_MILLISECONDS) + " sec";
+    return value + (configuredMs ? "" : " (default)");
+}
+
 void Notify(Player* player, std::string const& message)
 {
     if (player && player->GetSession())
@@ -213,22 +276,21 @@ public:
         lobby->InstanceId = lobbyMap->GetInstanceId();
         lobby->OwnerGuid = owner->GetGUID();
 
-        auto addMember = [&](Player* member, uint8 subgroup)
+        auto addMember = [&](Player* member)
         {
             if (!member || member->InBattleground() || member->InBattlegroundQueue() || playerbot::IsManagedRandomBot(member))
                 return;
 
             LobbyMember snapshot;
             snapshot.ReturnLocation = WorldLocation(member->GetMapId(), member->GetPositionX(), member->GetPositionY(), member->GetPositionZ(), member->GetOrientation());
-            snapshot.OriginalSubgroup = subgroup;
             lobby->Members.emplace(member->GetGUID(), snapshot);
         };
 
         if (importGroup)
             for (Group::MemberSlot const& slot : group->GetMemberSlots())
-                addMember(ObjectAccessor::FindConnectedPlayer(slot.guid), slot.group);
+                addMember(ObjectAccessor::FindConnectedPlayer(slot.guid));
         else
-            addMember(owner, 0);
+            addMember(owner);
 
         if (lobby->Members.find(owner->GetGUID()) == lobby->Members.end())
         {
@@ -284,31 +346,6 @@ public:
         Notify(player, "You are now unteamed and will spectate when the match starts.");
     }
 
-    void SetOriginalPartyTeam(Player* player, uint32 team, bool add)
-    {
-        CustomGameLobby* lobby = GetLobby(player);
-        if (!lobby || lobby->ActiveBattlegroundId)
-            return;
-
-        auto memberItr = lobby->Members.find(player->GetGUID());
-        if (memberItr == lobby->Members.end())
-            return;
-
-        for (auto const& [guid, member] : lobby->Members)
-        {
-            if (member.OriginalSubgroup != memberItr->second.OriginalSubgroup)
-                continue;
-
-            if (add)
-                lobby->Teams[guid] = team;
-            else if (auto teamItr = lobby->Teams.find(guid); teamItr != lobby->Teams.end() && teamItr->second == team)
-                lobby->Teams.erase(teamItr);
-
-            if (Player* cohortMember = ObjectAccessor::FindConnectedPlayer(guid))
-                ApplyTeamVisual(cohortMember, add ? team : 0);
-        }
-    }
-
     bool ChangeCloneRequest(Player* player, uint32 team, std::string name, bool playerbotClone, bool add)
     {
         CustomGameLobby* lobby = GetLobby(player);
@@ -322,32 +359,47 @@ public:
                 return request.SourceName == name && request.Team == team && request.IsPlayerbot == playerbotClone;
             });
             if (itr != lobby->CloneRequests.end())
+            {
+                playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(lobby->InstanceId,
+                    itr->SourceGuid, itr->Team, itr->IsPlayerbot);
                 lobby->CloneRequests.erase(itr);
+                RefreshLobbyClonePreviews(*lobby);
+            }
             return true;
         }
 
-        Player* source = ObjectAccessor::FindConnectedPlayerByName(name);
-        if (!source)
+        ObjectGuid const sourceGuid = sCharacterCache->GetCharacterGuidByName(name);
+        CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
+        if (!sourceGuid || !characterInfo)
         {
-            Notify(player, "That source character must be online.");
+            Notify(player, "No character with that name exists.");
             return false;
         }
 
-        bool const managedBot = playerbot::IsManagedRandomBot(source);
-        if (playerbotClone != managedBot)
+        Player* source = ObjectAccessor::FindConnectedPlayer(sourceGuid);
+        bool const managedBot = source && playerbot::IsManagedRandomBot(source);
+        if (playerbotClone && !managedBot)
         {
-            Notify(player, playerbotClone ? "That character is not a managed playerbot." : "Use the playerbot-copy option for that character.");
+            Notify(player, "That character must be an online managed playerbot.");
+            return false;
+        }
+        if (!playerbotClone && managedBot)
+        {
+            Notify(player, "Use the playerbot-copy option for that character.");
             return false;
         }
 
         auto matches = [&](CloneRequest const& request)
         {
-            return request.SourceGuid == source->GetGUID() && request.Team == team && request.IsPlayerbot == playerbotClone;
+            return request.SourceGuid == sourceGuid && request.Team == team && request.IsPlayerbot == playerbotClone;
         };
 
         auto itr = std::find_if(lobby->CloneRequests.begin(), lobby->CloneRequests.end(), matches);
         if (itr == lobby->CloneRequests.end())
-            lobby->CloneRequests.push_back({ source->GetGUID(), source->GetName(), team, playerbotClone });
+        {
+            lobby->CloneRequests.push_back({ sourceGuid, characterInfo->Name, team, playerbotClone });
+            RefreshLobbyClonePreviews(*lobby);
+        }
 
         return true;
     }
@@ -363,6 +415,8 @@ public:
         if (!IsOwner(player, lobby) || lobby->ActiveBattlegroundId)
             return;
 
+        if (lobby->SelectedType != type)
+            lobby->Rules = BattlegroundCustomRules();
         lobby->SelectedType = type;
         lobby->ArenaType = arenaType;
     }
@@ -420,6 +474,46 @@ public:
         return true;
     }
 
+    bool KickPlayer(Player* host, std::string name)
+    {
+        CustomGameLobby* lobby = GetLobby(host);
+        if (!IsOwner(host, lobby) || !normalizePlayerName(name))
+            return false;
+
+        ObjectGuid const targetGuid = sCharacterCache->GetCharacterGuidByName(name);
+        if (!targetGuid || lobby->Members.find(targetGuid) == lobby->Members.end())
+        {
+            Notify(host, "That player is not in this custom lobby.");
+            return false;
+        }
+
+        if (targetGuid == lobby->OwnerGuid)
+        {
+            Notify(host, "The host cannot be kicked. Close the lobby instead.");
+            return false;
+        }
+
+        Player* target = ObjectAccessor::FindConnectedPlayer(targetGuid);
+        if (!target)
+        {
+            Notify(host, "That player is no longer online.");
+            return false;
+        }
+
+        if (lobby->ActiveBattlegroundId && target->GetBattlegroundId() == lobby->ActiveBattlegroundId)
+            if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType))
+                bg->RemovePlayerAtLeave(targetGuid, false, true);
+
+        RemoveLobbyMember(target, *lobby, false);
+        target->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+        target->SetBGTeam(0);
+        target->SetPendingSpectatorForBG(0);
+        Notify(target, "The host removed you from the custom game.");
+        target->TeleportTo(GurubashiGamesmasterLocation);
+        Notify(host, name + " was removed from the custom game.");
+        return true;
+    }
+
     bool StartGame(Player* owner)
     {
         CustomGameLobby* lobby = GetLobby(owner);
@@ -474,6 +568,10 @@ public:
         bg->SetMinPlayers(0);
         bg->StartBattleground();
 
+        // Lobby previews are not combat participants. Destroy them before the
+        // requested copies are provisioned inside the battleground instance.
+        playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(lobby->InstanceId);
+
         lobby->ActiveBattlegroundId = bg->GetInstanceID();
         lobby->ClonesSpawned = false;
 
@@ -484,6 +582,9 @@ public:
                 continue;
 
             ApplyTeamVisual(player, 0);
+            player->SetVisible(true);
+            player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
+                UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
             player->SetBattlegroundEntryPoint();
 
             auto teamItr = lobby->Teams.find(guid);
@@ -525,11 +626,15 @@ public:
         if (!IsOwner(owner, lobby) || lobby->ActiveBattlegroundId)
             return;
 
+        playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(lobby->InstanceId);
         lobby->Closing = true;
         for (auto const& [guid, member] : lobby->Members)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             {
                 ApplyTeamVisual(player, 0);
+                player->SetVisible(true);
+                player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
+                    UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
                 player->ClearWorldSubMap();
                 player->TeleportTo(member.ReturnLocation);
             }
@@ -555,7 +660,13 @@ public:
             }
 
             player->SetVisible(true);
-            player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+            player->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
+                UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+            player->CombatStopWithPets(true);
+            if (player->GetTradeData())
+                player->TradeCancel(true);
+            if (player->duel)
+                player->DuelComplete(DUEL_INTERRUPTED);
             if (player->IsSpectator())
                 player->SetIsSpectator(false);
 
@@ -588,6 +699,19 @@ public:
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId)
             return;
+
+        player->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
+            UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+        if (!player->IsAlive())
+        {
+            player->ResurrectPlayer(1.0f);
+            player->SpawnCorpseBones();
+        }
+        player->SetFullHealth();
+        if (player->GetTradeData())
+            player->TradeCancel(true);
+        if (player->duel)
+            player->DuelComplete(DUEL_INTERRUPTED);
 
         if (player->GetDistance(LobbyArrival) > LOBBY_MAX_DISTANCE || player->GetPositionZ() < -80.0f || player->GetPositionZ() > -45.0f)
             player->NearTeleportTo(LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(), LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
@@ -624,7 +748,7 @@ public:
         for (auto& [instanceId, lobbyPtr] : _lobbies)
         {
             CustomGameLobby& lobby = *lobbyPtr;
-            if (lobby.Closing && lobby.Members.empty() && lobby.ActiveBattlegroundId)
+            if (lobby.Closing && lobby.ActiveBattlegroundId)
             {
                 playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(lobby.ActiveBattlegroundId);
                 if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.SelectedType))
@@ -639,10 +763,26 @@ public:
                 Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.SelectedType);
                 if (bg && bg->FindBgMap() && !lobby.ClonesSpawned)
                 {
+                    WorldSession* callbackSession = nullptr;
+                    for (auto const& [guid, member] : lobby.Members)
+                        if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                            if (player->GetSession() && !player->GetSession()->IsVirtualSession())
+                            {
+                                callbackSession = player->GetSession();
+                                break;
+                            }
+
                     for (CloneRequest const& request : lobby.CloneRequests)
-                        if (Player* source = ObjectAccessor::FindConnectedPlayer(request.SourceGuid))
-                            playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, request.Team,
-                                request.IsPlayerbot ? "Echo " : "Dark ");
+                    {
+                        if (request.IsPlayerbot)
+                        {
+                            if (Player* source = ObjectAccessor::FindConnectedPlayer(request.SourceGuid))
+                                playerbot::PlayerbotObcCloneManager::CreateCustomGameClone(source, bg, request.Team, "Echo ");
+                        }
+                        else
+                            playerbot::PlayerbotObcCloneManager::QueueCustomGameClone(request.SourceGuid, callbackSession,
+                                bg, request.Team, "Dark ");
+                    }
                     lobby.ClonesSpawned = true;
                 }
 
@@ -655,10 +795,18 @@ public:
 
             if (lobby.Closing)
             {
+                playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(instanceId);
                 for (auto const& [guid, member] : lobby.Members)
                     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                         if (player->HasWorldSubMap())
                         {
+                            ApplyTeamVisual(player, 0);
+                            player->SetVisible(true);
+                            player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE |
+                                UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+                            if (player->IsSpectator())
+                                player->SetIsSpectator(false);
+                            player->SetPendingSpectatorForBG(0);
                             player->ClearWorldSubMap();
                             player->TeleportTo(member.ReturnLocation);
                         }
@@ -681,6 +829,34 @@ public:
     }
 
 private:
+    void RefreshLobbyClonePreviews(CustomGameLobby& lobby)
+    {
+        if (lobby.ActiveBattlegroundId || lobby.Closing)
+            return;
+
+        WorldSession* callbackSession = nullptr;
+        for (auto const& [guid, member] : lobby.Members)
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                if (player->GetSession() && !player->GetSession()->IsVirtualSession())
+                {
+                    callbackSession = player->GetSession();
+                    break;
+                }
+
+        uint32 blueIndex = 0;
+        uint32 redIndex = 0;
+        for (CloneRequest const& request : lobby.CloneRequests)
+        {
+            uint32 const teamIndex = request.Team == ALLIANCE ? blueIndex++ : redIndex++;
+            Position const position = LobbyClonePosition(request.Team, teamIndex);
+            playerbot::PlayerbotObcCloneManager::QueueCustomGameLobbyClone(request.SourceGuid, callbackSession,
+                CUSTOM_GAME_MAP_ID, lobby.InstanceId, request.Team, request.IsPlayerbot, position,
+                request.IsPlayerbot ? "Echo " : "Dark ");
+            playerbot::PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(lobby.InstanceId,
+                request.SourceGuid, request.Team, request.IsPlayerbot, position);
+        }
+    }
+
     void RemoveLobbyMember(Player* player, CustomGameLobby& lobby, bool returnToOriginal)
     {
         if (!player)
@@ -705,9 +881,14 @@ private:
         if (returnToOriginal)
             player->TeleportTo(returnLocation);
 
-        if (wasOwner && !lobby.Members.empty())
-            lobby.OwnerGuid = lobby.Members.begin()->first;
-        if (lobby.Members.empty())
+        if (wasOwner)
+        {
+            lobby.Closing = true;
+            for (auto const& [guid, member] : lobby.Members)
+                if (Player* remaining = ObjectAccessor::FindConnectedPlayer(guid))
+                    Notify(remaining, "The custom-game host left, so the lobby is closing.");
+        }
+        else if (lobby.Members.empty())
             lobby.Closing = true;
     }
 
@@ -730,6 +911,24 @@ private:
 
         if (returningGuids.empty())
         {
+            lobby.Members.clear();
+            lobby.Teams.clear();
+            lobby.ActiveBattlegroundId = 0;
+            lobby.Closing = true;
+            return;
+        }
+
+        if (std::find(returningGuids.begin(), returningGuids.end(), lobby.OwnerGuid) == returningGuids.end())
+        {
+            for (ObjectGuid guid : returningGuids)
+                if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+                {
+                    if (bg)
+                        bg->RemovePlayerAtLeave(guid, false, true);
+                    player->ClearWorldSubMap();
+                    player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
+                }
+
             lobby.Members.clear();
             lobby.Teams.clear();
             lobby.ActiveBattlegroundId = 0;
@@ -769,8 +968,6 @@ private:
         lobby.ActiveBattlegroundId = 0;
         lobby.ClonesSpawned = false;
         lobby.Closing = false;
-        if (lobby.Members.find(lobby.OwnerGuid) == lobby.Members.end())
-            lobby.OwnerGuid = lobby.Members.begin()->first;
 
         auto lobbyNode = _lobbies.extract(lobbyItr);
         lobbyNode.key() = newInstanceId;
@@ -799,6 +996,8 @@ private:
                 player->TeleportTo(CUSTOM_GAME_MAP_ID, LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(),
                     LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
             }
+
+        RefreshLobbyClonePreviews(lobby);
 
         if (Map* oldLobbyMap = sMapMgr->FindMap(CUSTOM_GAME_MAP_ID, oldInstanceId))
             if (!oldLobbyMap->HavePlayers())
@@ -853,12 +1052,10 @@ public:
             else
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, std::string("Join team ") + TeamName(team), team, ACTION_JOIN_TEAM);
 
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add my original party", team, ACTION_ADD_PARTY);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove my original party", team, ACTION_REMOVE_PARTY);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot copy...", team, ACTION_ADD_BOT, "Enter the online playerbot name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot copy...", team, ACTION_REMOVE_BOT, "Enter the playerbot name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add Dark player copy...", team, ACTION_ADD_DARK, "Enter the online player name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove Dark player copy...", team, ACTION_REMOVE_DARK, "Enter the player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot copy...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot copy...", team, ACTION_REMOVE_BOT, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add Dark player copy...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove Dark player copy...", team, ACTION_REMOVE_DARK, "Enter player name", 0, true);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
@@ -868,13 +1065,58 @@ public:
             if (!lobby)
                 return;
 
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Selected: " + BattlegroundName(*lobby), GOSSIP_SENDER_MAIN, ACTION_STATUS);
             if (!CustomGameLobbyManager::Instance().IsOwner(player, lobby))
             {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Only the lobby owner can configure or start the match.", GOSSIP_SENDER_MAIN, ACTION_STATUS);
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Current: " + BattlegroundName(*lobby), GOSSIP_SENDER_MAIN, ACTION_STATUS);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Only the lobby host can configure or start the match.", GOSSIP_SENDER_MAIN, ACTION_STATUS);
                 SendGossipMenuFor(player, 1, me->GetGUID());
                 return;
             }
+
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE,
+                "Select Battleground (Current " + BattlegroundName(*lobby) + ")",
+                GOSSIP_SENDER_MAIN, ACTION_SELECT_GAME_MENU);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Battleground options", GOSSIP_SENDER_MAIN, ACTION_BATTLEGROUND_OPTIONS);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Kick player...", GOSSIP_SENDER_MAIN, ACTION_KICK_PLAYER,
+                "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "START PRIVATE GAME", GOSSIP_SENDER_MAIN, ACTION_START, "Start with the current teams and rules?", 0, false);
+            AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Close lobby and return everyone", GOSSIP_SENDER_MAIN, ACTION_CLOSE, "Close this custom lobby?", 0, false);
+            SendGossipMenuFor(player, 1, me->GetGUID());
+        }
+
+        void ShowGameSelectionMenu(Player* player)
+        {
+            CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
+            if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
+                return;
+
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_ARENA_MENU);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Battleground", GOSSIP_SENDER_MAIN, ACTION_SELECT_BATTLEGROUND_MENU);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SELECT_GAME_BACK);
+            SendGossipMenuFor(player, 1, me->GetGUID());
+        }
+
+        void ShowArenaSelectionMenu(Player* player)
+        {
+            CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
+            if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
+                return;
+
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nagrand Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NA);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blade's Edge Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_BE);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Ruins of Lordaeron", GOSSIP_SENDER_MAIN, ACTION_SELECT_RL);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nefarian's Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NL);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tol'Viron Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_TV);
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tiger's Peak", GOSSIP_SENDER_MAIN, ACTION_SELECT_TTP);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SELECT_LIST_BACK);
+            SendGossipMenuFor(player, 1, me->GetGUID());
+        }
+
+        void ShowBattlegroundSelectionMenu(Player* player)
+        {
+            CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
+            if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
+                return;
 
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Warsong Gulch", GOSSIP_SENDER_MAIN, ACTION_SELECT_WS);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Twin Peaks", GOSSIP_SENDER_MAIN, ACTION_SELECT_TP);
@@ -887,28 +1129,23 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Alterac Valley", GOSSIP_SENDER_MAIN, ACTION_SELECT_AV);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Strand of the Ancients", GOSSIP_SENDER_MAIN, ACTION_SELECT_SA);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Isle of Conquest", GOSSIP_SENDER_MAIN, ACTION_SELECT_IC);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nagrand Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NA);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blade's Edge Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_BE);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Ruins of Lordaeron", GOSSIP_SENDER_MAIN, ACTION_SELECT_RL);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nefarian's Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NL);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tol'Viron Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_TV);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Tiger's Peak", GOSSIP_SENDER_MAIN, ACTION_SELECT_TTP);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Flag captures: " + std::to_string(lobby->Rules.FlagCaptureLimit) + " (0 = default)", GOSSIP_SENDER_MAIN, ACTION_RULE_FLAG_CAPS, "Winning flag captures", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Resource limit: " + std::to_string(lobby->Rules.ResourceLimit) + " (0 = default)", GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCES, "Winning resource total", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Resource gain: " + std::to_string(lobby->Rules.ResourceGainPercent) + "%", GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCE_RATE, "Percent (100 is normal)", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Deathmatch kills: " + std::to_string(lobby->Rules.DeathmatchKillLimit) + " (0 = default)", GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Resurrection: " + std::to_string(lobby->Rules.ResurrectionIntervalMs / IN_MILLISECONDS) + " sec (0 = default)", GOSSIP_SENDER_MAIN, ACTION_RULE_REZ_TIME, "Seconds (5-120)", 0, true);
-            if (lobby->SelectedType == BATTLEGROUND_AB || lobby->SelectedType == BATTLEGROUND_BFG)
-            {
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    "Flag interaction: " + std::to_string(lobby->Rules.NodeFlagCaptureTimeMs / IN_MILLISECONDS) + " sec (0 = default)",
-                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_FLAG_TIME, "Seconds (1-120)", 0, true);
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    "Base capture after assault: " + std::to_string(lobby->Rules.NodeBaseCaptureTimeMs / IN_MILLISECONDS) + " sec (0 = default)",
-                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_BASE_TIME, "Seconds (1-600)", 0, true);
-            }
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_SELECT_LIST_BACK);
+            SendGossipMenuFor(player, 1, me->GetGUID());
+        }
+
+        void ShowBattlegroundOptions(Player* player)
+        {
+            CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
+            if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
+                return;
+
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, BattlegroundName(*lobby) + " options", GOSSIP_SENDER_MAIN, ACTION_STATUS);
+
             if (lobby->SelectedType == BATTLEGROUND_WS || lobby->SelectedType == BATTLEGROUND_TP)
             {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Flag captures: " + ConfiguredValue(lobby->Rules.FlagCaptureLimit, 3),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_FLAG_CAPS, "Winning flag captures (0 restores default)", 0, true);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
                     std::string("Enemy team's flag on map: ") + (lobby->Rules.ShowEnemyFlagOnMap ? "Visible" : "Hidden"),
                     GOSSIP_SENDER_MAIN, ACTION_TOGGLE_ENEMY_FLAG);
@@ -916,10 +1153,46 @@ public:
                     std::string("Your team's flag on map: ") + (lobby->Rules.ShowAllyFlagOnMap ? "Visible" : "Hidden"),
                     GOSSIP_SENDER_MAIN, ACTION_TOGGLE_ALLY_FLAG);
             }
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, std::string("Weather: ") + WeatherName(lobby->Rules.Weather) + " (click to change)",
+
+            uint32 const resourceLimit = DefaultResourceLimit(lobby->SelectedType);
+            if (resourceLimit)
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Resource limit: " + ConfiguredValue(lobby->Rules.ResourceLimit, resourceLimit),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCES, "Winning resource total (0 restores default)", 0, true);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Resource gain: " + std::to_string(lobby->Rules.ResourceGainPercent) + "%",
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_RESOURCE_RATE, "Percent (100 is normal)", 0, true);
+            }
+
+            if (lobby->SelectedType == BATTLEGROUND_SCM || lobby->SelectedType == BATTLEGROUND_BRT ||
+                lobby->SelectedType == BATTLEGROUND_OBC)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, 30),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total (0 restores default)", 0, true);
+
+            if (!IsArenaSelection(lobby->SelectedType))
+            {
+                uint32 const defaultResurrection = lobby->SelectedType == BATTLEGROUND_WS ? 31500 : RESURRECTION_INTERVAL;
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Resurrection: " + ConfiguredSeconds(lobby->Rules.ResurrectionIntervalMs, defaultResurrection),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_REZ_TIME, "Seconds (5-120; 0 restores default)", 0, true);
+            }
+
+            if (lobby->SelectedType == BATTLEGROUND_AB || lobby->SelectedType == BATTLEGROUND_BFG)
+            {
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Flag interaction: " + ConfiguredSeconds(lobby->Rules.NodeFlagCaptureTimeMs, 5000),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_FLAG_TIME, "Seconds (1-120; 0 restores DBC default)", 0, true);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Base capture after assault: " + ConfiguredSeconds(lobby->Rules.NodeBaseCaptureTimeMs, 60000),
+                    GOSSIP_SENDER_MAIN, ACTION_RULE_NODE_BASE_TIME, "Seconds (1-600; 0 restores default)", 0, true);
+            }
+
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                std::string("Weather: ") + WeatherName(lobby->Rules.Weather) + " (click to change)",
                 GOSSIP_SENDER_MAIN, ACTION_CYCLE_WEATHER);
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "START PRIVATE GAME", GOSSIP_SENDER_MAIN, ACTION_START, "Start with the current teams and rules?", 0, false);
-            AddGossipItemFor(player, GOSSIP_ICON_TAXI, "Close lobby and return everyone", GOSSIP_SENDER_MAIN, ACTION_CLOSE, "Close this custom lobby?", 0, false);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", GOSSIP_SENDER_MAIN, ACTION_BATTLEGROUND_OPTIONS_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
@@ -952,8 +1225,11 @@ public:
                 case ACTION_CREATE: manager.CreateLobby(player); break;
                 case ACTION_JOIN_TEAM: manager.SetTeam(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
-                case ACTION_ADD_PARTY: manager.SetOriginalPartyTeam(player, sender, true); ShowTeamMenu(player, sender); return true;
-                case ACTION_REMOVE_PARTY: manager.SetOriginalPartyTeam(player, sender, false); ShowTeamMenu(player, sender); return true;
+                case ACTION_SELECT_GAME_MENU: ShowGameSelectionMenu(player); return true;
+                case ACTION_SELECT_ARENA_MENU: ShowArenaSelectionMenu(player); return true;
+                case ACTION_SELECT_BATTLEGROUND_MENU: ShowBattlegroundSelectionMenu(player); return true;
+                case ACTION_SELECT_GAME_BACK: ShowChromieMenu(player); return true;
+                case ACTION_SELECT_LIST_BACK: ShowGameSelectionMenu(player); return true;
                 case ACTION_SELECT_WS: manager.SelectBattleground(player, BATTLEGROUND_WS, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TP: manager.SelectBattleground(player, BATTLEGROUND_TP, 0); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_AB: manager.SelectBattleground(player, BATTLEGROUND_AB, 0); ShowChromieMenu(player); return true;
@@ -971,11 +1247,13 @@ public:
                 case ACTION_SELECT_NL: manager.SelectBattleground(player, BATTLEGROUND_NL, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TV: manager.SelectBattleground(player, BATTLEGROUND_TV, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TTP: manager.SelectBattleground(player, BATTLEGROUND_TTP, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
+                case ACTION_BATTLEGROUND_OPTIONS: ShowBattlegroundOptions(player); return true;
+                case ACTION_BATTLEGROUND_OPTIONS_BACK: ShowChromieMenu(player); return true;
                 case ACTION_TOGGLE_ENEMY_FLAG:
                 case ACTION_TOGGLE_ALLY_FLAG:
                 case ACTION_CYCLE_WEATHER:
                     manager.ToggleRule(player, action);
-                    ShowChromieMenu(player);
+                    ShowBattlegroundOptions(player);
                     return true;
                 case ACTION_START: manager.StartGame(player); break;
                 case ACTION_CLOSE: manager.CloseLobby(player); break;
@@ -1000,10 +1278,16 @@ public:
             auto& manager = CustomGameLobbyManager::Instance();
             std::string value = code ? code : "";
 
-            if (action >= ACTION_RULE_FLAG_CAPS && action <= ACTION_RULE_NODE_BASE_TIME)
+            if (action == ACTION_KICK_PLAYER)
+            {
+                manager.KickPlayer(player, value);
+                ShowChromieMenu(player);
+                return true;
+            }
+            else if (action >= ACTION_RULE_FLAG_CAPS && action <= ACTION_RULE_NODE_BASE_TIME)
             {
                 manager.SetRule(player, action, value);
-                ShowChromieMenu(player);
+                ShowBattlegroundOptions(player);
                 return true;
             }
             else
@@ -1030,6 +1314,19 @@ public:
     void OnLogout(Player* player) override { CustomGameLobbyManager::Instance().OnLogout(player); }
 };
 
+class custom_game_lobby_unit_script : public UnitScript
+{
+public:
+    custom_game_lobby_unit_script() : UnitScript("custom_game_lobby_unit_script") { }
+
+    void OnDamage(Unit* /*attacker*/, Unit* victim, uint32& damage) override
+    {
+        if (Player* player = victim ? victim->ToPlayer() : nullptr)
+            if (player->IsInCustomGameLobby())
+                damage = 0;
+    }
+};
+
 class custom_game_lobby_world_script : public WorldScript
 {
 public:
@@ -1052,5 +1349,6 @@ void AddSC_custom_game_lobby()
 {
     new custom_game_lobby_npc();
     new custom_game_lobby_player_script();
+    new custom_game_lobby_unit_script();
     new custom_game_lobby_world_script();
 }

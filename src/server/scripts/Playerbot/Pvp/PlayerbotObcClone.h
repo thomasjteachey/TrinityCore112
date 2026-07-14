@@ -19,11 +19,14 @@
 #define TRINITY_PLAYERBOT_OBC_CLONE_H
 
 #include "Define.h"
+#include "ObjectGuid.h"
+#include "Position.h"
 
 #include <string>
 
 class Battleground;
 class Player;
+class WorldSession;
 
 namespace playerbot
 {
@@ -69,7 +72,19 @@ public:
     // Create and manage explicitly requested transient copies for private
     // custom games. The source character is never moved or modified.
     static Player* CreateCustomGameClone(Player* source, Battleground* bg, uint32 team, std::string const& displayPrefix);
+    static bool QueueCustomGameClone(ObjectGuid sourceGuid, WorldSession* callbackSession, Battleground* bg,
+        uint32 team, std::string const& displayPrefix);
     static void DestroyCustomGameClones(uint32 battlegroundInstanceId);
+
+    // Create inert, transient roster previews in a private custom-game lobby.
+    // The request key includes the source kind so an Echo and Dark copy of the
+    // same character can be represented independently.
+    static bool QueueCustomGameLobbyClone(ObjectGuid sourceGuid, WorldSession* callbackSession, uint32 mapId,
+        uint32 lobbyInstanceId, uint32 team, bool isPlayerbot, Position const& position, std::string const& displayPrefix);
+    static void SetCustomGameLobbyClonePosition(uint32 lobbyInstanceId, ObjectGuid sourceGuid, uint32 team,
+        bool isPlayerbot, Position const& position);
+    static void DestroyCustomGameLobbyClone(uint32 lobbyInstanceId, ObjectGuid sourceGuid, uint32 team, bool isPlayerbot);
+    static void DestroyCustomGameLobbyClones(uint32 lobbyInstanceId);
 };
 }
 

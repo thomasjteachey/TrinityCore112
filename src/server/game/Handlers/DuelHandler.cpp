@@ -32,6 +32,15 @@ void WorldSession::HandleDuelAcceptedOpcode(WorldPacket& recvPacket)
     recvPacket >> guid;
 
     Player* target = player->duel->Opponent;
+    if (player->IsInCustomGameLobby() || target->IsInCustomGameLobby())
+    {
+        SendNotification("Dueling is disabled inside custom-game lobbies.");
+        if (target->GetSession())
+            target->GetSession()->SendNotification("Dueling is disabled inside custom-game lobbies.");
+        player->DuelComplete(DUEL_INTERRUPTED);
+        return;
+    }
+
     if (target->GetGuidValue(PLAYER_DUEL_ARBITER) != guid)
         return;
 

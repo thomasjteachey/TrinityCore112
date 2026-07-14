@@ -596,6 +596,14 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
         return;
 
     TradeStatusInfo info;
+    if (GetPlayer()->IsInCustomGameLobby())
+    {
+        SendNotification("Trading is disabled inside custom-game lobbies.");
+        info.Status = TRADE_STATUS_CLOSE_WINDOW;
+        SendTradeStatus(info);
+        return;
+    }
+
     if (!GetPlayer()->IsAlive())
     {
         info.Status = TRADE_STATUS_YOU_DEAD;
@@ -637,6 +645,14 @@ void WorldSession::HandleInitiateTradeOpcode(WorldPacket& recvPacket)
     if (!pOther)
     {
         info.Status = TRADE_STATUS_NO_TARGET;
+        SendTradeStatus(info);
+        return;
+    }
+
+    if (pOther->IsInCustomGameLobby())
+    {
+        SendNotification("Trading is disabled inside custom-game lobbies.");
+        info.Status = TRADE_STATUS_CLOSE_WINDOW;
         SendTradeStatus(info);
         return;
     }
