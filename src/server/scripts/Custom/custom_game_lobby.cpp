@@ -1343,8 +1343,6 @@ public:
             if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
                 return;
 
-            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, BattlegroundName(*lobby) + " options", GOSSIP_SENDER_MAIN, ACTION_STATUS);
-
             if (lobby->SelectedType == BATTLEGROUND_WS || lobby->SelectedType == BATTLEGROUND_TP)
             {
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
@@ -1377,9 +1375,8 @@ public:
 
             if (!IsArenaSelection(lobby->SelectedType))
             {
-                uint32 const defaultResurrection = lobby->SelectedType == BATTLEGROUND_WS ? 31500 : RESURRECTION_INTERVAL;
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    "Resurrection: " + ConfiguredSeconds(lobby->Rules.ResurrectionIntervalMs, defaultResurrection),
+                    "Resurrection: " + ConfiguredSeconds(lobby->Rules.ResurrectionIntervalMs, RESURRECTION_INTERVAL),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_REZ_TIME, "Seconds (5-120; 0 restores default)", 0, true);
             }
 

@@ -1156,11 +1156,6 @@ bool BattlegroundWS::CheckAchievementCriteriaMeet(uint32 criteriaId, Player cons
     return Battleground::CheckAchievementCriteriaMeet(criteriaId, player, target, miscValue);
 }
 
-uint32 BattlegroundWS::GetResurrectionInterval() const
-{
-    return GetConfiguredResurrectionInterval(BG_WS_RESURRECTION_INTERVAL);
-}
-
 uint32 BattlegroundWS::GetBuffRespawnTime(uint32 type) const
 {
     switch (type)
