@@ -194,11 +194,13 @@ public:
             return false;
 
         Group* group = owner->GetGroup();
-        if (!group || !group->IsLeader(owner->GetGUID()))
+        if (group && !group->IsLeader(owner->GetGUID()))
         {
-            Notify(owner, "You must be the leader of a party or raid to create a custom game.");
+            Notify(owner, "You must be the party or raid leader to bring an existing group into a custom game.");
             return false;
         }
+
+        bool const importGroup = group != nullptr;
 
         Map* lobbyMap = sMapMgr->CreateWorldSubMap(CUSTOM_GAME_MAP_ID);
         if (!lobbyMap)
@@ -211,22 +213,27 @@ public:
         lobby->InstanceId = lobbyMap->GetInstanceId();
         lobby->OwnerGuid = owner->GetGUID();
 
-        for (Group::MemberSlot const& slot : group->GetMemberSlots())
-            if (Player* member = ObjectAccessor::FindConnectedPlayer(slot.guid))
-            {
-                if (member->InBattleground() || member->InBattlegroundQueue() || playerbot::IsManagedRandomBot(member))
-                    continue;
+        auto addMember = [&](Player* member, uint8 subgroup)
+        {
+            if (!member || member->InBattleground() || member->InBattlegroundQueue() || playerbot::IsManagedRandomBot(member))
+                return;
 
-                LobbyMember snapshot;
-                snapshot.ReturnLocation = WorldLocation(member->GetMapId(), member->GetPositionX(), member->GetPositionY(), member->GetPositionZ(), member->GetOrientation());
-                snapshot.OriginalSubgroup = slot.group;
-                lobby->Members.emplace(slot.guid, snapshot);
-            }
+            LobbyMember snapshot;
+            snapshot.ReturnLocation = WorldLocation(member->GetMapId(), member->GetPositionX(), member->GetPositionY(), member->GetPositionZ(), member->GetOrientation());
+            snapshot.OriginalSubgroup = subgroup;
+            lobby->Members.emplace(member->GetGUID(), snapshot);
+        };
+
+        if (importGroup)
+            for (Group::MemberSlot const& slot : group->GetMemberSlots())
+                addMember(ObjectAccessor::FindConnectedPlayer(slot.guid), slot.group);
+        else
+            addMember(owner, 0);
 
         if (lobby->Members.find(owner->GetGUID()) == lobby->Members.end())
         {
             sMapMgr->DestroyWorldSubMap(CUSTOM_GAME_MAP_ID, lobby->InstanceId);
-            Notify(owner, "No eligible online group members were found.");
+            Notify(owner, "No eligible players were found for the custom lobby.");
             return false;
         }
 
@@ -241,7 +248,8 @@ public:
         for (auto const& [guid, member] : _lobbies[instanceId]->Members)
             memberGuids.push_back(guid);
 
-        group->Disband();
+        if (importGroup)
+            group->Disband();
 
         for (ObjectGuid guid : memberGuids)
             if (Player* member = ObjectAccessor::FindConnectedPlayer(guid))
