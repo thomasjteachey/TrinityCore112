@@ -41,6 +41,17 @@ UPDATE `custom_game_template` SET
     `AIName` = '', `MovementType` = 0, `ScriptName` = 'custom_game_lobby_npc';
 INSERT INTO `creature_template` SELECT * FROM `custom_game_template`;
 
+UPDATE `creature_template` SET
+    `speed_walk` = 1, `speed_run` = 1.14286, `scale` = 1, `rank` = 0, `dmgschool` = 0,
+    `BaseAttackTime` = 2000, `RangeAttackTime` = 2000, `BaseVariance` = 1, `RangeVariance` = 1,
+    `unit_class` = 1, `unit_flags` = 0, `unit_flags2` = 0, `dynamicflags` = 0,
+    `family` = 0, `type` = 7, `type_flags` = 0, `AIName` = '', `MovementType` = 0,
+    `HoverHeight` = 1, `HealthModifier` = 1, `ManaModifier` = 1, `ArmorModifier` = 1,
+    `DamageModifier` = 1, `ExperienceModifier` = 1, `RacialLeader` = 0, `movementId` = 0,
+    `RegenHealth` = 1, `mechanic_immune_mask` = 0, `spell_school_immune_mask` = 0,
+    `flags_extra` = 0, `StringId` = NULL, `VerifiedBuild` = 0
+WHERE `entry` IN (900001, 900002, 900003, 900004);
+
 DROP TEMPORARY TABLE `custom_game_template`;
 
 SET @CUSTOM_GAME_HOST_GUID := (SELECT COALESCE(MAX(`guid`), 0) + 1 FROM `creature`);
