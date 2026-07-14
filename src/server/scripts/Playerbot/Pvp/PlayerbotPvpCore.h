@@ -62,6 +62,7 @@ struct PvpValues
     bool hasArenaTeamInvite = false;
     bool playerHasFlag = false;
     bool flagPickupAvailable = false;
+    bool nearbyEnemyActive = false;
     bool enemyFlagCarrierActive = false;
     bool enemyFlagCarrierNear = false;
     bool teamFlagCarrierNear = false;
@@ -130,6 +131,7 @@ struct BattlegroundTacticalContext
     BattlegroundObjectiveSelection objective;
     BattlegroundMovementPrimitive movement = BattlegroundMovementPrimitive::None;
     FlagCarrierDirective flagCarrierDirective = FlagCarrierDirective::None;
+    bool nearbyEnemyActive = false;
 };
 
 enum class QueueOperationType : uint8
@@ -187,6 +189,7 @@ struct PvpClassSpellContext
     ObjectGuid movementTargetGuid = ObjectGuid::Empty;
     float movementFollowRange = 0.0f;
     float movementPriority = 0.0f;
+    bool preserveFlagObjectiveMovement = false;
     bool preserveFlagCarrierMovement = false;
     uint32 itemEntry = 0;
 };

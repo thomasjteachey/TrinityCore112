@@ -82,6 +82,7 @@ constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
 constexpr uint32 kWandShootSpellId = 5019;
 constexpr uint32 kPlayerbotDispelCooldownToken = 900004;
 constexpr uint32 kPlayerbotHandOfSacrificeCooldownToken = 900005;
+constexpr uint32 kPaladinSacrificialAuraSpellId = 83256;
 constexpr uint32 kDruidCasterFaerieFireSpellId = 9907;
 constexpr uint32 kDruidThornsSpellId = 9910;
 constexpr uint32 kDruidMassThornsSpellId = 89762;
@@ -913,6 +914,27 @@ void PopulateObjectiveStateTriggers(Player const* player, playerbot::PvpValues& 
     TeamId const enemyTeam = (botTeam == TEAM_ALLIANCE) ? TEAM_HORDE : TEAM_ALLIANCE;
     ObjectGuid const playerGuid = player->GetGUID();
     values.flagPickupAvailable = !battleground->GetFlagPickupGUID(playerGuid).IsEmpty();
+
+    // Use one local-pressure boundary for tactical objective selection and
+    // class movement ownership. A midfield bot should break off its flag route
+    // to fight nearby enemies, while distant enemies must not pull it into a
+    // map-wide chase. LOS is intentionally not required: an enemy immediately
+    // around a corner is still local pressure that combat pathing should handle.
+    float const nearbyEnemyBoundary = std::max(GetConfiguredLongRange(), 35.0f);
+    if (Map const* map = player->FindMap())
+    {
+        Map::PlayerList const& mapPlayers = map->GetPlayers();
+        for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+        {
+            Player const* candidate = itr->GetSource();
+            if (!HasHostileTarget(player, candidate) ||
+                !player->IsWithinDistInMap(candidate, nearbyEnemyBoundary))
+                continue;
+
+            values.nearbyEnemyActive = true;
+            break;
+        }
+    }
 
     BattlegroundNodeObjective nodeObjective;
     if (battleground->GetNodeObjective(playerGuid, nodeObjective))
@@ -4668,6 +4690,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
 
     bool const isRetPaladin = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
     bool const isProtPaladin = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
+    bool const knowsSacrificialAura = player->HasSpell(kPaladinSacrificialAuraSpellId);
     Unit const* emergencyLowAlly = isRetPaladin ? nullptr : SelectFriendlyHealthTarget(player, 15.0f, 25.0f);
     Unit const* rebukeTarget = (isProtPaladin && IsSpellReady(player, 81276)) ? SelectEnemyCastingTarget(player, 10.0f, target) : nullptr;
     Unit const* cleanseTarget = nullptr;
@@ -4699,7 +4722,10 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin flash of light holy strike", "consume holy strike buff on the lowest-health friendly target", 19943, holyStrikeFlashHealTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, holyStrikeFlashHealTarget ? holyStrikeFlashHealTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isRetPaladin && executeTarget && IsSpellReady(player, 89796), 62.5f,
         { "paladin holy strike", "use holy strike with very high priority", 89796, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isRetPaladin && !HasAuraFromSpellChain(player, 20218) && IsSpellReady(player, 20218), 61.0f,
+    AddDecisionCandidate(candidates, knowsSacrificialAura && !player->HasAura(kPaladinSacrificialAuraSpellId) &&
+        IsSpellReady(player, kPaladinSacrificialAuraSpellId), 61.2f,
+        { "paladin sacrificial aura", "prefer sacrificial aura when learned", kPaladinSacrificialAuraSpellId, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, !knowsSacrificialAura && isRetPaladin && !HasAuraFromSpellChain(player, 20218) && IsSpellReady(player, 20218), 61.0f,
         { "paladin sanctity aura", "maintain sanctity aura for ret pressure", 20218, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRetPaladin && !HasAuraFromSpellChain(player, 20375) && IsSpellReady(player, 20375), 60.8f,
         { "paladin seal of command", "maintain seal of command", 20375, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -4745,7 +4771,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin judgement", "judge nearby stunned enemy while seal of command is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, stunnedJudgementTarget ? stunnedJudgementTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, executeTarget && HasActivePaladinSeal(player) && IsSpellReady(player, 20271), 46.0f,
         { "paladin judgement", "default offensive pressure when a seal is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !isRetPaladin && !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
+    AddDecisionCandidate(candidates, !knowsSacrificialAura && !isRetPaladin && !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
         { "paladin concentration aura", "maintain concentration aura", 19746, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !player->IsInCombat() && !isRetPaladin && IsSpellReady(player, 25898) && !HasAuraFromSpellChain(player, 25898), 19.0f,
         { "paladin greater blessing of kings", "maintain kings out of combat for holy/prot", 25898, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
@@ -5858,10 +5884,11 @@ BattlegroundTacticalContext PvpCore::BuildBattlegroundTacticalContext(Player con
     context.objective = SelectObjectiveSkeleton(values);
     context.movement = SelectMovementPrimitiveSkeleton(values, context.objective);
     context.flagCarrierDirective = SelectFlagCarrierDirectiveSkeleton(values);
+    context.nearbyEnemyActive = values.nearbyEnemyActive;
     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-        "Playerbot PvP human-first context: guid={} human_count={} has_humans={} player_has_flag={} flag_pickup_available={} directive={} action={}.",
+        "Playerbot PvP human-first context: guid={} human_count={} has_humans={} player_has_flag={} flag_pickup_available={} nearby_enemy={} directive={} action={}.",
         player->GetGUID().ToString(), values.battlegroundTeamHumanCount, values.battlegroundTeamHasHumans, values.playerHasFlag,
-        values.flagPickupAvailable, static_cast<uint8>(context.flagCarrierDirective),
+        values.flagPickupAvailable, values.nearbyEnemyActive, static_cast<uint8>(context.flagCarrierDirective),
         context.actionName ? context.actionName : "none");
     return context;
 }
@@ -5899,6 +5926,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return context;
 
     bool const inActiveBattleground = values.inBattleground && IsTriggerActive(PvpTrigger::BgActive, values);
+    // A carrier always owns its capture route. A midfield bot owns its live
+    // pickup route only while local combat pressure is clear; nearby enemies
+    // deliberately hand movement back to combat. Without this shared decision,
+    // class range/facing and tactical navmesh movement replace each other on
+    // alternating cadences and produce the visible run/turn/stop loop.
+    context.preserveFlagObjectiveMovement = inActiveBattleground &&
+        (values.playerHasFlag || (values.flagPickupAvailable && !values.nearbyEnemyActive));
     context.preserveFlagCarrierMovement = inActiveBattleground && values.playerHasFlag;
     bool const inBattlegroundPreparation = player->InBattleground() &&
         (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) || player->HasUnitFlag(UNIT_FLAG_PREPARATION));

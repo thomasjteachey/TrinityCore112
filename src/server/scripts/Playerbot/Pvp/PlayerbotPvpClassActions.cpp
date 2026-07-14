@@ -4505,11 +4505,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (!target || !target->HasBreakableByDamageCrowdControlAura())
             CommandPetAttackTarget(player, target);
 
-        // Virtual sessions can visually "turn" while server-side facing checks
-        // still fail for the immediate cast tick. SetInFront updates orientation
-        // instantly, so facing-sensitive spells pass UNIT_NOT_INFRONT checks.
-        player->SetFacingToObject(target);
-        player->SetInFront(target);
+        // Virtual sessions normally need an immediate server-side face update.
+        // A committed flag route is different: the movement spline owns facing,
+        // and its admission guard only permits enemy instants already in front.
+        // Re-facing here would visibly turn the runner away from the route and
+        // can disturb virtual-session spline movement.
+        if (!context.preserveFlagObjectiveMovement)
+        {
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+        }
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
@@ -4866,7 +4871,8 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // on a unit target can leave relocation unresolved; provide an explicit
     // front destination to mirror client cast payload semantics.
     bool const isInstantCast = spellInfo->CalcCastTime() == 0 && !isHunterStationaryCastTimeAction;
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast)
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && isInstantCast &&
+        !context.preserveFlagObjectiveMovement)
     {
         FaceTargetForInstantCast(player, target, spellInfo);
 
@@ -5563,12 +5569,12 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         return true;
     }
 
-    // Flag capture and injured-player Lightwell recovery own class movement.
+    // Flag pickup/capture and injured-player Lightwell recovery own class movement.
     // Preserve combat activity with spells that are already usable while
     // moving, while cast times, channels, items, and class movement directives
     // yield to the active route.
     bool const seekingLightwell = PvpCore::ShouldSeekLightwell(player);
-    if (context.preserveFlagCarrierMovement || seekingLightwell)
+    if (context.preserveFlagObjectiveMovement || seekingLightwell)
     {
         bool allowInstantSpell = false;
         if (context.spellId)
@@ -5609,6 +5615,9 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 !spellInfo->IsAutoRepeatRangedSpell() && !stopsForHunterShot && !stopsForRecovery && !repositionsCaster &&
                 resolvedSpellId != kRacialNightElfShadowmeldSpellId &&
                 (!context.preserveFlagCarrierMovement || !PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId)) &&
+                (!context.preserveFlagObjectiveMovement ||
+                    context.targetMode != PvpClassSpellContext::TargetMode::Enemy ||
+                    (target && player->isInFront(target))) &&
                 IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
         }
 

@@ -4424,12 +4424,36 @@ namespace playerbot
         }
         }
 
-        // Prefer a live flag pickup/capture route over tactical enemy pursuit.
-        // Class actions separately reserve movement only for the actual carrier;
-        // bots that are merely approaching a loose flag continue casting normally.
-        if (context.objective.type == BattlegroundObjectiveType::CaptureFlag &&
-            TryAdvanceFlagObjective(player, battleground))
-            return true;
+        if (context.objective.type == BattlegroundObjectiveType::CaptureFlag)
+        {
+            bool const isFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(player);
+
+            // Carrying the flag is unconditional: never replace the capture
+            // route with midfield combat, even when enemies are nearby.
+            if (isFlagCarrier)
+            {
+                TryAdvanceFlagObjective(player, battleground);
+                return true;
+            }
+
+            // A non-carrier heading for a live flag fights local enemies first,
+            // but does not abandon the objective for a distant map-wide chase.
+            if (context.nearbyEnemyActive)
+            {
+                float const localCombatRange = std::max(playerbot::PvpCore::GetConfig().longRange, 35.0f);
+                if (Player* nearbyEnemy = FindNearestEnemyBattlegroundPlayer(player, localCombatRange, nullptr, nullptr))
+                {
+                    EngageSelectedEnemyPlayer(player, nearbyEnemy, "flag-runner-midfield-pressure");
+                    return true;
+                }
+            }
+
+            // With midfield clear, commit fluidly to the navmesh flag route.
+            // Class actions share the same nearby-enemy decision and therefore
+            // cannot replace this MovePoint with alternating combat movement.
+            if (TryAdvanceFlagObjective(player, battleground))
+                return true;
+        }
 
         if (player->IsInCombat())
         {
