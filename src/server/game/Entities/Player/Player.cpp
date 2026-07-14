@@ -1874,7 +1874,16 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
     }
 
     uint32 const targetWorldSubMapInstanceId = GetWorldSubMapInstanceId(mapid);
-    bool const isNearTeleport = GetMapId() == mapid && GetInstanceId() == targetWorldSubMapInstanceId;
+    Map const* currentMap = FindMap();
+    bool const currentIsWorldSubMap = currentMap && currentMap->IsServerOnlyWorldSubMap();
+    bool const targetIsWorldSubMap = targetWorldSubMapInstanceId != 0;
+
+    // Entering, leaving, or changing a server-only world sub-map requires a far
+    // transfer. Ordinary same-map teleports inside an instance (such as releasing
+    // to a battleground graveyard) must remain near teleports.
+    bool const crossesWorldSubMapBoundary = currentIsWorldSubMap != targetIsWorldSubMap ||
+        (currentIsWorldSubMap && GetInstanceId() != targetWorldSubMapInstanceId);
+    bool const isNearTeleport = GetMapId() == mapid && !crossesWorldSubMapBoundary;
 
     // The player was ported to another map/instance and loses the duel immediately.
     // We have to perform this check before the teleport, otherwise the

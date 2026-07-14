@@ -148,6 +148,7 @@ Battleground::Battleground()
     m_InBGFreeSlotQueue = false;
     m_SetDeleteThis     = false;
     m_IsCustomGame      = false;
+    m_CustomGamePendingCloneCount = 0;
     m_CustomRules       = BattlegroundCustomRules();
 
     m_MaxPlayersPerTeam = 0;
@@ -226,6 +227,13 @@ void Battleground::Update(uint32 diff)
 
     if (!GetPlayersSize() && !IsReplay())
     {
+        // Bot-only custom matches create their transient combatants after the
+        // battleground map exists. Keep the empty shell alive while those
+        // asynchronous clone loads are pending instead of deleting it before
+        // the first participant can be inserted.
+        if (HasCustomGamePendingClones())
+            return;
+
         //BG is empty
         // if there are no players invited, delete BG
         // this will delete arena or bg object, where any player entered
@@ -244,7 +252,10 @@ void Battleground::Update(uint32 diff)
     switch (GetStatus())
     {
         case STATUS_WAIT_JOIN:
-            if (GetPlayersSize())
+            // Do not begin the countdown with a partially provisioned custom
+            // roster. In an arena, starting after only one team's first clone
+            // arrives can immediately satisfy the opposing-team win check.
+            if (GetPlayersSize() && !HasCustomGamePendingClones())
             {
                 _ProcessJoin(diff);
                 _CheckSafePositions(diff);

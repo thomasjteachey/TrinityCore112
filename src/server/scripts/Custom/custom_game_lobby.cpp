@@ -774,6 +774,7 @@ public:
         }
 
         bg->ConfigureCustomGame(lobby->Rules);
+        bg->SetCustomGamePendingCloneCount(uint32(lobby->CloneRequests.size()));
         // Custom matches enter directly and never use the public queue's arena
         // or battleground population requirements. Forty is the underlying
         // battleground-raid limit, so asymmetric matches such as 40v4 work.
@@ -823,6 +824,11 @@ public:
                 continue;
 
             player->SetInviteForBattlegroundQueueType(queueType, bg->GetInstanceID());
+            // Match the normal battleground port ordering: the temporary team
+            // faction must be present before the destination map builds this
+            // player for nearby clients. Changing it after worldport leaves
+            // overhead name colors stale until the unit is targeted.
+            player->SetFactionForRace(team == HORDE ? RACE_BLOODELF : RACE_HUMAN);
             player->SetBGTeam(team);
             player->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), queueSlot, true, false, Battleground::GetTeamIndexByTeamId(team));
             bg->IncreaseInvitedCount(team);

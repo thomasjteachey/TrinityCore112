@@ -400,6 +400,13 @@ class TC_GAME_API Battleground
         bool isRated() const        { return m_IsRated; }
         bool IsCustomGame() const   { return m_IsCustomGame; }
         void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
+        void SetCustomGamePendingCloneCount(uint32 count) { m_CustomGamePendingCloneCount = count; }
+        void ResolveCustomGamePendingClone()
+        {
+            if (m_CustomGamePendingCloneCount)
+                --m_CustomGamePendingCloneCount;
+        }
+        bool HasCustomGamePendingClones() const { return m_IsCustomGame && m_CustomGamePendingCloneCount != 0; }
         BattlegroundCustomRules const& GetCustomRules() const { return m_CustomRules; }
         void SendCustomGameRulesTo(Player* player) const;
         bool HasCustomWeatherOverride() const { return m_IsCustomGame && m_CustomRules.Weather != BattlegroundCustomWeather::Normal; }
@@ -665,6 +672,7 @@ class TC_GAME_API Battleground
         bool   m_InBGFreeSlotQueue;                         // used to make sure that BG is only once inserted into the BattlegroundMgr.BGFreeSlotQueue[bgTypeId] deque
         bool   m_SetDeleteThis;                             // used for safe deletion of the bg after end / all players leave
         bool   m_IsCustomGame;
+        uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;

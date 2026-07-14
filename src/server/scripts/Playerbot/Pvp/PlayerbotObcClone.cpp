@@ -422,6 +422,7 @@ bool ProvisionCloneForHuman(Player* human, Battleground* bg)
 
     clone->SetInviteForBattlegroundQueueType(queueTypeId, bg->GetInstanceID());
     clone->SetBattlegroundId(bg->GetInstanceID(), BATTLEGROUND_OBC);
+    clone->SetFactionForRace(oppositeTeam == HORDE ? RACE_BLOODELF : RACE_HUMAN);
     clone->SetBGTeam(oppositeTeam);
     clone->ResetMap();
     clone->Relocate(*start);
@@ -1033,6 +1034,7 @@ Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battlegr
 
     clone->SetInviteForBattlegroundQueueType(queueTypeId, bg->GetInstanceID());
     clone->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID());
+    clone->SetFactionForRace(team == HORDE ? RACE_BLOODELF : RACE_HUMAN);
     clone->SetBGTeam(team);
     clone->ResetMap();
     clone->Relocate(*start);
@@ -1066,21 +1068,38 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
     uint32 team, std::string const& displayPrefix)
 {
     if (!sourceGuid || !bg || (team != ALLIANCE && team != HORDE))
+    {
+        if (bg)
+            bg->ResolveCustomGamePendingClone();
         return false;
+    }
 
     if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
-        return CreateCustomGameClone(onlineSource, bg, team, displayPrefix) != nullptr;
+    {
+        bool const created = CreateCustomGameClone(onlineSource, bg, team, displayPrefix) != nullptr;
+        bg->ResolveCustomGamePendingClone();
+        return created;
+    }
 
     if (!callbackSession || HasCustomGameClone(sourceGuid, bg->GetInstanceID(), team))
+    {
+        bg->ResolveCustomGamePendingClone();
         return false;
+    }
 
     CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
     if (!characterInfo)
+    {
+        bg->ResolveCustomGamePendingClone();
         return false;
+    }
 
     auto holder = std::make_shared<LoginQueryHolder>(characterInfo->AccountId, sourceGuid);
     if (!holder->Initialize())
+    {
+        bg->ResolveCustomGamePendingClone();
         return false;
+    }
 
     uint32 const battlegroundInstanceId = bg->GetInstanceID();
     BattlegroundTypeId const battlegroundType = bg->GetTypeID();
@@ -1088,34 +1107,38 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
     callback.AfterComplete([sourceGuid, battlegroundInstanceId, battlegroundType, team, displayPrefix](SQLQueryHolderBase const& queryHolder)
     {
         Battleground* targetBg = sBattlegroundMgr->GetBattleground(battlegroundInstanceId, battlegroundType);
-        if (!targetBg || targetBg->GetStatus() == STATUS_NONE || targetBg->GetStatus() == STATUS_WAIT_LEAVE ||
-            HasCustomGameClone(sourceGuid, battlegroundInstanceId, team))
+        if (!targetBg)
             return;
 
-        if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
+        if (targetBg->GetStatus() != STATUS_NONE && targetBg->GetStatus() != STATUS_WAIT_LEAVE &&
+            !HasCustomGameClone(sourceGuid, battlegroundInstanceId, team))
         {
-            PlayerbotObcCloneManager::CreateCustomGameClone(onlineSource, targetBg, team, displayPrefix);
-            return;
+            if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
+                PlayerbotObcCloneManager::CreateCustomGameClone(onlineSource, targetBg, team, displayPrefix);
+            else
+            {
+                LoginQueryHolder const& loginHolder = static_cast<LoginQueryHolder const&>(queryHolder);
+                uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
+                auto sourceSession = std::make_unique<WorldSession>(loginHolder.GetAccountId(), "custom_game_offline_clone_source",
+                    nullptr, SEC_PLAYER, expansion, 0, Minutes(0), LOCALE_enUS, 0, false);
+                sourceSession->SetTransientPlayerSession();
+
+                Player* offlineSource = new Player(sourceSession.get());
+                if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
+                {
+                    offlineSource->GetMotionMaster()->Initialize();
+                    // Dark copies only read identity, spells, talents, glyph ids, and
+                    // equipment from this temporary source. Runtime auras are neither
+                    // copied nor safe to retain on a never-world offline Player.
+                    offlineSource->RemoveAllAuras();
+                    PlayerbotObcCloneManager::CreateCustomGameClone(offlineSource, targetBg, team, displayPrefix);
+                }
+
+                DestroyUnseatedClone(sourceSession, offlineSource);
+            }
         }
 
-        LoginQueryHolder const& loginHolder = static_cast<LoginQueryHolder const&>(queryHolder);
-        uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
-        auto sourceSession = std::make_unique<WorldSession>(loginHolder.GetAccountId(), "custom_game_offline_clone_source",
-            nullptr, SEC_PLAYER, expansion, 0, Minutes(0), LOCALE_enUS, 0, false);
-        sourceSession->SetTransientPlayerSession();
-
-        Player* offlineSource = new Player(sourceSession.get());
-        if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
-        {
-            offlineSource->GetMotionMaster()->Initialize();
-            // Dark copies only read identity, spells, talents, glyph ids, and
-            // equipment from this temporary source. Runtime auras are neither
-            // copied nor safe to retain on a never-world offline Player.
-            offlineSource->RemoveAllAuras();
-            PlayerbotObcCloneManager::CreateCustomGameClone(offlineSource, targetBg, team, displayPrefix);
-        }
-
-        DestroyUnseatedClone(sourceSession, offlineSource);
+        targetBg->ResolveCustomGamePendingClone();
     });
 
     return true;
