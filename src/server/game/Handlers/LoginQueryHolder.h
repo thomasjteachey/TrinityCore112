@@ -12,6 +12,7 @@
 
 #include "DatabaseEnv.h"
 #include "ObjectGuid.h"
+#include "QueryHolder.h"
 
 // Shared by the normal login flow and transient offline-character mirrors.
 class TC_GAME_API LoginQueryHolder : public CharacterDatabaseQueryHolder

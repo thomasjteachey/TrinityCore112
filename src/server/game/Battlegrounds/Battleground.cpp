@@ -899,26 +899,32 @@ void Battleground::EndBattleground(uint32 winner)
 
         // Rewards
         // only grant rewards if battle has lasted 15 seconds
-        if (!m_IsCustomGame && GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
+        if (GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
         {
             if (team == winner)
             {
-                player->RewardHonor(nullptr, 1, winner_honor);
-                if (CanAwardArenaPoints())
-                    player->ModifyArenaPoints(winner_arena);
-                if (!player->GetRandomWinner())
-                    player->SetRandomWinner(true);
+                // Private custom games retain the normal gold payout, but
+                // never grant progression rewards that can be farmed.
+                if (!m_IsCustomGame)
+                {
+                    player->RewardHonor(nullptr, 1, winner_honor);
+                    if (CanAwardArenaPoints())
+                        player->ModifyArenaPoints(winner_arena);
+                    if (!player->GetRandomWinner())
+                        player->SetRandomWinner(true);
 
-                player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
+                    player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_WIN_BG, player->GetMapId());
+
+                    bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS || GetTypeID(true) == BATTLEGROUND_SCM || GetTypeID(true) == BATTLEGROUND_BRT || GetTypeID(true) == BATTLEGROUND_OBC;
+                    if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
+                        player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
+                }
                 player->ModifyMoney(winner_money);
-
-                bool canRestoreMark = isArena() || GetTypeID(true) == BATTLEGROUND_WS || GetTypeID(true) == BATTLEGROUND_SCM || GetTypeID(true) == BATTLEGROUND_BRT || GetTypeID(true) == BATTLEGROUND_OBC;
-                if (canRestoreMark && Trinity::Custom::ConsumeEligibleDepletedMarks(player, 1))
-                    player->AddItem(Trinity::Custom::ITEM_RESTORED_MARK_OF_HONOR, 1); // restored mark of honor
             }
             else
             {
-                player->RewardHonor(nullptr, 1, loser_honor);
+                if (!m_IsCustomGame)
+                    player->RewardHonor(nullptr, 1, loser_honor);
                 player->ModifyMoney(loser_money);
             }
         }
