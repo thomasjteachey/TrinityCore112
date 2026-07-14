@@ -4171,6 +4171,21 @@ void Spell::update(uint32 difftime)
         bool const hasMovementInterruptFlag = m_spellInfo->InterruptFlags & SPELL_INTERRUPT_FLAG_MOVEMENT;
         bool const moveAllowedChannel = IsChannelActive() && m_spellInfo->IsMoveAllowedChannel() && !needsHurricaneMovementInterrupt && !needsArcaneMissilesMovementInterrupt;
 
+        // Movable Starfire lets virtual players keep their active movement
+        // spline, which can turn them away again after the cast began. Reface
+        // on the exact update that completes the cast so target-facing checks
+        // and the visible release orientation match a real client correction.
+        WorldSession const* session = playerCaster->GetSession();
+        if (isStarfire && snareMovementAllowed && session && session->IsVirtualSession() &&
+            difftime >= uint32(m_timer))
+        {
+            if (Unit* target = m_targets.GetUnitTarget())
+            {
+                playerCaster->SetFacingToObject(target);
+                playerCaster->SetInFront(target);
+            }
+        }
+
         if (playerMoved && !snareMovementAllowed &&
             (hasMovementInterruptFlag || needsStarfireMovementInterrupt || needsHurricaneMovementInterrupt || needsArcaneMissilesMovementInterrupt) &&
             (!m_spellInfo->HasEffect(SPELL_EFFECT_STUCK) || !playerCaster->HasUnitMovementFlag(MOVEMENTFLAG_FALLING_FAR)))

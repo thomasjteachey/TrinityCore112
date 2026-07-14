@@ -1184,6 +1184,10 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (!spellInfo)
         return false;
 
+    bool const breaksFlagCarry = playerbot::PvpCore::SpellWouldBreakFlagCarry(spellInfo->Id);
+    if (breaksFlagCarry && playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
+        return false;
+
     // A shapeshift form (Moonkin, Ghost Wolf, Bear/Cat, ...) makes most other
     // spells uncastable. Without this check the selector marks something like
     // Lightning Shield as "castable" while the caster is a Ghost Wolf, attempts
@@ -1236,6 +1240,11 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
 
     if (!resolvedTarget || !resolvedTarget->IsAlive())
         return false;
+
+    if (breaksFlagCarry)
+        if (Player const* targetPlayer = resolvedTarget->ToPlayer())
+            if (playerbot::PvpCore::IsBattlegroundFlagCarrier(targetPlayer))
+                return false;
 
     if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && !player->IsValidAttackTarget(resolvedTarget, spellInfo))
         return false;
@@ -4568,6 +4577,8 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* repentanceTarget = (isRetPaladin && IsSpellReady(player, 20066)) ? SelectEnemyCastingTarget(player, 20.0f, executeTarget) : nullptr;
     Unit const* stunnedJudgementTarget = (isRetPaladin && HasAuraFromSpellChain(player, 20375)) ? SelectStunnedEnemyTarget(player, executeTarget, 30.0f) : nullptr;
     Unit const* protectionTarget = (isRetPaladin && IsSpellReady(player, 10278)) ? SelectFriendlyMeleePressureTarget(player, 40.0f, 50.0f) : nullptr;
+    if (protectionTarget && PvpCore::IsBattlegroundFlagCarrier(protectionTarget->ToPlayer()))
+        protectionTarget = nullptr;
     Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
     ObjectGuid const mightTargetGuid = IsSpellReady(player, 25291) ? SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f) : ObjectGuid::Empty;
     Unit const* flashHealTarget = (!isRetPaladin && IsSpellReady(player, 19943)) ? SelectFriendlyHealthTarget(player, 40.0f, 85.0f) : nullptr;
@@ -5440,6 +5451,56 @@ uint32 PvpCore::CountHumanPlayersOnBattlegroundTeam(Player const* player)
 bool PvpCore::TeamHasHumanPlayers(Player const* player)
 {
     return CountHumanPlayersOnBattlegroundTeam(player) > 0;
+}
+
+bool PvpCore::IsBattlegroundFlagCarrier(Player const* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Battleground const* battleground = player->GetBattleground();
+    if (!battleground)
+        return false;
+
+    ObjectGuid const playerGuid = player->GetGUID();
+    return battleground->GetFlagPickerGUID(TEAM_ALLIANCE) == playerGuid ||
+        battleground->GetFlagPickerGUID(TEAM_HORDE) == playerGuid ||
+        battleground->GetFlagPickerGUID() == playerGuid;
+}
+
+bool PvpCore::SpellWouldBreakFlagCarry(uint32 spellId)
+{
+    auto spellWouldBreakFlagCarry = [&](auto const& self, SpellInfo const* spellInfo, uint8 depth) -> bool
+    {
+        if (!spellInfo || depth > 4)
+            return false;
+
+        if (spellInfo->Mechanic == MECHANIC_MOUNT)
+            return true;
+
+        for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+        {
+            switch (effect.ApplyAuraName)
+            {
+                case SPELL_AURA_MOD_STEALTH:
+                case SPELL_AURA_MOD_INVISIBILITY:
+                case SPELL_AURA_SCHOOL_IMMUNITY:
+                case SPELL_AURA_DAMAGE_IMMUNITY:
+                case SPELL_AURA_MOUNTED:
+                case SPELL_AURA_MOD_UNATTACKABLE:
+                    return true;
+                default:
+                    break;
+            }
+
+            if (effect.TriggerSpell && self(self, sSpellMgr->GetSpellInfo(effect.TriggerSpell), depth + 1))
+                return true;
+        }
+
+        return false;
+    };
+
+    return spellWouldBreakFlagCarry(spellWouldBreakFlagCarry, sSpellMgr->GetSpellInfo(spellId), 0);
 }
 
 void PvpCore::LoadConfig()

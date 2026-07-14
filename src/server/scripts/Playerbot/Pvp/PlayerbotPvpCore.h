@@ -227,6 +227,8 @@ public:
     static PvpClassSpellContext BuildClassSpellContext(Player const* player, PvpValues const& values);
     static RandomBotParticipationHooks BuildRandomBotParticipationHooks(Player const* player, PvpValues const& values);
     static uint32 CountHumanPlayersOnBattlegroundTeam(Player const* player);
+    static bool IsBattlegroundFlagCarrier(Player const* player);
+    static bool SpellWouldBreakFlagCarry(uint32 spellId);
     static bool TeamHasHumanPlayers(Player const* player);
 
 private:

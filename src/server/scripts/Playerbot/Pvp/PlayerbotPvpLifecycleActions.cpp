@@ -2929,7 +2929,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
         if (pickupGuid.IsEmpty())
         {
-            g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+            auto const delayItr = g_DroppedFlagPickupDelayByBotGuid.find(botGuidRaw);
+            if (delayItr == g_DroppedFlagPickupDelayByBotGuid.end() ||
+                GameTime::GetGameTimeMS() >= delayItr->second.pickupNotBeforeMs)
+                g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
             return false;
         }
 
@@ -2945,7 +2948,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             if (delay.flagGuid != pickupGuid)
             {
                 delay.flagGuid = pickupGuid;
-                delay.pickupNotBeforeMs = nowMs + PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS;
+                // A whisper-requested drop installs its own longer deadline
+                // before the dropped GO necessarily exists. Preserve that
+                // deadline when the new object GUID becomes visible; ordinary
+                // dropped flags retain the short anti-instant-reclick delay.
+                if (nowMs >= delay.pickupNotBeforeMs)
+                    delay.pickupNotBeforeMs = nowMs + PLAYERBOT_DROPPED_FLAG_PICKUP_DELAY_MS;
             }
 
             if (player->IsWithinDistInMap(flag, 8.0f) && nowMs < delay.pickupNotBeforeMs)
@@ -3893,6 +3901,16 @@ namespace playerbot
 
 namespace playerbot
 {
+    void BattlegroundTacticalActions::DelayFlagPickup(Player* player, uint32 delayMs)
+    {
+        if (!player || !delayMs)
+            return;
+
+        DroppedFlagPickupDelay& delay = g_DroppedFlagPickupDelayByBotGuid[player->GetGUID().GetRawValue()];
+        delay.flagGuid.Clear();
+        delay.pickupNotBeforeMs = GameTime::GetGameTimeMS() + delayMs;
+    }
+
     bool BattlegroundLifecycleActions::Execute(Player* player, BattlegroundLifecycleContext const& context)
     {
         if (!player || !context.lifecycleEnabled || !IsLifecycleGateEnabled())

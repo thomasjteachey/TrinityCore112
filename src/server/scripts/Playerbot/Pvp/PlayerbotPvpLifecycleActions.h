@@ -50,6 +50,7 @@ public:
     static bool UseBuffPrimitive(Player* player);
     static bool AttackEnemyFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
     static bool ProtectFlagCarrierPrimitive(Player* player, BattlegroundTacticalContext const& context);
+    static void DelayFlagPickup(Player* player, uint32 delayMs);
 };
 
 class ArenaLifecycleActions

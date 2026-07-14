@@ -709,8 +709,12 @@ public:
 
         if (command == "drop")
         {
+            bool const wasFlagCarrier = playerbot::PvpCore::IsBattlegroundFlagCarrier(receiver);
             if (Battleground* battleground = receiver->GetBattleground())
                 battleground->EventPlayerDroppedFlag(receiver);
+
+            if (wasFlagCarrier)
+                playerbot::BattlegroundTacticalActions::DelayFlagPickup(receiver, 5 * IN_MILLISECONDS);
 
             receiver->Whisper("Flag drop requested.", LANG_UNIVERSAL, sender);
             return;

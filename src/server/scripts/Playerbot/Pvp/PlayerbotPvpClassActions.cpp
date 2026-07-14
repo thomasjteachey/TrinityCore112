@@ -4318,6 +4318,28 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         return true;
     }
 
+    // Flag carriers must never choose an action whose resulting aura makes
+    // the battleground drop their flag. Apply the same target-side protection
+    // to immunity buffs such as Hand/Blessing of Protection before the cast
+    // path changes facing, attacks, forms, or movement.
+    if (playerbot::PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId))
+    {
+        if (playerbot::PvpCore::IsBattlegroundFlagCarrier(player))
+        {
+            failureReason = "flag_carrier_forbidden_spell";
+            return false;
+        }
+
+        if (Player const* targetPlayer = target->ToPlayer())
+        {
+            if (playerbot::PvpCore::IsBattlegroundFlagCarrier(targetPlayer))
+            {
+                failureReason = "flag_carrier_forbidden_target_buff";
+                return false;
+            }
+        }
+    }
+
     if (IsCrowdControlledForAction(player) &&
         !IsMageBlinkEscapeCast(player, context, resolvedSpellId) &&
         !IsControlBreakingRacialCast(player, context, resolvedSpellId))
@@ -4917,9 +4939,10 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     // effect keeps its ally and EffectJumpDest always receives m_targets.Dst.
     else if (resolvedSpellId == 83111 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && target)
     {
+        Position const landingPosition = BuildCollisionSafeDestination(player, target->GetPosition());
         SpellCastTargets leapTargets;
         leapTargets.SetUnitTarget(target);
-        leapTargets.SetDst(*target);
+        leapTargets.SetDst(landingPosition);
         castResult = player->CastSpell(CastSpellTargetArg(std::move(leapTargets)), resolvedSpellId);
     }
     else if (itemTarget)
@@ -5538,7 +5561,7 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 resolvedSpellId == SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK;
             allowInstantSpell = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
                 !spellInfo->IsAutoRepeatRangedSpell() && !stopsForHunterShot && !stopsForRecovery && !repositionsCaster &&
-                resolvedSpellId != kRacialNightElfShadowmeldSpellId &&
+                resolvedSpellId != kRacialNightElfShadowmeldSpellId && !PvpCore::SpellWouldBreakFlagCarry(resolvedSpellId) &&
                 IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
         }
 
