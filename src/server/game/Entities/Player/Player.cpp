@@ -17,8 +17,11 @@
 
 #include "Player.h"
 #include <algorithm>
-#include <unordered_set>
+#include <iomanip>
+#include <initializer_list>
+#include <limits>
 #include <sstream>
+#include <unordered_set>
 #include "AccountMgr.h"
 #include "AccountBankMgr.h"
 #include "AchievementMgr.h"
@@ -119,12 +122,49 @@ namespace
     constexpr float MinStarfireSnareSpeedRate = 0.01f;
     constexpr float MaxStarfireSnareSpeedRate = 1.0f;
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
+    constexpr uint32 CombatDiagnosticDelay = 5 * IN_MILLISECONDS;
+    constexpr uint32 CombatDiagnosticCheckInterval = 1 * IN_MILLISECONDS;
+    constexpr float CombatDiagnosticEnemyRange = 10.0f;
+    constexpr size_t CombatDiagnosticMaxReferences = 10;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
+    void AdvanceCombatDiagnosticTimer(uint32& timer, uint32 diff)
+    {
+        if (timer > std::numeric_limits<uint32>::max() - diff)
+            timer = std::numeric_limits<uint32>::max();
+        else
+            timer += diff;
+    }
+
+    class CombatDiagnosticNearbyEnemyCheck
+    {
+    public:
+        explicit CombatDiagnosticNearbyEnemyCheck(Player const* player) : _player(player) { }
+
+        bool operator()(Unit* unit) const
+        {
+            if (unit == _player || !unit->IsAlive() || !_player->IsWithinDistInMap(unit, CombatDiagnosticEnemyRange))
+                return false;
+
+            return _player->IsInCombatWith(unit) || _player->IsHostileTo(unit) || unit->IsHostileTo(_player);
+        }
+
+    private:
+        Player const* _player;
+    };
+
+    bool HasCombatDiagnosticNearbyEnemy(Player const* player)
+    {
+        Unit* enemy = nullptr;
+        CombatDiagnosticNearbyEnemyCheck check(player);
+        Trinity::UnitSearcher<CombatDiagnosticNearbyEnemyCheck> searcher(player, enemy, check);
+        Cell::VisitAllObjects(player, searcher, CombatDiagnosticEnemyRange);
+        return enemy != nullptr;
+    }
 }
 #include "ArenaSpectator.h"
 
 #include <array>
-#include <initializer_list>
 
 namespace DireMaulBeads
 {
@@ -323,6 +363,11 @@ Player::Player(WorldSession* session) : Unit(true)
     m_drunkTimer = 0;
     m_deathTimer = 0;
     m_deathExpireTime = 0;
+    m_combatDiagnosticCombatTimer = 0;
+    m_combatDiagnosticDirectSpellTimer = CombatDiagnosticDelay;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticSent = false;
+    m_combatDiagnosticHasDirectSpellCast = false;
 
     m_swingErrorMsg = 0;
 
@@ -1142,6 +1187,7 @@ void Player::Update(uint32 p_time)
     Unit::Update(p_time);
     SetCanDelayTeleport(false);
     sScriptMgr->OnPlayerUpdate(this, p_time);
+    UpdateCombatDiagnostic(p_time);
 
     UpdateStarfireSnare();
     VerifyStarfireSnare();
@@ -25611,6 +25657,9 @@ void Player::ProcessTerrainStatusUpdate(ZLiquidStatus oldLiquidStatus, Optional<
 void Player::AtExitCombat()
 {
     Unit::AtExitCombat();
+    m_combatDiagnosticCombatTimer = 0;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticSent = false;
     UpdatePotionCooldown();
 
     if (GetClass() == CLASS_DEATH_KNIGHT)
@@ -25619,6 +25668,146 @@ void Player::AtExitCombat()
             SetRuneTimer(i, 0xFFFFFFFF);
             SetLastRuneGraceTimer(i, 0);
         }
+}
+
+void Player::AtEnterCombat()
+{
+    Unit::AtEnterCombat();
+    m_combatDiagnosticCombatTimer = 0;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticSent = false;
+}
+
+void Player::NotifyDirectSpellCast()
+{
+    m_combatDiagnosticDirectSpellTimer = 0;
+    m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticHasDirectSpellCast = true;
+}
+
+void Player::UpdateCombatDiagnostic(uint32 diff)
+{
+    AdvanceCombatDiagnosticTimer(m_combatDiagnosticDirectSpellTimer, diff);
+
+    if (!IsInCombat())
+    {
+        m_combatDiagnosticCombatTimer = 0;
+        m_combatDiagnosticCheckTimer = 0;
+        m_combatDiagnosticSent = false;
+        return;
+    }
+
+    AdvanceCombatDiagnosticTimer(m_combatDiagnosticCombatTimer, diff);
+
+    if (m_combatDiagnosticSent || m_combatDiagnosticCombatTimer < CombatDiagnosticDelay ||
+        m_combatDiagnosticDirectSpellTimer < CombatDiagnosticDelay)
+        return;
+
+    if (m_combatDiagnosticCheckTimer > diff)
+    {
+        m_combatDiagnosticCheckTimer -= diff;
+        return;
+    }
+
+    m_combatDiagnosticCheckTimer = CombatDiagnosticCheckInterval;
+    if (HasCombatDiagnosticNearbyEnemy(this))
+        return;
+
+    SendCombatDiagnostic();
+    m_combatDiagnosticSent = true;
+}
+
+void Player::SendCombatDiagnostic()
+{
+    CombatManager const& combatManager = GetCombatManager();
+
+    size_t activePveReferences = 0;
+    size_t activePvpReferences = 0;
+    for (auto const& pair : combatManager.GetPvECombatRefs())
+        if (!pair.second->IsSuppressedFor(this))
+            ++activePveReferences;
+    for (auto const& pair : combatManager.GetPvPCombatRefs())
+        if (!pair.second->IsSuppressedFor(this))
+            ++activePvpReferences;
+
+    uint32 activeAuraReasons = 0;
+    for (uint32 spellId : { 29131u, 5229u })
+        if (HasAura(spellId))
+            ++activeAuraReasons;
+
+    std::ostringstream summary;
+    summary << "[Combat diagnostic] You have been in combat for " << std::fixed << std::setprecision(1)
+        << (m_combatDiagnosticCombatTimer / 1000.0f) << " seconds with no enemy within "
+        << CombatDiagnosticEnemyRange << " yards; ";
+    if (m_combatDiagnosticHasDirectSpellCast)
+        summary << "your last direct spell cast was " << (m_combatDiagnosticDirectSpellTimer / 1000.0f) << " seconds ago. ";
+    else
+        summary << "no direct spell cast has been recorded. ";
+    summary << "Active reasons: PvE refs " << activePveReferences << '/' << combatManager.GetPvECombatRefs().size() << ", PvP refs "
+        << activePvpReferences << '/' << combatManager.GetPvPCombatRefs().size() << ", combat auras "
+        << activeAuraReasons << ".";
+    sWorld->SendServerMessage(SERVER_MSG_STRING, summary.str(), this);
+
+    size_t referencesReported = 0;
+    auto reportReference = [this, &referencesReported](char const* type, CombatReference const* reference)
+    {
+        if (reference->IsSuppressedFor(this) || referencesReported >= CombatDiagnosticMaxReferences)
+            return;
+
+        ++referencesReported;
+        Unit* target = reference->GetOther(this);
+        bool const sameMap = target->GetMap() == GetMap();
+
+        std::ostringstream reason;
+        reason << "[Combat diagnostic] " << type << " ref: " << target->GetName() << " ["
+            << target->GetGUID().ToString();
+        if (Creature const* creature = target->ToCreature())
+            reason << ", entry=" << creature->GetEntry() << ", spawn=" << creature->GetSpawnId();
+        reason << "] distance=";
+        if (sameMap)
+            reason << std::fixed << std::setprecision(1) << GetDistance(target) << " yd";
+        else
+            reason << "n/a";
+        reason << ", alive=" << (target->IsAlive() ? "yes" : "no")
+            << ", inWorld=" << (target->IsInWorld() ? "yes" : "no")
+            << ", sameMap=" << (sameMap ? "yes" : "no")
+            << ", samePhase=" << (WorldObject::InSamePhase(this, target) ? "yes" : "no")
+            << ", hostile=" << ((IsHostileTo(target) || target->IsHostileTo(this)) ? "yes" : "no")
+            << ", yourVictim=" << (GetVictim() == target ? "yes" : "no")
+            << ", theirVictim=" << (target->GetVictim() == this ? "yes" : "no");
+        if (target->CanHaveThreatList())
+            reason << ", targetHasYourThreat=" << (target->IsThreatenedBy(this) ? "yes" : "no");
+        if (Unit* owner = target->GetCharmerOrOwner())
+            reason << ", owner=" << owner->GetName() << " [" << owner->GetGUID().ToString() << ']';
+        reason << '.';
+        sWorld->SendServerMessage(SERVER_MSG_STRING, reason.str(), this);
+    };
+
+    for (auto const& pair : combatManager.GetPvECombatRefs())
+        reportReference("PvE", pair.second);
+    for (auto const& pair : combatManager.GetPvPCombatRefs())
+        reportReference("PvP", pair.second);
+
+    size_t const omittedReferences = activePveReferences + activePvpReferences - referencesReported;
+    if (omittedReferences)
+        sWorld->SendServerMessage(SERVER_MSG_STRING,
+            Trinity::StringFormat("[Combat diagnostic] {} additional active combat references omitted.", omittedReferences), this);
+
+    for (uint32 spellId : { 29131u, 5229u })
+    {
+        if (!HasAura(spellId))
+            continue;
+
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+        std::string const spellName = spellInfo && spellInfo->SpellName[DEFAULT_LOCALE]
+            ? spellInfo->SpellName[DEFAULT_LOCALE] : "unknown";
+        sWorld->SendServerMessage(SERVER_MSG_STRING,
+            Trinity::StringFormat("[Combat diagnostic] Combat aura: {} (spell {}).", spellName, spellId), this);
+    }
+
+    if (!activePveReferences && !activePvpReferences && !activeAuraReasons)
+        sWorld->SendServerMessage(SERVER_MSG_STRING,
+            "[Combat diagnostic] No active combat reference or combat-forcing aura was found; the unit combat flag and combat manager state disagree.", this);
 }
 
 void Player::SetCanParry(bool value)

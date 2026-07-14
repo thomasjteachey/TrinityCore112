@@ -5447,6 +5447,19 @@ bool PvpClassActions::TryIssueShadowWraithFleeMovement(Player* player, Unit* thr
     return true;
 }
 
+bool PvpClassActions::IsBattlegroundObjectInteractionInProgress(Player const* player)
+{
+    if (!player || !player->InBattleground())
+        return false;
+
+    Spell const* spell = player->GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    if (!spell || spell->getState() == SPELL_STATE_FINISHED)
+        return false;
+
+    SpellInfo const* spellInfo = spell->GetSpellInfo();
+    return spellInfo && spellInfo->HasEffect(SPELL_EFFECT_OPEN_LOCK) && spell->m_targets.GetGOTarget();
+}
+
 bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& context)
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
@@ -5470,6 +5483,15 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     if (escapingHazard && !allowInstantSpellWhileEscaping)
     {
         SetLastExecutionStatus(player, "hazard_escape_before_class_action");
+        return true;
+    }
+
+    // Capturing a battleground node is a real interruptible OPEN_LOCK cast.
+    // Do not let routine class movement or spell selection cancel it every
+    // update; incoming damage and the spell system still interrupt it normally.
+    if (IsBattlegroundObjectInteractionInProgress(player))
+    {
+        SetLastExecutionStatus(player, "battleground_object_interaction_in_progress");
         return true;
     }
 

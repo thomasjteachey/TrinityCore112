@@ -4295,6 +4295,10 @@ void Spell::finish(bool ok)
     if (!ok)
         return;
 
+    if (!IsTriggered() && !m_triggeredByAuraSpell)
+        if (Player* playerCaster = unitCaster->ToPlayer())
+            playerCaster->NotifyDirectSpellCast();
+
     if (unitCaster->GetTypeId() == TYPEID_UNIT && unitCaster->IsSummon())
     {
         // Unsummon statue

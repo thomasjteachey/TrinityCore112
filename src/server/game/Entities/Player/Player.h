@@ -938,6 +938,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
             bool validateAppearanceAsNewCharacter = true);
 
         void Update(uint32 time) override;
+        void NotifyDirectSpellCast();
 
         static bool BuildEnumData(PreparedQueryResult result, WorldPacket* data);
 
@@ -1735,6 +1736,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool UpdatePosition(float x, float y, float z, float orientation, bool teleport = false) override;
         bool UpdatePosition(Position const& pos, bool teleport = false) override { return UpdatePosition(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation(), teleport); }
         void ProcessTerrainStatusUpdate(ZLiquidStatus oldLiquidStatus, Optional<LiquidData> const& newLiquidData) override;
+        void AtEnterCombat() override;
         void AtExitCombat() override;
 
         void SendMessageToSet(WorldPacket const* data, bool self) const override { if (IsInWorld()) SendMessageToSetInRange(data, GetVisibilityRange(), self); }
@@ -2482,6 +2484,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_hostileReferenceCheckTimer;
         uint32 m_drunkTimer;
         uint32 m_weaponChangeTimer;
+        uint32 m_combatDiagnosticCombatTimer;
+        uint32 m_combatDiagnosticDirectSpellTimer;
+        uint32 m_combatDiagnosticCheckTimer;
+        bool m_combatDiagnosticSent;
+        bool m_combatDiagnosticHasDirectSpellCast;
 
         uint32 m_zoneUpdateId;
         uint32 m_zoneUpdateTimer;
@@ -2551,6 +2558,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
     private:
         void ApplyActiveStarfireSnare();
         void ApplyActiveStarfireSnare(UnitMoveType moveType);
+        void UpdateCombatDiagnostic(uint32 diff);
+        void SendCombatDiagnostic();
 
         // internal common parts for CanStore/StoreItem functions
         InventoryResult CanStoreItem_InSpecificSlot(uint8 bag, uint8 slot, ItemPosCountVec& dest, ItemTemplate const* pProto, uint32& count, bool swap, Item* pSrcItem) const;

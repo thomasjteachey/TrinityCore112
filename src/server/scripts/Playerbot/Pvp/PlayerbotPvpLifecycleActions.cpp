@@ -2982,30 +2982,47 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
         bool const needsInteraction = !isDefense || objective.Status == BattlegroundNodeStatus::FriendlyUnderAttack;
         Position destination = objective.Location;
-        if (isDefense && !needsInteraction)
-            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
-
-        float const arrivalRange = needsInteraction ? 8.0f : 12.0f;
-        if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), arrivalRange))
-            return IssueMovePointThrottled(player, destination, 6.0f, 500) || player->isMoving();
 
         // Friendly/claimed nodes are defended by holding nearby and engaging
-        // attackers. Assault targets and friendly nodes under attack require a
-        // normal banner click.
+        // attackers.
         if (!needsInteraction)
+        {
+            playerbot::ApplyDeterministicObjectiveOffset(battleground, player, destination);
+            if (!player->IsWithinDist3d(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 12.0f))
+                return IssueMovePointThrottled(player, destination, 6.0f, 500) || player->isMoving();
+
             return true;
+        }
 
         GameObject* banner = player->FindMap()->GetGameObject(objective.BannerGuid);
         if (!banner || !banner->IsInWorld() || !banner->isSpawned())
             return true;
 
-        if (!player->IsWithinDistInMap(banner, 8.0f))
+        // Node banners use their lock spell (normally the 10-second Opening
+        // spell), not GameObject::Use. Use the spell's real interaction range
+        // instead of stopping at an arbitrary eight-yard approximation.
+        SpellInfo const* interactionSpell = banner->GetSpellForLock(player);
+        bool const isAtInteractDistance = interactionSpell ? banner->IsAtInteractDistance(player, interactionSpell) :
+            banner->IsAtInteractDistance(player);
+        if (!isAtInteractDistance)
             return IssueMovePointThrottled(player, banner->GetPosition(), 6.0f, 500) || player->isMoving();
 
-        banner->Use(player);
+        if (PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
+            return true;
+
+        StopVirtualPlayerbotMovement(player);
+        player->AttackStop();
+
+        SpellCastResult castResult = SPELL_FAILED_DONT_REPORT;
+        if (interactionSpell)
+            castResult = player->CastSpell(banner, interactionSpell->Id, false);
+        else
+            banner->Use(player);
+
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
-            "Playerbot PvP node interaction attempted: guid={} node={} status={} banner_guid={}.",
-            player->GetGUID().ToString(), objective.NodeId, static_cast<uint8>(objective.Status), objective.BannerGuid.ToString());
+            "Playerbot PvP node interaction attempted: guid={} node={} status={} banner_guid={} spell={} result={} fallback_use={}.",
+            player->GetGUID().ToString(), objective.NodeId, static_cast<uint8>(objective.Status), objective.BannerGuid.ToString(),
+            interactionSpell ? interactionSpell->Id : 0, static_cast<uint32>(castResult), interactionSpell == nullptr);
         return true;
     }
 
@@ -4182,6 +4199,12 @@ namespace playerbot
         // none should establish a stationary action position on hazardous
         // ground. Continue an active crossing or escape before doing anything.
         if (TryMoveOutOfHazardousLiquid(player))
+            return true;
+
+        // The node-capture OPEN_LOCK spell owns the bot until it completes or
+        // is interrupted by normal spell rules. Tactical movement and combat
+        // otherwise restart/cancel the ten-second interaction every fast tick.
+        if (PvpClassActions::IsBattlegroundObjectInteractionInProgress(player))
             return true;
 
         BreakExpiredHunterFeignDeath(player);
