@@ -26,6 +26,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -107,6 +108,7 @@ constexpr uint32 ACTION_REMOVE_CHOICE_LIMIT = 100;
 
 struct CloneRequest
 {
+    uint32 RosterSlotId = 0;
     ObjectGuid SourceGuid;
     std::string SourceName;
     uint32 Team = 0;
@@ -137,6 +139,7 @@ struct CustomGameLobby
     uint8 ArenaType = 0;
     BattlegroundCustomRules Rules;
     uint32 ActiveBattlegroundId = 0;
+    uint32 NextCloneRosterSlotId = 1;
     bool ClonesSpawned = false;
     bool Closing = false;
 };
@@ -522,17 +525,9 @@ public:
             return false;
         }
 
-        auto matches = [&](CloneRequest const& request)
-        {
-            return request.SourceGuid == sourceGuid && request.Team == team && request.IsPlayerbot == playerbotClone;
-        };
-
-        auto itr = std::find_if(lobby->CloneRequests.begin(), lobby->CloneRequests.end(), matches);
-        if (itr == lobby->CloneRequests.end())
-        {
-            lobby->CloneRequests.push_back({ sourceGuid, characterInfo->Name, team, playerbotClone });
-            RefreshLobbyClonePreviews(*lobby);
-        }
+        lobby->CloneRequests.push_back({ lobby->NextCloneRosterSlotId++, sourceGuid, characterInfo->Name, team,
+            playerbotClone });
+        RefreshLobbyClonePreviews(*lobby);
 
         return true;
     }
@@ -564,31 +559,39 @@ public:
             return false;
         }
 
-        std::vector<ObjectGuid> candidates = sCharacterCache->GetCharacterGuidsByAccountIds(botAccountIds);
-        candidates.erase(std::remove_if(candidates.begin(), candidates.end(), [&](ObjectGuid sourceGuid)
+        std::vector<ObjectGuid> allCandidates = sCharacterCache->GetCharacterGuidsByAccountIds(botAccountIds);
+        allCandidates.erase(std::remove_if(allCandidates.begin(), allCandidates.end(), [&](ObjectGuid sourceGuid)
         {
             CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
-            if (!characterInfo || characterInfo->Name.rfind("Obcm", 0) == 0)
-                return true;
+            return !characterInfo || characterInfo->Name.rfind("Obcm", 0) == 0;
+        }), allCandidates.end());
 
-            return std::any_of(lobby->CloneRequests.begin(), lobby->CloneRequests.end(), [&](CloneRequest const& request)
-            {
-                return request.SourceGuid == sourceGuid && request.IsPlayerbot;
-            });
-        }), candidates.end());
-
-        if (candidates.empty())
+        if (allCandidates.empty())
         {
-            Notify(player, "Every configured playerbot is already represented in this lobby.");
+            Notify(player, "No eligible characters exist on the configured playerbot accounts.");
             return false;
         }
 
+        std::vector<ObjectGuid> uniqueCandidates;
+        std::copy_if(allCandidates.begin(), allCandidates.end(), std::back_inserter(uniqueCandidates),
+            [&](ObjectGuid sourceGuid)
+            {
+                return std::none_of(lobby->CloneRequests.begin(), lobby->CloneRequests.end(),
+                    [&](CloneRequest const& request)
+                    {
+                        return request.SourceGuid == sourceGuid && request.IsPlayerbot;
+                    });
+            });
+
+        // Prefer a character not yet represented anywhere in this lobby. Once
+        // every configured bot has been used, random additions may repeat one.
+        std::vector<ObjectGuid> const& candidates = uniqueCandidates.empty() ? allCandidates : uniqueCandidates;
         ObjectGuid const sourceGuid = candidates[urand(0u, static_cast<uint32>(candidates.size() - 1))];
         CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
         if (!characterInfo)
             return false;
 
-        lobby->CloneRequests.push_back({ sourceGuid, characterInfo->Name, team, true });
+        lobby->CloneRequests.push_back({ lobby->NextCloneRosterSlotId++, sourceGuid, characterInfo->Name, team, true });
         RefreshLobbyClonePreviews(*lobby);
         Notify(player, "Added playerbot " + characterInfo->Name + " to team " + TeamName(team) + ".");
         return true;
@@ -608,8 +611,7 @@ public:
             if (currentIndex++ != filteredIndex)
                 continue;
 
-            playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(lobby->InstanceId,
-                itr->SourceGuid, itr->Team, itr->IsPlayerbot);
+            playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(lobby->InstanceId, itr->RosterSlotId);
             lobby->CloneRequests.erase(itr);
             RefreshLobbyClonePreviews(*lobby);
             return true;
@@ -895,7 +897,16 @@ public:
             if (lobby->ActiveBattlegroundId)
             {
                 Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType);
-                if (bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS) &&
+                if (player->GetBattlegroundId() != lobby->ActiveBattlegroundId &&
+                    IsOwner(player, lobby) && lobby->Members.size() == 1)
+                {
+                    // Leaving a solo custom match is equivalent to ending that
+                    // attempt. Keep its sole member on the retained roster so the
+                    // normal match-completion path can rebuild the same setup.
+                    if (bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS))
+                        bg->EndBattleground(PVP_TEAM_NEUTRAL);
+                }
+                else if (bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS) &&
                     player->GetBattlegroundId() != lobby->ActiveBattlegroundId)
                 {
                     RemoveLobbyMember(player, *lobby, true);
@@ -1115,10 +1126,10 @@ private:
             uint32 const teamIndex = request.Team == ALLIANCE ? blueIndex++ : redIndex++;
             Position const position = LobbyClonePosition(request.Team, teamIndex);
             playerbot::PlayerbotObcCloneManager::QueueCustomGameLobbyClone(request.SourceGuid, callbackSession,
-                CUSTOM_GAME_MAP_ID, lobby.InstanceId, request.Team, request.IsPlayerbot, position,
+                CUSTOM_GAME_MAP_ID, lobby.InstanceId, request.RosterSlotId, request.Team, request.IsPlayerbot, position,
                 request.IsPlayerbot ? "" : "Dark ");
             playerbot::PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(lobby.InstanceId,
-                request.SourceGuid, request.Team, request.IsPlayerbot, position);
+                request.RosterSlotId, position);
         }
     }
 
@@ -1169,10 +1180,28 @@ private:
         Battleground* bg = sBattlegroundMgr->GetBattleground(battlegroundId, lobby.SelectedType);
         playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(battlegroundId);
 
+        auto detachFromMatch = [bg](Player* player)
+        {
+            if (bg && bg->IsPlayerInBattleground(player->GetGUID()))
+                bg->RemovePlayerAtLeave(player->GetGUID(), false, true);
+            else
+            {
+                player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
+                player->SetBGTeam(0);
+                player->SetVisible(true);
+                player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
+                if (player->IsSpectator())
+                    player->SetIsSpectator(false);
+            }
+        };
+
         std::vector<ObjectGuid> returningGuids;
+        bool const isSoloLobby = lobby.Members.size() == 1 && lobby.Members.find(lobby.OwnerGuid) != lobby.Members.end();
         for (auto const& [guid, member] : lobby.Members)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-                if (player->GetBattlegroundId() == battlegroundId)
+                if (player->GetBattlegroundId() == battlegroundId ||
+                    (isSoloLobby && guid == lobby.OwnerGuid && player->GetMapId() == CUSTOM_GAME_MAP_ID &&
+                        player->GetInstanceId() == oldInstanceId))
                     returningGuids.push_back(guid);
 
         if (returningGuids.empty())
@@ -1189,8 +1218,7 @@ private:
             for (ObjectGuid guid : returningGuids)
                 if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                 {
-                    if (bg)
-                        bg->RemovePlayerAtLeave(guid, false, true);
+                    detachFromMatch(player);
                     player->ClearWorldSubMap();
                     player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
                 }
@@ -1208,8 +1236,7 @@ private:
             for (ObjectGuid guid : returningGuids)
                 if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
                 {
-                    if (bg)
-                        bg->RemovePlayerAtLeave(guid, false, true);
+                    detachFromMatch(player);
                     player->ClearWorldSubMap();
                     player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
                 }
@@ -1246,17 +1273,7 @@ private:
         for (ObjectGuid guid : returningGuids)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             {
-                if (bg)
-                    bg->RemovePlayerAtLeave(guid, false, true);
-                else
-                {
-                    player->SetBattlegroundId(0, BATTLEGROUND_TYPE_NONE);
-                    player->SetBGTeam(0);
-                    player->SetVisible(true);
-                    player->RemoveUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
-                    if (player->IsSpectator())
-                        player->SetIsSpectator(false);
-                }
+                detachFromMatch(player);
 
                 player->SetWorldSubMap(CUSTOM_GAME_MAP_ID, newInstanceId);
                 player->TeleportTo(CUSTOM_GAME_MAP_ID, LobbyArrival.GetPositionX(), LobbyArrival.GetPositionY(),
@@ -1507,7 +1524,14 @@ public:
             player->PlayerTalkClass->ClearMenus();
             if (me->GetEntry() == CUSTOM_GAME_HOST_ENTRY)
             {
-                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Create a private custom game", GOSSIP_SENDER_MAIN, ACTION_CREATE);
+                Group const* group = player->GetGroup();
+                std::string const rosterName = !group ? "solo" : group->isRaidGroup() ? "raid" : "party";
+                std::string const option = !group ? "Create a custom-game lobby" :
+                    "Create a custom-game lobby for my " + rosterName;
+                std::string const confirmation = !group ? "Create a custom-game lobby?" :
+                    "Create a custom-game lobby and bring your current " + rosterName + "?";
+                AddGossipItemFor(player, GOSSIP_ICON_BATTLE, option, GOSSIP_SENDER_MAIN, ACTION_CREATE,
+                    confirmation, 0, false);
                 SendGossipMenuFor(player, 1, me->GetGUID());
             }
             else if (me->GetEntry() == CUSTOM_GAME_BLUE_ENTRY)

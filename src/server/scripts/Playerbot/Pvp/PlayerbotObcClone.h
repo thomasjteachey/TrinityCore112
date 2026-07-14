@@ -77,13 +77,13 @@ public:
     static void DestroyCustomGameClones(uint32 battlegroundInstanceId);
 
     // Create inert, transient roster previews in a private custom-game lobby.
-    // The request key includes the source kind so a playerbot and Dark copy of the
-    // same character can be represented independently.
+    // rosterSlotId identifies one requested copy, allowing the same source
+    // character to appear more than once in a lobby roster.
     static bool QueueCustomGameLobbyClone(ObjectGuid sourceGuid, WorldSession* callbackSession, uint32 mapId,
-        uint32 lobbyInstanceId, uint32 team, bool isPlayerbot, Position const& position, std::string const& displayPrefix);
-    static void SetCustomGameLobbyClonePosition(uint32 lobbyInstanceId, ObjectGuid sourceGuid, uint32 team,
-        bool isPlayerbot, Position const& position);
-    static void DestroyCustomGameLobbyClone(uint32 lobbyInstanceId, ObjectGuid sourceGuid, uint32 team, bool isPlayerbot);
+        uint32 lobbyInstanceId, uint32 rosterSlotId, uint32 team, bool isPlayerbot, Position const& position,
+        std::string const& displayPrefix);
+    static void SetCustomGameLobbyClonePosition(uint32 lobbyInstanceId, uint32 rosterSlotId, Position const& position);
+    static void DestroyCustomGameLobbyClone(uint32 lobbyInstanceId, uint32 rosterSlotId);
     static void DestroyCustomGameLobbyClones(uint32 lobbyInstanceId);
 };
 }

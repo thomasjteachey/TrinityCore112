@@ -74,6 +74,7 @@ struct CustomGameLobbyCloneRecord
     ObjectGuid sourceGuid;
     uint32 mapId = 0;
     uint32 lobbyInstanceId = 0;
+    uint32 rosterSlotId = 0;
     uint32 team = 0;
     bool isPlayerbot = false;
 };
@@ -83,6 +84,7 @@ struct PendingCustomGameLobbyClone
     ObjectGuid sourceGuid;
     uint32 mapId = 0;
     uint32 lobbyInstanceId = 0;
+    uint32 rosterSlotId = 0;
     uint32 team = 0;
     bool isPlayerbot = false;
     Position position;
@@ -580,52 +582,38 @@ void TeardownAllCustomGameClones()
         TeardownCustomGameClone(cloneGuid);
 }
 
-bool HasCustomGameClone(ObjectGuid sourceGuid, uint32 battlegroundInstanceId, uint32 team)
+bool MatchesLobbyClone(CustomGameLobbyCloneRecord const& record, uint32 lobbyInstanceId, uint32 rosterSlotId)
 {
-    std::lock_guard<std::mutex> lock(g_ObcCloneLock);
-    for (auto const& [cloneGuid, record] : g_CustomGameClones)
-        if (record.sourceGuid == sourceGuid && record.battlegroundInstanceId == battlegroundInstanceId && record.team == team)
-            return true;
-
-    return false;
+    return record.lobbyInstanceId == lobbyInstanceId && record.rosterSlotId == rosterSlotId;
 }
 
-bool MatchesLobbyClone(CustomGameLobbyCloneRecord const& record, uint32 lobbyInstanceId, ObjectGuid sourceGuid,
-    uint32 team, bool isPlayerbot)
+bool MatchesLobbyClone(PendingCustomGameLobbyClone const& record, uint32 lobbyInstanceId, uint32 rosterSlotId)
 {
-    return record.lobbyInstanceId == lobbyInstanceId && record.sourceGuid == sourceGuid &&
-        record.team == team && record.isPlayerbot == isPlayerbot;
+    return record.lobbyInstanceId == lobbyInstanceId && record.rosterSlotId == rosterSlotId;
 }
 
-bool MatchesLobbyClone(PendingCustomGameLobbyClone const& record, uint32 lobbyInstanceId, ObjectGuid sourceGuid,
-    uint32 team, bool isPlayerbot)
-{
-    return record.lobbyInstanceId == lobbyInstanceId && record.sourceGuid == sourceGuid &&
-        record.team == team && record.isPlayerbot == isPlayerbot;
-}
-
-bool HasCustomGameLobbyClone(uint32 lobbyInstanceId, ObjectGuid sourceGuid, uint32 team, bool isPlayerbot)
+bool HasCustomGameLobbyClone(uint32 lobbyInstanceId, uint32 rosterSlotId)
 {
     std::lock_guard<std::mutex> lock(g_ObcCloneLock);
     for (auto const& [cloneGuid, record] : g_CustomGameLobbyClones)
-        if (MatchesLobbyClone(record, lobbyInstanceId, sourceGuid, team, isPlayerbot))
+        if (MatchesLobbyClone(record, lobbyInstanceId, rosterSlotId))
             return true;
 
     return std::any_of(g_PendingCustomGameLobbyClones.begin(), g_PendingCustomGameLobbyClones.end(),
         [&](PendingCustomGameLobbyClone const& record)
         {
-            return MatchesLobbyClone(record, lobbyInstanceId, sourceGuid, team, isPlayerbot);
+            return MatchesLobbyClone(record, lobbyInstanceId, rosterSlotId);
         });
 }
 
 Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyInstanceId, uint32 team,
-    bool isPlayerbot, Position const& position, std::string const& displayPrefix)
+    uint32 rosterSlotId, bool isPlayerbot, Position const& position, std::string const& displayPrefix)
 {
     if (!source || (team != ALLIANCE && team != HORDE))
         return nullptr;
 
     Map* lobbyMap = sMapMgr->FindMap(mapId, lobbyInstanceId);
-    if (!lobbyMap || HasCustomGameLobbyClone(lobbyInstanceId, source->GetGUID(), team, isPlayerbot))
+    if (!lobbyMap || HasCustomGameLobbyClone(lobbyInstanceId, rosterSlotId))
         return nullptr;
 
     std::string const internalName = GenerateCloneInternalName();
@@ -711,7 +699,7 @@ Player* CreateCustomGameLobbyClone(Player* source, uint32 mapId, uint32 lobbyIns
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         g_CloneSessions.emplace(cloneGuid, std::move(session));
         g_CustomGameLobbyClones.emplace(cloneGuid, CustomGameLobbyCloneRecord{
-            cloneGuid, source->GetGUID(), mapId, lobbyInstanceId, team, isPlayerbot });
+            cloneGuid, source->GetGUID(), mapId, lobbyInstanceId, rosterSlotId, team, isPlayerbot });
     }
 
     return clone;
@@ -975,8 +963,7 @@ bool PlayerbotObcCloneManager::IsActiveClone(Player const* player)
 
 Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battleground* bg, uint32 team, std::string const& displayPrefix)
 {
-    if (!source || !bg || (team != ALLIANCE && team != HORDE) ||
-        HasCustomGameClone(source->GetGUID(), bg->GetInstanceID(), team))
+    if (!source || !bg || (team != ALLIANCE && team != HORDE))
         return nullptr;
 
     std::string const internalName = GenerateCloneInternalName();
@@ -1081,7 +1068,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
         return created;
     }
 
-    if (!callbackSession || HasCustomGameClone(sourceGuid, bg->GetInstanceID(), team))
+    if (!callbackSession)
     {
         bg->ResolveCustomGamePendingClone();
         return false;
@@ -1110,8 +1097,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
         if (!targetBg)
             return;
 
-        if (targetBg->GetStatus() != STATUS_NONE && targetBg->GetStatus() != STATUS_WAIT_LEAVE &&
-            !HasCustomGameClone(sourceGuid, battlegroundInstanceId, team))
+        if (targetBg->GetStatus() != STATUS_NONE && targetBg->GetStatus() != STATUS_WAIT_LEAVE)
         {
             if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
                 PlayerbotObcCloneManager::CreateCustomGameClone(onlineSource, targetBg, team, displayPrefix);
@@ -1159,15 +1145,15 @@ void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstan
 }
 
 bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, WorldSession* callbackSession,
-    uint32 mapId, uint32 lobbyInstanceId, uint32 team, bool isPlayerbot, Position const& position,
+    uint32 mapId, uint32 lobbyInstanceId, uint32 rosterSlotId, uint32 team, bool isPlayerbot, Position const& position,
     std::string const& displayPrefix)
 {
     if (!sourceGuid || (team != ALLIANCE && team != HORDE) ||
-        HasCustomGameLobbyClone(lobbyInstanceId, sourceGuid, team, isPlayerbot))
+        HasCustomGameLobbyClone(lobbyInstanceId, rosterSlotId))
         return false;
 
     if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
-        return CreateCustomGameLobbyClone(onlineSource, mapId, lobbyInstanceId, team, isPlayerbot, position,
+        return CreateCustomGameLobbyClone(onlineSource, mapId, lobbyInstanceId, team, rosterSlotId, isPlayerbot, position,
             displayPrefix) != nullptr;
 
     if (!callbackSession)
@@ -1183,12 +1169,12 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
 
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
-        g_PendingCustomGameLobbyClones.push_back({ sourceGuid, mapId, lobbyInstanceId, team, isPlayerbot,
+        g_PendingCustomGameLobbyClones.push_back({ sourceGuid, mapId, lobbyInstanceId, rosterSlotId, team, isPlayerbot,
             position, displayPrefix });
     }
 
     SQLQueryHolderCallback& callback = callbackSession->AddQueryHolderCallback(CharacterDatabase.DelayQueryHolder(holder));
-    callback.AfterComplete([sourceGuid, lobbyInstanceId, team, isPlayerbot](SQLQueryHolderBase const& queryHolder)
+    callback.AfterComplete([sourceGuid, lobbyInstanceId, rosterSlotId](SQLQueryHolderBase const& queryHolder)
     {
         PendingCustomGameLobbyClone request;
         {
@@ -1196,7 +1182,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
             auto itr = std::find_if(g_PendingCustomGameLobbyClones.begin(), g_PendingCustomGameLobbyClones.end(),
                 [&](PendingCustomGameLobbyClone const& pending)
                 {
-                    return MatchesLobbyClone(pending, lobbyInstanceId, sourceGuid, team, isPlayerbot);
+                    return MatchesLobbyClone(pending, lobbyInstanceId, rosterSlotId);
                 });
             if (itr == g_PendingCustomGameLobbyClones.end())
                 return;
@@ -1211,7 +1197,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
         if (Player* onlineSource = ObjectAccessor::FindConnectedPlayer(sourceGuid))
         {
             CreateCustomGameLobbyClone(onlineSource, request.mapId, request.lobbyInstanceId, request.team,
-                request.isPlayerbot, request.position, request.displayPrefix);
+                request.rosterSlotId, request.isPlayerbot, request.position, request.displayPrefix);
             return;
         }
 
@@ -1230,7 +1216,7 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
             // not consume those effects, so detach them before copying.
             offlineSource->RemoveAllAuras();
             CreateCustomGameLobbyClone(offlineSource, request.mapId, request.lobbyInstanceId, request.team,
-                request.isPlayerbot, request.position, request.displayPrefix);
+                request.rosterSlotId, request.isPlayerbot, request.position, request.displayPrefix);
         }
 
         DestroyUnseatedClone(sourceSession, offlineSource);
@@ -1239,18 +1225,18 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
     return true;
 }
 
-void PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(uint32 lobbyInstanceId, ObjectGuid sourceGuid,
-    uint32 team, bool isPlayerbot, Position const& position)
+void PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(uint32 lobbyInstanceId, uint32 rosterSlotId,
+    Position const& position)
 {
     ObjectGuid cloneGuid;
     {
         std::lock_guard<std::mutex> lock(g_ObcCloneLock);
         for (auto& pending : g_PendingCustomGameLobbyClones)
-            if (MatchesLobbyClone(pending, lobbyInstanceId, sourceGuid, team, isPlayerbot))
+            if (MatchesLobbyClone(pending, lobbyInstanceId, rosterSlotId))
                 pending.position = position;
 
         for (auto const& [guid, record] : g_CustomGameLobbyClones)
-            if (MatchesLobbyClone(record, lobbyInstanceId, sourceGuid, team, isPlayerbot))
+            if (MatchesLobbyClone(record, lobbyInstanceId, rosterSlotId))
             {
                 cloneGuid = guid;
                 break;
@@ -1273,8 +1259,7 @@ void PlayerbotObcCloneManager::SetCustomGameLobbyClonePosition(uint32 lobbyInsta
     }
 }
 
-void PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(uint32 lobbyInstanceId, ObjectGuid sourceGuid,
-    uint32 team, bool isPlayerbot)
+void PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(uint32 lobbyInstanceId, uint32 rosterSlotId)
 {
     std::vector<ObjectGuid> cloneGuids;
     {
@@ -1282,11 +1267,11 @@ void PlayerbotObcCloneManager::DestroyCustomGameLobbyClone(uint32 lobbyInstanceI
         g_PendingCustomGameLobbyClones.erase(std::remove_if(g_PendingCustomGameLobbyClones.begin(),
             g_PendingCustomGameLobbyClones.end(), [&](PendingCustomGameLobbyClone const& pending)
             {
-                return MatchesLobbyClone(pending, lobbyInstanceId, sourceGuid, team, isPlayerbot);
+                return MatchesLobbyClone(pending, lobbyInstanceId, rosterSlotId);
             }), g_PendingCustomGameLobbyClones.end());
 
         for (auto const& [cloneGuid, record] : g_CustomGameLobbyClones)
-            if (MatchesLobbyClone(record, lobbyInstanceId, sourceGuid, team, isPlayerbot))
+            if (MatchesLobbyClone(record, lobbyInstanceId, rosterSlotId))
                 cloneGuids.push_back(cloneGuid);
     }
 
