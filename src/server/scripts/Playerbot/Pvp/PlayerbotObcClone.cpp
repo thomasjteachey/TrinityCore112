@@ -534,36 +534,42 @@ void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
             continue;
         }
 
-        bool wrongInstance = false;
+        ObcCloneRecord record;
+        bool foundRecord = false;
         {
             std::lock_guard<std::mutex> lock(g_ObcCloneLock);
             auto itr = g_ClonesByHuman.find(humanGuid);
-            wrongInstance = itr != g_ClonesByHuman.end() && itr->second.battlegroundInstanceId != bg->GetInstanceID();
+            if (itr != g_ClonesByHuman.end())
+            {
+                record = itr->second;
+                foundRecord = true;
+            }
         }
 
-        if (wrongInstance)
+        if (!foundRecord)
+            continue;
+
+        Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid);
+        uint32 const expectedCloneTeam = OppositeTeam(human->GetBGTeam());
+        bool const wrongInstance = record.battlegroundInstanceId != bg->GetInstanceID();
+        bool const wrongTeam = record.oppositeTeam != expectedCloneTeam;
+        bool const missingClone = !clone || !clone->IsInWorld();
+        bool const wrongMap = clone && clone->FindMap() != bg->GetBgMap();
+        bool const missingRosterEntry = !bg->IsPlayerInBattleground(record.cloneGuid);
+        bool const wrongRosterTeam = !missingRosterEntry && bg->GetPlayerTeam(record.cloneGuid) != record.oppositeTeam;
+        bool const wrongCloneTeam = clone && clone->GetBGTeam() != record.oppositeTeam;
+
+        if (wrongInstance || wrongTeam || missingClone || wrongMap || missingRosterEntry || wrongRosterTeam || wrongCloneTeam)
         {
-            TC_LOG_WARN("playerbots.population", "OBC clone: human {} changed battleground instances unexpectedly; rebuilding clone.", humanGuid.ToString());
+            TC_LOG_WARN("playerbots.population",
+                "OBC clone: rebuilding invalid mirror for human {} (clone={}, instance={}/{}, team={}/{}, missingClone={}, wrongMap={}, rosterPresent={}, rosterTeamOk={}, cloneTeamOk={}).",
+                humanGuid.ToString(), record.cloneGuid.ToString(), record.battlegroundInstanceId, bg->GetInstanceID(),
+                record.oppositeTeam, expectedCloneTeam, missingClone ? 1 : 0, wrongMap ? 1 : 0,
+                missingRosterEntry ? 0 : 1, wrongRosterTeam ? 0 : 1, wrongCloneTeam ? 0 : 1);
             TeardownCloneForHuman(humanGuid);
         }
         else
-        {
-            ObcCloneRecord record;
-            bool foundRecord = false;
-            {
-                std::lock_guard<std::mutex> lock(g_ObcCloneLock);
-                auto itr = g_ClonesByHuman.find(humanGuid);
-                if (itr != g_ClonesByHuman.end())
-                {
-                    record = itr->second;
-                    foundRecord = true;
-                }
-            }
-
-            if (foundRecord)
-                if (Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid))
-                    SynchronizeHunterPetMirror(human, clone);
-        }
+            SynchronizeHunterPetMirror(human, clone);
     }
 
     std::vector<ObjectGuid> obcHumans;
@@ -637,6 +643,13 @@ bool PlayerbotObcCloneManager::IsActiveClone(Player const* player)
 {
     if (!player)
         return false;
+
+    // The transient-session marker is assigned before the clone is inserted
+    // into the manager maps and remains set while teardown detaches it. It
+    // closes both small windows where generic virtual-bot lifecycle code could
+    // otherwise mistake the clone for a persistent managed bot.
+    if (WorldSession const* session = player->GetSession(); session && session->IsTransientPlayerSession())
+        return true;
 
     std::lock_guard<std::mutex> lock(g_ObcCloneLock);
     return g_HumanByClone.find(player->GetGUID()) != g_HumanByClone.end();

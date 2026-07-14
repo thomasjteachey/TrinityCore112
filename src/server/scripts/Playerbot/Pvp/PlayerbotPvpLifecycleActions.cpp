@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotObcClone.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
 #include "SpellHistory.h"
@@ -171,6 +172,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     bool IsScmManagedBotCandidate(Player const* player)
     {
         if (!player)
+            return false;
+
+        // OBC clones use virtual sessions so the shared tactical playerbot code
+        // controls them, but their team and lifetime are owned exclusively by
+        // PlayerbotObcCloneManager. They must never enter queue, slot-refill, or
+        // overstack rebalance paths intended for persistent managed bots.
+        if (playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
             return false;
 
         if (playerbot::IsManagedRandomBot(player))

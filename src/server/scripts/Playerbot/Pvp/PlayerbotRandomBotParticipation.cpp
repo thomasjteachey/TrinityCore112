@@ -1676,6 +1676,13 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     TryCastPriestSpiritOfRedemption(player);
     ProcessActiveBattlegroundTacticalTick(player);
 
+    // Dark clones deliberately share the playerbot tactical implementation,
+    // but the clone manager alone owns their battleground membership and team.
+    // Do not let the normal persistent-bot lifecycle queue, leave, or rebalance
+    // these transient players after their tactical tick has run.
+    if (PlayerbotObcCloneManager::IsActiveClone(player))
+        return;
+
     if (!CanProcessPlayerLifecycle(player))
         return;
 

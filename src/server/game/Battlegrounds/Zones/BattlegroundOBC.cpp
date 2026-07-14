@@ -603,16 +603,16 @@ void BattlegroundOBC::HandleKillPlayer(Player* victim, Player* killer)
     // damage, same-team weirdness, etc.).
     EventPlayerDroppedFlag(victim);
 
-    if (!killer || victim == killer)
-        return;
-
-    uint32 const killerTeam = GetPlayerTeam(killer->GetGUID());
     uint32 const victimTeam = GetPlayerTeam(victim->GetGUID());
-
-    if (!killerTeam || !victimTeam || killerTeam == victimTeam)
+    if (victimTeam != ALLIANCE && victimTeam != HORDE)
         return;
 
-    AwardPointsToTeam(killerTeam, BG_OBC_POINTS_PER_KILL);
+    // OBC is scored by deaths, not only credited killing blows. Award the
+    // opposing team for every death, including lava/environmental damage,
+    // falls, self-kills, and deaths without a resolved killer. The base
+    // battleground handler above still owns individual killing-blow credit.
+    uint32 const scoringTeam = victimTeam == ALLIANCE ? HORDE : ALLIANCE;
+    AwardPointsToTeam(scoringTeam, BG_OBC_POINTS_PER_KILL);
 }
 
 void BattlegroundOBC::FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet)

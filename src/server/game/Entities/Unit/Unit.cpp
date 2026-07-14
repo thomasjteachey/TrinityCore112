@@ -12131,17 +12131,19 @@ bool Unit::InitTamedPet(Pet* pet, uint8 level, uint32 spell_id)
     //    if (OutdoorPvP* pvp = victim->ToPlayer()->GetOutdoorPvP())
     //        pvp->HandlePlayerActivityChangedpVictim->ToPlayer();
 
-    // battleground things (do this at the end, so the death state flag will be properly set to handle in the bg->handlekill)
-    if (player && player->InBattleground())
+    // Battleground player deaths belong to the victim's battleground and must
+    // be reported even when no player killer exists (environment, creatures,
+    // or scripted deaths). Keep unit-kill dispatch tied to the player killer.
+    // Do this at the end so the death state is ready for battleground handling.
+    if (Player* playerVictim = victim->ToPlayer())
     {
-        if (Battleground* bg = player->GetBattleground())
-        {
-            if (Player* playerVictim = victim->ToPlayer())
+        if (playerVictim->InBattleground())
+            if (Battleground* bg = playerVictim->GetBattleground())
                 bg->HandleKillPlayer(playerVictim, player);
-            else
-                bg->HandleKillUnit(victim->ToCreature(), player);
-        }
     }
+    else if (player && player->InBattleground())
+        if (Battleground* bg = player->GetBattleground())
+            bg->HandleKillUnit(victim->ToCreature(), player);
 
     // achievement stuff
     if (attacker && victim->GetTypeId() == TYPEID_PLAYER)
