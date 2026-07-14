@@ -27,11 +27,13 @@
 class Unit;
 class WorldObject;
 
-// 74*4.0f=296y number_of_points*interval = max_path_len
-// this is way more than actual evade range
-// I think we can safely cut those down even more
-#define MAX_PATH_LENGTH         74
-#define MAX_POINT_PATH_LENGTH   74
+// Smooth paths use roughly one point per SMOOTH_PATH_STEP_SIZE. Complex
+// battleground and dungeon routes can legitimately exceed the historical
+// 74-point/~296-yard ceiling even when their endpoints are much closer in a
+// straight line. Hitting that ceiling discards the connected route and builds
+// a PATHFIND_SHORTCUT, which strict playerbot movement must reject.
+#define MAX_PATH_LENGTH         256
+#define MAX_POINT_PATH_LENGTH   256
 
 #define SMOOTH_PATH_STEP_SIZE   4.0f
 #define SMOOTH_PATH_SLOP        0.3f

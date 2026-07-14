@@ -533,41 +533,59 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
     if (!player)
         return false;
 
+    constexpr float strictPathCalculationLengthLimit = 1024.0f;
+    constexpr float strictMovementSegmentDistance = 80.0f;
+
     auto const tryResolveDestination = [&](Position const& requestedDestination, Position& resolvedDestination) -> bool
     {
         Position const safeDestination = BuildCollisionSafeDestination(player, requestedDestination);
 
         PathGenerator path(player);
-        path.SetPathLengthLimit(90.0f);
-        bool pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), true);
-        PathType pathType = path.GetPathType();
-        Movement::PointsArray points = path.GetPath();
-        G3D::Vector3 actualEnd = path.GetActualEndPosition();
+        path.SetPathLengthLimit(strictPathCalculationLengthLimit);
+        bool const pathOk = path.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
+        PathType const pathType = path.GetPathType();
+        Movement::PointsArray const& points = path.GetPath();
+        G3D::Vector3 const actualEnd = path.GetActualEndPosition();
 
-        if ((pathType & PATHFIND_SHORTCUT) != 0)
-        {
-            PathGenerator retryPath(player);
-            retryPath.SetPathLengthLimit(90.0f);
-            bool const retryOk = retryPath.CalculatePath(safeDestination.GetPositionX(), safeDestination.GetPositionY(), safeDestination.GetPositionZ(), false);
-            PathType const retryType = retryPath.GetPathType();
-            if (retryOk && (retryType & PATHFIND_SHORTCUT) == 0)
-            {
-                points = retryPath.GetPath();
-                pathType = retryType;
-                pathOk = true;
-                actualEnd = retryPath.GetActualEndPosition();
-            }
-        }
-
-        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
+        uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH |
+            PATHFIND_SHORT | PATHFIND_FARFROMPOLY;
         if (!pathOk || (pathType & forbiddenPathFlags) != 0)
             return false;
 
         bool haveResolvedDestination = false;
         if (points.size() > 1)
         {
-            G3D::Vector3 const& lastPoint = points.back();
-            resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+            G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+            float traversedDistance = 0.0f;
+            for (std::size_t i = 1; i < points.size(); ++i)
+            {
+                G3D::Vector3 const& point = points[i];
+                G3D::Vector3 const delta = point - previous;
+                float const segmentLength = delta.length();
+                if (segmentLength <= 0.01f)
+                {
+                    previous = point;
+                    continue;
+                }
+
+                if (traversedDistance + segmentLength >= strictMovementSegmentDistance)
+                {
+                    float const fraction = (strictMovementSegmentDistance - traversedDistance) / segmentLength;
+                    G3D::Vector3 const selected = previous + delta * fraction;
+                    resolvedDestination.Relocate(selected.x, selected.y, selected.z, safeDestination.GetOrientation());
+                    haveResolvedDestination = true;
+                    break;
+                }
+
+                traversedDistance += segmentLength;
+                previous = point;
+            }
+
+            if (!haveResolvedDestination)
+            {
+                G3D::Vector3 const& lastPoint = points.back();
+                resolvedDestination.Relocate(lastPoint.x, lastPoint.y, lastPoint.z, safeDestination.GetOrientation());
+            }
             haveResolvedDestination = true;
         }
         else
@@ -606,44 +624,10 @@ bool TryBuildStrictHumanSegmentDestination(Player* player, Position const& desir
         return true;
     };
 
-    if (tryResolveDestination(desiredDestination, segmentDestination))
-        return true;
-
-    float const dx = desiredDestination.GetPositionX() - player->GetPositionX();
-    float const dy = desiredDestination.GetPositionY() - player->GetPositionY();
-    float const dz = desiredDestination.GetPositionZ() - player->GetPositionZ();
-    float const planarDistance = std::sqrt(dx * dx + dy * dy);
-    if (planarDistance < 1.0f)
-        return false;
-
-    std::array<float, 6> const probeDistances =
-    {
-        24.0f,
-        18.0f,
-        12.0f,
-        8.0f,
-        5.0f,
-        3.0f
-    };
-
-    for (float probeDistance : probeDistances)
-    {
-        float const cappedDistance = std::min(planarDistance - 0.25f, probeDistance);
-        if (cappedDistance <= 0.5f)
-            continue;
-
-        float const fraction = cappedDistance / planarDistance;
-        Position probeDestination(
-            player->GetPositionX() + dx * fraction,
-            player->GetPositionY() + dy * fraction,
-            player->GetPositionZ() + dz * fraction,
-            desiredDestination.GetOrientation());
-
-        if (tryResolveDestination(probeDestination, segmentDestination))
-            return true;
-    }
-
-    return false;
+    // A point sampled along the straight line to the target can be reachable on
+    // this side of a wall while the real target is not reachable through that
+    // wall. Only accept a segment taken from the route to the real destination.
+    return tryResolveDestination(desiredDestination, segmentDestination);
 }
 
 bool IssueStrictHumanMove(Player* player, Position const& destination, float destinationChangeThreshold = 4.0f, uint32 minReissueMs = 350)
@@ -2666,8 +2650,7 @@ void IssueGapCloserRangeApproachMovement(Player* player, Unit* target, float max
     bool issued = false;
     if (RequiresStrictHumanPathing(player))
         issued = IssueStrictHumanMove(player, destination, 8.0f, 1000);
-
-    if (!issued)
+    else
     {
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
         motionMaster->MovePoint(0, BuildCollisionSafeDestination(player, destination), true);

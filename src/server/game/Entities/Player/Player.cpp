@@ -825,6 +825,15 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
     if (IsImmuneToEnvironmentalDamage())
         return 0;
 
+    // Environmental liquid damage is not backed by a SpellInfo, so it does
+    // not pass through the spell damage immunity checks. Respect the matching
+    // school immunity explicitly before absorb/resist processing. This makes
+    // standard lava obey Fire immunity (including Spirit of Redemption 27827)
+    // just like a periodic Fire-damage spell does.
+    if ((type == DAMAGE_LAVA && IsImmunedToDamage(SPELL_SCHOOL_MASK_FIRE)) ||
+        (type == DAMAGE_SLIME && IsImmunedToDamage(SPELL_SCHOOL_MASK_NATURE)))
+        return 0;
+
     if (type == DAMAGE_LAVA)
     {
         WorldSession const* session = GetSession();

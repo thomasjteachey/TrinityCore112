@@ -3761,6 +3761,27 @@ AuraApplication* Unit::_CreateAuraApplication(Aura* aura, uint8 effMask)
         return nullptr;
     }
 
+    // Applying an aura can re-enter spell handling before the first application
+    // has finished applying all of its effects. In release builds the assertion
+    // below does not prevent a second AuraApplication from being created. The
+    // second application then overwrites Aura::m_applications while both remain
+    // in Unit::m_appliedAuras, eventually leaving a dangling application/base
+    // pointer for aura stacking or removal to dereference.
+    //
+    // Treat the Aura-side target map as the authoritative uniqueness check and
+    // merge any newly requested effects into the existing application, matching
+    // the normal existing-application path in Spell::EffectApplyAura.
+    if (AuraApplication* existingApplication = aura->GetApplicationOfTarget(GetGUID()))
+    {
+        TC_LOG_ERROR("spells",
+            "Unit::_CreateAuraApplication() prevented duplicate reentrant application. Unit: {}, spell: {}, aura: {}, existing application: {}, requested effect mask: {}.",
+            GetGUID().ToString(), aura->GetId(), static_cast<void const*>(aura),
+            static_cast<void const*>(existingApplication), uint32(effMask));
+
+        existingApplication->UpdateApplyEffectMask(existingApplication->GetEffectsToApply() | effMask, false);
+        return existingApplication;
+    }
+
     // aura mustn't be already applied on target
     ASSERT (!aura->IsAppliedOnTarget(GetGUID()) && "Unit::_CreateAuraApplication: aura musn't be applied on target");
 
