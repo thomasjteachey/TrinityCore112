@@ -17908,7 +17908,7 @@ bool Player::IsLoading() const
     return GetSession()->PlayerLoading();
 }
 
-bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder)
+bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, bool loadRuntimeAuras)
 {
     //                                                       0     1        2     3     4      5       6      7   8      9     10    11         12         13           14         15         16
     //QueryResult* result = CharacterDatabase.PQuery("SELECT guid, account, name, race, class, gender, level, xp, money, skin, face, hairStyle, hairColor, facialStyle, bankSlots, restState, playerFlags, "
@@ -18496,12 +18496,14 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadSpells(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_SPELLS));
 
     _LoadGlyphs(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_GLYPHS));
-    _LoadAuras(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AURAS), time_diff);
+    if (loadRuntimeAuras)
+        _LoadAuras(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_AURAS), time_diff);
 
     // SPECTATOR_SPELL_SPEED should never persist across sessions
     if (HasAura(SPECTATOR_SPELL_SPEED))
         SetIsSpectator(false);
-    _LoadGlyphAuras();
+    if (loadRuntimeAuras)
+        _LoadGlyphAuras();
     // add ghost flag (must be after aura load: PLAYER_FLAGS_GHOST set in aura)
     if (HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         m_deathState = DEAD;

@@ -251,8 +251,12 @@ class CustomGameLobbyManager
 public:
     static CustomGameLobbyManager& Instance()
     {
-        static CustomGameLobbyManager manager;
-        return manager;
+        // Script-owned lobby state has process lifetime. A function-static
+        // value would be destructed from __run_exit_handlers after world and
+        // script teardown, where active lobby containers are no longer safe
+        // to unwind. The OS reclaims this small manager allocation at exit.
+        static CustomGameLobbyManager* manager = new CustomGameLobbyManager();
+        return *manager;
     }
 
     CustomGameLobby* GetLobby(Player const* player)

@@ -1093,9 +1093,13 @@ bool PlayerbotObcCloneManager::QueueCustomGameClone(ObjectGuid sourceGuid, World
         sourceSession->SetTransientPlayerSession();
 
         Player* offlineSource = new Player(sourceSession.get());
-        if (offlineSource->LoadFromDB(sourceGuid, loginHolder))
+        if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
         {
             offlineSource->GetMotionMaster()->Initialize();
+            // Dark copies only read identity, spells, talents, glyph ids, and
+            // equipment from this temporary source. Runtime auras are neither
+            // copied nor safe to retain on a never-world offline Player.
+            offlineSource->RemoveAllAuras();
             PlayerbotObcCloneManager::CreateCustomGameClone(offlineSource, targetBg, team, displayPrefix);
         }
 
@@ -1183,9 +1187,13 @@ bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, 
         sourceSession->SetTransientPlayerSession();
 
         Player* offlineSource = new Player(sourceSession.get());
-        if (offlineSource->LoadFromDB(sourceGuid, loginHolder))
+        if (offlineSource->LoadFromDB(sourceGuid, loginHolder, false))
         {
             offlineSource->GetMotionMaster()->Initialize();
+            // Equipment loading can still apply passive effects even when
+            // persisted and glyph auras are skipped. The preview copy does
+            // not consume those effects, so detach them before copying.
+            offlineSource->RemoveAllAuras();
             CreateCustomGameLobbyClone(offlineSource, request.mapId, request.lobbyInstanceId, request.team,
                 request.isPlayerbot, request.position, request.displayPrefix);
         }

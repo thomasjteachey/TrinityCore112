@@ -1376,7 +1376,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         /***                   LOAD SYSTEM                     ***/
         /*********************************************************/
 
-        bool LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder);
+        bool LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& holder, bool loadRuntimeAuras = true);
         bool IsLoading() const override;
 
         void Initialize(ObjectGuid::LowType guid);
