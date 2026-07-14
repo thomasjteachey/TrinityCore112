@@ -1306,7 +1306,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // Managed random bots can run on disconnected virtual sessions where RBAC
         // battleground permissions are not always populated like live client sessions.
         // Gate queue eligibility by battleground level + free queue slots instead.
-        if (!player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
+        if (player->IsInCustomGameLobby() || !player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
             return false;
 
         BattlegroundQueueTypeId const bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgTypeId, arenaType);

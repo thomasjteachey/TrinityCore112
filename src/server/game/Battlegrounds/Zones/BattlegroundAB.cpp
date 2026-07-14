@@ -168,8 +168,9 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
             if (m_lastTick[team] > BG_AB_TickIntervals[points])
             {
                 m_lastTick[team] -= BG_AB_TickIntervals[points];
-                m_TeamScores[team] += BG_AB_TickPoints[points];
-                m_ReputationScoreTics[team] += BG_AB_TickPoints[points];
+                uint32 const gainedPoints = ScaleResourceGain(BG_AB_TickPoints[points]);
+                m_TeamScores[team] += gainedPoints;
+                m_ReputationScoreTics[team] += gainedPoints;
 
                 if (m_ReputationScoreTics[team] >= m_ReputationTics)
                 {
@@ -192,8 +193,8 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
                     m_IsInformedNearVictory = true;
                 }
 
-                if (m_TeamScores[team] > BG_AB_MAX_TEAM_SCORE)
-                    m_TeamScores[team] = BG_AB_MAX_TEAM_SCORE;
+                if (m_TeamScores[team] > GetResourceLimit(BG_AB_MAX_TEAM_SCORE))
+                    m_TeamScores[team] = GetResourceLimit(BG_AB_MAX_TEAM_SCORE);
 
                 if (team == TEAM_ALLIANCE)
                     UpdateWorldState(BG_AB_OP_RESOURCES_ALLY, m_TeamScores[team]);
@@ -208,9 +209,9 @@ void BattlegroundAB::PostUpdateImpl(uint32 diff)
         }
 
         // Test win condition
-        if (m_TeamScores[TEAM_ALLIANCE] >= BG_AB_MAX_TEAM_SCORE)
+        if (m_TeamScores[TEAM_ALLIANCE] >= GetResourceLimit(BG_AB_MAX_TEAM_SCORE))
             EndBattleground(ALLIANCE);
-        else if (m_TeamScores[TEAM_HORDE] >= BG_AB_MAX_TEAM_SCORE)
+        else if (m_TeamScores[TEAM_HORDE] >= GetResourceLimit(BG_AB_MAX_TEAM_SCORE))
             EndBattleground(HORDE);
     }
 }
@@ -365,7 +366,7 @@ void BattlegroundAB::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
     packet.Worldstates.emplace_back(BG_AB_OP_OCCUPIED_BASES_HORDE, horde);
 
     // Team scores
-    packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_MAX, BG_AB_MAX_TEAM_SCORE);
+    packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_MAX, GetResourceLimit(BG_AB_MAX_TEAM_SCORE));
     packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_WARNING, BG_AB_WARNING_NEAR_VICTORY_SCORE);
     packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_ALLY, m_TeamScores[TEAM_ALLIANCE]);
     packet.Worldstates.emplace_back(BG_AB_OP_RESOURCES_HORDE, m_TeamScores[TEAM_HORDE]);

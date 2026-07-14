@@ -214,7 +214,7 @@ void Map::LoadMap(int gx, int gy, bool reload)
         if (!m_parentMap->GridMaps[gx][gy])
             m_parentMap->EnsureGridCreated(GridCoord((MAX_NUMBER_OF_GRIDS - 1) - gx, (MAX_NUMBER_OF_GRIDS - 1) - gy));
 
-        ((MapInstanced*)(m_parentMap))->AddGridMapReference(GridCoord(gx, gy));
+        m_parentMap->AddGridMapReference(GridCoord(gx, gy));
         GridMaps[gx][gy] = m_parentMap->GridMaps[gx][gy];
         return;
     }
@@ -287,6 +287,8 @@ i_gridExpiry(expiry),
 i_scriptLock(false), _respawnTimes(std::make_unique<RespawnListContainer>()), _respawnCheckTimer(0)
 {
     m_parentMap = (_parent ? _parent : this);
+    m_isServerOnlyWorldSubMap = false;
+    memset(&GridMapReference, 0, sizeof(GridMapReference));
     for (unsigned int idx=0; idx < MAX_NUMBER_OF_GRIDS; ++idx)
     {
         for (unsigned int j=0; j < MAX_NUMBER_OF_GRIDS; ++j)
@@ -556,8 +558,14 @@ bool Map::EnsureGridLoaded(Cell const& cell)
 
         grid->setGridObjectDataLoaded(true);
 
-        ObjectGridLoader loader(*grid, this, cell);
-        loader.LoadN();
+        // Private world subinstances intentionally start empty. They share
+        // terrain/collision with the continent, while their scripts populate
+        // only the staging objects they need.
+        if (!m_isServerOnlyWorldSubMap)
+        {
+            ObjectGridLoader loader(*grid, this, cell);
+            loader.LoadN();
+        }
 
         Balance();
         return true;
@@ -587,6 +595,19 @@ void Map::GridUnmarkNoUnload(uint32 x, uint32 y)
         NGridType* grid = getNGrid(x, y);
         grid->setUnloadExplicitLock(false);
     }
+}
+
+void Map::AddGridMapReference(GridCoord const& p)
+{
+    ++GridMapReference[p.x_coord][p.y_coord];
+    SetUnloadReferenceLock(GridCoord((MAX_NUMBER_OF_GRIDS - 1) - p.x_coord, (MAX_NUMBER_OF_GRIDS - 1) - p.y_coord), true);
+}
+
+void Map::RemoveGridMapReference(GridCoord const& p)
+{
+    ASSERT(GridMapReference[p.x_coord][p.y_coord] > 0);
+    if (!--GridMapReference[p.x_coord][p.y_coord])
+        SetUnloadReferenceLock(GridCoord((MAX_NUMBER_OF_GRIDS - 1) - p.x_coord, (MAX_NUMBER_OF_GRIDS - 1) - p.y_coord), false);
 }
 
 void Map::LoadGrid(float x, float y)
@@ -1731,7 +1752,7 @@ bool Map::UnloadGrid(NGridType& ngrid, bool unloadAll)
             MMAP::MMapFactory::createOrGetMMapManager()->unloadMap(GetId(), gx, gy);
         }
         else
-            ((MapInstanced*)m_parentMap)->RemoveGridMapReference(GridCoord(gx, gy));
+            m_parentMap->RemoveGridMapReference(GridCoord(gx, gy));
 
         GridMaps[gx][gy] = nullptr;
     }
@@ -4714,8 +4735,53 @@ void Map::RemoveOldCorpses()
     }
 }
 
+namespace
+{
+bool SendCustomBattlegroundWeather(Player* player)
+{
+    Battleground const* bg = player ? player->GetBattleground() : nullptr;
+    if (!bg || !bg->HasCustomWeatherOverride())
+        return false;
+
+    WeatherState state = WEATHER_STATE_FINE;
+    float intensity = 0.0f;
+    switch (bg->GetCustomRules().Weather)
+    {
+        case BattlegroundCustomWeather::Clear:
+            break;
+        case BattlegroundCustomWeather::Rain:
+            state = WEATHER_STATE_HEAVY_RAIN;
+            intensity = 0.9999f;
+            break;
+        case BattlegroundCustomWeather::Snow:
+            state = WEATHER_STATE_HEAVY_SNOW;
+            intensity = 0.9999f;
+            break;
+        case BattlegroundCustomWeather::Sandstorm:
+            state = WEATHER_STATE_HEAVY_SANDSTORM;
+            intensity = 0.9999f;
+            break;
+        case BattlegroundCustomWeather::Thunderstorm:
+            state = WEATHER_STATE_THUNDERS;
+            intensity = 0.9999f;
+            break;
+        case BattlegroundCustomWeather::Fog:
+            state = WEATHER_STATE_FOG;
+            intensity = 0.9999f;
+            break;
+        case BattlegroundCustomWeather::Normal:
+        case BattlegroundCustomWeather::Max:
+            return false;
+    }
+
+    player->SendDirectMessage(WorldPackets::Misc::Weather(state, intensity, true).Write());
+    return true;
+}
+}
+
 void Map::SendZoneDynamicInfo(uint32 zoneId, Player* player) const
 {
+    bool const sentCustomWeather = SendCustomBattlegroundWeather(player);
     auto itr = _zoneDynamicInfo.find(zoneId);
     if (itr == _zoneDynamicInfo.end())
         return;
@@ -4723,7 +4789,8 @@ void Map::SendZoneDynamicInfo(uint32 zoneId, Player* player) const
     if (uint32 music = itr->second.MusicId)
         player->SendDirectMessage(WorldPackets::Misc::PlayMusic(music).Write());
 
-    SendZoneWeather(itr->second, player);
+    if (!sentCustomWeather)
+        SendZoneWeather(itr->second, player);
 
     for (ZoneDynamicInfo::LightOverride const& lightOverride : itr->second.LightOverrides)
     {
@@ -4737,6 +4804,9 @@ void Map::SendZoneDynamicInfo(uint32 zoneId, Player* player) const
 
 void Map::SendZoneWeather(uint32 zoneId, Player* player) const
 {
+    if (SendCustomBattlegroundWeather(player))
+        return;
+
     auto itr = _zoneDynamicInfo.find(zoneId);
     if (itr == _zoneDynamicInfo.end())
         return;
@@ -4748,6 +4818,9 @@ void Map::SendZoneWeather(uint32 zoneId, Player* player) const
 
 void Map::SendZoneWeather(ZoneDynamicInfo const& zoneDynamicInfo, Player* player) const
 {
+    if (SendCustomBattlegroundWeather(player))
+        return;
+
     // WSG: use DB chances exactly
     if (GetId() == 489) // Warsong Gulch
     {
@@ -4882,7 +4955,10 @@ void Map::SetZoneWeather(uint32 zoneId, WeatherState weatherId, float intensity)
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
             if (Player* player = itr->GetSource())
                 if (player->GetZoneId() == zoneId)
-                    player->SendDirectMessage(weather.GetRawPacket());
+                {
+                    if (!SendCustomBattlegroundWeather(player))
+                        player->SendDirectMessage(weather.GetRawPacket());
+                }
     }
 }
 

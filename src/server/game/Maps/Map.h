@@ -382,6 +382,8 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         bool UnloadGrid(NGridType& ngrid, bool pForce);
         void GridMarkNoUnload(uint32 x, uint32 y);
         void GridUnmarkNoUnload(uint32 x, uint32 y);
+        void AddGridMapReference(GridCoord const& p);
+        void RemoveGridMapReference(GridCoord const& p);
         virtual void UnloadAll();
 
         void ResetGridExpiry(NGridType &grid, float factor = 1) const
@@ -429,6 +431,8 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         bool CheckGridIntegrity(Creature* c, bool moved) const;
 
         uint32 GetInstanceId() const { return i_InstanceId; }
+        bool IsServerOnlyWorldSubMap() const { return m_isServerOnlyWorldSubMap; }
+        void SetServerOnlyWorldSubMap(bool value) { m_isServerOnlyWorldSubMap = value; }
         uint8 GetSpawnMode() const { return (i_spawnMode); }
 
         enum EnterState
@@ -746,6 +750,11 @@ class TC_GAME_API Map : public GridRefManager<NGridType>
         //used for fast base_map (e.g. MapInstanced class object) search for
         //InstanceMaps and BattlegroundMaps...
         Map* m_parentMap;
+        bool m_isServerOnlyWorldSubMap;
+
+        // Shared terrain references are also used by server-only world
+        // subinstances whose parent is a regular continent map.
+        uint32 GridMapReference[MAX_NUMBER_OF_GRIDS][MAX_NUMBER_OF_GRIDS];
 
         NGridType* i_grids[MAX_NUMBER_OF_GRIDS][MAX_NUMBER_OF_GRIDS];
         GridMap* GridMaps[MAX_NUMBER_OF_GRIDS][MAX_NUMBER_OF_GRIDS];

@@ -997,7 +997,8 @@ bool HasAnyRealHumanInterestInBattleground(BattlegroundTypeId targetBgType, Mana
         if (isVirtualSession || IsManagedRandomBotImpl(participant, botAccounts))
             continue;
 
-        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType)
+        if (participant->InBattleground() && participant->GetBattlegroundTypeId() == targetBgType &&
+            participant->GetBattleground() && !participant->GetBattleground()->IsCustomGame())
         {
             TC_LOG_ERROR("playerbots.population",
                 "DIAG startup-hang: Human battleground interest found from active participant guid={} bgTypeId={} scanned={}.",

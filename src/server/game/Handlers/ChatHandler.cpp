@@ -226,6 +226,17 @@ bool HandleWSGFlagSyncRequest(Player* sender, uint32 type, uint32 lang, std::str
     return true;
 }
 
+bool HandleCustomGameRulesRequest(Player* sender, uint32 type, uint32 lang, std::string const& msg)
+{
+    if (!sender || lang != LANG_ADDON || type != CHAT_MSG_BATTLEGROUND || msg != "CCGAMEREQ\tRULES")
+        return false;
+
+    if (Battleground* battleground = sender->GetBattleground())
+        battleground->SendCustomGameRulesTo(sender);
+
+    return true;
+}
+
 }
 
 inline bool isNasty(uint8 c)
@@ -418,6 +429,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
         if (msg.empty())
             return;
         if (HandleWSGFlagSyncRequest(sender, type, lang, msg))
+            return;
+        if (HandleCustomGameRulesRequest(sender, type, lang, msg))
             return;
 
         if (lang == LANG_ADDON)

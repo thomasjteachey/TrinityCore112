@@ -20,6 +20,9 @@
 
 #include "Define.h"
 
+#include <string>
+
+class Battleground;
 class Player;
 
 namespace playerbot
@@ -62,6 +65,11 @@ public:
 
     // True while the given player is a live Obsidian Colosseum clone.
     static bool IsActiveClone(Player const* player);
+
+    // Create and manage explicitly requested transient copies for private
+    // custom games. The source character is never moved or modified.
+    static Player* CreateCustomGameClone(Player* source, Battleground* bg, uint32 team, std::string const& displayPrefix);
+    static void DestroyCustomGameClones(uint32 battlegroundInstanceId);
 };
 }
 

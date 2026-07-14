@@ -537,8 +537,8 @@ void BattlegroundOBC::UpdateTeamScoreWorldStates()
     UpdateWorldState(BG_OBC_WORLDSTATE_SHOW, 1);
     UpdateWorldState(BG_OBC_WORLDSTATE_ALLIANCE_SCORE, _allianceScore);
     UpdateWorldState(BG_OBC_WORLDSTATE_HORDE_SCORE, _hordeScore);
-    UpdateWorldState(BG_OBC_WORLDSTATE_MAX_SCORE, BG_OBC_SCORE_LIMIT);
-    UpdateWorldState(BG_OBC_WORLDSTATE_MAX_SCORE_UI, BG_OBC_SCORE_LIMIT);
+    UpdateWorldState(BG_OBC_WORLDSTATE_MAX_SCORE, GetDeathmatchKillLimit(BG_OBC_SCORE_LIMIT));
+    UpdateWorldState(BG_OBC_WORLDSTATE_MAX_SCORE_UI, GetDeathmatchKillLimit(BG_OBC_SCORE_LIMIT));
 }
 
 void BattlegroundOBC::AwardPointsToTeam(uint32 team, uint32 points)
@@ -569,9 +569,9 @@ void BattlegroundOBC::AwardPointsToTeam(uint32 team, uint32 points)
 
     UpdateTeamScoreWorldStates();
 
-    if (_allianceScore >= BG_OBC_SCORE_LIMIT)
+    if (_allianceScore >= GetDeathmatchKillLimit(BG_OBC_SCORE_LIMIT))
         EndBattleground(ALLIANCE);
-    else if (_hordeScore >= BG_OBC_SCORE_LIMIT)
+    else if (_hordeScore >= GetDeathmatchKillLimit(BG_OBC_SCORE_LIMIT))
         EndBattleground(HORDE);
 }
 
@@ -624,8 +624,8 @@ void BattlegroundOBC::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_SHOW, 1);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_ALLIANCE_SCORE, _allianceScore);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_HORDE_SCORE, _hordeScore);
-    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE, BG_OBC_SCORE_LIMIT);
-    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE_UI, BG_OBC_SCORE_LIMIT);
+    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE, GetDeathmatchKillLimit(BG_OBC_SCORE_LIMIT));
+    packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_MAX_SCORE_UI, GetDeathmatchKillLimit(BG_OBC_SCORE_LIMIT));
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_ALLIANCE, carrierTeam == ALLIANCE ? 2 : 1);
     packet.Worldstates.emplace_back(BG_OBC_WORLDSTATE_FLAG_HORDE, carrierTeam == HORDE ? 2 : 1);
 }

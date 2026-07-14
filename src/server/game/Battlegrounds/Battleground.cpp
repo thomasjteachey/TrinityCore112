@@ -19,6 +19,7 @@
 #include "ArenaScore.h"
 #include "BattlegroundMgr.h"
 #include "BattlegroundScore.h"
+#include "Chat.h"
 #include "ChatTextBuilder.h"
 #include "Configuration/Config.h"
 #include "Creature.h"
@@ -40,6 +41,7 @@
 #include "TemporarySummon.h"
 #include "Transport.h"
 #include "Util.h"
+#include "Weather.h"
 #include "WorldPacket.h"
 #include "WorldStatePackets.h"
 #include "WorldSession.h"
@@ -145,6 +147,8 @@ Battleground::Battleground()
     m_LevelMax          = 0;
     m_InBGFreeSlotQueue = false;
     m_SetDeleteThis     = false;
+    m_IsCustomGame      = false;
+    m_CustomRules       = BattlegroundCustomRules();
 
     m_MaxPlayersPerTeam = 0;
     m_MaxPlayers        = 0;
@@ -687,6 +691,9 @@ void Battleground::RemoveAuraOnTeam(uint32 SpellID, uint32 TeamID)
 
 void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
+    if (m_IsCustomGame)
+        return;
+
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayerForTeam(TeamID, itr, "CenturionRewardHonorToTeam"))
             player->ModifyHonorPoints(int32(Honor));
@@ -694,6 +701,9 @@ void Battleground::CenturionRewardHonorToTeam(uint32 Honor, uint32 TeamID)
 
 void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
 {
+    if (m_IsCustomGame)
+        return;
+
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayerForTeam(TeamID, itr, "RewardHonorToTeam"))
             UpdatePlayerScore(player, SCORE_BONUS_HONOR, Honor);
@@ -701,6 +711,9 @@ void Battleground::RewardHonorToTeam(uint32 Honor, uint32 TeamID)
 
 void Battleground::RewardReputationToTeam(uint32 faction_id, uint32 Reputation, uint32 TeamID)
 {
+    if (m_IsCustomGame)
+        return;
+
     FactionEntry const* factionEntry = sFactionStore.LookupEntry(faction_id);
     if (!factionEntry)
         return;
@@ -784,7 +797,7 @@ void Battleground::EndBattleground(uint32 winner)
 
     CharacterDatabasePreparedStatement* stmt = nullptr;
     uint64 battlegroundId = 1;
-    if (isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
+    if (!m_IsCustomGame && isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
     {
         stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_PVPSTATS_MAXID);
         PreparedQueryResult result = CharacterDatabase.Query(stmt);
@@ -840,7 +853,7 @@ void Battleground::EndBattleground(uint32 winner)
         uint32 winner_arena = player->GetRandomWinner() ? sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_LAST) : sWorld->getIntConfig(CONFIG_BG_REWARD_WINNER_ARENA_FIRST);
 
         bool const transientPlayer = player->GetSession() && player->GetSession()->IsTransientPlayerSession();
-        if (!transientPlayer && isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
+        if (!m_IsCustomGame && !transientPlayer && isBattleground() && sWorld->getBoolConfig(CONFIG_BATTLEGROUND_STORE_STATISTICS_ENABLE))
         {
             BattlegroundScoreMap::const_iterator score = PlayerScores.find(player->GetGUID().GetCounter());
             if (score == PlayerScores.end())
@@ -886,7 +899,7 @@ void Battleground::EndBattleground(uint32 winner)
 
         // Rewards
         // only grant rewards if battle has lasted 15 seconds
-        if (GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
+        if (!m_IsCustomGame && GetStartDelayTime() <= 0 && GetStartTime() >= 15 * IN_MILLISECONDS)
         {
             if (team == winner)
             {
@@ -919,7 +932,8 @@ void Battleground::EndBattleground(uint32 winner)
         WorldPacket data;
         sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, player->GetBattlegroundQueueIndex(bgQueueTypeId), STATUS_IN_PROGRESS, TIME_TO_AUTOREMOVE, GetStartTime(), GetArenaType(), player->GetBGTeam());
         player->SendDirectMessage(&data);
-        player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND, player->GetMapId());
+        if (!m_IsCustomGame)
+            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND, player->GetMapId());
         sScriptMgr->OnBattlegroundEnd(this, winner);
     }
 }
@@ -965,6 +979,8 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
 
     if (player)
     {
+        RemoveSpectator(player);
+
         // should remove spirit of redemption
         if (player->HasAuraType(SPELL_AURA_SPIRIT_OF_REDEMPTION))
             player->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
@@ -1051,6 +1067,9 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
         // reset destination bg team
         player->SetBGTeam(0);
 
+        if (HasCustomWeatherOverride())
+            Weather::SendFineWeatherUpdateToPlayer(player);
+
         // remove all criterias on bg leave
         player->ResetAchievementCriteria(ACHIEVEMENT_CRITERIA_CONDITION_BG_MAP, GetMapId(), true);
 
@@ -1101,7 +1120,8 @@ void Battleground::StartBattleground()
     SetStartTime(0);
     SetLastResurrectTime(0);
     // add BG to free slot queue
-    AddToBGFreeSlotQueue();
+    if (!m_IsCustomGame)
+        AddToBGFreeSlotQueue();
 
     // add bg to update list
     // This must be done here, because we need to have already invited some players when first BG::Update() method is executed
@@ -1205,6 +1225,13 @@ bool Battleground::SkipStartDelay()
 
 void Battleground::AddPlayer(Player* player)
 {
+    if (m_IsCustomGame && player->IsSpectator())
+    {
+        AddSpectator(player);
+        player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
+        return;
+    }
+
     // remove afk from player
     if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_AFK))
         player->ToggleAFK();
@@ -1239,6 +1266,7 @@ void Battleground::AddPlayer(Player* player)
     {
         m_HasEverHadNonVirtualHumanParticipant = true;
         m_NoNonVirtualHumanElapsed = 0;
+        SendCustomGameRulesTo(player);
     }
 
     WorldPacket data;
@@ -1279,6 +1307,18 @@ void Battleground::AddPlayer(Player* player)
     // Relying only on zone-change driven updates can delay top-frame UI setup
     // on maps that report transitional/non-canonical zone ids near spawn.
     player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
+}
+
+void Battleground::SendCustomGameRulesTo(Player* player) const
+{
+    if (!m_IsCustomGame || !player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    uint32 const resurrectionSeconds = (GetResurrectionInterval() + IN_MILLISECONDS - 1) / IN_MILLISECONDS;
+    std::string const message = "CCGAME\tREZ:" + std::to_string(resurrectionSeconds);
+    WorldPacket data;
+    ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
+    player->SendDirectMessage(&data);
 }
 
 // this method adds player to his team's bg group, or sets his correct group if player is already in bg group
@@ -1372,7 +1412,7 @@ void Battleground::EventPlayerLoggedOut(Player* player)
 // This method should be called only once ... it adds pointer to queue
 void Battleground::AddToBGFreeSlotQueue()
 {
-    if (!m_InBGFreeSlotQueue && isBattleground())
+    if (!m_IsCustomGame && !m_InBGFreeSlotQueue && isBattleground())
     {
         sBattlegroundMgr->AddToBGFreeSlotQueue(m_TypeID, this);
         m_InBGFreeSlotQueue = true;
@@ -1518,7 +1558,7 @@ bool Battleground::UpdatePlayerScore(Player* player, uint32 type, uint32 value, 
     if (itr == PlayerScores.end()) // player not found...
         return false;
 
-    if (type == SCORE_BONUS_HONOR && doAddHonor && isBattleground())
+    if (type == SCORE_BONUS_HONOR && doAddHonor && isBattleground() && !m_IsCustomGame)
         player->RewardHonor(nullptr, 1, value); // RewardHonor calls UpdatePlayerScore with doAddHonor = false
     else
     {
@@ -2019,7 +2059,8 @@ void Battleground::HandleKillPlayer(Player* victim, Player* killer)
     {
         // To be able to remove insignia -- ONLY IN Battlegrounds
         victim->SetUnitFlag(UNIT_FLAG_SKINNABLE);
-        RewardXPAtKill(killer, victim);
+        if (!m_IsCustomGame)
+            RewardXPAtKill(killer, victim);
     }
 }
 
@@ -2031,6 +2072,19 @@ uint32 Battleground::GetPlayerTeam(ObjectGuid guid) const
     if (itr != m_Players.end())
         return itr->second.Team;
     return 0;
+}
+
+bool Battleground::ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) const
+{
+    if (!m_IsCustomGame || !viewer)
+        return true;
+
+    uint32 viewerTeam = viewer->GetBGTeam();
+    if (viewerTeam != ALLIANCE && viewerTeam != HORDE)
+        viewerTeam = viewer->GetTeam();
+
+    TeamId const viewerTeamId = TeamId(GetTeamIndexByTeamId(viewerTeam));
+    return flagTeam == viewerTeamId ? m_CustomRules.ShowAllyFlagOnMap : m_CustomRules.ShowEnemyFlagOnMap;
 }
 
 bool Battleground::GetNodeObjective(ObjectGuid playerGuid, BattlegroundNodeObjective& objective) const

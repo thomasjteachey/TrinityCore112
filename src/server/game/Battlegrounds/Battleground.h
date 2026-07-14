@@ -23,6 +23,7 @@
 #include "ObjectGuid.h"
 #include "Position.h"
 #include "SharedDefines.h"
+#include <algorithm>
 #include <deque>
 #include <map>
 
@@ -64,6 +65,30 @@ struct BattlegroundNodeObjective
     BattlegroundNodeStatus Status = BattlegroundNodeStatus::Neutral;
     Position Location;
     ObjectGuid BannerGuid = ObjectGuid::Empty;
+};
+
+enum class BattlegroundCustomWeather : uint8
+{
+    Normal,
+    Clear,
+    Rain,
+    Snow,
+    Sandstorm,
+    Thunderstorm,
+    Fog,
+    Max
+};
+
+struct BattlegroundCustomRules
+{
+    uint32 FlagCaptureLimit = 0;
+    uint32 ResourceLimit = 0;
+    uint32 ResourceGainPercent = 100;
+    uint32 DeathmatchKillLimit = 0;
+    uint32 ResurrectionIntervalMs = 0;
+    bool ShowEnemyFlagOnMap = true;
+    bool ShowAllyFlagOnMap = true;
+    BattlegroundCustomWeather Weather = BattlegroundCustomWeather::Normal;
 };
 
 enum BattlegroundDesertionType
@@ -371,6 +396,16 @@ class TC_GAME_API Battleground
         bool isArena() const        { return m_IsArena; }
         bool isBattleground() const { return !m_IsArena; }
         bool isRated() const        { return m_IsRated; }
+        bool IsCustomGame() const   { return m_IsCustomGame; }
+        void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
+        BattlegroundCustomRules const& GetCustomRules() const { return m_CustomRules; }
+        void SendCustomGameRulesTo(Player* player) const;
+        bool HasCustomWeatherOverride() const { return m_IsCustomGame && m_CustomRules.Weather != BattlegroundCustomWeather::Normal; }
+        bool ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) const;
+        uint32 GetFlagCaptureLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.FlagCaptureLimit ? m_CustomRules.FlagCaptureLimit : defaultValue; }
+        uint32 GetResourceLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResourceLimit ? m_CustomRules.ResourceLimit : defaultValue; }
+        uint32 GetDeathmatchKillLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.DeathmatchKillLimit ? m_CustomRules.DeathmatchKillLimit : defaultValue; }
+        uint32 ScaleResourceGain(uint32 value) const { return m_IsCustomGame ? std::max<uint32>(1, value * m_CustomRules.ResourceGainPercent / 100) : value; }
 
         typedef std::map<ObjectGuid, BattlegroundPlayer> BattlegroundPlayerMap;
         BattlegroundPlayerMap const& GetPlayers() const { return m_Players; }
@@ -578,7 +613,8 @@ class TC_GAME_API Battleground
         void _ProcessJoin(uint32 diff);
         void _CheckSafePositions(uint32 diff);
 
-        virtual uint32 GetResurrectionInterval() const { return RESURRECTION_INTERVAL; }
+        uint32 GetConfiguredResurrectionInterval(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.ResurrectionIntervalMs ? m_CustomRules.ResurrectionIntervalMs : defaultValue; }
+        virtual uint32 GetResurrectionInterval() const { return GetConfiguredResurrectionInterval(RESURRECTION_INTERVAL); }
         virtual uint32 GetBuffRespawnTime(uint32 type) const { return BUFF_RESPAWN_TIME; }
 
         // Scorekeeping
@@ -624,6 +660,8 @@ class TC_GAME_API Battleground
         uint8  m_ArenaType;                                 // 2=2v2, 3=3v3, 5=5v5
         bool   m_InBGFreeSlotQueue;                         // used to make sure that BG is only once inserted into the BattlegroundMgr.BGFreeSlotQueue[bgTypeId] deque
         bool   m_SetDeleteThis;                             // used for safe deletion of the bg after end / all players leave
+        bool   m_IsCustomGame;
+        BattlegroundCustomRules m_CustomRules;
         bool   m_IsArena;
         PvPTeamId _winnerTeamId;
         int32  m_StartDelayTime;

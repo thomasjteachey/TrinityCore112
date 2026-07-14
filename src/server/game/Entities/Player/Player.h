@@ -930,6 +930,20 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool TeleportTo(WorldLocation const& loc, uint32 options = 0);
         bool TeleportToBGEntryPoint();
 
+        void SetWorldSubMap(uint32 mapId, uint32 instanceId)
+        {
+            m_worldSubMapId = mapId;
+            m_worldSubMapInstanceId = instanceId;
+        }
+        void ClearWorldSubMap()
+        {
+            m_worldSubMapId = MAPID_INVALID;
+            m_worldSubMapInstanceId = 0;
+        }
+        uint32 GetWorldSubMapInstanceId(uint32 mapId) const { return m_worldSubMapId == mapId ? m_worldSubMapInstanceId : 0; }
+        bool HasWorldSubMap() const { return m_worldSubMapInstanceId != 0; }
+        bool IsInCustomGameLobby() const { return GetMapId() == 1 && HasWorldSubMap(); }
+
         bool HasSummonPending() const;
         void SendSummonRequestFrom(Unit* summoner);
         void SummonIfPossible(bool agree);
@@ -2005,6 +2019,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         bool GetBGAccessByLevel(BattlegroundTypeId bgTypeId) const;
         bool CanUseBattlegroundObject(GameObject* gameobject) const;
+        bool CanBypassBattlegroundObjectImmunity(GameObject const* gameobject) const;
+        void BreakBattlegroundFlagVanishProtection(GameObject const* gameobject);
         bool isTotalImmune() const;
         bool CanCaptureTowerPoint() const;
 
@@ -2416,6 +2432,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         bool m_itemUpdateQueueBlocked;
 
         uint32 m_ExtraFlags;
+        uint32 m_worldSubMapId;
+        uint32 m_worldSubMapInstanceId;
 
         QuestStatusMap m_QuestStatus;
         QuestStatusSaveMap m_QuestStatusSave;

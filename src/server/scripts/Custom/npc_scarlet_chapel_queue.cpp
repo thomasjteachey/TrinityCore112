@@ -34,7 +34,7 @@ void SendQueueError(Player* player, char const* text)
 
 bool QueueSinglePlayer(Player* player, BattlegroundTypeId bgTypeId, uint32 forcedTeam)
 {
-    if (!player || !player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
+    if (!player || player->IsInCustomGameLobby() || !player->GetBGAccessByLevel(bgTypeId) || !player->HasFreeBattlegroundQueueId())
         return false;
 
     Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);

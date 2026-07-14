@@ -126,7 +126,14 @@ namespace
     constexpr uint32 CombatDiagnosticCheckInterval = 1 * IN_MILLISECONDS;
     constexpr float CombatDiagnosticEnemyRange = 10.0f;
     constexpr size_t CombatDiagnosticMaxReferences = 10;
+    constexpr uint32 SpellRogueNeilyoImmunity = 81439;
+    constexpr uint32 SpellRogueVanishImmunity = 89783;
     UnitMoveType const StarfireSnareMoveTypes[] = { MOVE_RUN, MOVE_RUN_BACK, MOVE_SWIM, MOVE_SWIM_BACK };
+
+    bool IsRogueVanishImmunitySpell(uint32 spellId)
+    {
+        return spellId == SpellRogueNeilyoImmunity || spellId == SpellRogueVanishImmunity;
+    }
 
     void AdvanceCombatDiagnosticTimer(uint32& timer, uint32 diff)
     {
@@ -285,6 +292,8 @@ Player::Player(WorldSession* session) : Unit(true)
     m_sharedQuestId = 0;
 
     m_ExtraFlags = 0;
+    m_worldSubMapId = MAPID_INVALID;
+    m_worldSubMapInstanceId = 0;
 
     m_spellModTakingSpell = nullptr;
     //m_pad = 0;
@@ -1864,13 +1873,16 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             transport->RemovePassenger(this);
     }
 
-    // The player was ported to another map and loses the duel immediately.
+    uint32 const targetWorldSubMapInstanceId = GetWorldSubMapInstanceId(mapid);
+    bool const isNearTeleport = GetMapId() == mapid && GetInstanceId() == targetWorldSubMapInstanceId;
+
+    // The player was ported to another map/instance and loses the duel immediately.
     // We have to perform this check before the teleport, otherwise the
     // ObjectAccessor won't find the flag.
-    if (duel && GetMapId() != mapid && GetMap()->GetGameObject(GetGuidValue(PLAYER_DUEL_ARBITER)))
+    if (duel && !isNearTeleport && GetMap()->GetGameObject(GetGuidValue(PLAYER_DUEL_ARBITER)))
         DuelComplete(DUEL_FLED);
 
-    if (GetMapId() == mapid)
+    if (isNearTeleport)
     {
         //lets reset far teleport flag if it wasn't reset during chained teleport
         SetSemaphoreTeleportFar(false);
@@ -7099,6 +7111,8 @@ void Player::UpdateHonorFields()
 ///An exact honor value can also be given (overriding the calcs)
 bool Player::RewardHonor(Unit* victim, uint32 groupsize, int32 honor, bool pvptoken)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return false;
 
     // 'Inactive' this aura prevents the player from gaining honor points and battleground tokens
     if (HasAura(SPELL_AURA_PLAYER_INACTIVE))
@@ -23329,6 +23343,12 @@ void Player::LeaveBattleground(bool teleportToEntryPoint)
 
 bool Player::CanJoinToBattleground(Battleground const* bg) const
 {
+    // Server-only map 1 sub-instances are private custom-game lobbies. Their
+    // participants are admitted directly by the lobby and must never enter a
+    // public battleground or arena queue through another code path.
+    if (IsInCustomGameLobby())
+        return false;
+
     uint32 perm = rbac::RBAC_PERM_JOIN_NORMAL_BG;
     if (bg->isArena())
         perm = rbac::RBAC_PERM_JOIN_ARENAS;
@@ -23355,7 +23375,7 @@ namespace
 
     bool QueueAfkReportedPlayerbot(Player* player, BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
-        if (!player || player->InBattleground())
+        if (!player || player->InBattleground() || player->IsInCustomGameLobby())
             return false;
 
         player->RemoveAurasDueToSpell(SPELL_BATTLEGROUND_DESERTER);
@@ -25936,9 +25956,42 @@ bool Player::CanUseBattlegroundObject(GameObject* gameobject) const
 
     // BUG: sometimes when player clicks on flag in AB - client won't send gameobject_use, only gameobject_report_use packet
     // Note: Mount, stealth and invisibility will be removed when used
-    return (!isTotalImmune() &&                            // Damage immune
+    // Vanish protection is consumed when flag use resolves.
+    return ((!isTotalImmune() || CanBypassBattlegroundObjectImmunity(gameobject)) &&
         !HasAura(SPELL_RECENTLY_DROPPED_FLAG) &&       // Still has recently held flag debuff
         IsAlive());                                    // Alive
+}
+
+bool Player::CanBypassBattlegroundObjectImmunity(GameObject const* gameobject) const
+{
+    if (!gameobject ||
+        (gameobject->GetGoType() != GAMEOBJECT_TYPE_FLAGSTAND && gameobject->GetGoType() != GAMEOBJECT_TYPE_FLAGDROP))
+        return false;
+
+    // These are the short stealth-protection immunities applied by Vanish and
+    // Neilyo's talent. Do not bypass if a real immunity is active alongside
+    // them: Ice Block, Divine Shield, and similar effects still block flags.
+    if (!HasAura(SpellRogueNeilyoImmunity) && !HasAura(SpellRogueVanishImmunity))
+        return false;
+
+    for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_SCHOOL_IMMUNITY))
+        if (!IsRogueVanishImmunitySpell(effect->GetSpellInfo()->Id))
+            return false;
+
+    for (AuraEffect const* effect : GetAuraEffectsByType(SPELL_AURA_DAMAGE_IMMUNITY))
+        if (!IsRogueVanishImmunitySpell(effect->GetSpellInfo()->Id))
+            return false;
+
+    return true;
+}
+
+void Player::BreakBattlegroundFlagVanishProtection(GameObject const* gameobject)
+{
+    if (!CanBypassBattlegroundObjectImmunity(gameobject))
+        return;
+
+    RemoveAurasByType(SPELL_AURA_MOD_STEALTH);
+    RemoveAurasByType(SPELL_AURA_MOD_INVISIBILITY);
 }
 
 bool Player::CanCaptureTowerPoint() const
@@ -26652,6 +26705,8 @@ bool Player::HasAchieved(uint32 achievementId) const
 
 void Player::StartTimedAchievement(AchievementCriteriaTimedTypes type, uint32 entry, uint32 timeLost/* = 0*/)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return;
     m_achievementMgr->StartTimedAchievement(type, entry, timeLost);
 }
 
@@ -26662,11 +26717,15 @@ void Player::RemoveTimedAchievement(AchievementCriteriaTimedTypes type, uint32 e
 
 void Player::ResetAchievementCriteria(AchievementCriteriaCondition condition, uint32 value, bool evenIfCriteriaComplete /* = false*/)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return;
     m_achievementMgr->ResetAchievementCriteria(condition, value, evenIfCriteriaComplete);
 }
 
 void Player::UpdateAchievementCriteria(AchievementCriteriaTypes type, uint32 miscValue1 /*= 0*/, uint32 miscValue2 /*= 0*/, WorldObject* ref /*= nullptr*/)
 {
+    if (Battleground const* bg = GetBattleground(); bg && bg->IsCustomGame())
+        return;
     m_achievementMgr->UpdateAchievementCriteria(type, miscValue1, miscValue2, ref);
 }
 

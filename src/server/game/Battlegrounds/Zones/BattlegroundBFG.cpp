@@ -144,17 +144,19 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
 
                     uint8 honorRewards = _honorTics ? uint8(m_TeamScores[teamId] / _honorTics) : 0;
                     uint8 reputationRewards = _reputationTics ? uint8(m_TeamScores[teamId] / _reputationTics) : 0;
-                    uint8 information = uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
-                    m_TeamScores[teamId] += GILNEAS_BG_TickPoints[controlledPoints];
-                    if (m_TeamScores[teamId] > GILNEAS_BG_MAX_TEAM_SCORE)
-                        m_TeamScores[teamId] = GILNEAS_BG_MAX_TEAM_SCORE;
+                    uint32 const scoreLimit = GetResourceLimit(GILNEAS_BG_MAX_TEAM_SCORE);
+                    uint32 const warningScore = scoreLimit > 1 ? scoreLimit * 9 / 10 : 1;
+                    bool const wasNearVictory = m_TeamScores[teamId] >= warningScore;
+                    m_TeamScores[teamId] += ScaleResourceGain(GILNEAS_BG_TickPoints[controlledPoints]);
+                    if (m_TeamScores[teamId] > scoreLimit)
+                        m_TeamScores[teamId] = scoreLimit;
 
                     if (_honorTics && honorRewards < uint8(m_TeamScores[teamId] / _honorTics))
                         RewardHonorToTeam(GetBonusHonorFromKill(1), teamId);
                     if (_reputationTics && reputationRewards < uint8(m_TeamScores[teamId] / _reputationTics))
                         RewardReputationToTeam(teamId == TEAM_ALLIANCE ? 509 : 510, 10, teamId);
 
-                    if (information < uint8(m_TeamScores[teamId] / GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE))
+                    if (!wasNearVictory && m_TeamScores[teamId] >= warningScore)
                     {
                         SendBroadcastText(teamId == TEAM_ALLIANCE ? LANG_BG_BFG_A_NEAR_VICTORY : LANG_BG_BFG_H_NEAR_VICTORY, CHAT_MSG_BG_SYSTEM_NEUTRAL);
                         PlaySoundToAll(GILNEAS_BG_SOUND_NEAR_VICTORY);
@@ -163,7 +165,7 @@ void BattlegroundBFG::PostUpdateImpl(uint32 diff)
                     UpdateWorldState(teamId == TEAM_ALLIANCE ? GILNEAS_BG_OP_RESOURCES_ALLY : GILNEAS_BG_OP_RESOURCES_HORDE, m_TeamScores[teamId]);
                     if (m_TeamScores[teamId] > m_TeamScores[GetOtherGilneasTeamId(teamId)] + 500)
                         _teamScores500Disadvantage[GetOtherGilneasTeamId(teamId)] = true;
-                    if (m_TeamScores[teamId] >= GILNEAS_BG_MAX_TEAM_SCORE)
+                    if (m_TeamScores[teamId] >= scoreLimit)
                         EndBattleground(teamId);
 
                     _bgEvents.ScheduleEvent(eventId, Milliseconds(GILNEAS_BG_TickIntervals[controlledPoints]));
@@ -305,8 +307,9 @@ void BattlegroundBFG::FillInitialWorldStates(WorldPackets::WorldState::InitWorld
 
     packet.Worldstates.emplace_back(GILNEAS_BG_OP_OCCUPIED_BASES_ALLY, _controlledPoints[TEAM_ALLIANCE]);
     packet.Worldstates.emplace_back(GILNEAS_BG_OP_OCCUPIED_BASES_HORDE, _controlledPoints[TEAM_HORDE]);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_MAX, GILNEAS_BG_MAX_TEAM_SCORE);
-    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_WARNING, GILNEAS_BG_WARNING_NEAR_VICTORY_SCORE);
+    uint32 const scoreLimit = GetResourceLimit(GILNEAS_BG_MAX_TEAM_SCORE);
+    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_MAX, scoreLimit);
+    packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_WARNING, scoreLimit > 1 ? scoreLimit * 9 / 10 : 1);
     packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_ALLY, m_TeamScores[TEAM_ALLIANCE]);
     packet.Worldstates.emplace_back(GILNEAS_BG_OP_RESOURCES_HORDE, m_TeamScores[TEAM_HORDE]);
     packet.Worldstates.emplace_back(0x745, 0x2u);           // 37 1861 unk

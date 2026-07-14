@@ -191,7 +191,7 @@ bool BattlegroundWS::GetWSGFlagWorldPositionByIdentity(uint32 flagTeam, float& x
     return false;
 }
 
-std::string BattlegroundWS::BuildWSGFlagFullPayload() const
+std::string BattlegroundWS::BuildWSGFlagFullPayload(Player const* viewer) const
 {
     std::string allianceCarrier;
     std::string hordeCarrier;
@@ -200,13 +200,16 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
     std::string hordeX;
     std::string hordeY;
 
-    if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    bool const showAllianceFlag = ShouldShowFlagOnMapTo(viewer, TEAM_ALLIANCE);
+    bool const showHordeFlag = ShouldShowFlagOnMapTo(viewer, TEAM_HORDE);
+
+    if (showAllianceFlag && _flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_ON_PLAYER)
     {
         if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_ALLIANCE]))
             allianceCarrier = carrier->GetName();
     }
 
-    if (_flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
+    if (showHordeFlag && _flagState[TEAM_HORDE] == BG_WS_FLAG_STATE_ON_PLAYER)
     {
         if (Player* carrier = ObjectAccessor::FindPlayer(m_FlagKeepers[TEAM_HORDE]))
             hordeCarrier = carrier->GetName();
@@ -214,14 +217,14 @@ std::string BattlegroundWS::BuildWSGFlagFullPayload() const
 
     float x = 0.0f;
     float y = 0.0f;
-    if (GetWSGFlagWorldPositionByIdentity(ALLIANCE, x, y))
+    if (showAllianceFlag && GetWSGFlagWorldPositionByIdentity(ALLIANCE, x, y))
     {
         Map2ZoneCoordinates(x, y, 3277);
         allianceX = FormatWSGCoord(x / 100.0f);
         allianceY = FormatWSGCoord(y / 100.0f);
     }
 
-    if (GetWSGFlagWorldPositionByIdentity(HORDE, x, y))
+    if (showHordeFlag && GetWSGFlagWorldPositionByIdentity(HORDE, x, y))
     {
         Map2ZoneCoordinates(x, y, 3277);
         hordeX = FormatWSGCoord(x / 100.0f);
@@ -238,11 +241,32 @@ void BattlegroundWS::SendWSGFlagAddonMessage(std::string const& payload)
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
-    SendPacketToAll(&data);
+
+    if (!IsCustomGame() || (payload.rfind("A:", 0) != 0 && payload.rfind("H:", 0) != 0))
+    {
+        SendPacketToAll(&data);
+        return;
+    }
+
+    TeamId const flagTeam = payload[0] == 'A' ? TEAM_ALLIANCE : TEAM_HORDE;
+    for (auto const& entry : GetPlayers())
+    {
+        Player* player = ObjectAccessor::FindPlayer(entry.first);
+        if (player && ShouldShowFlagOnMapTo(player, flagTeam))
+            player->SendDirectMessage(&data);
+    }
 }
 
 void BattlegroundWS::BroadcastWSGFlagFullState()
 {
+    if (IsCustomGame())
+    {
+        for (auto const& entry : GetPlayers())
+            if (Player* player = ObjectAccessor::FindPlayer(entry.first))
+                SendWSGFlagFullStateTo(player);
+        return;
+    }
+
     std::string payload = BuildWSGFlagFullPayload();
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
@@ -255,7 +279,7 @@ void BattlegroundWS::SendWSGFlagFullStateTo(Player* player)
     if (!player || !player->GetSession())
         return;
 
-    std::string payload = BuildWSGFlagFullPayload();
+    std::string payload = BuildWSGFlagFullPayload(player);
     std::string message = "CWSG\t" + payload;
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
@@ -516,7 +540,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
         else if (_flagDebuffState == 2)
           player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
 
-        if (GetTeamScore(TEAM_ALLIANCE) < BG_WS_MAX_TEAM_SCORE)
+        if (GetTeamScore(TEAM_ALLIANCE) < GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
             AddPoint(ALLIANCE, 1);
         PlaySoundToAll(BG_WS_SOUND_FLAG_CAPTURED_ALLIANCE);
         RewardReputationToTeam(890, m_ReputationCapture, ALLIANCE);
@@ -536,7 +560,7 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
         else if (_flagDebuffState == 2)
           player->RemoveAurasDueToSpell(WS_SPELL_BRUTAL_ASSAULT);
 
-        if (GetTeamScore(TEAM_HORDE) < BG_WS_MAX_TEAM_SCORE)
+        if (GetTeamScore(TEAM_HORDE) < GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
             AddPoint(HORDE, 1);
         PlaySoundToAll(BG_WS_SOUND_FLAG_CAPTURED_HORDE);
         RewardReputationToTeam(889, m_ReputationCapture, HORDE);
@@ -564,10 +588,10 @@ void BattlegroundWS::EventPlayerCapturedFlag(Player* player)
     // update last flag capture to be used if teamscore is equal
     SetLastFlagCapture(player->GetTeam());
 
-    if (GetTeamScore(TEAM_ALLIANCE) == BG_WS_MAX_TEAM_SCORE)
+    if (GetTeamScore(TEAM_ALLIANCE) >= GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
         winner = ALLIANCE;
 
-    if (GetTeamScore(TEAM_HORDE) == BG_WS_MAX_TEAM_SCORE)
+    if (GetTeamScore(TEAM_HORDE) >= GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE))
         winner = HORDE;
 
     if (winner)
@@ -1087,7 +1111,7 @@ void BattlegroundWS::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
     else
         packet.Worldstates.emplace_back(BG_WS_FLAG_UNK_HORDE, 0);
 
-    packet.Worldstates.emplace_back(BG_WS_FLAG_CAPTURES_MAX, BG_WS_MAX_TEAM_SCORE);
+    packet.Worldstates.emplace_back(BG_WS_FLAG_CAPTURES_MAX, GetFlagCaptureLimit(BG_WS_MAX_TEAM_SCORE));
 
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
@@ -1134,7 +1158,7 @@ bool BattlegroundWS::CheckAchievementCriteriaMeet(uint32 criteriaId, Player cons
 
 uint32 BattlegroundWS::GetResurrectionInterval() const
 {
-    return BG_WS_RESURRECTION_INTERVAL;
+    return GetConfiguredResurrectionInterval(BG_WS_RESURRECTION_INTERVAL);
 }
 
 uint32 BattlegroundWS::GetBuffRespawnTime(uint32 type) const

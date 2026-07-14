@@ -2151,7 +2151,11 @@ void Spell::EffectOpenLock()
         GameObjectTemplate const* goInfo = gameObjTarget->GetGOInfo();
 
         if (goInfo->CannotBeUsedUnderImmunity() && player->HasUnitFlag(UNIT_FLAG_IMMUNE))
-            return;
+        {
+            player->BreakBattlegroundFlagVanishProtection(gameObjTarget);
+            if (player->HasUnitFlag(UNIT_FLAG_IMMUNE))
+                return;
+        }
 
         // Arathi Basin banner opening. /// @todo Verify correctness of this check
         if ((goInfo->type == GAMEOBJECT_TYPE_BUTTON && goInfo->button.noDamageImmune) ||

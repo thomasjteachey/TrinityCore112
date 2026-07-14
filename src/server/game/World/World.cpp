@@ -26,6 +26,7 @@
 #include "ArenaTeamMgr.h"
 #include "AuctionHouseMgr.h"
 #include "BattlefieldMgr.h"
+#include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CalendarMgr.h"
 #include "ChannelMgr.h"
@@ -64,6 +65,7 @@
 #include "MMapFactory.h"
 #include "ObjectAccessor.h"
 #include "ObjectMgr.h"
+#include "Opcodes.h"
 #include "Mail.h"
 #include "MapManager.h"
 #include "OutdoorPvPMgr.h"
@@ -2684,9 +2686,7 @@ void World::SendGlobalMessage(WorldPacket const* packet, WorldSession* self, uin
             itr->second->GetPlayer()->IsInWorld() &&
             itr->second != self &&
             (team == 0 || itr->second->GetPlayer()->GetTeam() == team))
-        {
             itr->second->SendPacket(packet);
-        }
     }
 }
 
@@ -2833,6 +2833,14 @@ bool World::SendZoneMessage(uint32 zone, WorldPacket const* packet, WorldSession
             itr->second != self &&
             (team == 0 || itr->second->GetPlayer()->GetTeam() == team))
         {
+            // A custom battleground weather override is sent per instance and
+            // per player by Map. Do not let a normal zone-wide weather update
+            // overwrite it (zones can be shared by multiple map instances).
+            if (packet->GetOpcode() == SMSG_WEATHER)
+                if (Battleground const* bg = itr->second->GetPlayer()->GetBattleground())
+                    if (bg->HasCustomWeatherOverride())
+                        continue;
+
             itr->second->SendPacket(packet);
             foundPlayerToSend = true;
         }

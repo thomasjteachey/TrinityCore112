@@ -5560,7 +5560,9 @@ SpellCastResult Spell::CheckCast(bool strict, uint32* param1 /*= nullptr*/, uint
     // Prevent cheating in case the player has an immunity effect and tries to interact with a non-allowed gameobject. The error message is handled by the client so we don't report anything here
     if (m_caster->ToPlayer() && m_targets.GetGOTarget())
     {
-        if (m_targets.GetGOTarget()->GetGOInfo()->CannotBeUsedUnderImmunity() && m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_IMMUNE))
+        if (m_targets.GetGOTarget()->GetGOInfo()->CannotBeUsedUnderImmunity() &&
+            m_caster->ToUnit()->HasUnitFlag(UNIT_FLAG_IMMUNE) &&
+            !m_caster->ToPlayer()->CanBypassBattlegroundObjectImmunity(m_targets.GetGOTarget()))
             return SPELL_FAILED_DONT_REPORT;
     }
 

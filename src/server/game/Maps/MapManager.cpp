@@ -34,6 +34,14 @@
 #include "WorldSession.h"
 #include "Opcodes.h"
 
+namespace
+{
+uint64 MakeWorldSubMapKey(uint32 mapId, uint32 instanceId)
+{
+    return (uint64(mapId) << 32) | instanceId;
+}
+}
+
 MapManager::MapManager()
     : _nextInstanceId(0), _scheduledScripts(0)
 {
@@ -57,6 +65,9 @@ void MapManager::InitializeVisibilityDistanceInfo()
 {
     for (MapMapType::iterator iter = i_maps.begin(); iter != i_maps.end(); ++iter)
         (*iter).second->InitVisibilityDistance();
+
+    for (WorldSubMapType::iterator iter = i_worldSubMaps.begin(); iter != i_worldSubMaps.end(); ++iter)
+        iter->second->InitVisibilityDistance();
 }
 
 MapManager* MapManager::instance()
@@ -102,6 +113,10 @@ Map* MapManager::FindBaseNonInstanceMap(uint32 mapId) const
 
 Map* MapManager::CreateMap(uint32 id, Player* player, uint32 loginInstanceId)
 {
+    if (player)
+        if (uint32 instanceId = player->GetWorldSubMapInstanceId(id))
+            return FindMap(id, instanceId);
+
     Map* m = CreateBaseMap(id);
 
     if (m && m->Instanceable())
@@ -112,6 +127,13 @@ Map* MapManager::CreateMap(uint32 id, Player* player, uint32 loginInstanceId)
 
 Map* MapManager::FindMap(uint32 mapid, uint32 instanceId) const
 {
+    if (instanceId)
+    {
+        WorldSubMapType::const_iterator worldItr = i_worldSubMaps.find(MakeWorldSubMapKey(mapid, instanceId));
+        if (worldItr != i_worldSubMaps.end())
+            return worldItr->second;
+    }
+
     Map* map = FindBaseMap(mapid);
     if (!map)
         return nullptr;
@@ -120,6 +142,50 @@ Map* MapManager::FindMap(uint32 mapid, uint32 instanceId) const
         return instanceId == 0 ? map : nullptr;
 
     return ((MapInstanced*)map)->FindInstanceMap(instanceId);
+}
+
+Map* MapManager::CreateWorldSubMap(uint32 mapId)
+{
+    Map* parent = CreateBaseMap(mapId);
+    if (!parent || parent->Instanceable())
+        return nullptr;
+
+    uint32 const instanceId = GenerateInstanceId();
+    Map* map = new Map(mapId, i_gridCleanUpDelay, instanceId, REGULAR_DIFFICULTY, parent);
+    map->SetServerOnlyWorldSubMap(true);
+
+    {
+        std::lock_guard<std::mutex> lock(_mapsLock);
+        i_worldSubMaps.emplace(MakeWorldSubMapKey(mapId, instanceId), map);
+    }
+
+    TC_LOG_DEBUG("maps", "Created server-only world subinstance {} for map {}", instanceId, mapId);
+    return map;
+}
+
+bool MapManager::DestroyWorldSubMap(uint32 mapId, uint32 instanceId)
+{
+    Map* map = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(_mapsLock);
+        WorldSubMapType::iterator itr = i_worldSubMaps.find(MakeWorldSubMapKey(mapId, instanceId));
+        if (itr == i_worldSubMaps.end() || itr->second->HavePlayers())
+            return false;
+
+        map = itr->second;
+        i_worldSubMaps.erase(itr);
+    }
+
+    map->UnloadAll();
+    delete map;
+    FreeInstanceId(instanceId);
+    TC_LOG_DEBUG("maps", "Destroyed server-only world subinstance {} for map {}", instanceId, mapId);
+    return true;
+}
+
+bool MapManager::IsWorldSubMap(uint32 mapId, uint32 instanceId) const
+{
+    return instanceId && i_worldSubMaps.find(MakeWorldSubMapKey(mapId, instanceId)) != i_worldSubMaps.end();
 }
 
 Map::EnterState MapManager::PlayerCannotEnter(uint32 mapid, Player* player, bool loginCheck)
@@ -218,6 +284,8 @@ void MapManager::Update(uint32 diff)
         maps.reserve(i_maps.size());
         for (auto const& mapPair : i_maps)
             maps.push_back(mapPair.second);
+        for (auto const& mapPair : i_worldSubMaps)
+            maps.push_back(mapPair.second);
     }
 
     for (Map* map : maps)
@@ -263,6 +331,13 @@ bool MapManager::IsValidMAP(uint32 mapid, bool startUp)
 
 void MapManager::UnloadAll()
 {
+    for (WorldSubMapType::iterator iter = i_worldSubMaps.begin(); iter != i_worldSubMaps.end();)
+    {
+        iter->second->UnloadAll();
+        delete iter->second;
+        i_worldSubMaps.erase(iter++);
+    }
+
     for (MapMapType::iterator iter = i_maps.begin(); iter != i_maps.end();)
     {
         iter->second->UnloadAll();

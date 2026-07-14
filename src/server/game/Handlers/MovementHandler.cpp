@@ -274,12 +274,14 @@ void WorldSession::HandleMoveWorldportAck()
     }
 
     {
-        if (newMap->IsBattleArena() && ((BattlegroundMap*)newMap)->GetBG() && _player->HasPendingSpectatorForBG(((BattlegroundMap*)newMap)->GetInstanceId()))
+        Battleground* spectatorBg = newMap->IsBattlegroundOrArena() ? ((BattlegroundMap*)newMap)->GetBG() : nullptr;
+        if (spectatorBg && (newMap->IsBattleArena() || spectatorBg->IsCustomGame()) &&
+            _player->HasPendingSpectatorForBG(((BattlegroundMap*)newMap)->GetInstanceId()))
         {
             _player->ClearReceivedSpectatorResetFor();
             _player->SetIsSpectator(true);
             //ArenaSpectator::SendCommand(_player, "%sENABLE", SPECTATOR_ADDON_PREFIX);
-            ((BattlegroundMap*)newMap)->GetBG()->AddSpectator(_player);
+            spectatorBg->AddSpectator(_player);
             //ArenaSpectator::HandleResetCommand(_player);
         }
         else

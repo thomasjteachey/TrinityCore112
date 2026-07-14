@@ -57,6 +57,15 @@ struct ObcCloneRecord
     uint32 battlegroundInstanceId = 0;
 };
 
+struct CustomGameCloneRecord
+{
+    ObjectGuid cloneGuid;
+    ObjectGuid sourceGuid;
+    uint32 team = 0;
+    uint32 battlegroundInstanceId = 0;
+    BattlegroundTypeId battlegroundType = BATTLEGROUND_TYPE_NONE;
+};
+
 std::mutex g_ObcCloneLock;
 ObcCloneConfig g_ObcCloneConfig;
 
@@ -66,6 +75,7 @@ ObcCloneConfig g_ObcCloneConfig;
 std::unordered_map<ObjectGuid, std::unique_ptr<WorldSession>> g_CloneSessions;
 std::unordered_map<ObjectGuid, ObcCloneRecord> g_ClonesByHuman;
 std::unordered_map<ObjectGuid, ObjectGuid> g_HumanByClone;
+std::unordered_map<ObjectGuid, CustomGameCloneRecord> g_CustomGameClones;
 
 uint32 g_CloneTickAccumulatorMs = 0;
 
@@ -92,7 +102,7 @@ Battleground* GetHumanObcBattleground(Player* player)
         return nullptr;
 
     Battleground* bg = player->GetBattleground();
-    if (!bg || bg->GetTypeID(true) != BATTLEGROUND_OBC)
+    if (!bg || bg->GetTypeID(true) != BATTLEGROUND_OBC || bg->IsCustomGame())
         return nullptr;
 
     if (bg->GetStatus() == STATUS_WAIT_LEAVE || bg->GetStatus() == STATUS_NONE)
@@ -475,6 +485,64 @@ void TeardownAllClones()
     for (ObjectGuid const& humanGuid : humanGuids)
         TeardownCloneForHuman(humanGuid);
 }
+
+void TeardownCustomGameClone(ObjectGuid cloneGuid)
+{
+    CustomGameCloneRecord record;
+    std::unique_ptr<WorldSession> session;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto recordItr = g_CustomGameClones.find(cloneGuid);
+        if (recordItr == g_CustomGameClones.end())
+            return;
+
+        record = recordItr->second;
+        g_CustomGameClones.erase(recordItr);
+
+        auto sessionItr = g_CloneSessions.find(cloneGuid);
+        if (sessionItr != g_CloneSessions.end())
+        {
+            session = std::move(sessionItr->second);
+            g_CloneSessions.erase(sessionItr);
+        }
+    }
+
+    Player* clone = session ? session->GetPlayer() : nullptr;
+    if (!clone)
+        return;
+
+    if (Battleground* bg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, record.battlegroundType))
+        if (bg->IsPlayerInBattleground(cloneGuid))
+            bg->RemovePlayerAtLeave(cloneGuid, false, false);
+
+    std::string cachedName;
+    sCharacterCache->GetCharacterNameByGuid(cloneGuid, cachedName);
+    if (Map* map = clone->FindMap())
+        map->RemovePlayerFromMap(clone, true);
+    else
+    {
+        ObjectAccessor::RemoveObject(clone);
+        delete clone;
+    }
+    session->SetPlayer(nullptr);
+
+    if (!cachedName.empty())
+        sCharacterCache->DeleteCharacterCacheEntry(cloneGuid, cachedName);
+}
+
+void TeardownAllCustomGameClones()
+{
+    std::vector<ObjectGuid> cloneGuids;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        cloneGuids.reserve(g_CustomGameClones.size());
+        for (auto const& [cloneGuid, record] : g_CustomGameClones)
+            cloneGuids.push_back(cloneGuid);
+    }
+
+    for (ObjectGuid cloneGuid : cloneGuids)
+        TeardownCustomGameClone(cloneGuid);
+}
 }
 
 namespace playerbot
@@ -500,11 +568,25 @@ void PlayerbotObcCloneManager::OnStartupSweep()
 
 void PlayerbotObcCloneManager::OnShutdown()
 {
+    TeardownAllCustomGameClones();
     TeardownAllClones();
 }
 
 void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
 {
+    std::vector<ObjectGuid> expiredCustomClones;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        for (auto const& [cloneGuid, record] : g_CustomGameClones)
+        {
+            Battleground* bg = sBattlegroundMgr->GetBattleground(record.battlegroundInstanceId, record.battlegroundType);
+            if (!bg || bg->GetStatus() == STATUS_NONE || bg->GetStatus() == STATUS_WAIT_LEAVE)
+                expiredCustomClones.push_back(cloneGuid);
+        }
+    }
+    for (ObjectGuid cloneGuid : expiredCustomClones)
+        TeardownCustomGameClone(cloneGuid);
+
     if (!IsObcCloneFeatureConfigured())
     {
         TeardownAllClones();
@@ -653,5 +735,110 @@ bool PlayerbotObcCloneManager::IsActiveClone(Player const* player)
 
     std::lock_guard<std::mutex> lock(g_ObcCloneLock);
     return g_HumanByClone.find(player->GetGUID()) != g_HumanByClone.end();
+}
+
+Player* PlayerbotObcCloneManager::CreateCustomGameClone(Player* source, Battleground* bg, uint32 team, std::string const& displayPrefix)
+{
+    if (!source || !bg || (team != ALLIANCE && team != HORDE))
+        return nullptr;
+
+    std::string const internalName = GenerateCloneInternalName();
+    if (internalName.empty())
+        return nullptr;
+
+    uint8 const expansion = static_cast<uint8>(sWorld->getIntConfig(CONFIG_EXPANSION));
+    auto session = std::make_unique<WorldSession>(0, "custom_game_in_memory_clone", nullptr, SEC_PLAYER, expansion, 0,
+        Minutes(0), LOCALE_enUS, 0, false);
+    session->SetTransientPlayerSession();
+
+    Player* clone = new Player(session.get());
+    CharacterCreateInfo createInfo;
+    createInfo.SetName(internalName)
+        .SetRace(source->GetRace()).SetClass(source->GetClass()).SetGender(source->GetNativeGender())
+        .SetSkin(source->GetSkinId()).SetFace(source->GetFaceId()).SetHairStyle(source->GetHairStyleId())
+        .SetHairColor(source->GetHairColorId()).SetFacialHair(source->GetFacialStyle()).SetOutfitId(0);
+
+    ObjectGuid::LowType const cloneLowGuid = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
+    if (!clone->Create(cloneLowGuid, &createInfo, false, false))
+    {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    clone->SetGender(source->GetNativeGender());
+    clone->SetNativeGender(source->GetNativeGender());
+    clone->InitDisplayIds();
+    session->SetPlayer(clone);
+    clone->GetMotionMaster()->Initialize();
+    clone->SetLevel(source->GetLevel(), false);
+    clone->InitStatsForLevel();
+    clone->InitTalentForLevel();
+    clone->InitGlyphsForLevel();
+    CopySkills(clone, source);
+    CopySpellsTalentsAndGlyphs(clone, source);
+    if (!CopyEquipment(clone, source))
+    {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    clone->UpdateAllStats();
+    clone->SetFullHealth();
+    for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
+        clone->SetFullPower(Powers(power));
+
+    BattlegroundQueueTypeId const queueTypeId = BattlegroundMgr::BGQueueTypeId(bg->GetTypeID(), bg->GetArenaType());
+    Position const* start = bg->GetTeamStartPosition(Battleground::GetTeamIndexByTeamId(team));
+    if (queueTypeId == BATTLEGROUND_QUEUE_NONE || !start || clone->AddBattlegroundQueueId(queueTypeId) >= PLAYER_MAX_BATTLEGROUND_QUEUES)
+    {
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    clone->SetInviteForBattlegroundQueueType(queueTypeId, bg->GetInstanceID());
+    clone->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID());
+    clone->SetBGTeam(team);
+    clone->ResetMap();
+    clone->Relocate(*start);
+    clone->SetMap(bg->GetBgMap());
+    bg->IncreaseInvitedCount(team);
+    if (!bg->GetBgMap()->AddPlayerToMap(clone))
+    {
+        bg->DecreaseInvitedCount(team);
+        DestroyUnseatedClone(session, clone);
+        return nullptr;
+    }
+
+    ObjectGuid const cloneGuid = clone->GetGUID();
+    std::string displayName = displayPrefix + source->GetName();
+    if (sCharacterCache->GetCharacterCacheByName(displayName))
+        displayName += " " + std::to_string(bg->GetInstanceID());
+    sCharacterCache->AddCharacterCacheEntry(cloneGuid, 0, displayName, clone->GetNativeGender(), clone->GetRace(), clone->GetClass(), clone->GetLevel());
+    ObjectAccessor::AddObject(clone);
+    bg->AddPlayer(clone);
+    clone->SetInGameTime(GameTime::GetGameTimeMS());
+    SynchronizeHunterPetMirror(source, clone);
+
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        g_CloneSessions.emplace(cloneGuid, std::move(session));
+        g_CustomGameClones.emplace(cloneGuid, CustomGameCloneRecord{ cloneGuid, source->GetGUID(), team, bg->GetInstanceID(), bg->GetTypeID() });
+    }
+
+    return clone;
+}
+
+void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstanceId)
+{
+    std::vector<ObjectGuid> cloneGuids;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        for (auto const& [cloneGuid, record] : g_CustomGameClones)
+            if (record.battlegroundInstanceId == battlegroundInstanceId)
+                cloneGuids.push_back(cloneGuid);
+    }
+
+    for (ObjectGuid cloneGuid : cloneGuids)
+        TeardownCustomGameClone(cloneGuid);
 }
 }

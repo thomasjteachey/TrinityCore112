@@ -242,7 +242,7 @@ class BattlegroundWS : public Battleground
         void SendWSGFlagAddonMessage(std::string const& payload);
         void BroadcastWSGFlagFullState();
         void SendWSGFlagFullStateTo(Player* player);
-        std::string BuildWSGFlagFullPayload() const;
+        std::string BuildWSGFlagFullPayload(Player const* viewer = nullptr) const;
 
         void RemovePlayer(Player* player, ObjectGuid guid, uint32 team) override;
         void HandleAreaTrigger(Player* player, uint32 trigger) override;

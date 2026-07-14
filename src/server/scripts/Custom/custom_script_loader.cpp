@@ -32,6 +32,7 @@ void AddSC_custom_pvpve_dungeon();
 void AddSC_npc_scarlet_chapel_queue();
 void AddSC_npc_account_banker();
 void AddSC_go_lplus_jump_pad();
+void AddSC_custom_game_lobby();
 
 void AddCustomScripts()
 {
@@ -47,4 +48,5 @@ void AddCustomScripts()
     AddSC_npc_scarlet_chapel_queue();
     AddSC_npc_account_banker();
     AddSC_go_lplus_jump_pad();
+    AddSC_custom_game_lobby();
 }

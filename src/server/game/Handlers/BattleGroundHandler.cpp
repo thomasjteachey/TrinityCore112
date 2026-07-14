@@ -53,6 +53,20 @@ namespace
     float constexpr GurubashiArenaZ = 31.276190;
     float constexpr GurubashiArenaO = 1.010225f;
 
+    bool IsPlayerInsideCustomGameLobby(Player const* player)
+    {
+        return player && player->IsInCustomGameLobby();
+    }
+
+    bool RejectNormalBattlegroundQueueFromCustomLobby(WorldSession* session)
+    {
+        if (!session || !IsPlayerInsideCustomGameLobby(session->GetPlayer()))
+            return false;
+
+        session->SendNotification("You cannot queue for other battlegrounds or arenas while inside a custom game lobby.");
+        return true;
+    }
+
     bool HasArtifactEquipment(Player const* player)
     {
         if (!player)
@@ -131,6 +145,9 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
     recvData >> bgTypeId_;                                 // battleground type id (DBC id)
     recvData >> instanceId;                                // instance id, 0 if First Available selected
     recvData >> joinAsGroup;                               // join as group
+
+    if (RejectNormalBattlegroundQueueFromCustomLobby(this))
+        return;
 
     if (!sBattlemasterListStore.LookupEntry(bgTypeId_))
     {
@@ -318,18 +335,34 @@ void WorldSession::HandleBattlegroundPlayerPositionsOpcode(WorldPacket& /*recvDa
     Player* allianceFlagCarrier = nullptr;
     Player* hordeFlagCarrier = nullptr;
 
-    if (ObjectGuid guid = bg->GetFlagPickerGUID(TEAM_ALLIANCE))
+    bool showAllianceFlag = true;
+    bool showHordeFlag = true;
+    BattlegroundTypeId const actualType = bg->GetTypeID(true);
+    if (bg->IsCustomGame() && (actualType == BATTLEGROUND_WS || actualType == BATTLEGROUND_TP))
     {
-        allianceFlagCarrier = ObjectAccessor::FindPlayer(guid);
-        if (allianceFlagCarrier)
-            ++flagCarrierCount;
+        // These picker slots are indexed by flag identity, not carrier team.
+        showAllianceFlag = bg->ShouldShowFlagOnMapTo(_player, TEAM_ALLIANCE);
+        showHordeFlag = bg->ShouldShowFlagOnMapTo(_player, TEAM_HORDE);
     }
 
-    if (ObjectGuid guid = bg->GetFlagPickerGUID(TEAM_HORDE))
+    if (showAllianceFlag)
     {
-        hordeFlagCarrier = ObjectAccessor::FindPlayer(guid);
-        if (hordeFlagCarrier)
-            ++flagCarrierCount;
+        if (ObjectGuid guid = bg->GetFlagPickerGUID(TEAM_ALLIANCE))
+        {
+            allianceFlagCarrier = ObjectAccessor::FindPlayer(guid);
+            if (allianceFlagCarrier)
+                ++flagCarrierCount;
+        }
+    }
+
+    if (showHordeFlag)
+    {
+        if (ObjectGuid guid = bg->GetFlagPickerGUID(TEAM_HORDE))
+        {
+            hordeFlagCarrier = ObjectAccessor::FindPlayer(guid);
+            if (hordeFlagCarrier)
+                ++flagCarrierCount;
+        }
     }
 
     WorldPacket data(MSG_BATTLEGROUND_PLAYER_POSITIONS, 4 + 4 + 16 * flagCarrierCount);
@@ -410,6 +443,12 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket &recvData)
     uint8 action;                                           // enter battle 0x1, leave queue 0x0
 
     recvData >> type >> unk2 >> bgTypeId_ >> unk >> action;
+
+    // Let a lobby occupant decline/leave a stale queue, but never accept an
+    // invitation into a normal battleground from inside the private lobby.
+    if (action && RejectNormalBattlegroundQueueFromCustomLobby(this))
+        return;
+
     if (!sBattlemasterListStore.LookupEntry(bgTypeId_))
     {
         TC_LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} ArenaType: {}, Unk: {}, BgType: {}, Action: {}. Invalid BgType!",
@@ -694,6 +733,9 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPacket& recvData)
     Group* grp = nullptr;
 
     recvData >> guid >> arenaslot >> asGroup >> isRated;
+
+    if (RejectNormalBattlegroundQueueFromCustomLobby(this))
+        return;
 
     // ignore if rated but queued solo
     if (isRated && !asGroup)

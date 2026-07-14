@@ -243,7 +243,7 @@ class BattlegroundTP : public Battleground
         char const* GetCTFFlagStateToken(uint8 flagState) const;
         static std::string FormatCTFCoord(float value);
         bool GetCTFFlagWorldPositionByIdentity(TeamId flagTeam, float& x, float& y) const;
-        std::string BuildCTFFlagFullPayload() const;
+        std::string BuildCTFFlagFullPayload(Player const* viewer = nullptr) const;
         void SendCTFFlagAddonMessage(std::string const& payload);
         void BroadcastCTFFlagFullState();
         void SendCTFFlagFullStateTo(Player* player);
