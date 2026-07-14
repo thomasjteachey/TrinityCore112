@@ -3607,6 +3607,37 @@ bool IsHazardousLiquidDestination(Player const* player, Position const& destinat
         (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
 }
 
+bool IsValidatedDirectHazardEgress(Player const* player, Position const& destination)
+{
+    if (!player || IsHazardousLiquidDestination(player, destination))
+        return false;
+
+    float const dx = destination.GetPositionX() - player->GetPositionX();
+    float const dy = destination.GetPositionY() - player->GetPositionY();
+    float const planarDelta = std::sqrt(dx * dx + dy * dy);
+    float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
+    if (planarDelta < 0.5f || planarDelta > 24.0f ||
+        verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+        return false;
+
+    return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ() + 0.5f);
+}
+
+bool IssueValidatedDirectHazardEgress(Player* player, Position const& destination, char const* debugStatus)
+{
+    if (!IsValidatedDirectHazardEgress(player, destination))
+        return false;
+
+    MotionMaster* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+    motionMaster->MovePoint(0, destination, false);
+    SetLastMovementDebugStatus(player, debugStatus);
+    return true;
+}
+
 bool TryMoveOutOfHazardousLiquid(Player* player)
 {
     if (!player)
@@ -3657,6 +3688,10 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
         return true;
     }
 
+    if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f &&
+        IssueValidatedDirectHazardEgress(player, state.lastSafePosition, "hazardous_liquid_direct_return_to_last_safe"))
+        return true;
+
     float const baseAngle = player->GetOrientation();
     std::array<float, 12> const probeAngles =
     {
@@ -3685,7 +3720,22 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
         }
     }
 
-    return false;
+    for (float distance : probeDistances)
+    {
+        for (float offset : probeAngles)
+        {
+            Position destination = player->GetPosition();
+            float const angle = baseAngle + offset;
+            destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+            destination = BuildCollisionSafeDestination(player, destination);
+            if (IssueValidatedDirectHazardEgress(player, destination, "hazardous_liquid_direct_move_out"))
+                return true;
+        }
+    }
+
+    // Never release class-action ownership while the bot remains in hazardous
+    // liquid, even if this tick could not find an acceptable escape endpoint.
+    return true;
 }
 
 void StopPlayerbotForStationaryCast(Player* player)
@@ -5550,7 +5600,11 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
         uint32 const resolvedSpellId = ResolveKnownSpellInChain(player, context.spellId);
         SpellInfo const* spellInfo = resolvedSpellId ? sSpellMgr->GetSpellInfo(resolvedSpellId) : nullptr;
         Unit* target = ResolveTarget(player, context);
-        allowInstantSpellWhileEscaping = spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        bool const hasEscapeOrder = player->isMoving() ||
+            (motionMaster && motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE) ||
+            (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+        allowInstantSpellWhileEscaping = hasEscapeOrder && spellInfo && spellInfo->CalcCastTime() <= 0 && !spellInfo->IsChanneled() &&
             IsSpellReadyAtCurrentPosition(player, target, spellInfo, context.targetMode);
     }
 

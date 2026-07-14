@@ -108,6 +108,8 @@ namespace
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS = 900;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
+    constexpr uint32 PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID = 81351;
+    constexpr uint32 PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID = 81352;
 constexpr uint32 kHunterFeignDeathSpellId = 5384;
 constexpr uint32 kPlayerbotHunterStationaryCastLockToken = 900006;
 constexpr uint32 kPlayerbotShadowmeldGraceToken = 900007;
@@ -981,6 +983,26 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
     }
 
+    bool IsValidatedDirectHazardEgress(Player const* player, Position const& destination)
+    {
+        if (!player || IsHazardousLiquidDestination(player, destination))
+            return false;
+
+        float const dx = destination.GetPositionX() - player->GetPositionX();
+        float const dy = destination.GetPositionY() - player->GetPositionY();
+        float const planarDelta = std::sqrt(dx * dx + dy * dy);
+        float const verticalDelta = std::fabs(destination.GetPositionZ() - player->GetPositionZ());
+
+        // This is only an emergency egress for a bot whose liquid position is
+        // not represented by the navmesh. Keep it short, reject floor changes,
+        // and require collision LOS so it cannot become a wall/drop shortcut.
+        if (planarDelta < 0.5f || planarDelta > 24.0f ||
+            verticalDelta > std::max(8.0f, planarDelta * 0.75f + 2.0f))
+            return false;
+
+        return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ() + 0.5f);
+    }
+
     bool TryMoveOutOfHazardousLiquid(Player* player)
     {
         if (!player)
@@ -1014,7 +1036,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         MotionMaster* motionMaster = player->GetMotionMaster();
         if (!motionMaster)
-            return false;
+            return true;
 
         // Preserve an already-launched escape point. Recomputing from the bot's
         // new position and clearing/reissuing every AI tick repeatedly resets
@@ -1038,6 +1060,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             {
                 motionMaster->Clear(MOTION_SLOT_ACTIVE);
                 motionMaster->MovePoint(0, player->InBattleground() ? segmentDestination : state.lastSafePosition, true);
+                return true;
+            }
+
+            if (IsValidatedDirectHazardEgress(player, state.lastSafePosition))
+            {
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                motionMaster->MovePoint(0, state.lastSafePosition, false);
                 return true;
             }
         }
@@ -1073,7 +1102,31 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             }
         }
 
-        return false;
+        // A strict path can fail when the bot's current liquid polygon is not
+        // present in the navmesh. In that case, permit only a short grounded,
+        // collision-visible move to a non-hazardous bank. This is deliberately
+        // a second pass so a fully navmeshed route always wins.
+        for (float distance : probeDistances)
+        {
+            for (float offset : probeAngles)
+            {
+                Position destination = player->GetPosition();
+                float const angle = baseAngle + offset;
+                destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
+                destination = BuildCollisionSafeDestination(player, destination);
+                if (!IsValidatedDirectHazardEgress(player, destination))
+                    continue;
+
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                motionMaster->MovePoint(0, destination, false);
+                return true;
+            }
+        }
+
+        // Being in magma/slime always retains movement ownership. Reporting
+        // false here used to hand the tick back to class logic, allowing a bot
+        // with no accepted probe to stand still and cast until it died.
+        return true;
     }
 
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold, uint32 minReissueMs)
@@ -2161,6 +2214,35 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             player->GetPositionY() + std::sin(angleAway) * moveDistance,
             player->GetPositionZ(), player->GetOrientation());
         return IssueMovePointThrottled(player, destination, 4.0f, 500);
+    }
+
+    bool TryDrivePlayerbotEscapeAura(Player* player, Unit* target)
+    {
+        if (!player)
+            return false;
+
+        // Preserve the completed Elune's Grace invisibility instead of
+        // immediately attacking and cancelling it on the next tactical tick.
+        if (player->HasInvisibilityAura())
+        {
+            player->AttackStop();
+            player->SetSelection(ObjectGuid::Empty);
+            return true;
+        }
+
+        bool const fadingFromElunesGrace = player->HasAura(PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID);
+        bool const inWispForm = player->GetClass() == CLASS_PRIEST &&
+            player->HasAura(PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID);
+        if (!fadingFromElunesGrace && !inWispForm)
+            return false;
+
+        player->AttackStop();
+        if (target && target->IsAlive())
+            MoveAwayFromUnit(player, target, std::max(20.0f, playerbot::PvpCore::GetConfig().closeRange + 5.0f));
+
+        // The escape aura owns this tick even when movement is temporarily
+        // throttled; falling through to normal combat would replace its route.
+        return true;
     }
 
     bool TryRecoverLineOfSight(Player* player, Unit* target, CombatPositioningProfile const& profile, char const* reason)
@@ -3617,6 +3699,9 @@ namespace playerbot
         if (TryMoveOutOfHazardousLiquid(player))
             return true;
 
+        if (TryDrivePlayerbotEscapeAura(player, target))
+            return true;
+
         // Cast-time hunter actions such as Aimed Shot and Revive Pet must win
         // over every movement system. Check this before CanIssueBotMovement(),
         // recent-order preservation, LOS recovery, or distance-band movement so
@@ -3820,6 +3905,9 @@ namespace playerbot
             player->AttackStop();
             return false;
         }
+
+        if (TryDrivePlayerbotEscapeAura(player, target))
+            return true;
 
         player->SetSelection(target->GetGUID());
 
