@@ -1368,8 +1368,18 @@ void Spell::EffectJumpDest()
         else
             speedXY = 0.0f;
 
-        // Fire the client-side jump (you can spin in mid-air)
-        unitCaster->JumpTo(speedXY, speedZ, true, destPos);
+        // Real clients execute JumpTo from the knockback movement packet they
+        // receive. Virtual player sessions have no client movement loop to
+        // acknowledge that packet, so drive their jump from the server's
+        // MotionMaster instead. This also gives playerbot movement guards an
+        // EFFECT_MOTION_TYPE to protect until the leap finishes.
+        Player* playerCaster = unitCaster->ToPlayer();
+        WorldSession* session = playerCaster ? playerCaster->GetSession() : nullptr;
+        if (session && session->IsVirtualSession())
+            unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP,
+                !m_targets.GetObjectTargetGUID().IsEmpty());
+        else
+            unitCaster->JumpTo(speedXY, speedZ, true, destPos);
         return;
     }
     unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP, !m_targets.GetObjectTargetGUID().IsEmpty());

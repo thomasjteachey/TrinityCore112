@@ -3242,10 +3242,10 @@ Unit const* SelectFriendlyLowestHealthTarget(Player const* player, float maxDist
     return best;
 }
 
-// Finds the ally with the greatest distance strictly under maxDistance, i.e.
-// the ally closest to the range cap without exceeding it. Used by escape/leap
-// abilities that need a friendly destination near, but not past, their range.
-Unit const* SelectFriendlyNearRangeCapTarget(Player const* player, float maxDistance)
+// Finds the ally with the greatest distance strictly inside the supplied range,
+// i.e. the ally closest to the range cap without violating the spell's minimum.
+// Used by escape/leap abilities that need a valid friendly destination.
+Unit const* SelectFriendlyNearRangeCapTarget(Player const* player, float minDistance, float maxDistance)
 {
     if (!player || !player->FindMap())
         return nullptr;
@@ -3261,7 +3261,7 @@ Unit const* SelectFriendlyNearRangeCapTarget(Player const* player, float maxDist
             return;
 
         float const distance = player->GetDistance(candidate);
-        if (distance >= maxDistance || !player->IsWithinLOSInMap(candidate))
+        if (distance <= minDistance || distance >= maxDistance || !player->IsWithinLOSInMap(candidate))
             return;
 
         if (distance > bestDistance)
@@ -4432,7 +4432,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
     // are Moon Bash / Nature's Grasp / Leap instead of shifting to Bear Form.
     bool const balanceUnderMeleePressure = isBalanceDruid && CountNearbyEnemies(player, 10.0f) >= 1;
     Unit const* balanceMeleeRangeTarget = isBalanceDruid ? SelectNearbyMeleeTarget(player, target, 5.0f) : nullptr;
-    Unit const* balanceEscapeAlly = (isBalanceDruid && balanceMeleeRangeTarget) ? SelectFriendlyNearRangeCapTarget(player, 25.0f) : nullptr;
+    Unit const* balanceEscapeAlly = (isBalanceDruid && balanceMeleeRangeTarget) ? SelectFriendlyNearRangeCapTarget(player, 8.0f, 25.0f) : nullptr;
     // 81342/81343 are the moonkin talents that permit casting Regrowth/
     // Rejuvenation while shapeshifted; without them Moonkin Form blocks both.
     Unit const* balanceRegrowthTarget = (isBalanceDruid && player->HasAura(81342)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 80.0f) : nullptr;

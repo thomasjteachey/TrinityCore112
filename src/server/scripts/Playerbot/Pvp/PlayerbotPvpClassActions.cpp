@@ -1853,6 +1853,7 @@ bool IsGapCloserSpell(uint32 spellId)
         case 20617: // Intercept
         case 81271: // Heroic Leap
         case 82419: // Rehgar's Fury
+        case 83111: // Feral Charge - Moonkin
         case 49376: // Feral Charge - Cat
         case 16979: // Feral Charge - Bear
             return true;
@@ -4910,6 +4911,16 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         Position dest = target->GetPosition();
         EmitRehgarsFuryServerDiagnostic(player, target, "pre_cast");
         castResult = player->CastSpell(CastSpellTargetArg(dest), resolvedSpellId);
+    }
+    // Feral Charge - Moonkin has both an explicit friendly unit effect and a
+    // destination-at-target jump effect. Supply both target forms so the dummy
+    // effect keeps its ally and EffectJumpDest always receives m_targets.Dst.
+    else if (resolvedSpellId == 83111 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && target)
+    {
+        SpellCastTargets leapTargets;
+        leapTargets.SetUnitTarget(target);
+        leapTargets.SetDst(*target);
+        castResult = player->CastSpell(CastSpellTargetArg(std::move(leapTargets)), resolvedSpellId);
     }
     else if (itemTarget)
         castResult = player->CastSpell(CastSpellTargetArg(itemTarget), resolvedSpellId);

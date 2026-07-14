@@ -834,11 +834,13 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
         (type == DAMAGE_SLIME && IsImmunedToDamage(SPELL_SCHOOL_MASK_NATURE)))
         return 0;
 
-    if (type == DAMAGE_LAVA)
+    if (type == DAMAGE_LAVA || type == DAMAGE_SLIME)
     {
         WorldSession const* session = GetSession();
-        Battleground const* battleground = GetBattleground();
-        if (session && session->IsVirtualSession() && battleground && battleground->GetTypeID(true) == BATTLEGROUND_OBC)
+        // Managed playerbots and transient dark clones both use virtual
+        // sessions. Reduce damaging liquid terrain for either kind of bot
+        // without coupling core Player code to the playerbot script library.
+        if (session && session->IsVirtualSession())
             damage = (damage + 1) / 2;
     }
 
