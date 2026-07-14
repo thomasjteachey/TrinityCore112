@@ -40,10 +40,10 @@ constexpr uint32 CUSTOM_GAME_MAX_PLAYERS_PER_TEAM = 40;
 constexpr uint32 BLUE_FLAG_VISUAL = 32609;
 constexpr uint32 RED_FLAG_VISUAL = 32610;
 
-Position const LobbyArrival = { 16229.862305f, 16415.587891f, -64.378716f, 3.132112f };
-Position const BlueNpcPosition = { 16218.0f, 16424.0f, -64.378716f, 4.70f };
-Position const RedNpcPosition = { 16218.0f, 16407.0f, -64.378716f, 1.58f };
-Position const ChromieNpcPosition = { 16218.0f, 16415.5f, -64.378716f, 3.14f };
+Position const LobbyArrival = { 16240.299805f, 16402.800781f, -64.378502f, 3.104630f };
+Position const BlueNpcPosition = { 16240.299805f, 16402.800781f, -64.378502f, 3.104630f };
+Position const RedNpcPosition = { 16240.299805f, 16402.800781f, -64.378502f, 3.104630f };
+Position const ChromieNpcPosition = { 16240.299805f, 16402.800781f, -64.378502f, 3.104630f };
 constexpr float LOBBY_MAX_DISTANCE = 32.0f;
 
 enum GossipAction : uint32

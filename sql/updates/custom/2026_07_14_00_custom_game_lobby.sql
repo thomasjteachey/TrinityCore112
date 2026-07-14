@@ -52,6 +52,16 @@ UPDATE `creature_template` SET
     `flags_extra` = 0, `StringId` = NULL, `VerifiedBuild` = 0
 WHERE `entry` IN (900001, 900002, 900003, 900004);
 
+UPDATE `creature_template` AS `gamesmaster`
+JOIN `creature_template` AS `display_source` ON `display_source`.`entry` = 19219
+SET
+    `gamesmaster`.`modelid1` = `display_source`.`modelid1`,
+    `gamesmaster`.`modelid2` = `display_source`.`modelid2`,
+    `gamesmaster`.`modelid3` = `display_source`.`modelid3`,
+    `gamesmaster`.`modelid4` = `display_source`.`modelid4`,
+    `gamesmaster`.`scale` = 0.2
+WHERE `gamesmaster`.`entry` = 900001;
+
 DROP TEMPORARY TABLE `custom_game_template`;
 
 SET @CUSTOM_GAME_HOST_GUID := (SELECT COALESCE(MAX(`guid`), 0) + 1 FROM `creature`);
