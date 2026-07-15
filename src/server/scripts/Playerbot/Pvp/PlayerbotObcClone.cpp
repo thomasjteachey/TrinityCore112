@@ -878,6 +878,29 @@ void PlayerbotObcCloneManager::OnWorldUpdate(uint32 diffMs)
             SynchronizeHunterPetMirror(human, clone);
     }
 
+    // Custom-game clones (see CreateCustomGameClone) only ran the hunter pet
+    // mirror once, at clone creation. If the source hunter's pet was not
+    // actively summoned at that exact instant (dismissed, still logging in,
+    // etc.) the clone was petless for the entire match with no way to catch
+    // up -- unlike the dedicated OBC auto-clone loop above, which retries
+    // SynchronizeHunterPetMirror every tick via g_ClonesByHuman. Mirror that
+    // same periodic retry here so a custom-game clone picks up the source's
+    // pet whenever it actually gets summoned, not just at creation.
+    std::vector<CustomGameCloneRecord> customGameCloneRecords;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        customGameCloneRecords.reserve(g_CustomGameClones.size());
+        for (auto const& [cloneGuid, record] : g_CustomGameClones)
+            customGameCloneRecords.push_back(record);
+    }
+    for (CustomGameCloneRecord const& record : customGameCloneRecords)
+    {
+        Player* source = ObjectAccessor::FindConnectedPlayer(record.sourceGuid);
+        Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid);
+        if (source && clone && clone->IsInWorld())
+            SynchronizeHunterPetMirror(source, clone);
+    }
+
     std::vector<ObjectGuid> obcHumans;
     {
         std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
