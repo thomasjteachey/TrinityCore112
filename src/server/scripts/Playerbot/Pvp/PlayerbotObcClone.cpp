@@ -185,7 +185,22 @@ bool CopyEquipment(Player* clone, Player const* human)
         clone->EquipItem(destination, clonedItem, false);
     }
 
-    clone->SetUInt32Value(PLAYER_AMMO_ID, human->GetUInt32Value(PLAYER_AMMO_ID));
+    // Projectiles are not equipment, so the loop above never brings any ammo
+    // over. Spell::CheckItems requires the active ammo item to physically
+    // exist in the bags: on a miss it zeroes PLAYER_AMMO_ID and rejects every
+    // ranged attack with SPELL_FAILED_NO_AMMO -- for spell 75 the core
+    // neither interrupts nor resets the ranged timer on that failure, which
+    // is invisible on a socketless clone and kept cloned hunters from ever
+    // releasing Auto Shot. Stock a full match's worth of the human's ammo,
+    // then SetAmmo() writes the field and applies the ammo DPS bonus.
+    // Thori'dal-style no-ammo bows leave the source field at 0 and are
+    // covered by their own equip aura (46699) instead.
+    if (uint32 const sourceAmmoId = human->GetUInt32Value(PLAYER_AMMO_ID))
+    {
+        clone->StoreNewItemInBestSlots(sourceAmmoId, 2000);
+        clone->SetAmmo(sourceAmmoId);
+    }
+
     return true;
 }
 
