@@ -249,17 +249,14 @@ uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
     if (spellInfo->Id == 982)
         return std::max<uint32>(castTimeMs, 1000);
 
-    // Multi-Shot used to get an artificial 500ms floor here to protect its
-    // animation from the stutter-flee movement loop. That floor made
-    // IsHunterCastTimeShot()/HoldHunterStationaryCast() treat Multi-Shot as a
-    // stationary hard-cast, which armed kPlayerbotHunterStationaryCastLockToken
-    // on every Multi-Shot cast. EngageSelectedEnemyPlayer() checks
-    // HoldHunterStationaryCast() first and returns immediately (before ever
-    // reaching the Auto Shot cast below) whenever that lock is active --
-    // Multi-Shot is selectable roughly every GCD, so this kept Auto Shot from
-    // ever getting a chance to start. Multi-Shot is a genuine 0-cast-time
-    // instant with no cast bar to clip; let it fall through to the normal
-    // cast-time calculation like any other instant shot.
+    // Multi-Shot has a short stationary launch/cast window. Protect that
+    // window from playerbot movement even on custom data that reports zero,
+    // but do not treat it like Aimed Shot for Auto Shot cancellation: the two
+    // ranged attacks are allowed to coexist and the core delays Auto Shot as
+    // needed through m_AutoRepeatFirstCast.
+    if (IsHunterMultiShotSpell(spellInfo))
+        return std::max<uint32>(castTimeMs, 500);
+
     return castTimeMs > 0 ? castTimeMs : 0;
 }
 
@@ -1515,29 +1512,23 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
 
 bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return false;
 
-    float const distance = player->GetExactDist(target);
-    return distance > 5.0f && distance < 8.0f;
+    return rangeInfo.exactDistance > rangeInfo.meleeRange &&
+        rangeInfo.exactDistance < rangeInfo.minRange;
 }
 
 bool IsHunterAutoShotBand(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !player->HasSpell(75))
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return false;
 
-    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-    if (!autoShotInfo)
-        return false;
-
-    if (!player->IsWithinLOSInMap(target))
-        return false;
-
-    float const exactDistance = player->GetExactDist(target);
-    float const minAutoShotRange = autoShotInfo->GetMinRange(false);
-    float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-    return exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
+    return player->IsWithinLOSInMap(target) &&
+        rangeInfo.exactDistance > rangeInfo.minRange + 0.75f &&
+        rangeInfo.exactDistance <= rangeInfo.maxRange;
 }
 
 void StopHunterDamageOnBreakableCrowdControl(Player* player, Unit* target, char const* reason);
@@ -3725,9 +3716,10 @@ void DelayHunterRangedTimerForStationaryShot(Player* player, SpellInfo const* sp
     // Mirror the core Auto Shot protection in Unit::_UpdateAutoRepeatSpell():
     // when a hunter has a generic/channel spell preparing and the ranged timer
     // gets inside the Auto Shot launch window, keep the ranged timer slightly
-    // delayed.  The playerbot cast guard intentionally suppresses CURRENT_AUTOREPEAT_SPELL
-    // during Aimed Shot/Multi-Shot, so the core's auto-repeat update does not
-    // get a chance to perform this delay itself.  Without this, RANGED_ATTACK
+    // delayed. Aimed Shot/Revive Pet suppress Auto Shot; Multi-Shot keeps the
+    // auto-repeat active, but publishing the same 434ms floor here makes the
+    // bot's plant logic observe the correct post-cast release window. Without
+    // this, RANGED_ATTACK
     // can hit 0 in the middle of Aimed Shot and the shot can be clipped/aborted
     // even though the bot did not move.
     player->setAttackTimer(RANGED_ATTACK, 434);
@@ -3830,7 +3822,8 @@ void ScheduleHunterStationaryCastGuard(Player* player, Unit* target, uint32 spel
             // The guard should only HOLD other systems out and delay the ranged
             // timer. If something actually made the hunter move, log it and
             // apply one emergency stop.
-            StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
+            if (!IsHunterMultiShotSpell(currentInfo))
+                StopHunterAutoShotForStationaryCast(hunter, "hunter_stationary_cast_guard_stop_autoshot");
 
             bool const movedDuringCast = hunter->isMoving() ||
                 hunter->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
@@ -4824,15 +4817,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Movement/decision locks are not enough: CURRENT_AUTOREPEAT_SPELL can
         // still update independently and clip the generic cast on this branch.
         //
-        // Multi-Shot only needs the movement-hold/re-cast protection above
-        // (its "stationary cast" floor exists purely to stop the stutter-flee
-        // loop from clipping its animation); it is a genuinely instant shot
-        // that does not reset or conflict with the ranged auto-attack timer
-        // in-game. Unlike Aimed Shot/Revive Pet it must not interrupt Auto
-        // Shot here -- Multi-Shot is selectable roughly every GCD, faster
-        // than a full Auto Shot swing cycle, so unconditionally interrupting
-        // it made Auto Shot get restarted and killed again before it could
-        // ever complete a single shot.
+        // Multi-Shot has its own ~500ms stationary launch window, but it does
+        // not cancel the hunter's Auto Shot toggle. Hold movement and let the
+        // core delay the pending ranged release through m_AutoRepeatFirstCast;
+        // interrupting CURRENT_AUTOREPEAT_SPELL here restarted the full swing
+        // after every Multi-Shot and could prevent Auto Shot from ever firing.
         if (!IsHunterMultiShotSpell(spellInfo))
         {
             StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
@@ -5108,10 +5097,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (player->GetClass() == CLASS_HUNTER && IsHunterCastTimeShot(player, spellInfo))
     {
-        StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
+        bool const isMultiShot = IsHunterMultiShotSpell(spellInfo);
+        if (!isMultiShot)
+            StopHunterAutoShotForStationaryCast(player, "hunter_cast_accepted_stop_autoshot_for_stationary_cast");
         DelayHunterRangedTimerForStationaryShot(player, spellInfo, "cast_accepted");
         uint32 const castTimeMs = GetHunterStationaryCastTimeMs(spellInfo);
-        uint32 const lockMs = std::clamp<uint32>(castTimeMs + 750, 750, 12000);
+        uint32 const lockMs = isMultiShot
+            ? std::clamp<uint32>(castTimeMs + 150, 500, 1200)
+            : std::clamp<uint32>(castTimeMs + 750, 750, 12000);
 
         // Hunter shots with a stationary launch window can be clipped by the
         // lifecycle stutter loop before CURRENT_GENERIC_SPELL is visible to the

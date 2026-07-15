@@ -2102,36 +2102,20 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    bool GetHunterAutoShotRange(Player* player, Unit const* target, float& exactDistance, float& minAutoShotRange, float& maxAutoShotRange)
+    bool GetHunterAutoShotRange(Player* player, Unit const* target, playerbot::HunterAutoShotRangeInfo& rangeInfo)
     {
-        exactDistance = 0.0f;
-        minAutoShotRange = 0.0f;
-        maxAutoShotRange = 0.0f;
-
-        if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !player->HasSpell(75))
-            return false;
-
-        SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75);
-        if (!autoShotInfo)
-            return false;
-
-        exactDistance = player->GetExactDist(target);
-        minAutoShotRange = autoShotInfo->GetMinRange(false);
-        maxAutoShotRange = autoShotInfo->GetMaxRange(false, player);
-        return maxAutoShotRange > 0.0f;
+        return playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo);
     }
 
     bool IsHunterAutoShotBand(Player* player, Unit const* target)
     {
-        float exactDistance = 0.0f;
-        float minAutoShotRange = 0.0f;
-        float maxAutoShotRange = 0.0f;
-        if (!GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange))
+        playerbot::HunterAutoShotRangeInfo rangeInfo;
+        if (!GetHunterAutoShotRange(player, target, rangeInfo))
             return false;
 
         return player->IsWithinLOSInMap(target) &&
-            exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) &&
-            exactDistance <= maxAutoShotRange;
+            rangeInfo.exactDistance > rangeInfo.minRange + 0.75f &&
+            rangeInfo.exactDistance <= rangeInfo.maxRange;
     }
 
     bool StopHunterAndStartAutoShot(Player* player, Unit* target, char const* logReason)
@@ -2696,18 +2680,18 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // Pet. The decision and movement layers can be held, but auto-repeat is
         // updated by the core independently.
         //
-        // Only interrupt Auto Shot while a real generic cast is actively in
-        // progress (activeCast). explicitLock alone (no active cast visible)
-        // means we are past the cast itself, in the residual settle/grace
-        // window kept only to stop movement from clipping it -- most commonly
-        // Multi-Shot, whose "cast" is already finished by the time later
-        // ticks see it. Multi-Shot never needed to interrupt Auto Shot; doing
-        // so on every lock-only tick killed Auto Shot faster than it could
-        // ever complete a swing.
+        // Only Aimed Shot/Revive Pet-style hard casts cancel Auto Shot.
+        // Multi-Shot still owns a real ~500ms stationary window, but it keeps
+        // CURRENT_AUTOREPEAT_SPELL queued and merely delays its release. The
+        // explicit residual lock prevents movement from clipping either shot.
         WhisperHunterAimedLifecycleDiagnostic(player, target, reason ? reason : "stationary_hold", activeCast ? "activeCast=1" : "activeCast=0", 250);
+        SpellInfo const* activeGenericInfo = nullptr;
         if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
-            DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
-        if (activeCast)
+        {
+            activeGenericInfo = generic->GetSpellInfo();
+            DelayHunterRangedTimerForStationaryShot(player, activeGenericInfo);
+        }
+        if (activeCast && !IsHunterMultiShotSpell(activeGenericInfo))
             StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
 
         bool const movedDuringCast = player->isMoving() ||
@@ -2932,11 +2916,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
             return false;
 
-        float exactDistance = 0.0f;
-        float minAutoShotRange = 0.0f;
-        float maxAutoShotRange = 0.0f;
-        if (!GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange))
+        playerbot::HunterAutoShotRangeInfo rangeInfo;
+        if (!GetHunterAutoShotRange(player, target, rangeInfo))
             return false;
+
+        float const exactDistance = rangeInfo.exactDistance;
+        float const minAutoShotRange = rangeInfo.minRange;
+        float const maxAutoShotRange = rangeInfo.maxRange;
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
@@ -2947,14 +2933,14 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             plantUntilMs = 0;
             g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
         };
-        float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
+        float const safeShootMin = minAutoShotRange + 0.75f;
 
         // "Ideal range": a hunter that knows Mongoose Bite holds close
         // (~10y) to weave it between shots. Otherwise it holds five yards
         // inside its own fully modified Auto Shot range (Hawk Eye included).
         bool const hasMongooseBite = HunterKnowsMongooseBite(player);
         float const idealRange = hasMongooseBite
-            ? 10.0f
+            ? std::max(10.0f, safeShootMin + 1.0f)
             : std::max(safeShootMin + 1.0f, maxAutoShotRange - 5.0f);
 
         // If Mongoose Bite is actually off cooldown and the kill target is
@@ -3934,9 +3920,12 @@ namespace playerbot
         // was one cause of visible triangle/orbit movement.
         if (player->GetClass() == CLASS_HUNTER)
         {
-            float const exactDistance = player->GetExactDist(target);
+            playerbot::HunterAutoShotRangeInfo rangeInfo;
+            bool const hasHunterRange = GetHunterAutoShotRange(player, target, rangeInfo);
+            float const exactDistance = hasHunterRange ? rangeInfo.exactDistance : player->GetExactDist(target);
             bool const targetPressuringHunter = target->GetVictim() == player || player->IsWithinMeleeRange(target);
-            if ((targetPressuringHunter && exactDistance < 12.0f) || (exactDistance > 5.0f && exactDistance < 8.0f))
+            bool const inDeadZone = hasHunterRange && exactDistance > rangeInfo.meleeRange && exactDistance < rangeInfo.minRange;
+            if ((targetPressuringHunter && exactDistance < 12.0f) || inDeadZone)
                 MarkHunterKiteHold(player);
         }
 
@@ -3951,12 +3940,11 @@ namespace playerbot
             if (player->GetClass() != CLASS_HUNTER)
                 return true;
 
-            float exactDistance = 0.0f;
-            float minAutoShotRange = 0.0f;
-            float maxAutoShotRange = 0.0f;
-            bool const hasHunterRange = GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange);
+            playerbot::HunterAutoShotRangeInfo rangeInfo;
+            bool const hasHunterRange = GetHunterAutoShotRange(player, target, rangeInfo);
+            float const exactDistance = rangeInfo.exactDistance;
             bool const safeAutoShotBand = hasHunterRange && player->IsWithinLOSInMap(target) &&
-                exactDistance > std::max(minAutoShotRange + 0.75f, 8.75f) && exactDistance <= maxAutoShotRange;
+                exactDistance > rangeInfo.minRange + 0.75f && exactDistance <= rangeInfo.maxRange;
             bool const shouldBreakRecentOrder = safeAutoShotBand || IsHunterKiteHoldActive(player) || exactDistance < 12.0f;
             if (!shouldBreakRecentOrder)
                 return true;
@@ -4009,10 +3997,10 @@ namespace playerbot
             {
                 if (player->GetClass() == CLASS_HUNTER)
                 {
-                    float exactDistance = 0.0f;
-                    float minAutoShotRange = 0.0f;
-                    float maxAutoShotRange = 0.0f;
-                    bool const hasHunterRange = GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange);
+                    playerbot::HunterAutoShotRangeInfo rangeInfo;
+                    bool const hasHunterRange = GetHunterAutoShotRange(player, target, rangeInfo);
+                    float const exactDistance = rangeInfo.exactDistance;
+                    float const maxAutoShotRange = rangeInfo.maxRange;
 
                     // Beast Mastery's "weave" profile (GetCombatPositioningProfile)
                     // deliberately holds a much tighter ideal/max-pressure range
@@ -4313,19 +4301,12 @@ namespace playerbot
                 return DriveCombatPositioning(player, target, profile);
             }
 
-            bool inAutoShotRange = false;
-            float minAutoShotRange = 0.0f;
-            float maxAutoShotRange = 0.0f;
-            float distance = 0.0f;
-            bool hasLos = false;
-            if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
-            {
-                minAutoShotRange = autoShotInfo->GetMinRange(false);
-                maxAutoShotRange = autoShotInfo->GetMaxRange(false, player);
-                distance = player->GetDistance(target);
-                hasLos = player->IsWithinLOSInMap(target);
-                inAutoShotRange = hasLos && distance > minAutoShotRange && distance <= maxAutoShotRange;
-            }
+            playerbot::HunterAutoShotRangeInfo rangeInfo;
+            bool const hasRangeInfo = GetHunterAutoShotRange(player, target, rangeInfo);
+            bool const hasLos = player->IsWithinLOSInMap(target);
+            bool const inAutoShotRange = hasRangeInfo && hasLos &&
+                rangeInfo.exactDistance > rangeInfo.minRange + 0.75f &&
+                rangeInfo.exactDistance <= rangeInfo.maxRange;
 
             if (!inAutoShotRange)
             {
@@ -4333,16 +4314,21 @@ namespace playerbot
                     player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
 
                 std::ostringstream outOfRangeDiag;
-                outOfRangeDiag << "[AutoShot] out-of-range dist=" << distance << " min=" << minAutoShotRange
-                    << " max=" << maxAutoShotRange << " los=" << (hasLos ? 1 : 0) << " wasActive=" << (autoShotActive ? 1 : 0);
+                outOfRangeDiag << "[AutoShot] out-of-range dist=" << rangeInfo.exactDistance
+                    << " dbcMin=" << rangeInfo.dbcMinRange << " melee=" << rangeInfo.meleeRange
+                    << " effectiveMin=" << rangeInfo.minRange << " max=" << rangeInfo.maxRange
+                    << " deadZone=" << (hasRangeInfo && rangeInfo.exactDistance > rangeInfo.meleeRange && rangeInfo.exactDistance < rangeInfo.minRange ? 1 : 0)
+                    << " los=" << (hasLos ? 1 : 0) << " wasActive=" << (autoShotActive ? 1 : 0);
                 WhisperAutoShotDiagnosticToArena(player, outOfRangeDiag.str(), 1500);
             }
             else if (!autoShotActive)
             {
                 SpellCastResult const castResult = player->CastSpell(target, 75, false);
                 std::ostringstream castDiag;
-                castDiag << "[AutoShot] cast-attempt dist=" << distance << " min=" << minAutoShotRange
-                    << " max=" << maxAutoShotRange << " resultCode=" << uint32(castResult);
+                castDiag << "[AutoShot] cast-attempt dist=" << rangeInfo.exactDistance
+                    << " effectiveMin=" << rangeInfo.minRange << " max=" << rangeInfo.maxRange
+                    << " result=" << (castResult == SPELL_CAST_OK ? "OK" : EnumUtils::ToString(castResult).Title)
+                    << " resultCode=" << uint32(castResult);
                 WhisperAutoShotDiagnosticToArena(player, castDiag.str(), 500);
             }
         }

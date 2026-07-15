@@ -52,6 +52,15 @@ enum class BattlegroundState : uint8
     Active
 };
 
+struct HunterAutoShotRangeInfo
+{
+    float exactDistance = 0.0f;
+    float dbcMinRange = 0.0f;
+    float meleeRange = 0.0f;
+    float minRange = 0.0f;
+    float maxRange = 0.0f;
+};
+
 struct PvpValues
 {
     BattlegroundState battlegroundState = BattlegroundState::None;
@@ -225,6 +234,7 @@ class PvpCore
 public:
     static void LoadConfig();
     static PvpCoreConfig const& GetConfig();
+    static bool GetHunterAutoShotRange(Player const* player, Unit const* target, HunterAutoShotRangeInfo& rangeInfo);
 
     static PvpValues CollectValues(Player const* player);
     static bool CanMageBlinkOutOfControl(Player const* player);

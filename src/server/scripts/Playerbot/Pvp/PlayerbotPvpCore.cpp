@@ -642,39 +642,24 @@ void UpdateHunterCombatMode(Player const* player, Unit const* target)
     }
 }
 
-float GetHunterDeadZoneMaxRange()
+float GetHunterDeadZoneMaxRange(Player const* player, Unit const* target)
 {
-    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(kHunterAutoShotSpellId);
-    if (!autoShotInfo)
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return kReferenceHunterSwitchDistance;
 
-    float const minRange = autoShotInfo->GetMinRange(false);
-    if (minRange <= 0.0f)
-        return kReferenceHunterSwitchDistance;
-
-    // Some 3.3.5 spell metadata reports a lower min range than the classic
-    // hunter dead-zone actually enforced by the ranged weapon cast path. Keep
-    // the Classic 5-8y rule authoritative for PvP bot spacing.
-    return std::max(kReferenceHunterSwitchDistance, minRange);
-}
-
-float GetHunterAutoShotMaxRange()
-{
-    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(kHunterAutoShotSpellId);
-    if (!autoShotInfo)
-        return 35.0f;
-
-    float const maxRange = autoShotInfo->GetMaxRange(false);
-    return maxRange > 0.0f ? maxRange : 35.0f;
+    return rangeInfo.minRange;
 }
 
 bool IsHunterWithinAutoShotBand(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target)
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return false;
 
-    float const distance = player->GetDistance(target);
-    return distance > std::max(GetHunterDeadZoneMaxRange() + 0.75f, 8.75f) && distance <= GetHunterAutoShotMaxRange();
+    return player->IsWithinLOSInMap(target) &&
+        rangeInfo.exactDistance > rangeInfo.minRange + 0.75f &&
+        rangeInfo.exactDistance <= rangeInfo.maxRange;
 }
 
 uint8 IncrementCombatNoTargetTicks(Player const* player)
@@ -714,16 +699,16 @@ float GetConfiguredLongRange() { return g_PvpCoreConfig.longRange; }
 
 bool IsHunterExactDeadZone(Player const* player, Unit const* target)
 {
-    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
+    playerbot::HunterAutoShotRangeInfo rangeInfo;
+    if (!playerbot::PvpCore::GetHunterAutoShotRange(player, target, rangeInfo))
         return false;
 
-    // This must be the Classic hunter weapon dead-zone, not the configurable
-    // PvP melee spacing band. Playerbot.PvpClassSpells.Range.Melee defaults to
-    // 8y in LoadConfig(), which accidentally made the old check become
-    // distance > 8 && distance < 8 and disabled every dead-zone guard. That is
-    // why Viper Sting/Arcane Shot kept getting selected at exact 5-8y.
-    float const distance = player->GetExactDist(target);
-    return distance > kReferenceHunterMeleeDistance && distance < kReferenceHunterSwitchDistance;
+    // SPELL_RANGE_RANGED adds the caster/target melee range to the raw DBC
+    // minimum. For normal players this is the familiar 3 + 5 = 8 yard Auto
+    // Shot floor, but using the core-equivalent values also handles combat
+    // reach and custom melee-range modifiers correctly.
+    return rangeInfo.exactDistance > rangeInfo.meleeRange &&
+        rangeInfo.exactDistance < rangeInfo.minRange;
 }
 
 Unit const* SelectHunterDeadZoneEnemy(Player const* player, Unit const* preferredTarget)
@@ -765,7 +750,7 @@ float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
         return 6.0f;
 
     float const currentDistance = player->GetExactDist(target);
-    float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange() + 4.0f, 12.0f);
+    float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange(player, target) + 4.0f, 12.0f);
     return std::clamp(desiredExactDistance - currentDistance, 4.0f, 10.0f);
 }
 
@@ -775,7 +760,7 @@ float ComputeHunterMeleeKiteRetreatStep(Player const* player, Unit const* target
         return 10.0f;
 
     float const currentDistance = player->GetExactDist(target);
-    float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange() + 5.0f, 13.0f);
+    float const desiredExactDistance = std::max(GetHunterDeadZoneMaxRange(player, target) + 5.0f, 13.0f);
     return std::clamp(desiredExactDistance - currentDistance, 8.0f, 14.0f);
 }
 
@@ -5961,6 +5946,41 @@ void PvpCore::LoadConfig()
 PvpCoreConfig const& PvpCore::GetConfig()
 {
     return g_PvpCoreConfig;
+}
+
+bool PvpCore::GetHunterAutoShotRange(Player const* player, Unit const* target, HunterAutoShotRangeInfo& rangeInfo)
+{
+    rangeInfo = {};
+    if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !player->HasSpell(kHunterAutoShotSpellId))
+        return false;
+
+    SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(kHunterAutoShotSpellId);
+    if (!autoShotInfo || !autoShotInfo->RangeEntry)
+        return false;
+
+    rangeInfo.exactDistance = player->GetExactDist(target);
+    rangeInfo.dbcMinRange = player->GetSpellMinRangeForTarget(target, autoShotInfo);
+    if (autoShotInfo->RangeEntry->Flags & SPELL_RANGE_RANGED)
+        rangeInfo.meleeRange = player->GetMeleeRange(target);
+    rangeInfo.minRange = rangeInfo.dbcMinRange + rangeInfo.meleeRange;
+
+    // Keep this in the same order as Spell::GetMinMaxRange(): target-sensitive
+    // base range, ranged-weapon range modifier, caster spell-range modifiers,
+    // then combat reach (plus the moving-target tolerance used by the core).
+    rangeInfo.maxRange = player->GetSpellMaxRangeForTarget(target, autoShotInfo);
+    if (autoShotInfo->HasAttribute(SPELL_ATTR0_REQ_AMMO))
+        if (Item* rangedWeapon = player->GetWeaponForAttack(RANGED_ATTACK, true))
+            rangeInfo.maxRange *= rangedWeapon->GetTemplate()->RangedModRange * 0.01f;
+
+    if (Player* modOwner = player->GetSpellModOwner())
+        modOwner->ApplySpellMod(autoShotInfo->Id, SPELLMOD_RANGE, rangeInfo.maxRange, nullptr);
+
+    float maxRangeMod = player->GetCombatReach() + target->GetCombatReach();
+    if (player->isMoving() && target->isMoving() && !player->IsWalking() && !target->IsWalking() && target->GetTypeId() == TYPEID_PLAYER)
+        maxRangeMod += 8.0f / 3.0f;
+    rangeInfo.maxRange += maxRangeMod;
+
+    return rangeInfo.minRange > 0.0f && rangeInfo.maxRange > rangeInfo.minRange;
 }
 
 bool PvpCore::CanMageBlinkOutOfControl(Player const* player)
