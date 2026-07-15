@@ -658,7 +658,7 @@ bool IsHunterWithinAutoShotBand(Player const* player, Unit const* target)
         return false;
 
     return player->IsWithinLOSInMap(target) &&
-        rangeInfo.exactDistance > rangeInfo.minRange + 0.75f &&
+        rangeInfo.exactDistance > rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN &&
         rangeInfo.exactDistance <= rangeInfo.maxRange;
 }
 

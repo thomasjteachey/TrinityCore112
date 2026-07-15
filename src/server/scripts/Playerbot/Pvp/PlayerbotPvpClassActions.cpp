@@ -16,6 +16,7 @@
  */
 
 #include "PlayerbotPvpClassActions.h"
+#include "PlayerbotPvpLifecycleActions.h"
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
@@ -1527,60 +1528,11 @@ bool IsHunterAutoShotBand(Player const* player, Unit const* target)
         return false;
 
     return player->IsWithinLOSInMap(target) &&
-        rangeInfo.exactDistance > rangeInfo.minRange + 0.75f &&
+        rangeInfo.exactDistance > rangeInfo.minRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN &&
         rangeInfo.exactDistance <= rangeInfo.maxRange;
 }
 
 void StopHunterDamageOnBreakableCrowdControl(Player* player, Unit* target, char const* reason);
-
-void StopHunterAndStartAutoShot(Player* player, Unit* target, char const* reason)
-{
-    if (!player || !target || !target->IsAlive())
-        return;
-
-    if (TryMoveOutOfHazardousLiquid(player))
-        return;
-
-    if (target->HasBreakableByDamageCrowdControlAura())
-    {
-        StopHunterDamageOnBreakableCrowdControl(player, target, "hunter_hold_autoshot_suppressed_breakable_cc");
-        return;
-    }
-
-    MotionMaster* motionMaster = player->GetMotionMaster();
-    MovementGeneratorType const motionBefore = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
-    if (motionMaster)
-        motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
-    player->StopMoving();
-    // Clone mirrors use a transient (not virtual) session but are equally
-    // socketless -- see the matching fix in StopVirtualPlayerbotMovement
-    // (PlayerbotPvpLifecycleActions.cpp). Without this, a clone's stale
-    // MOVEMENTFLAG_MASK_MOVING bit made the engine treat it as still moving
-    // on the very next Auto Shot cast attempt below, clipping it.
-    if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
-    {
-        player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-        player->SendMovementFlagUpdate();
-    }
-
-    player->SetFacingToObject(target);
-    player->SetInFront(target);
-
-    Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-    bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
-    if (!autoShotActive && player->HasSpell(75))
-        player->CastSpell(target, 75, false);
-
-    std::ostringstream diag;
-    diag << (reason ? reason : "hunter_auto_shot_hold")
-         << " dist=" << player->GetDistance(target)
-         << " exact=" << player->GetExactDist(target)
-         << " motion_before=" << uint32(motionBefore)
-         << " motion_after=" << (motionMaster ? uint32(motionMaster->GetCurrentMovementGeneratorType()) : 0)
-         << " auto_active=" << (autoShotActive ? "yes" : "no");
-    SetLastMovementDebugStatus(player, diag.str());
-}
 
 float ComputeHunterDeadZoneRetreatStep(Player const* player, Unit const* target)
 {
@@ -1804,11 +1756,11 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     bool const strictPathing = RequiresStrictHumanPathing(player);
 
     // Hunters should not chase inward just because an instant shot is out of its
-    // shorter spell range. If Auto Shot is valid, hold ground and shoot; only
-    // close later when the target is actually beyond ranged-weapon range.
+    // shorter spell range. The lifecycle kite loop already owns ideal-range
+    // movement and the weapon-timer plant; class movement must neither replace
+    // that order nor stop early merely because Auto Shot is currently legal.
     if (!forceMovementWhenAlreadyInRange && targetAttackable && IsHunterAutoShotBand(player, target))
     {
-        StopHunterAndStartAutoShot(player, target, "hunter_ranged_approach_suppressed_autoshot_band");
         stallState.targetGuid = target->GetGUID();
         stallState.lastDistance = currentDistance;
         stallState.lastSampleMs = GameTime::GetGameTimeMS();
@@ -4574,12 +4526,13 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
         // When we are trying to cast but are still out of range, proactively
         // close the gap instead of idling and repeating failed cast attempts.
-        // Hunter exception: if ranged weapon Auto Shot is already valid, do not
-        // chase inward just to make Arcane/Concussive/Serpent range metadata happy.
+        // Hunter exception: if ranged weapon Auto Shot is already valid, leave
+        // movement untouched. DriveHunterKiteLoop owns both the ideal-range
+        // pursuit and the final weapon-timer plant.
         if (player->GetClass() == CLASS_HUNTER && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
             IsHunterAutoShotBand(player, target))
         {
-            StopHunterAndStartAutoShot(player, target, "hunter_cast_out_of_spell_range_hold_autoshot");
+            // No class-side movement or Auto Shot toggle here.
         }
         else if (CanIssueFollowCommands(player) && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy)
         {
@@ -5543,6 +5496,19 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
 {
     if (!player || !context.classSpellsEnabled || !context.shouldExecute)
         return false;
+
+    // Auto Shot planting is a real short stationary commitment. Lifecycle
+    // establishes the plant after the tactical/class pass, so without this
+    // cross-module guard the next class tick can cast or issue movement before
+    // the core receives 434 ms of uninterrupted stationary time. Let the
+    // triggered Auto Shot event release the plant before selecting another
+    // hunter action.
+    bool const hunterPlantEmergencyOverride = player->GetClass() == CLASS_HUNTER && context.spellId == 81300; // Bestial Wrath CC break
+    if (player->GetClass() == CLASS_HUNTER && !hunterPlantEmergencyOverride && playerbot::IsHunterAutoShotPlantActive(player))
+    {
+        SetLastExecutionStatus(player, "hunter_autoshot_plant_in_progress");
+        return true;
+    }
 
     // The context may have been selected just before a synchronous flag click
     // in the tactical pass. Recheck live carrier state before any spell can

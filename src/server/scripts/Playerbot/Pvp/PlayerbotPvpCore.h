@@ -29,6 +29,7 @@ class Unit;
 namespace playerbot
 {
 constexpr float PLAYERBOT_MOUNT_ENEMY_AWARENESS_RANGE = 100.0f;
+constexpr float PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN = 0.50f;
 
 struct PvpCoreConfig
 {
