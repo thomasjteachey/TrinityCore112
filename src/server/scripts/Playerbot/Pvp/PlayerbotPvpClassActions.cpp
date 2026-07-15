@@ -4951,8 +4951,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             // that movement. The cast is attempted immediately after this, so
             // it observes the corrected facing without interrupting the path.
             player->SetInFront(target);
-            if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-                player->SendMovementFlagUpdate();
         }
         else
         {
