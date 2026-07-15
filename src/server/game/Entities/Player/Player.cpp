@@ -9510,6 +9510,12 @@ void Player::SendInitWorldStates(uint32 zoneId, uint32 areaId)
         packet.Worldstates.emplace_back(2491, 15); // NA_UI_GUARDS_LEFT
     }
 
+    // Custom-game spectators may enter copied maps or spawn positions whose
+    // reported zone/area does not match the battleground type. The active
+    // BG object is authoritative for their initial WorldStateUI data.
+    if (battleground && battleground->IsCustomGame() && IsSpectator())
+        battleground->FillInitialWorldStates(packet);
+    else
     switch (zoneId)
     {
     case 1: // Dun Morogh

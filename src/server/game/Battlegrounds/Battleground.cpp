@@ -114,6 +114,14 @@ void Battleground::BroadcastWorker(Do& _do)
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayer(itr, "BroadcastWorker"))
             _do(player);
+
+    // Custom-game spectators are not members of m_Players, but they still
+    // need localized battleground announcements such as start countdowns
+    // and objective pickup/drop/capture messages.
+    if (m_IsCustomGame)
+        for (Player* spectator : m_Spectators)
+            if (spectator && spectator->IsInWorld() && spectator->GetBattlegroundId() == GetInstanceID())
+                _do(spectator);
 }
 
 Battleground::Battleground()
@@ -660,6 +668,14 @@ void Battleground::SendPacketToAll(WorldPacket const* packet)
     for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
         if (Player* player = _GetPlayer(itr, "SendPacketToAll"))
             player->SendDirectMessage(packet);
+
+    // Custom-game spectators live outside m_Players. Forward shared BG
+    // packets so their WorldStateUI, sounds, and other match-wide state
+    // remain synchronized with both custom arenas and custom battlegrounds.
+    if (m_IsCustomGame)
+        for (Player* spectator : m_Spectators)
+            if (spectator && spectator->IsInWorld() && spectator->GetBattlegroundId() == GetInstanceID())
+                spectator->SendDirectMessage(packet);
 }
 
 void Battleground::SendPacketToTeam(uint32 TeamID, WorldPacket const* packet, Player* sender, bool self)
