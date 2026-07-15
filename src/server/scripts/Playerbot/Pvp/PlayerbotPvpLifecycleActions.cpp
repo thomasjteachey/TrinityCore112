@@ -2226,7 +2226,16 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         switch (player->GetClass())
         {
-        case CLASS_HUNTER: return { 8.0f, 28.0f, 38.0f, true, true, false, "hunter-ranged" };
+        case CLASS_HUNTER:
+            // Beast Mastery leans on melee-weaving Mongoose Bite between Auto
+            // Shots (see SelectHunterSpell's bmReadyToBiteKillTarget), so it
+            // should hold near its Auto Shot dead-zone floor instead of
+            // kiting all the way out to max range like MM/SV. 81300 is the
+            // same Bestial Wrath capstone talent DetectClassicClassProfile
+            // uses to identify BM elsewhere in the playerbot AI.
+            if (player->HasTalent(81300, player->GetActiveSpec()))
+                return { 8.0f, 10.0f, 15.0f, true, true, true, "hunter-bm-weave" };
+            return { 8.0f, 28.0f, 38.0f, true, true, false, "hunter-ranged" };
         case CLASS_MAGE: return { 12.0f, 27.0f, 36.0f, true, true, false, "mage-ranged" };
         case CLASS_PRIEST: return { 10.0f, 25.0f, 34.0f, true, true, false, "priest-ranged" };
         case CLASS_WARLOCK: return { 10.0f, 26.0f, 35.0f, true, true, false, "warlock-ranged" };
@@ -2801,7 +2810,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return issued || alreadyMoving || player->isMoving();
     }
 
-    bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& /*profile*/)
+    bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& profile)
     {
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive())
             return false;
@@ -2823,6 +2832,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
         };
         float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
+
+        // Beast Mastery's profile (see GetCombatPositioningProfile) holds a
+        // tight ~10y ideal range instead of the normal 28y so it can weave
+        // Mongoose Bite into melee range between shots. Every other spec's
+        // profile keeps a wide ideal range close to max Auto Shot range, so
+        // this only changes behavior for BM.
+        bool const isWeaveProfile = profile.preferredIdealRange > 0.0f && profile.preferredIdealRange < maxAutoShotRange * 0.5f;
+        float const postShotFleeDistance = isWeaveProfile
+            ? std::clamp(profile.preferredIdealRange, safeShootMin + 1.0f, maxAutoShotRange - 1.0f)
+            : std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+
         bool const hasLos = player->IsWithinLOSInMap(target);
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
         bool const tooClose = exactDistance <= safeShootMin;
@@ -2899,7 +2919,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 plantUntilMs = 0;
                 g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
                 forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
-                float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+                float const desiredFleeDistance = postShotFleeDistance;
                 return IssueHunterStutterFlee(player, target, desiredFleeDistance, "autoshot-fired-resume-flee");
             }
 
@@ -2922,7 +2942,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // chain-plant forever and appear completely stuck.
         if (forceFleeUntilMs > nowMs && inAutoShotBand)
         {
-            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+            float const desiredFleeDistance = postShotFleeDistance;
             return IssueHunterStutterFlee(player, target, desiredFleeDistance, "post-shot-force-flee");
         }
 
@@ -2954,7 +2974,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // range/chase logic.
         if (inAutoShotBand)
         {
-            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
+            float const desiredFleeDistance = postShotFleeDistance;
             return IssueHunterStutterFlee(player, target, desiredFleeDistance, "timer-filling");
         }
 
