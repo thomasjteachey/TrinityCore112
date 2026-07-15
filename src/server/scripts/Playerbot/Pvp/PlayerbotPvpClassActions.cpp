@@ -5506,6 +5506,25 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
     bool const hunterPlantEmergencyOverride = player->GetClass() == CLASS_HUNTER && context.spellId == 81300; // Bestial Wrath CC break
     if (player->GetClass() == CLASS_HUNTER && !hunterPlantEmergencyOverride && playerbot::IsHunterAutoShotPlantActive(player))
     {
+        // Planting must hold the hunter's own movement/casts, not the pet. The
+        // previous early return occurred before every CommandPetAttackTarget()
+        // call, so a stalled Auto Shot plant also left a healthy hunter pet
+        // standing idle indefinitely.
+        Unit* petAttackTarget = nullptr;
+        if (Spell const* autoRepeat = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL))
+            if (SpellInfo const* autoRepeatInfo = autoRepeat->GetSpellInfo(); autoRepeatInfo && autoRepeatInfo->Id == 75)
+                petAttackTarget = autoRepeat->m_targets.GetUnitTarget();
+        if (!petAttackTarget)
+            petAttackTarget = player->GetVictim();
+        if (!petAttackTarget)
+            petAttackTarget = player->GetSelectedUnit();
+
+        if (petAttackTarget && petAttackTarget->IsAlive() && player->IsValidAttackTarget(petAttackTarget) &&
+            !petAttackTarget->HasBreakableByDamageCrowdControlAura())
+        {
+            CommandPetAttackTarget(player, petAttackTarget);
+        }
+
         SetLastExecutionStatus(player, "hunter_autoshot_plant_in_progress");
         return true;
     }

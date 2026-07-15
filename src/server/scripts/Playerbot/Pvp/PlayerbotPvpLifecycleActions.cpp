@@ -2049,7 +2049,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // IsVirtualSession() left clones with a stale MOVEMENTFLAG_MASK_MOVING
         // bit after every stop, which made the engine treat them as still
         // moving on the very next Auto Shot cast attempt and clip it.
-        if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
+        WorldSession* session = player->GetSession();
+        bool const syntheticPlayerbotMover =
+            playerbot::IsManagedRandomBot(player) ||
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(player) ||
+            (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()));
+        if (syntheticPlayerbotMover)
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
             player->SendMovementFlagUpdate();
@@ -3148,6 +3153,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
         }
 
+        // A ready, primed Mongoose Bite owns movement immediately. Do not let
+        // a plant established on the previous pass hold the hunter at range
+        // after the Sting/cooldown state has changed.
+        if (shouldCommitForBite && plantUntilMs != 0)
+            clearPlantState();
+
         if (plantUntilMs > nowMs)
         {
             stopFaceAndKeepAutoShot();
@@ -3156,15 +3167,24 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             auto const plantSequenceItr = g_HunterAutoShotPlantFireSequence.find(hunterGuidRaw);
             uint32 const plantFireSequence = plantSequenceItr != g_HunterAutoShotPlantFireSequence.end()
                 ? plantSequenceItr->second : fireSequence;
+            uint32 const rangedTimerMs = player->getAttackTimer(RANGED_ATTACK);
 
-            // Only the triggered Auto Shot projectile advances this sequence.
-            // Do not infer a shot from the ranged timer resetting: another
-            // non-triggered hunter ability can legally reset auto actions and
-            // would otherwise release the plant before Auto Shot actually fired.
-            if (fireSequence != plantFireSequence)
+            // During the plant, tactical movement and the hunter class executor
+            // are both held. Therefore a reset above the plant lead cannot have
+            // come from Arcane Shot/Multi-Shot; it is a reliable second signal
+            // that the core launched Auto Shot even if the PlayerScript callback
+            // was not emitted for this auto-repeat path.
+            bool const fireEventObserved = fireSequence != plantFireSequence;
+            bool const rangedTimerReset = rangedTimerMs > PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS;
+            if (fireEventObserved || rangedTimerReset)
             {
-                plantUntilMs = 0;
-                g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
+                std::ostringstream releaseDiag;
+                releaseDiag << "[AutoShot] fired-detected timer=" << rangedTimerMs
+                    << " sequence=" << fireSequence
+                    << " event=" << (fireEventObserved ? 1 : 0)
+                    << " timerReset=" << (rangedTimerReset ? 1 : 0);
+                WhisperAutoShotDiagnosticToArena(player, releaseDiag.str(), 0);
+                clearPlantState();
 
                 // The shot landed. Never reflexively retreat -- a hunter must
                 // never move just because a shot succeeded; only pursue the
