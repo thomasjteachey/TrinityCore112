@@ -25,6 +25,7 @@
 #include "ObjectMgr.h"
 #include "Log.h"
 #include "Map.h"
+#include "Movement/AbstractFollower.h"
 #include "MovementDefines.h"
 #include "MoveSpline.h"
 #include "MotionMaster.h"
@@ -429,6 +430,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
 void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target, float issuedRange, uint8 mode);
 void MarkTargetRelativeMovementLaunch(Player const* player);
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs, char const* label, std::string* reasonOut);
+bool HasActiveTargetRelativeMovementFor(Player const* player, Unit const* target);
 
 struct LastLosCastFailureState
 {
@@ -873,6 +875,42 @@ void MarkTargetRelativeMovementLaunch(Player const* player)
         return;
 
     itr->second.lastLaunchMs = GameTime::GetGameTimeMS();
+}
+
+// A live CHASE/FOLLOW generator already actively targeting this exact unit
+// must never be replaced by a fresh MoveChase/MoveFollow call, even when a
+// distance/progress heuristic would otherwise justify reissuing one. Chase
+// and Follow already repath internally against a moving target; issuing a
+// new one on top of an already-running generator makes MoveSplineInit
+// resync the server position to the old spline before launching the
+// replacement, while the client may still be interpolating the prior
+// packet. That mismatch renders as a sporadic forward teleport/snap onto
+// the target -- most visible against a kiting target that a melee bot can
+// never fully close on, where distance-progress heuristics keep concluding
+// "not progressing" and approving a reissue every cadence tick. See the
+// matching fix/comment in PlayerbotPvpLifecycleActions.cpp.
+bool HasActiveTargetRelativeMovementFor(Player const* player, Unit const* target)
+{
+    if (!player || !target)
+        return false;
+
+    MotionMaster const* motionMaster = player->GetMotionMaster();
+    if (!motionMaster)
+        return false;
+
+    MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+    if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+        return false;
+
+    MovementGenerator const* movement = motionMaster->GetCurrentMovementGenerator();
+    AbstractFollower const* follower = movement ? dynamic_cast<AbstractFollower const*>(movement) : nullptr;
+    if (!follower || follower->GetTarget() != target)
+        return false;
+
+    bool const activeSpline = player->movespline && player->movespline->Initialized() &&
+        !player->movespline->Finalized();
+    return activeSpline || player->isMoving() ||
+        player->HasUnitState(UNIT_STATE_CHASE_MOVE | UNIT_STATE_FOLLOW_MOVE);
 }
 
 bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* target, float desiredRange, uint32 minRunMs,
@@ -2342,6 +2380,12 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
                 }
             }
 
+            if (HasActiveTargetRelativeMovementFor(player, target))
+            {
+                SetLastMovementDebugStatus(player, "stealth_melee_active_target_relative_motion_preserved");
+                return;
+            }
+
             std::string preserveDiag;
             if (ShouldPreserveTargetRelativeMovement(player, target, 1.5f, 2000, "stealth_melee_existing_motion_preserved", &preserveDiag))
             {
@@ -2383,6 +2427,12 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         }
 
         IssueThrottledFollowMovement(player, target, 1.5f);
+        return;
+    }
+
+    if (HasActiveTargetRelativeMovementFor(player, target))
+    {
+        SetLastMovementDebugStatus(player, "melee_active_target_relative_motion_preserved");
         return;
     }
 
