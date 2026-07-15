@@ -3271,10 +3271,22 @@ void Unit::_UpdateSpells(uint32 time)
 void Unit::_UpdateAutoRepeatSpell()
 {
     SpellInfo const* autoRepeatSpellInfo = m_currentSpells[CURRENT_AUTOREPEAT_SPELL]->m_spellInfo;
+    constexpr uint32 AutoShotReleaseDelayMs = 434;
 
-    // check "realtime" interrupts
-    if ((GetTypeId() == TYPEID_PLAYER && ToPlayer()->isMoving()) || IsNonMeleeSpellCast(false, false, true, autoRepeatSpellInfo->Id == 75))
+    bool const playerMoving = GetTypeId() == TYPEID_PLAYER && ToPlayer()->isMoving();
+    bool const blockedByCast = IsNonMeleeSpellCast(false, false, true, autoRepeatSpellInfo->Id == 75);
+
+    // Auto Shot's weapon timer continues counting down while the hunter moves
+    // or performs another cast, but the final release window cannot complete
+    // until the hunter has stood still and is otherwise free to shoot. Clamp
+    // that final window before returning so AI and real clients observe the
+    // actual 3.3.5-style timer state instead of a misleading zero timer while
+    // movement/casting is still blocking the shot.
+    if (playerMoving || blockedByCast)
     {
+        if (autoRepeatSpellInfo->Id == 75 && getAttackTimer(RANGED_ATTACK) < AutoShotReleaseDelayMs)
+            setAttackTimer(RANGED_ATTACK, AutoShotReleaseDelayMs);
+
         // cancel wand shoot
         if (autoRepeatSpellInfo->Id != 75)
             InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
@@ -3282,15 +3294,17 @@ void Unit::_UpdateAutoRepeatSpell()
         return;
     }
 
-    //hunter autoshot change
-    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < 434)
+    // Keep the same minimum release window when a generic/channel spell and
+    // Auto Shot overlap. Auto Shot remains queued; it simply cannot release
+    // until this delay has elapsed while stationary.
+    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) &&
+        getAttackTimer(RANGED_ATTACK) < AutoShotReleaseDelayMs)
     {
-        setAttackTimer(RANGED_ATTACK, 434);
+        setAttackTimer(RANGED_ATTACK, AutoShotReleaseDelayMs);
     }
 
-    // apply delay (Auto Shot (spellID 75) not affected) (just kidding lol)
-    if (m_AutoRepeatFirstCast && getAttackTimer(RANGED_ATTACK) < 434)
-        setAttackTimer(RANGED_ATTACK, 434);
+    if (m_AutoRepeatFirstCast && getAttackTimer(RANGED_ATTACK) < AutoShotReleaseDelayMs)
+        setAttackTimer(RANGED_ATTACK, AutoShotReleaseDelayMs);
     m_AutoRepeatFirstCast = false;
 
     // castroutine

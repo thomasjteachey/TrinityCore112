@@ -2106,8 +2106,8 @@ bool HasAnyAuraFromSpellChain(Unit const* unit, std::initializer_list<uint32> ba
 
 bool HasHunterDamagingStingFromCaster(Unit const* unit, ObjectGuid casterGuid)
 {
-    return HasAuraFromSpellChain(unit, 25295, casterGuid) || // Serpent Sting
-        HasAuraFromSpellChain(unit, 14280, casterGuid) ||    // Viper Sting
+    return HasAuraFromSpellChain(unit, 1978, casterGuid) || // Serpent Sting
+        HasAuraFromSpellChain(unit, 3034, casterGuid) ||     // Viper Sting
         HasAuraFromSpellChain(unit, 3043, casterGuid);       // Scorpid Sting
 }
 
@@ -4317,16 +4317,16 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         player->IsWithinLOSInMap(bmPet) &&
         std::abs(player->GetPositionZ() - bmPet->GetPositionZ()) <= 20.0f;
     bool const bmCrowdControlled = isBeastMasteryHunter && IsHunterBestialWrathBreakableControl(player);
-    bool const bmHasBitePrimerOnKillTarget = isBeastMasteryHunter && activeTarget && HasHunterDamagingStingFromCaster(activeTarget, player->GetGUID());
+    bool const hasMongooseBite = ResolveKnownPlayerSpellInChain(player, 81285) != 0;
+    bool const hasBitePrimerOnKillTarget = hasMongooseBite && activeTarget &&
+        HasHunterDamagingStingFromCaster(activeTarget, player->GetGUID());
     // Must also require melee range: this flag suppresses every ranged
-    // filler below (concussive shot, arcane shot, multi-shot, viper sting)
-    // whenever it is true. Without the range check it went true purely from
-    // having a Sting up, so a BM hunter kiting at max range with a Sting
-    // ticking would have every ranged option suppressed and Auto Shot would
-    // never fire -- the AI held out for a melee bite it couldn't reach. Now
-    // ranged fillers stay available while closing/holding at range, and only
-    // get suppressed once the bot is actually in melee range to bite.
-    bool const bmReadyToBiteKillTarget = bmHasBitePrimerOnKillTarget && !IsRootedOrSnared(player) &&
+    // filler below (Concussive Shot, Arcane Shot, Multi-Shot, Viper Sting)
+    // whenever it is true. Without the range check it would go true purely
+    // from having a Sting up, making the hunter hold all ranged pressure for
+    // a bite it had not reached yet. The movement layer closes whenever the
+    // learned bite is ready; fillers remain available until melee is reached.
+    bool const readyToBiteKillTarget = hasBitePrimerOnKillTarget && !IsRootedOrSnared(player) &&
         activeTarget && player->IsWithinMeleeRange(activeTarget);
     Unit const* manaTarget = isSurvivalHunter
         ? SelectNearbyEnemyManaTarget(player, activeTarget, GetConfiguredLongRange(), 0.0f)
@@ -4387,7 +4387,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         21.0f,
         { "hunter wing clip", "close-range fallback snare", 14268, playerbot::PvpClassSpellContext::TargetMode::Enemy,
             enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
+    AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && !targetClose && !targetSnaredOrStunned && IsSpellReady(player, 5116), 20.0f,
         { "hunter concussive shot", "kite or chase control", 5116, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && activeTarget && activeTarget->GetPowerType() != POWER_MANA &&
         !HasHunterStingFromCaster(activeTarget, player->GetGUID()) && IsSpellReady(player, 25295), 19.75f,
@@ -4396,15 +4396,15 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter serpent sting", "apply ranged dot pressure", 25295, playerbot::PvpClassSpellContext::TargetMode::Enemy, rogueTarget ? rogueTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && isMarksmanshipHunter && rangedMode && !enemyNear && IsSpellReady(player, 20904), 18.0f,
         { "hunter aimed shot", "long cast pressure from range", 20904, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, bmHasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
-        { "hunter mongoose bite", "consume hunter sting for beast mastery melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
+    AddDecisionCandidate(candidates, hasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
+        { "hunter mongoose bite", "consume hunter sting for melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
         { "hunter arcane shot", "instant pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
+    AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee && IsSpellReady(player, 25294), 17.0f,
         { "hunter multi-shot", "ranged burst pressure", 25294, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && rangedMode && !inMelee && IsSpellReady(player, 3045), 16.0f,
         { "hunter rapid fire", "burst cooldown while freecasting at range", 3045, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !bmReadyToBiteKillTarget && !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
+    AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && manaTarget && !HasBreakableCrowdControl(manaTarget) && manaTarget->GetPowerType() == POWER_MANA && !HasAuraFromSpellChain(manaTarget, 14280) && IsSpellReady(player, 14280), 15.0f,
         { "hunter viper sting", "drain mana on mana users", 14280, playerbot::PvpClassSpellContext::TargetMode::Enemy, manaTarget ? manaTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isMarksmanshipHunter && enemyOnTop && (!IsSpellReady(player, 5384) || !IsSpellReady(player, 14311)) && IsSpellReady(player, 19503) && !HasBreakableCrowdControl(enemyOnTopTarget), 14.0f,
         { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
@@ -4417,11 +4417,11 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition &&
         (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player)) && IsSpellReady(player, 81297), 36.5f,
         { "hunter outmaneuver", "swap to the pet's safe position under movement or melee pressure", 81297, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isBeastMasteryHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
+    AddDecisionCandidate(candidates, hasMongooseBite && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
         { "hunter mongoose bite", "bite the nearest attacker under melee pressure", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     // The old unconditional fallback candidate here (no melee-range check,
     // relying on SelectHighestPriorityCastableDecision's uncastable-decision
-    // fallback to force approach movement) is gone: bmReadyToBiteKillTarget
+    // fallback to force approach movement) is gone: readyToBiteKillTarget
     // now requires melee range itself, which makes it identical to the
     // melee-range-gated candidate above minus the root/snare check, so it
     // never added anything and only forced the bot to path in from any

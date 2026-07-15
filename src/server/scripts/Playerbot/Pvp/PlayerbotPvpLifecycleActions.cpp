@@ -104,7 +104,7 @@ namespace
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS = 1500;
+    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS = 2200;
     constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
@@ -2037,6 +2037,36 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         }
     }
 
+    // StopMoving() only terminates the current spline. A POINT/CHASE/FOLLOW
+    // generator remains installed and can launch a new spline on the next
+    // MotionMaster update, which is fatal to Auto Shot's final 434ms stationary
+    // release window. Hunter planting/settling therefore needs to relinquish
+    // the active ordinary movement generator as well as clear movement flags.
+    // Effect movement (charges/leaps), knockbacks, and other high-priority
+    // generators are deliberately left alone.
+    void StopHunterTargetMovementForPlant(Player* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (motionMaster)
+        {
+            switch (motionMaster->GetCurrentMovementGeneratorType())
+            {
+                case POINT_MOTION_TYPE:
+                case CHASE_MOTION_TYPE:
+                case FOLLOW_MOTION_TYPE:
+                    motionMaster->Clear(MOTION_SLOT_ACTIVE);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        StopVirtualPlayerbotMovement(player);
+    }
+
     bool BreakExpiredHunterFeignDeath(Player* player)
     {
         if (!player || player->GetClass() != CLASS_HUNTER || !player->HasAura(kHunterFeignDeathSpellId))
@@ -2056,7 +2086,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    bool GetHunterAutoShotRange(Player const* player, Unit const* target, float& exactDistance, float& minAutoShotRange, float& maxAutoShotRange)
+    bool GetHunterAutoShotRange(Player* player, Unit const* target, float& exactDistance, float& minAutoShotRange, float& maxAutoShotRange)
     {
         exactDistance = 0.0f;
         minAutoShotRange = 0.0f;
@@ -2071,11 +2101,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         exactDistance = player->GetExactDist(target);
         minAutoShotRange = autoShotInfo->GetMinRange(false);
-        maxAutoShotRange = autoShotInfo->GetMaxRange(false);
+        maxAutoShotRange = autoShotInfo->GetMaxRange(false, player);
         return maxAutoShotRange > 0.0f;
     }
 
-    bool IsHunterAutoShotBand(Player const* player, Unit const* target)
+    bool IsHunterAutoShotBand(Player* player, Unit const* target)
     {
         float exactDistance = 0.0f;
         float minAutoShotRange = 0.0f;
@@ -2093,15 +2123,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player || player->GetClass() != CLASS_HUNTER || !target || !target->IsAlive() || !IsHunterAutoShotBand(player, target))
             return false;
 
-        StopVirtualPlayerbotMovement(player);
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
-            if (motionMaster->GetCurrentMovementGeneratorType() == CHASE_MOTION_TYPE ||
-                motionMaster->GetCurrentMovementGeneratorType() == FOLLOW_MOTION_TYPE)
-                motionMaster->Clear(MOTION_SLOT_ACTIVE);
-
+        StopHunterTargetMovementForPlant(player);
         player->SetFacingToObject(target);
         player->SetInFront(target);
-        StopVirtualPlayerbotMovement(player);
+        StopHunterTargetMovementForPlant(player);
 
         Spell const* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
         bool const autoShotActive = autoRepeatSpell && autoRepeatSpell->GetSpellInfo() && autoRepeatSpell->GetSpellInfo()->Id == 75;
@@ -2250,14 +2275,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         switch (player->GetClass())
         {
         case CLASS_HUNTER:
-            // Beast Mastery leans on melee-weaving Mongoose Bite between Auto
-            // Shots (see SelectHunterSpell's bmReadyToBiteKillTarget), so it
-            // should hold near its Auto Shot dead-zone floor instead of
-            // kiting all the way out to max range like MM/SV. 81300 is the
-            // same Bestial Wrath capstone talent DetectClassicClassProfile
-            // uses to identify BM elsewhere in the playerbot AI.
-            if (player->HasTalent(81300, player->GetActiveSpec()))
-                return { 8.0f, 10.0f, 15.0f, true, true, true, "hunter-bm-weave" };
+            // The actual learned ability, not the detected talent profile, owns
+            // hunter spacing. Any hunter that knows Mongoose Bite should hold
+            // around 10 yards so it can step in and consume a Sting when the
+            // bite is ready; hunters without it hold five yards inside their
+            // true modified Auto Shot range in DriveHunterKiteLoop.
+            if (player->HasSpell(81285))
+                return { 8.0f, 10.0f, 15.0f, true, true, true, "hunter-mongoose-weave" };
             return { 8.0f, 28.0f, 38.0f, true, true, false, "hunter-ranged" };
         case CLASS_MAGE: return { 12.0f, 27.0f, 36.0f, true, true, false, "mage-ranged" };
         case CLASS_PRIEST: return { 10.0f, 25.0f, 34.0f, true, true, false, "priest-ranged" };
@@ -2864,30 +2888,27 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     // here) -- kept in sync manually if the sting spell list ever changes.
     bool HasHunterDamagingStingFromThisCaster(Unit const* unit, ObjectGuid casterGuid)
     {
-        return HasAuraFromSpellChainCastBy(unit, 25295, casterGuid) || // Serpent Sting
-            HasAuraFromSpellChainCastBy(unit, 14280, casterGuid) ||    // Viper Sting
+        return HasAuraFromSpellChainCastBy(unit, 1978, casterGuid) || // Serpent Sting
+            HasAuraFromSpellChainCastBy(unit, 3034, casterGuid) ||     // Viper Sting
             HasAuraFromSpellChainCastBy(unit, 3043, casterGuid);       // Scorpid Sting
     }
 
     bool HunterKnowsMongooseBite(Player const* player)
     {
-        return player && (player->HasSpell(81285) || player->HasSpell(81286) || player->HasSpell(81287));
+        // 81285 is the player-facing Mongoose Bite. 81286/81287 are the
+        // triggered main/off-hand effects handled by spell_hunter.cpp and
+        // must not independently make the AI think the ability is learned
+        // or ready while the real 81285 cooldown is active.
+        return player && player->HasSpell(81285);
     }
 
     bool IsHunterMongooseBiteReady(Player* player)
     {
-        if (!player)
+        if (!HunterKnowsMongooseBite(player))
             return false;
 
         SpellHistory* history = player->GetSpellHistory();
-        if (!history)
-            return false;
-
-        for (uint32 spellId : { 81285u, 81286u, 81287u })
-            if (player->HasSpell(spellId) && !history->HasCooldown(spellId))
-                return true;
-
-        return false;
+        return history && !history->HasCooldown(81285);
     }
 
     bool DriveHunterKiteLoop(Player* player, Unit* target, CombatPositioningProfile const& profile)
@@ -2912,30 +2933,26 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         };
         float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
 
-        // "Ideal range": a hunter that knows Mongoose Bite should hold close
-        // (~10y) to weave it in between shots; a hunter without it should
-        // simply sit comfortably inside its own true max range, not out at
-        // the ragged edge. maxAutoShotRange above has no caster-side range
-        // mods applied (GetHunterAutoShotRange calls GetMaxRange with no
-        // caster), so recompute the Hawkeye-inclusive value here specifically
-        // for this formula; the hard in-band checks below intentionally keep
-        // using the unmodified maxAutoShotRange already proven correct
-        // elsewhere (EngageSelectedEnemyPlayer's own range check, etc.).
-        float modifiedMaxAutoShotRange = maxAutoShotRange;
-        if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
-            modifiedMaxAutoShotRange = autoShotInfo->GetMaxRange(false, player);
+        // "Ideal range": a hunter that knows Mongoose Bite holds close
+        // (~10y) to weave it between shots. Otherwise it holds five yards
+        // inside its own fully modified Auto Shot range (Hawk Eye included).
         bool const hasMongooseBite = HunterKnowsMongooseBite(player);
         float const idealRange = hasMongooseBite
             ? 10.0f
-            : std::max(safeShootMin + 1.0f, modifiedMaxAutoShotRange - 5.0f);
+            : std::max(safeShootMin + 1.0f, maxAutoShotRange - 5.0f);
 
         // If Mongoose Bite is actually off cooldown and the kill target is
         // already stung, closing to melee to land the bite takes priority
         // over holding the ranged ideal range.
         bool const mongooseBiteReady = hasMongooseBite && IsHunterMongooseBiteReady(player);
         bool const targetStung = mongooseBiteReady && HasHunterDamagingStingFromThisCaster(target, player->GetGUID());
-        bool const shouldCloseForBite = mongooseBiteReady && targetStung && !player->IsWithinMeleeRange(target);
-        float const desiredDistance = shouldCloseForBite ? 3.0f : idealRange;
+        bool const shouldCommitForBite = mongooseBiteReady && targetStung;
+        bool const shouldCloseForBite = shouldCommitForBite && !player->IsWithinMeleeRange(target);
+        // Stay committed at melee distance until the bite consumes the Sting.
+        // Switching back to the 10-yard ideal the instant melee range was
+        // reached made lifecycle movement retreat before the class tick could
+        // actually cast Mongoose Bite.
+        float const desiredDistance = shouldCommitForBite ? 3.0f : idealRange;
 
         bool const hasLos = player->IsWithinLOSInMap(target);
         bool const inAutoShotBand = hasLos && exactDistance > safeShootMin && exactDistance <= maxAutoShotRange;
@@ -2967,10 +2984,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 return;
             }
 
-            StopVirtualPlayerbotMovement(player);
+            StopHunterTargetMovementForPlant(player);
             player->SetFacingToObject(target);
             player->SetInFront(target);
-            StopVirtualPlayerbotMovement(player);
+            StopHunterTargetMovementForPlant(player);
 
             if (!HunterHasActiveAutoShot(player) && player->HasSpell(75))
                 player->CastSpell(target, 75, false);
@@ -2987,7 +3004,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             if (std::fabs(exactDistance - desiredDistance) <= 2.0f)
             {
-                StopVirtualPlayerbotMovement(player);
+                StopHunterTargetMovementForPlant(player);
                 if (hasLos)
                 {
                     player->SetFacingToObject(target);
@@ -3012,7 +3029,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return TryRecoverLineOfSight(player, target, GetCombatPositioningProfile(player), "hunter-stutter-los");
         }
 
-        if (tooClose && !shouldCloseForBite)
+        if (tooClose && !shouldCommitForBite)
         {
             clearPlantState();
             MarkHunterKiteHold(player);
@@ -3029,8 +3046,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 ? plantSequenceItr->second : fireSequence;
 
             // Only the triggered Auto Shot projectile advances this sequence.
-            // Instant hunter abilities do not participate in the plant
-            // transition, regardless of their normal combat timing.
+            // Do not infer a shot from the ranged timer resetting: another
+            // non-triggered hunter ability can legally reset auto actions and
+            // would otherwise release the plant before Auto Shot actually fired.
             if (fireSequence != plantFireSequence)
             {
                 plantUntilMs = 0;
@@ -3048,7 +3066,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         }
 
         // If we somehow reached the max plant deadline without seeing the
-        // ranged timer reset, clear the stale plant state so the next tick
+        // triggered Auto Shot event, clear the stale plant state so the next tick
         // re-evaluates fresh instead of holding on a stale read forever.
         if (plantUntilMs != 0 && plantUntilMs <= nowMs)
         {
@@ -3059,10 +3077,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
         bool const autoShotActive = HunterHasActiveAutoShot(player);
 
-        // Do not plant (stop and commit to firing) while actively closing for
-        // a Mongoose Bite opportunity -- reaching melee range takes priority
-        // over holding still for the next shot.
-        bool const shouldPlantForAutoShot = inAutoShotBand && !shouldCloseForBite &&
+        // Do not plant (stop and commit to firing) while committed to a
+        // Mongoose Bite opportunity. Closing to melee and remaining there
+        // long enough for the class action to consume the Sting takes priority.
+        bool const shouldPlantForAutoShot = inAutoShotBand && !shouldCommitForBite &&
             (autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
 
         if (shouldPlantForAutoShot)
@@ -3085,7 +3103,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // of parking or fleeing. Moving is always safe here -- it only
         // clamps the last fraction of the ranged timer, which the plant
         // branch above already accounts for.
-        return pursueDesiredDistance(shouldCloseForBite ? "closing-for-mongoose-bite" : "pursue-ideal-range");
+        return pursueDesiredDistance(shouldCommitForBite
+            ? (shouldCloseForBite ? "closing-for-mongoose-bite" : "hold-for-mongoose-bite")
+            : "pursue-ideal-range");
     }
 
     Player* FindFlagCarrierForDirective(Player* player, playerbot::FlagCarrierDirective directive)
@@ -4245,7 +4265,12 @@ namespace playerbot
         }
 
         CombatPositioningProfile const profile = GetCombatPositioningProfile(player);
-        bool const useMeleeAttack = !profile.primarilyRanged || profile.meleeFallbackAcceptable;
+        // "Melee fallback acceptable" means a ranged profile may fight back once
+        // an enemy has actually reached melee. It must not make a hunter begin
+        // a melee chase from its 10-yard Mongoose weave position, because that
+        // active chase generator immediately breaks the Auto Shot plant window.
+        bool const useMeleeAttack = !profile.primarilyRanged ||
+            (profile.meleeFallbackAcceptable && player->IsWithinMeleeRange(target));
         bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
         bool const targetInBreakableCrowdControl = target->HasBreakableByDamageCrowdControlAura();
         bool const alreadyAttackingTarget = player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID();
@@ -4257,7 +4282,7 @@ namespace playerbot
             if (alreadyAttackingTarget)
                 player->AttackStop();
         }
-        else if (!alreadyAttackingTarget || !meleeAutoAttackActive)
+        else if (!alreadyAttackingTarget || meleeAutoAttackActive != useMeleeAttack)
             player->Attack(target, useMeleeAttack);
 
         if (player->GetClass() == CLASS_HUNTER && profile.primarilyRanged && player->HasSpell(75))
@@ -4279,7 +4304,7 @@ namespace playerbot
             if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
             {
                 minAutoShotRange = autoShotInfo->GetMinRange(false);
-                maxAutoShotRange = autoShotInfo->GetMaxRange(false);
+                maxAutoShotRange = autoShotInfo->GetMaxRange(false, player);
                 distance = player->GetDistance(target);
                 hasLos = player->IsWithinLOSInMap(target);
                 inAutoShotRange = hasLos && distance > minAutoShotRange && distance <= maxAutoShotRange;
