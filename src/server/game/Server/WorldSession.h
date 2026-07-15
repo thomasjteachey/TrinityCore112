@@ -62,6 +62,15 @@ enum AuctionAction : uint8;
 enum AuctionError : uint8;
 enum InventoryResult : uint8;
 
+enum class GmDiagnosticCategory : uint8
+{
+    Heartbeat = 0x01,
+    Combat    = 0x02,
+    Playerbot = 0x04,
+    Feign     = 0x08,
+    All       = 0x0F
+};
+
 namespace lfg
 {
     struct LfgJoinResultData;
@@ -478,6 +487,19 @@ class TC_GAME_API WorldSession
         void InvalidateRBACData(); // Used to force LoadPermissions at next HasPermission check
 
         AccountTypes GetSecurity() const { return _security; }
+        bool IsGmDiagnosticEnabled(GmDiagnosticCategory category) const
+        {
+            return (_gmDiagnosticMask & static_cast<uint8>(category)) != 0;
+        }
+        void SetGmDiagnosticEnabled(GmDiagnosticCategory category, bool enabled)
+        {
+            uint8 const mask = static_cast<uint8>(category);
+            if (enabled)
+                _gmDiagnosticMask |= mask;
+            else
+                _gmDiagnosticMask &= static_cast<uint8>(~mask);
+        }
+        uint8 GetGmDiagnosticMask() const { return _gmDiagnosticMask; }
         uint32 GetAccountId() const { return _accountId; }
         std::string const& GetAccountName() const { return _accountName; }
         Player* GetPlayer() const { return _player; }
@@ -1235,6 +1257,7 @@ class TC_GAME_API WorldSession
      // std::string m_LAddress;                             // Last Attempted Remote Adress - we can not set attempted ip for a non-existing session!
 
         AccountTypes _security;
+        uint8 _gmDiagnosticMask;
         uint32 _accountId;
         uint32 m_sessionMapKey;
         std::string _accountName;

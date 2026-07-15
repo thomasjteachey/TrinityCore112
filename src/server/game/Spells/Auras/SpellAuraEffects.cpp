@@ -55,6 +55,33 @@ namespace PolearmStaffInnerAuras
 
 namespace
 {
+    constexpr uint32 SpellRogueNeilyoImmunity = 81439;
+    constexpr uint32 SpellRogueVanishImmunity = 89783;
+
+    bool IsRogueVanishProtectionImmunity(SpellInfo const* spellInfo)
+    {
+        if (!spellInfo)
+            return false;
+
+        return spellInfo->Id == SpellRogueNeilyoImmunity || spellInfo->Id == SpellRogueVanishImmunity;
+    }
+
+    bool HasClientVisibleDamageImmunity(Unit const* unit)
+    {
+        if (!unit)
+            return false;
+
+        for (AuraEffect const* effect : unit->GetAuraEffectsByType(SPELL_AURA_SCHOOL_IMMUNITY))
+            if (!IsRogueVanishProtectionImmunity(effect->GetSpellInfo()))
+                return true;
+
+        for (AuraEffect const* effect : unit->GetAuraEffectsByType(SPELL_AURA_DAMAGE_IMMUNITY))
+            if (!IsRogueVanishProtectionImmunity(effect->GetSpellInfo()))
+                return true;
+
+        return false;
+    }
+
     bool IsFollowFearSpell(SpellInfo const* spellInfo)
     {
         if (!spellInfo)
@@ -3331,14 +3358,21 @@ void AuraEffect::HandleAuraModSchoolImmunity(AuraApplication const* aurApp, uint
 
     if (apply)
     {
-        target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+        // Vanish's short protection still applies its server-side spell immunities, but it must not
+        // advertise the generic damage-immunity unit flag to the client. That flag makes the 3.3.5a
+        // client reject battleground flag interactions before the server can consume stealth.
+        if (!IsRogueVanishProtectionImmunity(m_spellInfo))
+            target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+
         target->GetThreatManager().EvaluateSuppressed();
     }
     else
     {
-        // do not remove unit flag if there are more than this auraEffect of that kind on unit
-        if (target->HasAuraType(GetAuraType()) || target->HasAuraType(SPELL_AURA_DAMAGE_IMMUNITY))
+        // Only keep the client-visible flag for a real immunity. Vanish protection is deliberately
+        // excluded so an overlapping Divine Shield/Ice Block removal cannot leave the flag stuck.
+        if (HasClientVisibleDamageImmunity(target))
             return;
+
         target->RemoveUnitFlag(UNIT_FLAG_IMMUNE);
     }
 }
@@ -3353,14 +3387,18 @@ void AuraEffect::HandleAuraModDmgImmunity(AuraApplication const* aurApp, uint8 m
 
     if (apply)
     {
-        target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+        // See HandleAuraModSchoolImmunity: Vanish protection must remain a server-side immunity
+        // without setting the client flag that blocks battleground flag use.
+        if (!IsRogueVanishProtectionImmunity(m_spellInfo))
+            target->SetUnitFlag(UNIT_FLAG_IMMUNE);
+
         target->GetThreatManager().EvaluateSuppressed();
     }
     else
     {
-        // do not remove unit flag if there are more than this auraEffect of that kind on unit
-        if (target->HasAuraType(GetAuraType()) || target->HasAuraType(SPELL_AURA_SCHOOL_IMMUNITY))
+        if (HasClientVisibleDamageImmunity(target))
             return;
+
         target->RemoveUnitFlag(UNIT_FLAG_IMMUNE);
     }
 }

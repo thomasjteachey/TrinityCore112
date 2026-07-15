@@ -388,6 +388,10 @@ void WhisperInsigniaDiagnostic(Player const* player, std::string const& detail)
     if (!player || !player->duel || !player->duel->Opponent)
         return;
 
+    WorldSession const* observerSession = player->duel->Opponent->GetSession();
+    if (!observerSession || !observerSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot))
+        return;
+
     const_cast<Player*>(player)->Whisper("INSIGNIA DIAG: " + detail, LANG_UNIVERSAL, player->duel->Opponent);
 }
 

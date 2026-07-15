@@ -125,8 +125,8 @@ namespace
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
     constexpr uint32 CombatDiagnosticDelay = 5 * IN_MILLISECONDS;
     constexpr uint32 CombatDiagnosticCheckInterval = 1 * IN_MILLISECONDS;
-    constexpr uint32 ElgromFeignTrapDiagnosticWindow = 1 * IN_MILLISECONDS;
-    constexpr uint32 ElgromFeignDeathSpell = 5384;
+    constexpr uint32 FeignTrapDiagnosticWindow = 1 * IN_MILLISECONDS;
+    constexpr uint32 FeignDeathSpell = 5384;
     constexpr float CombatDiagnosticEnemyRange = 10.0f;
     constexpr size_t CombatDiagnosticMaxReferences = 10;
     constexpr uint32 SpellRogueNeilyoImmunity = 81439;
@@ -172,9 +172,9 @@ namespace
         return enemy != nullptr;
     }
 
-    bool IsElgromHumanCombatDiagnosticTarget(Player const* player)
+    bool IsHumanHunterFeignDiagnosticTarget(Player const* player)
     {
-        if (!player || player->GetClass() != CLASS_HUNTER || player->GetName() != "Elgrom")
+        if (!player || player->GetClass() != CLASS_HUNTER)
             return false;
 
         WorldSession const* session = player->GetSession();
@@ -25784,11 +25784,11 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
     m_combatDiagnosticCheckTimer = 0;
     m_combatDiagnosticHasDirectSpellCast = true;
 
-    if (!IsElgromHumanCombatDiagnosticTarget(this))
+    if (!IsHumanHunterFeignDiagnosticTarget(this))
         return;
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-    if (spellId == ElgromFeignDeathSpell)
+    if (spellId == FeignDeathSpell)
     {
         m_combatDiagnosticFeignTrapTimer = 0;
         m_combatDiagnosticFeignHealth = GetHealth();
@@ -25796,7 +25796,7 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
         m_combatDiagnosticFeignFailedSpellId = 0;
         m_combatDiagnosticFeignFailedResult = 0;
         m_combatDiagnosticFeignTrapPending = true;
-        m_combatDiagnosticFeignSawAura = HasAura(ElgromFeignDeathSpell);
+        m_combatDiagnosticFeignSawAura = HasAura(FeignDeathSpell);
         m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
         return;
     }
@@ -25806,7 +25806,7 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
 
     m_combatDiagnosticFeignLastDirectSpellId = spellId;
     if (IsHunterTrapSpellForCombatDiagnostic(spellInfo) &&
-        m_combatDiagnosticFeignTrapTimer <= ElgromFeignTrapDiagnosticWindow)
+        m_combatDiagnosticFeignTrapTimer <= FeignTrapDiagnosticWindow)
     {
         m_combatDiagnosticFeignTrapPending = false;
     }
@@ -25814,7 +25814,7 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
 
 void Player::NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result)
 {
-    if (!m_combatDiagnosticFeignTrapPending || !IsElgromHumanCombatDiagnosticTarget(this))
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
         return;
 
     if (!IsHunterTrapSpellForCombatDiagnostic(sSpellMgr->GetSpellInfo(spellId)))
@@ -25826,7 +25826,12 @@ void Player::NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult 
 
 void Player::UpdateCombatDiagnostic(uint32 diff)
 {
-    UpdateElgromFeignTrapDiagnostic(diff);
+    UpdateFeignTrapDiagnostic(diff);
+
+    WorldSession const* session = GetSession();
+    if (!session || !session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat))
+        return;
+
     AdvanceCombatDiagnosticTimer(m_combatDiagnosticDirectSpellTimer, diff);
 
     if (!IsInCombat())
@@ -25857,28 +25862,28 @@ void Player::UpdateCombatDiagnostic(uint32 diff)
     m_combatDiagnosticSent = true;
 }
 
-void Player::UpdateElgromFeignTrapDiagnostic(uint32 diff)
+void Player::UpdateFeignTrapDiagnostic(uint32 diff)
 {
     if (!m_combatDiagnosticFeignTrapPending)
         return;
 
-    if (!IsElgromHumanCombatDiagnosticTarget(this))
+    if (!IsHumanHunterFeignDiagnosticTarget(this))
     {
         m_combatDiagnosticFeignTrapPending = false;
         return;
     }
 
-    m_combatDiagnosticFeignSawAura = m_combatDiagnosticFeignSawAura || HasAura(ElgromFeignDeathSpell);
+    m_combatDiagnosticFeignSawAura = m_combatDiagnosticFeignSawAura || HasAura(FeignDeathSpell);
     m_combatDiagnosticFeignSawOutOfCombat = m_combatDiagnosticFeignSawOutOfCombat || !IsInCombat();
     AdvanceCombatDiagnosticTimer(m_combatDiagnosticFeignTrapTimer, diff);
-    if (m_combatDiagnosticFeignTrapTimer < ElgromFeignTrapDiagnosticWindow)
+    if (m_combatDiagnosticFeignTrapTimer < FeignTrapDiagnosticWindow)
         return;
 
-    SendElgromFeignTrapDiagnostic();
+    SendFeignTrapDiagnostic();
     m_combatDiagnosticFeignTrapPending = false;
 }
 
-void Player::SendElgromFeignTrapDiagnostic()
+void Player::SendFeignTrapDiagnostic()
 {
     Spell const* generic = GetCurrentSpell(CURRENT_GENERIC_SPELL);
     Spell const* channel = GetCurrentSpell(CURRENT_CHANNELED_SPELL);
@@ -25889,8 +25894,11 @@ void Player::SendElgromFeignTrapDiagnostic()
     };
 
     std::ostringstream diagnostic;
-    diagnostic << "[Combat diagnostic][Elgrom FD/trap] No trap completed within 1000ms"
-               << "; feignAuraNow=" << (HasAura(ElgromFeignDeathSpell) ? 1 : 0)
+    diagnostic << "[Feign diagnostic] player=" << GetName()
+               << " guid=" << GetGUID().ToString()
+               << " class=" << uint32(GetClass())
+               << "; no trap completed within 1000ms"
+               << "; feignAuraNow=" << (HasAura(FeignDeathSpell) ? 1 : 0)
                << ", sawFeignAura=" << (m_combatDiagnosticFeignSawAura ? 1 : 0)
                << ", combatNow=" << (IsInCombat() ? 1 : 0)
                << ", sawOutOfCombat=" << (m_combatDiagnosticFeignSawOutOfCombat ? 1 : 0)
@@ -25925,8 +25933,20 @@ void Player::SendElgromFeignTrapDiagnostic()
     diagnostic << '.';
 
     std::string const message = diagnostic.str();
-    TC_LOG_WARN("combat.diagnostic", "{}", message);
-    sWorld->SendServerMessage(SERVER_MSG_STRING, message, this);
+    bool delivered = false;
+    for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
+    {
+        WorldSession* observerSession = sessionPair.second;
+        if (!observerSession || !observerSession->GetPlayer() ||
+            !observerSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign))
+            continue;
+
+        ChatHandler(observerSession).SendSysMessage(message);
+        delivered = true;
+    }
+
+    if (delivered)
+        TC_LOG_WARN("combat.diagnostic", "{}", message);
 }
 
 void Player::SendCombatDiagnostic()

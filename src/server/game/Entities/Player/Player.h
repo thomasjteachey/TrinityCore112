@@ -2591,9 +2591,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void ApplyActiveStarfireSnare();
         void ApplyActiveStarfireSnare(UnitMoveType moveType);
         void UpdateCombatDiagnostic(uint32 diff);
-        void UpdateElgromFeignTrapDiagnostic(uint32 diff);
+        void UpdateFeignTrapDiagnostic(uint32 diff);
         void SendCombatDiagnostic();
-        void SendElgromFeignTrapDiagnostic();
+        void SendFeignTrapDiagnostic();
 
         // internal common parts for CanStore/StoreItem functions
         InventoryResult CanStoreItem_InSpecificSlot(uint8 bag, uint8 slot, ItemPosCountVec& dest, ItemTemplate const* pProto, uint32& count, bool swap, Item* pSrcItem) const;

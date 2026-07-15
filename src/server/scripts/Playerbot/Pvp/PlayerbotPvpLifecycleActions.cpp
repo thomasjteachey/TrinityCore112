@@ -84,6 +84,12 @@ namespace playerbot
 
 namespace
 {
+    bool WantsPlayerbotDiagnostics(Player const* observer)
+    {
+        WorldSession const* session = observer ? observer->GetSession() : nullptr;
+        return session && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot);
+    }
+
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
     std::unordered_map<uint64, uint32> g_HunterAutoShotPlantFireSequence;
     std::mutex g_HunterAutoShotEventLock;
@@ -756,7 +762,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             WorldSession* session = sessionPair.second;
             Player* observer = session ? session->GetPlayer() : nullptr;
-            if (observer && (observer->IsGameMaster() || session->GetSecurity() > SEC_PLAYER))
+            if (WantsPlayerbotDiagnostics(observer))
                 ChatHandler(session).SendSysMessage(message);
         }
     }
@@ -2519,7 +2525,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         }
 
         std::string const message = os.str();
-        if (player->duel && player->duel->Opponent)
+        if (player->duel && WantsPlayerbotDiagnostics(player->duel->Opponent))
             player->Whisper(message, LANG_UNIVERSAL, player->duel->Opponent);
 
         Map* map = player->FindMap();
@@ -2529,7 +2535,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
         {
             Player* observer = itr->GetSource();
-            if (!observer || !observer->IsGameMaster())
+            if (!WantsPlayerbotDiagnostics(observer))
                 continue;
             if (player->duel && player->duel->Opponent && observer->GetGUID() == player->duel->Opponent->GetGUID())
                 continue;
@@ -4171,13 +4177,10 @@ namespace playerbot
         return true;
     }
 
-    // TEMPORARY, narrowly-scoped debugging aid for the Auto Shot investigation
-    // only -- deliberately does not go through WhisperHunterAimedLifecycleDiagnostic
-    // or WhisperPlayerbotDiagnostic, since those are gated to duel-opponent/active-GM
-    // by design to avoid spamming every playerbot's diagnostics. This instead
-    // reaches anyone actually present in the same battleground/arena instance
-    // as the bot, which is what's needed to observe a bot in a real arena/BG
-    // match without toggling GM mode. Remove once Auto Shot is confirmed fixed.
+    // TEMPORARY, narrowly-scoped debugging aid for the Auto Shot investigation.
+    // It reaches opted-in playerbot diagnostic observers in the same
+    // battleground/arena instance without requiring active GM mode.
+    // Remove once Auto Shot is confirmed fixed.
     std::unordered_map<uint64, uint32> g_AutoShotDiagLastMsByGuid;
 
     void WhisperAutoShotDiagnosticToArena(Player* player, std::string const& message, uint32 throttleMs = 0)
@@ -4204,7 +4207,8 @@ namespace playerbot
             bool const observerIsPlayerbot = observer &&
                 (playerbot::IsManagedRandomBot(observer) || playerbot::PlayerbotObcCloneManager::IsActiveClone(observer));
             if (!observer || observer == player || observerIsPlayerbot ||
-                observer->GetBattlegroundId() != player->GetBattlegroundId())
+                observer->GetBattlegroundId() != player->GetBattlegroundId() ||
+                !WantsPlayerbotDiagnostics(observer))
                 continue;
 
             player->Whisper(message, LANG_UNIVERSAL, observer);

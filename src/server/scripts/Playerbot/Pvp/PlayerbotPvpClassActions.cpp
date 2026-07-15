@@ -63,6 +63,12 @@ constexpr uint32 kWarlockFirestoneItemEntry = 13701;
 constexpr uint32 kWarlockCreateSoulwellSpellId = 29886;
 constexpr uint32 kWarlockRitualOfSoulsSpellId = 29893;
 
+bool WantsPlayerbotDiagnostics(Player const* observer)
+{
+    WorldSession const* session = observer ? observer->GetSession() : nullptr;
+    return session && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot);
+}
+
 bool IsLifeTapSpell(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
@@ -3082,7 +3088,7 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         return;
 
     Player* opponent = player->duel->Opponent;
-    if (opponent)
+    if (WantsPlayerbotDiagnostics(opponent))
     {
         std::string message = "Decision: ";
         message += context.actionName ? context.actionName : "none";
@@ -3108,7 +3114,7 @@ void NotifyDuelDecision(Player* player, playerbot::PvpClassSpellContext const& c
         failureReason.empty() ? "none" : failureReason);
 }
 
-void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellContext const& context, SpellCastResult castResult)
+void NotifySpellCastFailureToDiagnosticObservers(Player* bot, playerbot::PvpClassSpellContext const& context, SpellCastResult castResult)
 {
     if (!bot || castResult == SPELL_CAST_OK || castResult == SPELL_FAILED_SPELL_IN_PROGRESS)
         return;
@@ -3131,7 +3137,7 @@ void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellCo
     for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
     {
         Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
+        if (!WantsPlayerbotDiagnostics(observer))
             continue;
 
         bot->Whisper(message, LANG_UNIVERSAL, observer);
@@ -3190,7 +3196,7 @@ void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
     if (!bot || message.empty())
         return;
 
-    if (bot->duel && bot->duel->Opponent)
+    if (bot->duel && WantsPlayerbotDiagnostics(bot->duel->Opponent))
         bot->Whisper(message, LANG_UNIVERSAL, bot->duel->Opponent);
 
     Map* map = bot->FindMap();
@@ -3200,7 +3206,7 @@ void WhisperPlayerbotDiagnostic(Player* bot, std::string const& message)
     for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
     {
         Player* observer = itr->GetSource();
-        if (!observer || !observer->IsGameMaster())
+        if (!WantsPlayerbotDiagnostics(observer))
             continue;
 
         if (bot->duel && bot->duel->Opponent && observer->GetGUID() == bot->duel->Opponent->GetGUID())
@@ -3253,7 +3259,7 @@ void EmitRehgarsFuryServerDiagnostic(Player* player, Unit* target, char const* p
     {
         WorldSession* session = sessionPair.second;
         Player* observer = session ? session->GetPlayer() : nullptr;
-        if (observer && (observer->IsGameMaster() || session->GetSecurity() > SEC_PLAYER))
+        if (WantsPlayerbotDiagnostics(observer))
             ChatHandler(session).SendSysMessage(message);
     }
 }
@@ -5093,7 +5099,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                     context.spellId == kHunterCallPetSpellId ? "call_pet_failed" : "revive_pet_failed", castResult));
             }
 
-            NotifySpellCastFailureToGameMasters(player, context, castResult);
+            NotifySpellCastFailureToDiagnosticObservers(player, context, castResult);
             EnumText const reasonText = EnumUtils::ToString(castResult);
             failureReason = reasonText.Title;
             return false;

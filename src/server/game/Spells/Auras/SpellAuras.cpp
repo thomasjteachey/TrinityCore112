@@ -2235,7 +2235,7 @@ void Aura::LogHeartbeatRemoval(Unit* target, AuraRemoveMode removeMode) const
         return;
 
     WorldSession* casterSession = casterPlayer->GetSession();
-    if (!casterSession || casterSession->GetSecurity() < SEC_GAMEMASTER)
+    if (!casterSession || !casterSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Heartbeat))
         return;
 
     int32 heartbeatBase = m_heartbeatDurationBase > 0 ? m_heartbeatDurationBase : m_heartbeatDurationCap;
