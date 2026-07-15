@@ -3283,7 +3283,7 @@ void Unit::_UpdateAutoRepeatSpell()
     }
 
     //hunter autoshot change
-    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < 500)
+    if ((m_currentSpells[CURRENT_GENERIC_SPELL] || m_currentSpells[CURRENT_CHANNELED_SPELL]) && getAttackTimer(RANGED_ATTACK) < 434)
     {
         setAttackTimer(RANGED_ATTACK, 434);
     }
