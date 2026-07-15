@@ -4809,8 +4809,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         // Aimed Shot/Revive Pet must not coexist with a queued Auto Shot.
         // Movement/decision locks are not enough: CURRENT_AUTOREPEAT_SPELL can
         // still update independently and clip the generic cast on this branch.
-        StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
-        WhisperHunterCastDiagnostic(player, target, "pre_cast_autoshot_suppressed", resolvedSpellId);
+        //
+        // Multi-Shot only needs the movement-hold/re-cast protection above
+        // (its "stationary cast" floor exists purely to stop the stutter-flee
+        // loop from clipping its animation); it is a genuinely instant shot
+        // that does not reset or conflict with the ranged auto-attack timer
+        // in-game. Unlike Aimed Shot/Revive Pet it must not interrupt Auto
+        // Shot here -- Multi-Shot is selectable roughly every GCD, faster
+        // than a full Auto Shot swing cycle, so unconditionally interrupting
+        // it made Auto Shot get restarted and killed again before it could
+        // ever complete a single shot.
+        if (!IsHunterMultiShotSpell(spellInfo))
+        {
+            StopHunterAutoShotForStationaryCast(player, "hunter_pre_cast_stop_autoshot_for_stationary_cast");
+            WhisperHunterCastDiagnostic(player, target, "pre_cast_autoshot_suppressed", resolvedSpellId);
+        }
     }
 
     if (requiresStationaryCast)

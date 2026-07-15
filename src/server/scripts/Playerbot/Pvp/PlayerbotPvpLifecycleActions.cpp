@@ -2632,10 +2632,20 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // Do not let an already-queued Auto Shot live through Aimed Shot/Revive
         // Pet. The decision and movement layers can be held, but auto-repeat is
         // updated by the core independently.
+        //
+        // Only interrupt Auto Shot while a real generic cast is actively in
+        // progress (activeCast). explicitLock alone (no active cast visible)
+        // means we are past the cast itself, in the residual settle/grace
+        // window kept only to stop movement from clipping it -- most commonly
+        // Multi-Shot, whose "cast" is already finished by the time later
+        // ticks see it. Multi-Shot never needed to interrupt Auto Shot; doing
+        // so on every lock-only tick killed Auto Shot faster than it could
+        // ever complete a swing.
         WhisperHunterAimedLifecycleDiagnostic(player, target, reason ? reason : "stationary_hold", activeCast ? "activeCast=1" : "activeCast=0", 250);
         if (Spell const* generic = player->GetCurrentSpell(CURRENT_GENERIC_SPELL))
             DelayHunterRangedTimerForStationaryShot(player, generic->GetSpellInfo());
-        StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
+        if (activeCast)
+            StopHunterAutoShotForStationaryCast(player, "hunter_stationary_cast_hold_stop_autoshot");
 
         bool const movedDuringCast = player->isMoving() ||
             player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE) ||
