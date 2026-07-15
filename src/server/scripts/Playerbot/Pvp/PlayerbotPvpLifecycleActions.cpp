@@ -3014,10 +3014,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (tooFar)
         {
             // Only close if the hunter has genuinely drifted outside Auto Shot
-            // range. Close to the outer edge, never to preferred/ideal range.
+            // range. Close to the outer edge, never to preferred/ideal range --
+            // except for BM's weave profile, where "the outer edge" (~34y) is
+            // exactly the distance this function must NOT settle at. This was
+            // the last of three hardcoded, spell-range-based distances in this
+            // function (the other two already route through postShotFleeDistance
+            // above); missing it here meant a hunter that drifted past max
+            // range got pulled back to ~34y instead of the profile's ~10y,
+            // undoing any progress the weave profile had made closing in.
             // IssueHumanLikeFollow gates internally; an outer pre-check here
             // double-consumed the same-tick throttle token (see MoveAwayFromUnit).
-            float const closeToRange = std::max(1.0f, maxAutoShotRange - 1.0f);
+            float const closeToRange = isWeaveProfile ? postShotFleeDistance : std::max(1.0f, maxAutoShotRange - 1.0f);
             bool const issued = IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 700);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP hunter stutter loop: bot={} target={} decision=close-to-autoshot-edge distance={} followRange={} issued={}",
