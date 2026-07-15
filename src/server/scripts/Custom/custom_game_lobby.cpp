@@ -65,6 +65,10 @@ enum GossipAction : uint32
     ACTION_ADD_RANDOM_BOT,
     ACTION_REMOVE_BOT_OR_CLONE,
     ACTION_ADD_DARK,
+    ACTION_DUPLICATE_TEAM_MEMBER,
+    ACTION_DUPLICATE_HUMAN_MEMBER,
+    ACTION_DUPLICATE_CLONE_MEMBER,
+    ACTION_DUPLICATE_LIST_BACK,
     ACTION_SELECT_GAME_MENU = 280,
     ACTION_SELECT_ARENA_MENU,
     ACTION_SELECT_BATTLEGROUND_MENU,
@@ -624,6 +628,80 @@ public:
         return true;
     }
 
+    bool DuplicateTeamMember(Player* player, uint32 expectedTeam, uint32 selectionId, bool cloneRequest)
+    {
+        CustomGameLobby* lobby = GetLobby(player);
+        if (!lobby || lobby->ActiveBattlegroundId || (expectedTeam != ALLIANCE && expectedTeam != HORDE))
+            return false;
+
+        ObjectGuid sourceGuid;
+        std::string sourceName;
+        uint32 team = 0;
+        bool isPlayerbot = false;
+
+        if (cloneRequest)
+        {
+            auto requestItr = std::find_if(lobby->CloneRequests.begin(), lobby->CloneRequests.end(),
+                [selectionId](CloneRequest const& request) { return request.RosterSlotId == selectionId; });
+            if (requestItr == lobby->CloneRequests.end() || requestItr->Team != expectedTeam)
+            {
+                Notify(player, "That playerbot or player clone is no longer in the team roster.");
+                return false;
+            }
+
+            sourceGuid = requestItr->SourceGuid;
+            sourceName = requestItr->SourceName;
+            team = requestItr->Team;
+            isPlayerbot = requestItr->IsPlayerbot;
+        }
+        else
+        {
+            sourceGuid = ObjectGuid::Create<HighGuid::Player>(selectionId);
+            auto teamItr = lobby->Teams.find(sourceGuid);
+            if (teamItr == lobby->Teams.end() || teamItr->second != expectedTeam)
+            {
+                Notify(player, "That player is no longer on this custom-game team.");
+                return false;
+            }
+
+            team = teamItr->second;
+            if (Player* source = ObjectAccessor::FindConnectedPlayer(sourceGuid))
+                sourceName = source->GetName();
+            else if (CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid))
+                sourceName = characterInfo->Name;
+
+            // A real lobby member always produces a dark player clone, even
+            // if that character happens to use a configured playerbot account.
+            isPlayerbot = false;
+        }
+
+        if ((team != ALLIANCE && team != HORDE) || !sourceGuid || sourceName.empty())
+        {
+            Notify(player, "That team member can no longer be duplicated.");
+            return false;
+        }
+
+        uint32 teamSize = 0;
+        for (auto const& [guid, assignedTeam] : lobby->Teams)
+            if (assignedTeam == team)
+                ++teamSize;
+        for (CloneRequest const& request : lobby->CloneRequests)
+            if (request.Team == team)
+                ++teamSize;
+
+        if (teamSize >= CUSTOM_GAME_MAX_PLAYERS_PER_TEAM)
+        {
+            Notify(player, std::string("Team ") + TeamName(team) + " already has the maximum of " +
+                std::to_string(CUSTOM_GAME_MAX_PLAYERS_PER_TEAM) + " participants.");
+            return false;
+        }
+
+        lobby->CloneRequests.push_back({ lobby->NextCloneRosterSlotId++, sourceGuid, sourceName, team, isPlayerbot });
+        RefreshLobbyClonePreviews(*lobby);
+        Notify(player, "Duplicated " + sourceName + (isPlayerbot ? " as a playerbot." : " as a player clone."));
+        return true;
+    }
+
     bool RemoveCloneRequest(Player* player, uint32 team, bool playerbotClone, uint32 filteredIndex)
     {
         CustomGameLobby* lobby = GetLobby(player);
@@ -1082,6 +1160,19 @@ public:
                     LobbyArrival.GetPositionZ(), LobbyArrival.GetOrientation());
                 return;
             }
+
+        // Lobby membership is intentionally discarded on logout. If the
+        // character was saved inside the jail, do not leave them stranded in
+        // the shared Map 1 copy when they next log in (including after a
+        // worldserver restart, when no lobby state survives).
+        if (player->GetMapId() == CUSTOM_GAME_MAP_ID &&
+            player->GetDistance(LobbyArrival) <= LOBBY_MAX_DISTANCE &&
+            player->GetPositionZ() >= -80.0f && player->GetPositionZ() <= -45.0f)
+        {
+            player->ClearWorldSubMap();
+            player->TeleportTo(GurubashiGamesmasterLocation);
+            Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
+        }
     }
 
     void Update()
@@ -1432,7 +1523,52 @@ public:
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random playerbot", team, ACTION_ADD_RANDOM_BOT);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add player clone...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Duplicate existing team member...", team, ACTION_DUPLICATE_TEAM_MEMBER);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot/player clone...", team, ACTION_REMOVE_BOT_OR_CLONE);
+            SendGossipMenuFor(player, 1, me->GetGUID());
+        }
+
+        void ShowDuplicateTeamMemberMenu(Player* player, uint32 team)
+        {
+            CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
+            if (!lobby || (team != ALLIANCE && team != HORDE))
+                return;
+
+            uint32 rosterCount = 0;
+            for (auto const& [guid, assignedTeam] : lobby->Teams)
+            {
+                if (assignedTeam != team)
+                    continue;
+
+                std::string name;
+                if (Player* member = ObjectAccessor::FindConnectedPlayer(guid))
+                    name = member->GetName();
+                else if (CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(guid))
+                    name = characterInfo->Name;
+
+                if (name.empty())
+                    continue;
+
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Duplicate " + name + " (player)",
+                    guid.GetCounter(), ACTION_DUPLICATE_HUMAN_MEMBER);
+                ++rosterCount;
+            }
+
+            for (CloneRequest const& request : lobby->CloneRequests)
+            {
+                if (request.Team != team)
+                    continue;
+
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Duplicate " + request.SourceName + (request.IsPlayerbot ? " (playerbot)" : " (player clone)"),
+                    request.RosterSlotId, ACTION_DUPLICATE_CLONE_MEMBER);
+                ++rosterCount;
+            }
+
+            if (!rosterCount)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No team members are available to duplicate.", team, ACTION_STATUS);
+
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", team, ACTION_DUPLICATE_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
@@ -1660,6 +1796,22 @@ public:
                 case ACTION_JOIN_TEAM: manager.SetTeam(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
                 case ACTION_ADD_RANDOM_BOT: manager.AddRandomPlayerbotClone(player, sender); ShowTeamMenu(player, sender); return true;
+                case ACTION_DUPLICATE_TEAM_MEMBER: ShowDuplicateTeamMemberMenu(player, sender); return true;
+                case ACTION_DUPLICATE_HUMAN_MEMBER:
+                {
+                    uint32 const team = me->GetEntry() == CUSTOM_GAME_BLUE_ENTRY ? ALLIANCE : HORDE;
+                    manager.DuplicateTeamMember(player, team, sender, false);
+                    ShowTeamMenu(player, team);
+                    return true;
+                }
+                case ACTION_DUPLICATE_CLONE_MEMBER:
+                {
+                    uint32 const team = me->GetEntry() == CUSTOM_GAME_BLUE_ENTRY ? ALLIANCE : HORDE;
+                    manager.DuplicateTeamMember(player, team, sender, true);
+                    ShowTeamMenu(player, team);
+                    return true;
+                }
+                case ACTION_DUPLICATE_LIST_BACK: ShowTeamMenu(player, sender); return true;
                 case ACTION_REMOVE_BOT_OR_CLONE: ShowCloneRemovalMenu(player, sender); return true;
                 case ACTION_REMOVE_LIST_BACK: ShowTeamMenu(player, sender); return true;
                 case ACTION_SELECT_GAME_MENU: ShowGameSelectionMenu(player); return true;
