@@ -11,6 +11,7 @@
 #include "DBCStores.h"
 #include "Group.h"
 #include "GameTime.h"
+#include "GameObject.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
@@ -38,6 +39,7 @@ constexpr uint32 CUSTOM_GAME_HOST_ENTRY = 900001;
 constexpr uint32 CUSTOM_GAME_BLUE_ENTRY = 900002;
 constexpr uint32 CUSTOM_GAME_RED_ENTRY = 900003;
 constexpr uint32 CUSTOM_GAME_CHROMIE_ENTRY = 900004;
+constexpr uint32 CUSTOM_GAME_CHAIR_ENTRY = 178934;
 constexpr uint32 CUSTOM_GAME_MAP_ID = 1;
 constexpr uint32 CUSTOM_GAME_MAX_PLAYERS_PER_TEAM = 40;
 constexpr uint32 BLUE_FLAG_VISUAL = 32609;
@@ -47,6 +49,8 @@ Position const LobbyArrival = { 16218.700195f, 16403.599609f, -64.378899f, 6.283
 Position const BlueNpcPosition = { 16229.862305f, 16415.587891f, -64.378716f, 3.132112f };
 Position const RedNpcPosition = { 16230.437500f, 16391.000000f, -64.378792f, 3.014295f };
 Position const ChromieNpcPosition = { 16240.280273f, 16402.792969f, -64.378471f, 3.104628f };
+Position const ChairPosition = { 16227.799805f, 16403.400391f, -64.380402f, 3.136040f };
+QuaternionData const ChairRotation(0.0f, 0.0f, 0.999996f, 0.002776f);
 WorldLocation const GurubashiGamesmasterLocation(0, -13235.707031f, 214.336441f, 31.276190f, 1.010225f);
 constexpr float LOBBY_MAX_DISTANCE = 32.0f;
 
@@ -257,6 +261,25 @@ void Notify(Player* player, std::string const& message)
         player->GetSession()->SendNotification("%s", message.c_str());
 }
 
+void PopulateLobbyMap(Map* map)
+{
+    if (!map)
+        return;
+
+    map->SummonCreature(CUSTOM_GAME_BLUE_ENTRY, BlueNpcPosition);
+    map->SummonCreature(CUSTOM_GAME_RED_ENTRY, RedNpcPosition);
+    map->SummonCreature(CUSTOM_GAME_CHROMIE_ENTRY, ChromieNpcPosition);
+
+    GameObject* chair = new GameObject();
+    if (!chair->Create(map->GenerateLowGuid<HighGuid::GameObject>(), CUSTOM_GAME_CHAIR_ENTRY, map,
+        PHASEMASK_NORMAL, ChairPosition, ChairRotation, 0, GO_STATE_READY) || !map->AddToMap(chair))
+    {
+        delete chair;
+        TC_LOG_ERROR("scripts.custom", "Custom-game lobby could not spawn chair entry {} in instance {}.",
+            CUSTOM_GAME_CHAIR_ENTRY, map->GetInstanceId());
+    }
+}
+
 class CustomGameLobbyManager
 {
 public:
@@ -331,9 +354,7 @@ public:
         uint32 const instanceId = lobby->InstanceId;
         _lobbies.emplace(instanceId, std::move(lobby));
 
-        lobbyMap->SummonCreature(CUSTOM_GAME_BLUE_ENTRY, BlueNpcPosition);
-        lobbyMap->SummonCreature(CUSTOM_GAME_RED_ENTRY, RedNpcPosition);
-        lobbyMap->SummonCreature(CUSTOM_GAME_CHROMIE_ENTRY, ChromieNpcPosition);
+        PopulateLobbyMap(lobbyMap);
 
         std::vector<ObjectGuid> memberGuids;
         for (auto const& [guid, member] : _lobbies[instanceId]->Members)
@@ -1329,9 +1350,7 @@ private:
         lobbyNode.key() = newInstanceId;
         _lobbies.insert(std::move(lobbyNode));
 
-        newLobbyMap->SummonCreature(CUSTOM_GAME_BLUE_ENTRY, BlueNpcPosition);
-        newLobbyMap->SummonCreature(CUSTOM_GAME_RED_ENTRY, RedNpcPosition);
-        newLobbyMap->SummonCreature(CUSTOM_GAME_CHROMIE_ENTRY, ChromieNpcPosition);
+        PopulateLobbyMap(newLobbyMap);
 
         for (ObjectGuid guid : returningGuids)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))

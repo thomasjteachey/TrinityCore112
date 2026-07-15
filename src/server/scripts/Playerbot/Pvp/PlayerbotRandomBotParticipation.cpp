@@ -877,9 +877,10 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
 }
 
-void TryFinalizePendingManagedBotTeleport(Player* player)
+void TryFinalizePendingVirtualPlayerTeleport(Player* player)
 {
-    if (!player || !playerbot::IsManagedRandomBot(player))
+    if (!player || (!playerbot::IsManagedRandomBot(player) &&
+        !playerbot::PlayerbotObcCloneManager::IsActiveClone(player)))
         return;
 
     WorldSession* session = player->GetSession();
@@ -957,7 +958,7 @@ void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
 
     for (ObjectGuid const& guid : managedTeleportGuids)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-            TryFinalizePendingManagedBotTeleport(player);
+            TryFinalizePendingVirtualPlayerTeleport(player);
 }
 
 void TryReviveManagedBotAfterStartup(Player* player)
@@ -1774,7 +1775,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
     TryRecoverPlayerbotFromUnderMap(player);
     TryReviveManagedBotAfterStartup(player);
-    TryFinalizePendingManagedBotTeleport(player);
+    TryFinalizePendingVirtualPlayerTeleport(player);
     TryUsePlayerbotInsigniaBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
 
@@ -1801,7 +1802,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 
 void RandomBotParticipationManager::FinalizePendingVirtualPlayerTeleport(Player* player)
 {
-    TryFinalizePendingManagedBotTeleport(player);
+    TryFinalizePendingVirtualPlayerTeleport(player);
 }
 
 void RandomBotParticipationManager::SetPopulationRuntimeEnabled(bool enabled)
