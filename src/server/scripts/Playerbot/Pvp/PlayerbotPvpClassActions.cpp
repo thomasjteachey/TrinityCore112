@@ -1876,6 +1876,27 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             SetLastMovementDebugStatus(player, resetDiag.str());
         }
 
+        // Same guard as IssueMeleeApproachMovement: a live spline already
+        // chasing/following this exact target must not be replaced just
+        // because ShouldPreserveTargetRelativeMovement's distance-progress
+        // heuristic gives up. Against a target the bot can never quite close
+        // on (a kiting caster, or a ranged bot straining to hold its own
+        // preferred range), currentDistance never shrinks enough to satisfy
+        // that heuristic, so it kept approving a reissue every cadence tick
+        // -- each one a MoveSplineInit resync that renders as a snap/teleport
+        // toward the target. The stale-recovery clears above still run first,
+        // so a genuinely stuck (unlaunched/finalized) generator is unaffected.
+        if (HasActiveTargetRelativeMovementFor(player, target))
+        {
+            SetLastMovementDebugStatus(player, BuildRangedMovementDiag(player, target, "ranged_active_target_relative_motion_preserved",
+                safeDistance, safeDistance, targetLos, targetAttackable, false, initialMotionType,
+                initialMotionType == FOLLOW_MOTION_TYPE ? "existing_follow" : "existing_chase"));
+            stallState.targetGuid = target->GetGUID();
+            stallState.lastDistance = currentDistance;
+            stallState.lastSampleMs = nowMs;
+            return;
+        }
+
         std::string preserveDiag;
         if (ShouldPreserveTargetRelativeMovement(player, target, safeDistance, 3000, "ranged_existing_motion_preserved", &preserveDiag))
         {
