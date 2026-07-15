@@ -4317,9 +4317,6 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     bool const arcanePowerReady = arcaneBurstWindow && !HasAuraFromSpellChain(player, 12042) && IsSpellReady(player, 12042);
     bool const presenceOfMindReady = arcaneBurstWindow && player->HasAura(12042) && !player->HasAura(12043) && IsSpellReady(player, 12043);
     bool const burstPyroblastReady = arcaneBurstWindow && player->HasAura(12043) && IsSpellReady(player, 18809);
-    Aura const* arcaneTravelAura = isArcaneMage ? player->GetAura(89780) : nullptr;
-    bool const arcaneBlinkRefreshReady = isArcaneMage && arcaneTravelAura &&
-        arcaneTravelAura->GetDuration() > 0 && arcaneTravelAura->GetDuration() < 2000 && IsSpellReady(player, 1953);
     return SelectFromTriggerGraph(player, target, nullptr,
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
@@ -4332,8 +4329,6 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage presence of mind", "queue an instant pyroblast during the burst window", 12043, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "arcane burst window", burstPyroblastReady, 56.6f,
             { "mage pyroblast", "instant burst finisher under presence of mind", 18809, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
-        { "mage blink refresh", arcaneBlinkRefreshReady, 62.0f,
-            { "mage blink", "reblink before the time travel window expires", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
             { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
@@ -6080,12 +6075,15 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
     bool const criticalLowMana = !inSpiritOfRedemption &&
+        !UsesMeleeSpacingProfile(player, profileSelection) &&
         player->GetClass() != CLASS_HUNTER &&
         player->GetClass() != CLASS_WARLOCK &&
         player->GetMaxPower(POWER_MANA) > 0 && player->GetPowerPct(POWER_MANA) < 10.0f;
 
-    // Hard-priority mana preservation policy: below 10% mana, disengage from
-    // combat above all other class behavior, then drink as soon as combat drops.
+    // Hard-priority mana preservation policy for ranged/healing profiles: below
+    // 10% mana, disengage above all other class behavior, then drink as soon as
+    // combat drops. Melee mana users keep pressure with attacks instead of
+    // oscillating between chase and retreat as their mana crosses the threshold.
     // Spirit of Redemption is exempt because its healing casts are free and the
     // aura duration is too short to spend on drinking or disengaging.
     if (criticalLowMana)

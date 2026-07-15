@@ -751,7 +751,22 @@ bool CanProcessPlayerLifecycle(Player const* player)
     return true;
 }
 
-void ProcessActiveBattlegroundTacticalTick(Player* player)
+bool ConsumeCloneClassDecisionCadence(Player const* player)
+{
+    if (!player)
+        return false;
+
+    LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
+    std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
+    LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[player->GetGUID().GetRawValue()];
+    if (nextProcessTime > now)
+        return false;
+
+    nextProcessTime = now + RandomBotLifecycleCadenceInterval;
+    return true;
+}
+
+void ProcessBattlegroundPlayerbotTick(Player* player)
 {
     if (!player || !IsLifecycleGateEnabled())
         return;
@@ -764,10 +779,34 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
         return;
 
     Battleground* battleground = player->GetBattleground();
-    if (!battleground || battleground->GetStatus() != STATUS_IN_PROGRESS)
+    if (!battleground)
         return;
 
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return;
+
+    // Persistent bots reach preparation through the normal lifecycle below.
+    // Transient custom-game copies return before that lifecycle ownership, so
+    // explicitly run their ordinary preparation decision graph while arena or
+    // battleground gates are closed. Do not run tactical/movement actions here.
+    if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+    {
+        if (!activeClone || !ConsumeCloneClassDecisionCadence(player))
+            return;
+
+        playerbot::PvpValues const prepValues = playerbot::PvpCore::CollectValues(player);
+        playerbot::PvpClassSpellContext const prepContext = playerbot::PvpCore::BuildClassSpellContext(player, prepValues);
+        bool const didExecutePrep = playerbot::PvpClassActions::Execute(player, prepContext);
+
+        std::ostringstream prepDetail;
+        prepDetail << "bg-preparation clone_class_tick=1"
+                   << " class_exec=" << (didExecutePrep ? 1 : 0)
+                   << " class_spell=" << prepContext.spellId;
+        EmitLifecycleGmDebug(player, prepDetail.str(), 1500);
+        return;
+    }
+
+    if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         return;
 
     // The normal class decision graph is deliberately skipped while crowd
@@ -805,18 +844,7 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
     // Transient custom-game copies deliberately return before queue/lifecycle
     // ownership, so give only those copies an equivalent class-decision cadence
     // here instead of limiting them to autoattacks and movement/pet actions.
-    bool runCloneClassDecision = false;
-    if (activeClone)
-    {
-        LifecycleCadenceTimePoint const now = LifecycleCadenceClock::now();
-        std::lock_guard<std::mutex> cadenceLock(g_RandomBotLifecycleCadenceLock);
-        LifecycleCadenceTimePoint& nextProcessTime = g_NextRandomBotLifecycleProcessTimeByGuid[player->GetGUID().GetRawValue()];
-        if (nextProcessTime <= now)
-        {
-            nextProcessTime = now + RandomBotLifecycleCadenceInterval;
-            runCloneClassDecision = true;
-        }
-    }
+    bool const runCloneClassDecision = activeClone && ConsumeCloneClassDecisionCadence(player);
 
     bool const didExecuteClassSpell = (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick) &&
         playerbot::PvpClassActions::Execute(player, classContext);
@@ -1749,7 +1777,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     TryFinalizePendingManagedBotTeleport(player);
     TryUsePlayerbotInsigniaBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
-    ProcessActiveBattlegroundTacticalTick(player);
+    ProcessBattlegroundPlayerbotTick(player);
 
     // Dark clones deliberately share the playerbot tactical implementation,
     // but the clone manager alone owns their battleground membership and team.

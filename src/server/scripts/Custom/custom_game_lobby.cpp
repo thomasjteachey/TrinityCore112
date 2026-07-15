@@ -83,6 +83,7 @@ enum GossipAction : uint32
     ACTION_SELECT_NL,
     ACTION_SELECT_TV,
     ACTION_SELECT_TTP,
+    ACTION_SELECT_RANDOM_ARENA,
     ACTION_BATTLEGROUND_OPTIONS = 380,
     ACTION_BATTLEGROUND_OPTIONS_BACK,
     ACTION_RULE_FLAG_CAPS = 400,
@@ -137,8 +138,10 @@ struct CustomGameLobby
     std::vector<CloneRequest> CloneRequests;
     BattlegroundTypeId SelectedType = BATTLEGROUND_WS;
     uint8 ArenaType = 0;
+    bool RandomArena = false;
     BattlegroundCustomRules Rules;
     uint32 ActiveBattlegroundId = 0;
+    BattlegroundTypeId ActiveBattlegroundType = BATTLEGROUND_TYPE_NONE;
     uint32 NextCloneRosterSlotId = 1;
     bool ClonesSpawned = false;
     bool Closing = false;
@@ -151,6 +154,9 @@ char const* TeamName(uint32 team)
 
 std::string BattlegroundName(CustomGameLobby const& lobby)
 {
+    if (lobby.RandomArena)
+        return "Random Arena";
+
     switch (lobby.SelectedType)
     {
         case BATTLEGROUND_WS: return "Warsong Gulch";
@@ -632,10 +638,26 @@ public:
         if (!IsOwner(player, lobby) || lobby->ActiveBattlegroundId)
             return;
 
-        if (lobby->SelectedType != type)
+        if (lobby->RandomArena || lobby->SelectedType != type)
             lobby->Rules = BattlegroundCustomRules();
         lobby->SelectedType = type;
         lobby->ArenaType = arenaType;
+        lobby->RandomArena = false;
+    }
+
+    void SelectRandomArena(Player* player)
+    {
+        CustomGameLobby* lobby = GetLobby(player);
+        if (!IsOwner(player, lobby) || lobby->ActiveBattlegroundId)
+            return;
+
+        if (!lobby->RandomArena)
+            lobby->Rules = BattlegroundCustomRules();
+        // Keep a real arena type as the backing selection for arena-specific
+        // option visibility. StartGame resolves the actual map independently.
+        lobby->SelectedType = BATTLEGROUND_NA;
+        lobby->ArenaType = ARENA_TYPE_5v5;
+        lobby->RandomArena = true;
     }
 
     bool SetRule(Player* player, uint32 action, std::string const& text)
@@ -718,7 +740,7 @@ public:
         }
 
         if (lobby->ActiveBattlegroundId && target->GetBattlegroundId() == lobby->ActiveBattlegroundId)
-            if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType))
+            if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->ActiveBattlegroundType))
                 bg->RemovePlayerAtLeave(targetGuid, false, true);
 
         RemoveLobbyMember(target, *lobby, false);
@@ -758,17 +780,52 @@ public:
             return false;
         }
 
-        Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(lobby->SelectedType);
-        PvPDifficultyEntry const* bracket = bgTemplate ? GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), owner->GetLevel()) : nullptr;
-        if (!bracket && bgTemplate)
-            bracket = GetBattlegroundBracketById(bgTemplate->GetMapId(), BG_BRACKET_ID_FIRST);
+        auto resolveBracket = [owner](BattlegroundTypeId type) -> PvPDifficultyEntry const*
+        {
+            Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(type);
+            if (!bgTemplate)
+                return nullptr;
+
+            PvPDifficultyEntry const* bracket = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), owner->GetLevel());
+            return bracket ? bracket : GetBattlegroundBracketById(bgTemplate->GetMapId(), BG_BRACKET_ID_FIRST);
+        };
+
+        BattlegroundTypeId matchType = lobby->SelectedType;
+        if (lobby->RandomArena)
+        {
+            BattlegroundTypeId const arenaTypes[] =
+            {
+                BATTLEGROUND_NA,
+                BATTLEGROUND_BE,
+                BATTLEGROUND_RL,
+                BATTLEGROUND_NL,
+                BATTLEGROUND_TV,
+                BATTLEGROUND_TTP
+            };
+
+            std::vector<BattlegroundTypeId> compatibleArenas;
+            compatibleArenas.reserve(std::size(arenaTypes));
+            for (BattlegroundTypeId type : arenaTypes)
+                if (resolveBracket(type))
+                    compatibleArenas.push_back(type);
+
+            if (compatibleArenas.empty())
+            {
+                Notify(owner, "No compatible arena has a bracket for your level.");
+                return false;
+            }
+
+            matchType = compatibleArenas[urand(0, uint32(compatibleArenas.size() - 1))];
+        }
+
+        PvPDifficultyEntry const* bracket = resolveBracket(matchType);
         if (!bracket)
         {
             Notify(owner, "That battleground has no bracket for your level.");
             return false;
         }
 
-        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(lobby->SelectedType, bracket, lobby->ArenaType, false, true);
+        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(matchType, bracket, lobby->ArenaType, false, true);
         if (!bg)
         {
             Notify(owner, "The private battleground could not be created.");
@@ -791,6 +848,7 @@ public:
         playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(lobby->InstanceId);
 
         lobby->ActiveBattlegroundId = bg->GetInstanceID();
+        lobby->ActiveBattlegroundType = matchType;
         lobby->ClonesSpawned = false;
         InvalidateLobbyInvites(lobby->InstanceId);
 
@@ -896,7 +954,7 @@ public:
         {
             if (lobby->ActiveBattlegroundId)
             {
-                Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType);
+                Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->ActiveBattlegroundType);
                 if (player->GetBattlegroundId() != lobby->ActiveBattlegroundId &&
                     IsOwner(player, lobby) && lobby->Members.size() == 1)
                 {
@@ -933,7 +991,7 @@ public:
 
         if (lobby->ActiveBattlegroundId && player->GetBattlegroundId() == lobby->ActiveBattlegroundId)
         {
-            Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->SelectedType);
+            Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->ActiveBattlegroundType);
             if (bg && player->GetMapId() == bg->GetMapId() && player->GetInstanceId() == bg->GetInstanceID())
                 return;
 
@@ -1022,16 +1080,17 @@ public:
             if (lobby.Closing && lobby.ActiveBattlegroundId)
             {
                 playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(lobby.ActiveBattlegroundId);
-                if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.SelectedType))
+                if (Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.ActiveBattlegroundType))
                     if (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS)
                         bg->EndBattleground(PVP_TEAM_NEUTRAL);
                 lobby.ActiveBattlegroundId = 0;
+                lobby.ActiveBattlegroundType = BATTLEGROUND_TYPE_NONE;
                 lobby.ClonesSpawned = false;
             }
 
             if (lobby.ActiveBattlegroundId)
             {
-                Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.SelectedType);
+                Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.ActiveBattlegroundType);
                 if (bg && bg->FindBgMap() && !lobby.ClonesSpawned)
                 {
                     WorldSession* callbackSession = nullptr;
@@ -1177,7 +1236,7 @@ private:
 
         CustomGameLobby& lobby = *lobbyItr->second;
         uint32 const battlegroundId = lobby.ActiveBattlegroundId;
-        Battleground* bg = sBattlegroundMgr->GetBattleground(battlegroundId, lobby.SelectedType);
+        Battleground* bg = sBattlegroundMgr->GetBattleground(battlegroundId, lobby.ActiveBattlegroundType);
         playerbot::PlayerbotObcCloneManager::DestroyCustomGameClones(battlegroundId);
 
         auto detachFromMatch = [bg](Player* player)
@@ -1209,6 +1268,7 @@ private:
             lobby.Members.clear();
             lobby.Teams.clear();
             lobby.ActiveBattlegroundId = 0;
+            lobby.ActiveBattlegroundType = BATTLEGROUND_TYPE_NONE;
             lobby.Closing = true;
             return;
         }
@@ -1226,6 +1286,7 @@ private:
             lobby.Members.clear();
             lobby.Teams.clear();
             lobby.ActiveBattlegroundId = 0;
+            lobby.ActiveBattlegroundType = BATTLEGROUND_TYPE_NONE;
             lobby.Closing = true;
             return;
         }
@@ -1241,6 +1302,7 @@ private:
                     player->TeleportTo(lobby.Members.at(guid).ReturnLocation);
                 }
             lobby.ActiveBattlegroundId = 0;
+            lobby.ActiveBattlegroundType = BATTLEGROUND_TYPE_NONE;
             lobby.Closing = true;
             return;
         }
@@ -1259,6 +1321,7 @@ private:
         lobby.Teams = std::move(returningTeams);
         lobby.InstanceId = newInstanceId;
         lobby.ActiveBattlegroundId = 0;
+        lobby.ActiveBattlegroundType = BATTLEGROUND_TYPE_NONE;
         lobby.ClonesSpawned = false;
         lobby.Closing = false;
 
@@ -1428,6 +1491,7 @@ public:
             if (!lobby || !CustomGameLobbyManager::Instance().IsOwner(player, lobby))
                 return;
 
+            AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Random Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_RANDOM_ARENA);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Nagrand Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_NA);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Blade's Edge Arena", GOSSIP_SENDER_MAIN, ACTION_SELECT_BE);
             AddGossipItemFor(player, GOSSIP_ICON_BATTLE, "Ruins of Lordaeron", GOSSIP_SENDER_MAIN, ACTION_SELECT_RL);
@@ -1597,6 +1661,7 @@ public:
                 case ACTION_SELECT_NL: manager.SelectBattleground(player, BATTLEGROUND_NL, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TV: manager.SelectBattleground(player, BATTLEGROUND_TV, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
                 case ACTION_SELECT_TTP: manager.SelectBattleground(player, BATTLEGROUND_TTP, ARENA_TYPE_5v5); ShowChromieMenu(player); return true;
+                case ACTION_SELECT_RANDOM_ARENA: manager.SelectRandomArena(player); ShowChromieMenu(player); return true;
                 case ACTION_BATTLEGROUND_OPTIONS: ShowBattlegroundOptions(player); return true;
                 case ACTION_BATTLEGROUND_OPTIONS_BACK: ShowChromieMenu(player); return true;
                 case ACTION_TOGGLE_ENEMY_FLAG:
