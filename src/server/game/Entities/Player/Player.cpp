@@ -23009,6 +23009,17 @@ void Player::UpdatePvPState(bool onlyFFA)
 
 void Player::SetPvP(bool state)
 {
+    // A few teleport-completion paths call UpdatePvP(false, false) after
+    // UpdateZone() when the destination AreaTable entry is friendly. That can
+    // happen after Battleground::AddPlayer() has already enabled PvP, and it
+    // directly clears UNIT_BYTE2_FLAG_PVP instead of starting the normal timer.
+    // Once cleared, UpdatePvPFlag() cannot repair it because it returns early
+    // for non-PvP players. Keep the invariant at the lowest player-level entry
+    // point so no worldport, near-teleport, or playerbot fallback can turn an
+    // active battleground/arena participant blue.
+    if (!state && InBattleground() && !IsGameMaster())
+        state = true;
+
     Unit::SetPvP(state);
     for (ControlList::iterator itr = m_Controlled.begin(); itr != m_Controlled.end(); ++itr)
         (*itr)->SetPvP(state);
