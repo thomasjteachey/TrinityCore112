@@ -994,12 +994,20 @@ public:
     void CloseLobby(Player* owner)
     {
         CustomGameLobby* lobby = GetLobby(owner);
-        if (!IsOwner(owner, lobby) || lobby->ActiveBattlegroundId)
+        if (!IsOwner(owner, lobby))
             return;
 
         playerbot::PlayerbotObcCloneManager::DestroyCustomGameLobbyClones(lobby->InstanceId);
         InvalidateLobbyInvites(lobby->InstanceId);
         lobby->Closing = true;
+
+        // The owner can already be back in the retained lobby while the match
+        // still owns a stale battleground id. Let Chromie close that state too;
+        // Update() will end the active match, destroy its clones, and return all
+        // retained members once the battleground teardown is safe to process.
+        if (lobby->ActiveBattlegroundId)
+            return;
+
         for (auto const& [guid, member] : lobby->Members)
             if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
             {
@@ -1044,12 +1052,14 @@ public:
             if (lobby->ActiveBattlegroundId)
             {
                 Battleground* bg = sBattlegroundMgr->GetBattleground(lobby->ActiveBattlegroundId, lobby->ActiveBattlegroundType);
-                if (player->GetBattlegroundId() != lobby->ActiveBattlegroundId &&
-                    IsOwner(player, lobby) && lobby->Members.size() == 1)
+                if (IsOwner(player, lobby) && lobby->Members.size() == 1)
                 {
                     // Leaving a solo custom match is equivalent to ending that
                     // attempt. Keep its sole member on the retained roster so the
                     // normal match-completion path can rebuild the same setup.
+                    // The map-change callback may run before or after the normal
+                    // battleground leave path clears Player::GetBattlegroundId(),
+                    // so physical arrival in the retained lobby is authoritative.
                     if (bg && (bg->GetStatus() == STATUS_WAIT_JOIN || bg->GetStatus() == STATUS_IN_PROGRESS))
                         bg->EndBattleground(PVP_TEAM_NEUTRAL);
                 }
