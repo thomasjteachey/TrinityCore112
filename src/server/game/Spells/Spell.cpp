@@ -3598,6 +3598,19 @@ void Spell::cancel()
     if (m_selfContainer && *m_selfContainer == this)
         *m_selfContainer = nullptr;
 
+    // SpellEvent::Abort can reach cancel() during teardown without a preceding
+    // Spell::update(). Refresh the cached original-caster pointer from its GUID
+    // before touching owned dynamic/game objects; pets, totems, and other
+    // transient original casters may already have been removed by this point.
+    if (m_originalCasterGUID == m_caster->GetGUID())
+        m_originalCaster = m_caster->ToUnit();
+    else
+    {
+        m_originalCaster = ObjectAccessor::GetUnit(*m_caster, m_originalCasterGUID);
+        if (m_originalCaster && !m_originalCaster->IsInWorld())
+            m_originalCaster = nullptr;
+    }
+
     // originalcaster handles gameobjects/dynobjects for gob caster
     if (m_originalCaster)
     {
