@@ -80,17 +80,18 @@ namespace playerbot
     bool EngageNearestEnemyPlayer(Player* player, float scanDistance);
     void ApplyDeterministicObjectiveOffset(Battleground const* battleground, Player const* player, Position& destination);
     bool TryGetObjectivePosition(Battleground* battleground, Player* player, Position& destination);
+    void WhisperAutoShotDiagnosticToArena(Player* player, std::string const& message, uint32 throttleMs);
 }
 
 namespace
 {
+    using playerbot::WhisperAutoShotDiagnosticToArena;
+
     bool WantsPlayerbotDiagnostics(Player const* observer)
     {
         WorldSession const* session = observer ? observer->GetSession() : nullptr;
         return session && session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot);
     }
-
-    void WhisperAutoShotDiagnosticToArena(Player* player, std::string const& message, uint32 throttleMs);
 
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
     std::unordered_map<uint64, uint32> g_HunterAutoShotPlantFireSequence;
