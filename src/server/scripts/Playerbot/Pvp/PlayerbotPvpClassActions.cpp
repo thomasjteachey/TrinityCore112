@@ -2789,6 +2789,14 @@ bool IsMageBlinkEscapeCast(Player const* player, playerbot::PvpClassSpellContext
     return !hardNonBlinkableControl;
 }
 
+bool IsHunterBestialWrathEscapeCast(Player const* player, playerbot::PvpClassSpellContext const& context,
+    uint32 resolvedSpellId)
+{
+    return player && player->GetClass() == CLASS_HUNTER &&
+        context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self &&
+        (context.spellId == 81300 || resolvedSpellId == 81300);
+}
+
 
 bool PlayerHasPoisonForStoneform(Player const* player)
 {
@@ -4405,11 +4413,12 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
 
     if (IsCrowdControlledForAction(player) &&
         !IsMageBlinkEscapeCast(player, context, resolvedSpellId) &&
+        !IsHunterBestialWrathEscapeCast(player, context, resolvedSpellId) &&
         !IsControlBreakingRacialCast(player, context, resolvedSpellId))
     {
         // Hard crowd-control gate: polymorphed/confused actors must not start
         // attacks or cast attempts until control is restored. Mage Blink and
-        // specific control-breaking racials are explicit exceptions because
+        // Bestial Wrath and specific control-breaking racials are explicit exceptions because
         // they are intentionally usable while the corresponding control is active.
         failureReason = "crowd_controlled_polymorph";
         return false;
@@ -5184,7 +5193,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         ScheduleHunterFeignDeathStandup(player);
     }
 
-    bool hasTeleportEffect = false;
+    // Outmaneuver performs its hunter/pet swap from a dummy spell script, so
+    // its DBC effects do not advertise the near teleport performed at runtime.
+    bool hasTeleportEffect = resolvedSpellId == 81297;
     bool hasChargeEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
@@ -5216,7 +5227,7 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (hasTeleportEffect && player->IsBeingTeleportedNear())
     {
         WorldSession* session = player->GetSession();
-        if (session && session->IsVirtualSession())
+        if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
         {
             TC_LOG_DEBUG("playerbots.pvp.class",
                 "Playerbot PvP teleport ACK synthesized: guid={} spell={} map={} x={} y={} z={}.",

@@ -4187,6 +4187,15 @@ std::vector<uint8> payload(packet.size());
         if (!bg)
             return;
 
+        // Custom games are private, non-standard matches and must never be
+        // persisted as arena replays. Discard any record that may have been
+        // created before the battleground was marked as a custom game.
+        if (bg->IsCustomGame())
+        {
+            Records.erase(bg->GetInstanceID());
+            return;
+        }
+
         if (!sConfigMgr->GetBoolDefault("ArenaReplay.Enable", true))
             return;
 
@@ -4433,7 +4442,7 @@ public:
         Player* player = session->GetPlayer();
         Battleground* bg = player->GetBattleground();
 
-        if (!bg || bg->IsReplay())
+        if (!bg || bg->IsReplay() || bg->IsCustomGame())
             return;
 
         if (!bg->isArena())
@@ -4759,7 +4768,7 @@ public:
 
     void OnBattlegroundEnd(Battleground* bg, uint32 winner) override
     {
-        if (!bg || !bg->isArena())
+        if (!bg || !bg->isArena() || bg->IsCustomGame())
             return;
 
         if (!bg->IsReplay())

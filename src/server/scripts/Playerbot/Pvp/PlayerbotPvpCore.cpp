@@ -3810,6 +3810,23 @@ bool IsMageBlinkableControl(Player const* player)
     return !hardNonBlinkableControl;
 }
 
+bool IsHunterBestialWrathBreakableControl(Player const* player)
+{
+    if (!player || player->GetClass() != CLASS_HUNTER ||
+        !player->HasTalent(81300, player->GetActiveSpec()))
+        return false;
+
+    // Spell 81300 uses the same complete movement-impairment/loss-of-control
+    // immunity mask as a PvP trinket. Trigger it for every mechanic it can
+    // actually clear, rather than only stun/fear/polymorph.
+    return IsRootedOrSnared(player) ||
+        player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED | UNIT_STATE_STUNNED |
+            UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK) ||
+        player->IsPolymorphed();
+}
+
 bool HasShieldEquipped(Player const* player)
 {
     if (!player)
@@ -4160,12 +4177,10 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     Pet* bmPet = isBeastMasteryHunter ? player->GetPet() : nullptr;
     bool const bmPetAttacking = bmPet && bmPet->IsAlive() && bmPet->GetVictim();
     float const bmPetDistance = bmPet && bmPet->IsAlive() ? player->GetDistance(bmPet) : -1.0f;
-    bool const bmPetInOutmaneuverRange = bmPetDistance >= 8.0f && bmPetDistance <= 30.0f;
-    bool const bmHardCrowdControlled = isBeastMasteryHunter &&
-        (player->HasAuraWithMechanic(1 << MECHANIC_STUN) ||
-         player->HasAuraWithMechanic(1 << MECHANIC_FEAR) ||
-         player->IsPolymorphed() ||
-         player->HasAuraType(SPELL_AURA_MOD_CONFUSE));
+    bool const bmPetAtUsefulSwapPosition = bmPetDistance >= 8.0f && bmPetDistance <= 30.0f &&
+        player->IsWithinLOSInMap(bmPet) &&
+        std::abs(player->GetPositionZ() - bmPet->GetPositionZ()) <= 20.0f;
+    bool const bmCrowdControlled = isBeastMasteryHunter && IsHunterBestialWrathBreakableControl(player);
     bool const bmHasBitePrimerOnKillTarget = isBeastMasteryHunter && activeTarget && HasHunterDamagingStingFromCaster(activeTarget, player->GetGUID());
     bool const bmReadyToBiteKillTarget = bmHasBitePrimerOnKillTarget && !IsRootedOrSnared(player);
     Unit const* manaTarget = isSurvivalHunter
@@ -4250,12 +4265,13 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
         { "hunter scatter shot", "fallback peel when trap setup unavailable", 19503, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, enemyOnTop && closeMeleeThreat && (isSurvivalHunter || !IsSpellReady(player, 19503)) && (!IsSpellReady(player, 5384) || !preferredTrapReady) && IsSpellReady(player, 19263), 13.0f,
         { "hunter deterrence", "defensive cooldown under sustained melee pressure", 19263, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, bmHardCrowdControlled && IsSpellReady(player, 81300), 33.0f,
-        { "hunter bestial wrath", "pop bestial wrath while stunned, polymorphed, or feared", 81300, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, bmCrowdControlled && IsSpellReady(player, 81300), 100.0f,
+        { "hunter bestial wrath", "break any removable crowd-control effect", 81300, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAttacking && activeTarget && IsSpellReady(player, 19577), 28.5f,
         { "hunter intimidate", "stun the kill target whenever the pet is attacking", 19577, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetInOutmaneuverRange && enemyOnTop && IsSpellReady(player, 81297), 24.5f,
-        { "hunter outmaneuver", "mobility while under melee pressure with the pet at range", 81297, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, isBeastMasteryHunter && bmPetAtUsefulSwapPosition &&
+        (enemyOnTop || activeTargetDeadZone || IsRootedOrSnared(player)) && IsSpellReady(player, 81297), 36.5f,
+        { "hunter outmaneuver", "swap to the pet's safe position under movement or melee pressure", 81297, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBeastMasteryHunter && enemyOnTop && enemyOnTopTarget && player->IsWithinMeleeRange(enemyOnTopTarget) && IsSpellReady(player, 81285), 24.0f,
         { "hunter mongoose bite", "bite the nearest attacker under melee pressure", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, enemyOnTopTarget ? enemyOnTopTarget->GetGUID() : ObjectGuid::Empty });
     // Needs to actually win the priority sort while out of melee range, not
@@ -5812,6 +5828,11 @@ PvpCoreConfig const& PvpCore::GetConfig()
 bool PvpCore::CanMageBlinkOutOfControl(Player const* player)
 {
     return IsMageBlinkableControl(player) && IsSpellReady(player, 1953);
+}
+
+bool PvpCore::CanHunterBestialWrathOutOfControl(Player const* player)
+{
+    return IsHunterBestialWrathBreakableControl(player) && IsSpellReady(player, 81300);
 }
 
 PvpValues PvpCore::CollectValues(Player const* player)

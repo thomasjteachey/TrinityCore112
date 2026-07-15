@@ -124,6 +124,26 @@ bool TryMageBlinkOutOfControl(Player* player)
     return playerbot::PvpClassActions::Execute(player, classContext);
 }
 
+bool TryHunterBestialWrathOutOfControl(Player* player)
+{
+    if (!playerbot::PvpCore::CanHunterBestialWrathOutOfControl(player))
+        return false;
+
+    playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+    if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpClassSpellsEnabled)
+        return false;
+
+    playerbot::PvpClassSpellContext context;
+    context.classSpellsEnabled = true;
+    context.shouldExecute = true;
+    context.actionName = "hunter bestial wrath";
+    context.reason = "fast-path break any removable crowd-control effect";
+    context.spellId = 81300;
+    context.selfCast = true;
+    context.targetMode = playerbot::PvpClassSpellContext::TargetMode::Self;
+    return playerbot::PvpClassActions::Execute(player, context);
+}
+
 bool IsLifecycleGateEnabled()
 {
     playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
@@ -749,6 +769,15 @@ void ProcessActiveBattlegroundTacticalTick(Player* player)
 
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
         return;
+
+    // The normal class decision graph is deliberately skipped while crowd
+    // controlled. Run the BM hunter's universal control break before that gate,
+    // including roots/snares that do not pause the lifecycle tick.
+    if (TryHunterBestialWrathOutOfControl(player))
+    {
+        EmitLifecycleGmDebug(player, "bg-fasttick escaped crowd-control with Bestial Wrath", 1000);
+        return;
+    }
 
     if (IsCrowdControlledForLifecyclePause(player))
     {
