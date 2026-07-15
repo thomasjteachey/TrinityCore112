@@ -1375,7 +1375,9 @@ void Spell::EffectJumpDest()
         // EFFECT_MOTION_TYPE to protect until the leap finishes.
         Player* playerCaster = unitCaster->ToPlayer();
         WorldSession* session = playerCaster ? playerCaster->GetSession() : nullptr;
-        if (session && session->IsVirtualSession())
+        bool const serverDrivenPlayer = session &&
+            (session->IsVirtualSession() || session->IsTransientPlayerSession());
+        if (serverDrivenPlayer)
             unitCaster->GetMotionMaster()->MoveJump(*destTarget, speedXY, speedZ, EVENT_JUMP,
                 !m_targets.GetObjectTargetGUID().IsEmpty());
         else
