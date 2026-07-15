@@ -2679,13 +2679,16 @@ bool IsFriendlySupportTarget(Player const* player, Unit const* target, SpellInfo
     if (!player || !target || !target->IsAlive())
         return false;
 
+    Player const* targetPlayer = target->ToPlayer();
+    if (targetPlayer && targetPlayer->IsSpectator())
+        return false;
+
     if (target == player)
         return true;
 
     if (player->IsValidAssistTarget(target, spellInfo))
         return true;
 
-    Player const* targetPlayer = target->ToPlayer();
     if (!targetPlayer || !player->InBattleground() || !targetPlayer->InBattleground())
         return false;
 
