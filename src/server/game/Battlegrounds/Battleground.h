@@ -400,6 +400,8 @@ class TC_GAME_API Battleground
         bool isRated() const        { return m_IsRated; }
         bool IsCustomGame() const   { return m_IsCustomGame; }
         void ConfigureCustomGame(BattlegroundCustomRules const& rules) { m_IsCustomGame = true; m_CustomRules = rules; }
+        void SetCustomGameBotOnlyPreparation(bool enabled) { m_CustomGameBotOnlyPreparation = enabled; }
+        bool HasCustomGameBotOnlyPreparation() const { return m_CustomGameBotOnlyPreparation; }
         void SetCustomGamePendingCloneCount(uint32 count) { m_CustomGamePendingCloneCount = count; }
         void ResolveCustomGamePendingClone()
         {
@@ -672,6 +674,7 @@ class TC_GAME_API Battleground
         bool   m_InBGFreeSlotQueue;                         // used to make sure that BG is only once inserted into the BattlegroundMgr.BGFreeSlotQueue[bgTypeId] deque
         bool   m_SetDeleteThis;                             // used for safe deletion of the bg after end / all players leave
         bool   m_IsCustomGame;
+        bool   m_CustomGameBotOnlyPreparation;
         uint32 m_CustomGamePendingCloneCount;
         BattlegroundCustomRules m_CustomRules;
         bool   m_IsArena;

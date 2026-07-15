@@ -148,6 +148,7 @@ Battleground::Battleground()
     m_InBGFreeSlotQueue = false;
     m_SetDeleteThis     = false;
     m_IsCustomGame      = false;
+    m_CustomGameBotOnlyPreparation = false;
     m_CustomGamePendingCloneCount = 0;
     m_CustomRules       = BattlegroundCustomRules();
 
@@ -548,10 +549,29 @@ inline void Battleground::_ProcessJoin(uint32 diff)
             return;
         }
 
-        SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
-        // First start warning - 2 or 1 minute
-        if (StartMessageIds[BG_STARTING_EVENT_FIRST])
-            SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FIRST], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        if (IsCustomGame() && HasCustomGameBotOnlyPreparation())
+        {
+            // A custom match whose combat roster contains only playerbots or
+            // clones does not need the full human preparation window. Mark
+            // the longer warning stages complete so they cannot announce
+            // misleading 30/60-second countdowns on the following ticks.
+            m_Events |= BG_STARTING_EVENT_2;
+            m_Events |= BG_STARTING_EVENT_3;
+            SetStartDelayTime(BG_START_DELAY_10S);
+
+            // Arenas have an exact ten-second broadcast text. Battleground
+            // third-stage texts are commonly fifteen or thirty seconds, so
+            // suppress those rather than announce an incorrect duration.
+            if (isArena() && StartMessageIds[BG_STARTING_EVENT_THIRD])
+                SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_THIRD], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        }
+        else
+        {
+            SetStartDelayTime(StartDelayTimes[BG_STARTING_EVENT_FIRST]);
+            // First start warning - 2 or 1 minute
+            if (StartMessageIds[BG_STARTING_EVENT_FIRST])
+                SendBroadcastText(StartMessageIds[BG_STARTING_EVENT_FIRST], CHAT_MSG_BG_SYSTEM_NEUTRAL);
+        }
     }
     // After 1 minute or 30 seconds, warning is signaled
     else if (GetStartDelayTime() <= StartDelayTimes[BG_STARTING_EVENT_SECOND] && !(m_Events & BG_STARTING_EVENT_2))

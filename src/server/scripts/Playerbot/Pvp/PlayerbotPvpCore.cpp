@@ -1558,6 +1558,19 @@ bool IsSpellReady(Player const* player, uint32 spellId)
     return !player->GetSpellHistory()->HasCooldown(resolvedSpellId);
 }
 
+bool IsZeroManaCostSpellReady(Player const* player, uint32 spellId)
+{
+    uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
+    if (!player || !resolvedSpellId || player->GetSpellHistory()->HasCooldown(resolvedSpellId))
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(resolvedSpellId);
+    if (!spellInfo || spellInfo->PowerType != POWER_MANA)
+        return false;
+
+    return spellInfo->CalcPowerCost(player, spellInfo->GetSchoolMask()) == 0;
+}
+
 bool MeetsCasterAuraStateRequirements(Player const* player, uint32 spellId)
 {
     uint32 const resolvedSpellId = ResolveKnownPlayerSpellInChain(player, spellId);
@@ -2281,79 +2294,84 @@ SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
     if (!player || !player->InBattleground() || player->IsInCombat())
         return {};
 
-    auto makeDecision = [player](char const* actionName, char const* reason, uint32 spellId, ObjectGuid targetGuid)
+    auto makeDecision = [player](char const* actionName, char const* reason, uint32 spellId,
+        playerbot::PvpClassSpellContext::TargetMode targetMode, ObjectGuid targetGuid)
     {
         SpellDecision decision;
-        if (targetGuid.IsEmpty())
+        if (targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && targetGuid.IsEmpty())
             return decision;
 
         decision.actionName = actionName;
         decision.reason = reason;
         decision.spellId = spellId;
-        decision.targetMode = targetGuid == player->GetGUID()
-            ? playerbot::PvpClassSpellContext::TargetMode::Self
-            : playerbot::PvpClassSpellContext::TargetMode::Ally;
+        decision.targetMode = targetMode;
         decision.targetGuid = targetGuid;
         return decision;
     };
 
-    // Party-area versions efficiently cover the caster's subgroup during
-    // preparation. These single-target fallbacks deliberately inspect every
-    // nearby member of the battleground raid so other subgroups and late
-    // joiners are filled in one member at a time.
+    // Raid/group buffs are intentionally selected only while their actual
+    // post-aura mana cost is zero. Battleground Preparation and the brief
+    // post-resurrection mana-cost aura make these casts free; outside those
+    // windows bots conserve mana instead of topping off buffs.
+    //
+    // Do not fall back to the cheaper single-target versions. If a raid buff
+    // is free, always use the broader, normally more expensive version.
     switch (player->GetClass())
     {
         case CLASS_DRUID:
         {
-            if (IsSpellReady(player, 9885))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 9885, 21850 }, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("druid mark of the wild raid", "buff an unbuffed battleground raid member", 9885, targetGuid);
+            if (IsZeroManaCostSpellReady(player, 21850))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 9885, 21850 }, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("druid gift of the wild raid", "apply free raid-wide stat buff", 21850,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
-            if (IsSpellReady(player, kDruidThornsSpellId))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { kDruidThornsSpellId, kDruidMassThornsSpellId }, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("druid thorns raid", "buff an unbuffed battleground raid member", kDruidThornsSpellId, targetGuid);
+            if (IsZeroManaCostSpellReady(player, kDruidMassThornsSpellId))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player,
+                    { kDruidThornsSpellId, kDruidMassThornsSpellId }, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("druid mass thorns raid", "apply free raid-wide thorns buff", kDruidMassThornsSpellId,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
             break;
         }
         case CLASS_PRIEST:
         {
-            if (IsSpellReady(player, 10938))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10938, 21564 }, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("priest power word fortitude raid", "buff an unbuffed battleground raid member", 10938, targetGuid);
+            if (IsZeroManaCostSpellReady(player, 21564))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10938, 21564 }, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("priest prayer of fortitude raid", "apply free raid-wide fortitude buff", 21564,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
-            if (IsSpellReady(player, 10958))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10958, 27683 }, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("priest shadow protection raid", "buff an unbuffed battleground raid member", 10958, targetGuid);
+            if (IsZeroManaCostSpellReady(player, 27683))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10958, 27683 }, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("priest prayer of shadow protection raid", "apply free raid-wide shadow protection buff", 27683,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
-            if (IsSpellReady(player, 27841))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 27841, 27681 }, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("priest divine spirit raid", "buff an unbuffed battleground raid member", 27841, targetGuid);
+            if (IsZeroManaCostSpellReady(player, 27681))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 27841, 27681 }, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("priest prayer of spirit raid", "apply free raid-wide spirit buff", 27681,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
             break;
         }
         case CLASS_MAGE:
         {
-            if (IsSpellReady(player, 10157))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10157, 23028 }, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("mage arcane intellect raid", "buff an unbuffed battleground raid member", 10157, targetGuid);
+            if (IsZeroManaCostSpellReady(player, 23028))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10157, 23028 }, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("mage arcane brilliance raid", "apply free raid-wide intellect buff", 23028,
+                        playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID());
 
             break;
         }
         case CLASS_PALADIN:
         {
             bool const isRetPaladin = DetectClassicClassProfile(player).profile == ClassicClassProfile::TertiaryClassic;
-            if (!isRetPaladin && IsSpellReady(player, 25898))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("paladin greater blessing of kings raid", "buff an unbuffed battleground raid member", 25898, targetGuid);
+            if (!isRetPaladin && IsZeroManaCostSpellReady(player, 25898))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("paladin greater blessing of kings raid", "apply free greater blessing to an unbuffed class", 25898,
+                        playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid);
 
-            if (isRetPaladin && IsSpellReady(player, 21918))
-                if (ObjectGuid targetGuid = SelectFriendlyWithManaAndWithoutAuraFromSpellChain(player, 21918, 40.0f, true); !targetGuid.IsEmpty())
-                    return makeDecision("paladin greater blessing of wisdom raid", "buff an unbuffed battleground raid member", 21918, targetGuid);
-
-            if (isRetPaladin && IsSpellReady(player, 25291))
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 40.0f); !targetGuid.IsEmpty())
-                    return makeDecision("paladin blessing of might raid", "buff an unbuffed non-mana battleground raid member", 25291, targetGuid);
-
+            // Ret keeps its deliberate single-target blessing behavior in the
+            // normal paladin selector below. It never substitutes a Greater
+            // Blessing here merely because the raid version is free.
             break;
         }
         default:
@@ -2440,38 +2458,14 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
             break;
         }
         case CLASS_DRUID:
-        {
-            if (IsSpellReady(player, 21850) && !HasAuraFromSpellChain(player, 21850))
-                return { "druid gift of the wild prep", "apply raid-wide stat buff before gates open", 21850, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
-
-            if (IsSpellReady(player, kDruidMassThornsSpellId))
-            {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { kDruidThornsSpellId, kDruidMassThornsSpellId }, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "druid mass thorns prep", "apply mass thorns to nearby allies before gates open", kDruidMassThornsSpellId, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
-            }
-
-            break;
-        }
         case CLASS_PRIEST:
-        {
-            if (IsSpellReady(player, 21564) && !HasAuraFromSpellChain(player, 21564))
-                return { "priest prayer of fortitude prep", "buff nearby party before gates open", 21564, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
-
-            if (IsSpellReady(player, 27683) && !HasAuraFromSpellChain(player, 27683))
-                return { "priest prayer of shadow protection prep", "buff nearby party before gates open", 27683, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
-
-            if (IsSpellReady(player, 27681) && !HasAuraFromSpellChain(player, 27681))
-                return { "priest prayer of spirit prep", "buff nearby party before gates open", 27681, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
-
+            // Raid buffs are handled by SelectMissingBattlegroundRaidBuff()
+            // after class-specific preparation actions.
             break;
-        }
         case CLASS_MAGE:
         {
             if (IsSpellReady(player, 10054) && !player->HasItemCount(8008))
                 return { "create mana ruby prep", "create mana ruby before gates open", 10054, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
-
-            if (IsSpellReady(player, 23028) && !HasAuraFromSpellChain(player, 23028))
-                return { "arcane brilliance prep", "buff nearby party before gates open", 23028, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
 
             if (!HasAuraFromSpellChain(player, 10220) && IsSpellReady(player, 10220))
                 return { "frost armor prep", "maintain armor before gates open", 10220, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() };
@@ -2484,20 +2478,12 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
             bool const isRetPaladin = profileSelection.profile == ClassicClassProfile::TertiaryClassic;
 
             if (!isRetPaladin)
-            {
-                if (IsSpellReady(player, 25898))
-                {
-                    if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 45.0f, true); !targetGuid.IsEmpty())
-                        return { "paladin greater blessing of kings prep", "buff nearby team before gates open", 25898, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
-                }
-
                 break;
-            }
 
-            if (IsSpellReady(player, 21918))
+            if (IsSpellReady(player, 25290))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithManaAndWithoutAuraFromSpellChain(player, 21918, 45.0f, true); !targetGuid.IsEmpty())
-                    return { "paladin greater blessing of wisdom prep", "buff nearby team before gates open", 21918, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
+                if (ObjectGuid targetGuid = SelectFriendlyWithManaAndWithoutAuraFromSpellChain(player, 25290, 45.0f, false); !targetGuid.IsEmpty())
+                    return { "paladin blessing of wisdom prep", "ret paladin manually buffs nearby mana allies", 25290, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
             }
 
             if (IsSpellReady(player, 25291))
@@ -4484,8 +4470,6 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
         { "default ranged", hasHostileTarget && IsSpellReady(player, (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304)), 18.0f,
             { (isFireMage || isArcaneMage) ? "mage scorch" : "mage frostbolt", isFireMage ? "default fire pressure" : (isArcaneMage ? "scorch instead of frostbolt" : "default ranged pressure"), (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304), playerbot::PvpClassSpellContext::TargetMode::Enemy } },
-        { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10157) && !player->HasAura(10157), 10.0f,
-            { "arcane intellect", "arcane intellect", 10157, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "maintain buff", !player->IsInCombat() && IsSpellReady(player, 10220) && !player->HasAura(10220), 9.0f,
             { "frost armor", "frost armor", 10220, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "mana gem missing", !player->IsInCombat() && IsSpellReady(player, 10054) && !player->HasItemCount(8008), 8.0f,
@@ -4629,10 +4613,6 @@ SpellDecision SelectPriestSpell(Player const* player, Unit const* target, Unit c
             { "priest power word shield ally", "protect ally below 50 percent health", 10901, shieldTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, shieldTarget ? shieldTarget->GetGUID() : ObjectGuid::Empty });
         AddDecisionCandidate(candidates, !isHolyPriest && casterAlly, 30.0f,
             { "priest power infusion", "boost nearby caster throughput in combat", 10060, casterAlly == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, casterAlly ? casterAlly->GetGUID() : ObjectGuid::Empty });
-        AddDecisionCandidate(candidates, !player->IsInCombat() && !player->HasAura(10938) && IsSpellReady(player, 10938), 14.0f,
-            { "priest power word fortitude", "maintain fortitude out of combat", 10938, playerbot::PvpClassSpellContext::TargetMode::Self });
-        AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 10958) && IsSpellReady(player, 10958), 13.0f,
-            { "priest shadow protection", "maintain shadow protection out of combat", 10958, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(candidates, !player->IsInCombat() && !HasAuraFromSpellChain(player, 1006) && IsSpellReady(player, 1006), 12.0f,
             { "priest inner fire", "maintain inner fire out of combat", 1006, playerbot::PvpClassSpellContext::TargetMode::Self });
         AddDecisionCandidate(candidates, renewTarget && !HasAuraFromSpellChain(renewTarget, 10929), 28.0f,
@@ -4896,7 +4876,10 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     if (protectionTarget && playerbot::PvpCore::IsBattlegroundFlagCarrier(protectionTarget->ToPlayer()))
         protectionTarget = nullptr;
     Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
-    ObjectGuid const mightTargetGuid = IsSpellReady(player, 25291) ? SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f) : ObjectGuid::Empty;
+    ObjectGuid const wisdomTargetGuid = (isRetPaladin && IsSpellReady(player, 25290)) ?
+        SelectFriendlyWithManaAndWithoutAuraFromSpellChain(player, 25290, 45.0f, false) : ObjectGuid::Empty;
+    ObjectGuid const mightTargetGuid = (isRetPaladin && IsSpellReady(player, 25291)) ?
+        SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 45.0f) : ObjectGuid::Empty;
     Unit const* flashHealTarget = (!isRetPaladin && IsSpellReady(player, 19943)) ? SelectFriendlyHealthTarget(player, 40.0f, 85.0f) : nullptr;
     // Holy Light is intentionally never used; Flash of Light covers every heal tier instead.
     Unit const* bigFlashHealTarget = (!isRetPaladin && IsSpellReady(player, 19943)) ? SelectFriendlyHealthTarget(player, 40.0f, 60.0f) : nullptr;
@@ -4957,14 +4940,12 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
         { "paladin judgement", "default offensive pressure when a seal is active", 20271, playerbot::PvpClassSpellContext::TargetMode::Enemy, executeTarget ? executeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !knowsSacrificialAura && !isRetPaladin && !player->HasAura(19746) && IsSpellReady(player, 19746), 20.0f,
         { "paladin concentration aura", "maintain concentration aura", 19746, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && !isRetPaladin && IsSpellReady(player, 25898) && !HasAuraFromSpellChain(player, 25898), 19.0f,
-        { "paladin greater blessing of kings", "maintain kings out of combat for holy/prot", 25898, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && IsSpellReady(player, 21918) && !HasAuraFromSpellChain(player, 21918), 19.0f,
-        { "paladin greater blessing of wisdom", "maintain greater wisdom out of combat for ret", 21918, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
-    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && IsSpellReady(player, 25291) && !HasAuraFromSpellChain(player, 25291), 18.5f,
-        { "paladin blessing of might self", "ret paladin prefers blessing of might", 25291, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && IsSpellReady(player, 25291) && !HasAuraFromSpellChain(player, 25291), 19.0f,
+        { "paladin blessing of might self", "ret paladin manually maintains lesser might on self", 25291, playerbot::PvpClassSpellContext::TargetMode::Self, player->GetGUID() });
+    AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && !wisdomTargetGuid.IsEmpty(), 18.5f,
+        { "paladin blessing of wisdom", "ret paladin manually maintains lesser wisdom on nearby mana allies", 25290, playerbot::PvpClassSpellContext::TargetMode::Ally, wisdomTargetGuid });
     AddDecisionCandidate(candidates, !player->IsInCombat() && isRetPaladin && !mightTargetGuid.IsEmpty(), 18.0f,
-        { "paladin blessing of might", "maintain might on nearby non-mana allies", 25291, playerbot::PvpClassSpellContext::TargetMode::Ally, mightTargetGuid });
+        { "paladin blessing of might", "ret paladin manually maintains lesser might on nearby non-mana allies", 25291, playerbot::PvpClassSpellContext::TargetMode::Ally, mightTargetGuid });
 
     return SelectHighestPriorityCastableDecision(candidates, player, target, nullptr);
 }

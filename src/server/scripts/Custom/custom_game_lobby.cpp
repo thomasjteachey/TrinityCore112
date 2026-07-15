@@ -850,10 +850,14 @@ public:
 
         uint32 blueCount = 0;
         uint32 redCount = 0;
+        bool hasHumanTeamParticipant = false;
         for (auto const& [guid, team] : lobby->Teams)
             if (Player* member = ObjectAccessor::FindConnectedPlayer(guid))
                 if (member->GetMapId() == CUSTOM_GAME_MAP_ID && member->GetInstanceId() == lobby->InstanceId)
+                {
                     team == ALLIANCE ? ++blueCount : ++redCount;
+                    hasHumanTeamParticipant = true;
+                }
         for (CloneRequest const& request : lobby->CloneRequests)
             request.Team == ALLIANCE ? ++blueCount : ++redCount;
 
@@ -922,6 +926,7 @@ public:
         }
 
         bg->ConfigureCustomGame(lobby->Rules);
+        bg->SetCustomGameBotOnlyPreparation(!hasHumanTeamParticipant);
         bg->SetCustomGamePendingCloneCount(uint32(lobby->CloneRequests.size()));
         // Custom matches enter directly and never use the public queue's arena
         // or battleground population requirements. Forty is the underlying
