@@ -3854,6 +3854,31 @@ namespace playerbot
             return true;
         }
 
+        // An Assassination rogue's configured stealth opener is Garrote.  The
+        // normal melee distance-band code intentionally does not move a bot
+        // that is already in melee range, but Garrote cannot be used while the
+        // target still has the rogue in its frontal arc.  Relying exclusively
+        // on the class cast-failure recovery leaves a deadlock if that class
+        // tick is delayed or rejected: the hidden rogue has no victim and the
+        // enemy cannot detect it, so both units simply stand still.  Keep the
+        // lifecycle moving toward the required rear arc as a generic rogue
+        // opener invariant; the class action will cast Garrote once it arrives.
+        bool const isAssassinationStealthOpener =
+            player->GetClass() == CLASS_ROGUE &&
+            player->HasStealthAura() &&
+            player->HasTalent(81302, player->GetActiveSpec());
+        if (isAssassinationStealthOpener &&
+            player->IsWithinMeleeRange(target) &&
+            target->HasInArc(static_cast<float>(M_PI), player))
+        {
+            ClearEatDrinkAurasForMovement(player);
+            player->GetMotionMaster()->MoveFollow(target, 1.5f, static_cast<float>(M_PI));
+            TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+                "Playerbot PvP distance band: bot={} target={} profile={} decision=assassination-opener-move-behind distance={}.",
+                player->GetGUID().ToString(), target->GetGUID().ToString(), profile.label, distance);
+            return true;
+        }
+
         if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
         {
             bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
