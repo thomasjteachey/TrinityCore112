@@ -2210,6 +2210,42 @@ ObjectGuid SelectFriendlyWithoutManaAndAuraFromSpellChain(Player const* player, 
     return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
 }
 
+ObjectGuid SelectFriendlyWithManaAndWithoutAuraFromSpellChain(Player const* player, uint32 baseSpellId, float maxDistance, bool includeSelf)
+{
+    if (!player || !player->FindMap() || !baseSpellId)
+        return ObjectGuid::Empty;
+
+    auto isEligible = [&](Player* candidate)
+    {
+        return candidate && candidate->IsAlive() && candidate->GetMaxPower(POWER_MANA) > 0 &&
+            IsFriendlySupportTarget(player, candidate) &&
+            player->IsWithinLOSInMap(candidate) && player->IsWithinDistInMap(candidate, maxDistance) &&
+            !HasAuraFromSpellChain(candidate, baseSpellId);
+    };
+
+    if (includeSelf && isEligible(const_cast<Player*>(player)))
+        return player->GetGUID();
+
+    Player* bestTarget = nullptr;
+    float bestDistance = std::numeric_limits<float>::max();
+    Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
+    for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
+    {
+        Player* candidate = itr->GetSource();
+        if (!isEligible(candidate))
+            continue;
+
+        float const distance = player->GetDistance(candidate);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestTarget = candidate;
+        }
+    }
+
+    return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
+
 ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std::initializer_list<uint32> baseSpellIds, float maxDistance, bool includeSelf)
 {
     if (!player || !player->FindMap() || baseSpellIds.size() == 0)
@@ -2250,6 +2286,93 @@ ObjectGuid SelectFriendlyWithoutAnyAuraFromSpellChain(Player const* player, std:
     }
 
     return bestTarget ? bestTarget->GetGUID() : ObjectGuid::Empty;
+}
+
+SpellDecision SelectMissingBattlegroundRaidBuff(Player const* player)
+{
+    if (!player || !player->InBattleground() || player->IsInCombat())
+        return {};
+
+    auto makeDecision = [player](char const* actionName, char const* reason, uint32 spellId, ObjectGuid targetGuid)
+    {
+        SpellDecision decision;
+        if (targetGuid.IsEmpty())
+            return decision;
+
+        decision.actionName = actionName;
+        decision.reason = reason;
+        decision.spellId = spellId;
+        decision.targetMode = targetGuid == player->GetGUID()
+            ? playerbot::PvpClassSpellContext::TargetMode::Self
+            : playerbot::PvpClassSpellContext::TargetMode::Ally;
+        decision.targetGuid = targetGuid;
+        return decision;
+    };
+
+    // Party-area versions efficiently cover the caster's subgroup during
+    // preparation. These single-target fallbacks deliberately inspect every
+    // nearby member of the battleground raid so other subgroups and late
+    // joiners are filled in one member at a time.
+    switch (player->GetClass())
+    {
+        case CLASS_DRUID:
+        {
+            if (IsSpellReady(player, 9885))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 9885, 21850 }, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("druid mark of the wild raid", "buff an unbuffed battleground raid member", 9885, targetGuid);
+
+            if (IsSpellReady(player, kDruidThornsSpellId))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { kDruidThornsSpellId, kDruidMassThornsSpellId }, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("druid thorns raid", "buff an unbuffed battleground raid member", kDruidThornsSpellId, targetGuid);
+
+            break;
+        }
+        case CLASS_PRIEST:
+        {
+            if (IsSpellReady(player, 10938))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10938, 21564 }, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("priest power word fortitude raid", "buff an unbuffed battleground raid member", 10938, targetGuid);
+
+            if (IsSpellReady(player, 10958))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10958, 27683 }, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("priest shadow protection raid", "buff an unbuffed battleground raid member", 10958, targetGuid);
+
+            if (IsSpellReady(player, 27841))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 27841, 27681 }, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("priest divine spirit raid", "buff an unbuffed battleground raid member", 27841, targetGuid);
+
+            break;
+        }
+        case CLASS_MAGE:
+        {
+            if (IsSpellReady(player, 10157))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAnyAuraFromSpellChain(player, { 10157, 23028 }, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("mage arcane intellect raid", "buff an unbuffed battleground raid member", 10157, targetGuid);
+
+            break;
+        }
+        case CLASS_PALADIN:
+        {
+            bool const isRetPaladin = DetectClassicClassProfile(player).profile == ClassicClassProfile::TertiaryClassic;
+            if (!isRetPaladin && IsSpellReady(player, 25898))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 25898, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("paladin greater blessing of kings raid", "buff an unbuffed battleground raid member", 25898, targetGuid);
+
+            if (isRetPaladin && IsSpellReady(player, 21918))
+                if (ObjectGuid targetGuid = SelectFriendlyWithManaAndWithoutAuraFromSpellChain(player, 21918, 40.0f, true); !targetGuid.IsEmpty())
+                    return makeDecision("paladin greater blessing of wisdom raid", "buff an unbuffed battleground raid member", 21918, targetGuid);
+
+            if (isRetPaladin && IsSpellReady(player, 25291))
+                if (ObjectGuid targetGuid = SelectFriendlyWithoutManaAndAuraFromSpellChain(player, 25291, 40.0f); !targetGuid.IsEmpty())
+                    return makeDecision("paladin blessing of might raid", "buff an unbuffed non-mana battleground raid member", 25291, targetGuid);
+
+            break;
+        }
+        default:
+            break;
+    }
+
+    return {};
 }
 
 SpellDecision SelectPreparationBuffSpell(Player const* player)
@@ -2385,7 +2508,7 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
 
             if (IsSpellReady(player, 21918))
             {
-                if (ObjectGuid targetGuid = SelectFriendlyWithoutAuraFromSpellChain(player, 21918, 45.0f, true); !targetGuid.IsEmpty())
+                if (ObjectGuid targetGuid = SelectFriendlyWithManaAndWithoutAuraFromSpellChain(player, 21918, 45.0f, true); !targetGuid.IsEmpty())
                     return { "paladin greater blessing of wisdom prep", "buff nearby team before gates open", 21918, playerbot::PvpClassSpellContext::TargetMode::Ally, targetGuid };
             }
 
@@ -2430,6 +2553,9 @@ SpellDecision SelectPreparationBuffSpell(Player const* player)
         default:
             break;
     }
+
+    if (SpellDecision const raidBuffDecision = SelectMissingBattlegroundRaidBuff(player); raidBuffDecision.spellId)
+        return raidBuffDecision;
 
     if (SpellDecision const mountDecision = SelectMountSpell(player, "mount during preparation after prep actions"); mountDecision.spellId)
         return mountDecision;
@@ -5202,7 +5328,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
     if (!hasHostileTarget && !allyTarget && !isRestoShaman && !isEnhancementShaman)
         return decision;
 
-    bool const enhancementUsesWindfury = isEnhancementShaman && PartyBenefitsFromWindfuryTotem(player);
+    bool const partyBenefitsFromWindfury = PartyBenefitsFromWindfuryTotem(player);
 
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     // 89745 lets an enhancement shaman weave in a low-priority heal.
@@ -5255,7 +5381,7 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasHostileTarget && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 10414), 60.0f,
         { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && hasHostileTarget && target->GetPowerType() == POWER_MANA && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
+    AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && target->GetPowerType() == POWER_MANA && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
         { "shaman grounding totem", "counter incoming caster pressure", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 16166), 58.0f,
         { "shaman elemental mastery", "trigger burst throughput cooldown", 16166, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5289,13 +5415,13 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, inCombat && isRestoShaman && player->GetPowerPct(POWER_MANA) < 50.0f && !HasActiveWaterTotem(player) && IsSpellReady(player, 16190), 52.8f,
         { "shaman mana tide totem", "restore mana below half", 16190, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && (isRestoShaman || isEnhancementShaman) && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
+    AddDecisionCandidate(candidates, inCombat && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
         { "shaman tremor totem", "maintain a nearby tremor totem", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && (isRestoShaman || isEnhancementShaman) && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
+    AddDecisionCandidate(candidates, inCombat && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
         { "shaman poison cleansing totem", "maintain a nearby poison cleansing totem", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && (isRestoShaman || (isEnhancementShaman && !enhancementUsesWindfury)) && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
+    AddDecisionCandidate(candidates, inCombat && !partyBenefitsFromWindfury && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
         { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && isEnhancementShaman && enhancementUsesWindfury && !HasActiveAirTotem(player) && IsSpellReady(player, 10614), 52.5f,
+    AddDecisionCandidate(candidates, inCombat && partyBenefitsFromWindfury && !HasActiveAirTotem(player) && IsSpellReady(player, 10614), 52.5f,
         { "shaman windfury totem", "support an arms/fury warrior or retribution paladin", 10614, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
         { "shaman ghost wolf", "escape melee pressure while endangered", 2645, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -6002,6 +6128,27 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             context.spellId = prepDecision.spellId;
             context.targetMode = prepDecision.targetMode;
             context.targetGuid = prepDecision.targetGuid;
+            context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
+            context.shouldExecute = true;
+            return context;
+        }
+
+        // Preparation is a closed-gates support phase. Once consumables,
+        // buffs, pets, and mounting are complete, do not fall through into
+        // the ordinary enemy/pet combat graph before the match starts.
+        return context;
+    }
+
+    if (!player->IsInCombat())
+    {
+        SpellDecision const raidBuffDecision = SelectMissingBattlegroundRaidBuff(player);
+        if (raidBuffDecision.spellId)
+        {
+            context.actionName = raidBuffDecision.actionName;
+            context.reason = raidBuffDecision.reason;
+            context.spellId = raidBuffDecision.spellId;
+            context.targetMode = raidBuffDecision.targetMode;
+            context.targetGuid = raidBuffDecision.targetGuid;
             context.selfCast = context.targetMode == PvpClassSpellContext::TargetMode::Self;
             context.shouldExecute = true;
             return context;

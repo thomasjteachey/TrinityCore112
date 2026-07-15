@@ -77,15 +77,16 @@ void BattlegroundNL::FillInitialWorldStates(WorldPackets::WorldState::InitWorldS
 bool BattlegroundNL::SetupBattleground()
 {
     // Gates use the exact rotations from the original BWL gameobjects:
-    // 75162 and 2136042.
+    // 75162 and 2136042. Create them closed so the initial create packet can
+    // never expose an open gate before StartingEventCloseDoors runs.
     if (!AddObject(BG_NL_OBJECT_DOOR_1, BG_NL_OBJECT_TYPE_DOOR,
             -7488.169922f, -1150.540039f, 476.712006f, 0.610865f,
             0.0f, 0.0f, 0.300706f, 0.953717f,
-            RESPAWN_IMMEDIATELY, GO_STATE_ACTIVE)
+            RESPAWN_IMMEDIATELY, GO_STATE_READY)
         || !AddObject(BG_NL_OBJECT_DOOR_2, BG_NL_OBJECT_TYPE_DOOR,
             -7591.849121f, -1203.417725f, 476.799896f, 2.171660f,
             -0.0f, -0.0f, -0.884691f, -0.466177f,
-            RESPAWN_IMMEDIATELY, GO_STATE_ACTIVE)
+            RESPAWN_IMMEDIATELY, GO_STATE_READY)
         // Permanent wall/blocker, from original BWL gameobject 75164.
         || !AddObject(BG_NL_OBJECT_WALL_1, BG_NL_OBJECT_TYPE_WALL,
             -7464.000000f, -1103.550049f, 480.029999f, 0.610865f,

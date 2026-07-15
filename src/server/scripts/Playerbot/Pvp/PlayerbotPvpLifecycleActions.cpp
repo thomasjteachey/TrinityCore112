@@ -2702,23 +2702,47 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
             bool const shouldUsePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
             Position pathDestination;
-            if (shouldUsePath && player->InBattleground() && TryBuildBattlegroundSegmentDestination(player, safeDestination, pathDestination, &pathType))
+            bool const hasRetreatPath = shouldUsePath &&
+                TryBuildBattlegroundSegmentDestination(player, safeDestination, pathDestination, &pathType);
+            float const retreatSeparation = hasRetreatPath ? target->GetExactDist(pathDestination) : currentDistance;
+            bool const retreatMakesProgress = hasRetreatPath && retreatSeparation >= currentDistance + 1.0f;
+            if (retreatMakesProgress)
             {
                 // Hunters were visually clipping through Blackrock Throne WMO
                 // walls because the stutter-flee loop used a raw direct spline.
-                // Always prefer a real mmap segment in battlegrounds; if mmaps
-                // cannot build a non-shortcut path, do not fall back to direct
-                // wall-crossing movement.
+                // Always prefer a real mmap segment, and only accept a retreat
+                // segment that actually creates separation from the attacker.
                 motionMaster->MovePoint(0, pathDestination, true);
                 movementMode = "mmap-segment";
                 issued = true;
             }
-            else if (!player->InBattleground())
+            else if (shouldUsePath && currentDistance <= 12.0f)
             {
-                // PvP locomotion always goes through the path generator. Actual
-                // spell teleports are handled by their spell effects, not here.
-                motionMaster->MovePoint(0, safeDestination, true);
-                movementMode = "path";
+                // If the hunter is cornered, continuing to request the blocked
+                // point behind it only pins it against the wall. Cross through
+                // the close attacker and finish well beyond them; after the
+                // crossing, the normal away vector points into open space and
+                // regular kiting resumes. Unit collision does not block this
+                // generated path, while terrain collision still does.
+                float const throughAngle = player->GetAbsoluteAngle(target->GetPosition());
+                float const throughDistance = currentDistance + 12.0f;
+                Position throughDestination(player->GetPositionX() + std::cos(throughAngle) * throughDistance,
+                    player->GetPositionY() + std::sin(throughAngle) * throughDistance,
+                    player->GetPositionZ(), player->GetOrientation());
+                Position const safeThroughDestination = BuildCollisionSafeDestination(player, throughDestination);
+                Position throughPathDestination;
+                PathType throughPathType = PathType(0);
+                if (TryBuildBattlegroundSegmentDestination(player, safeThroughDestination, throughPathDestination, &throughPathType))
+                {
+                    motionMaster->MovePoint(0, throughPathDestination, true);
+                    pathType = throughPathType;
+                    movementMode = "corner-run-through-mmap";
+                }
+                else
+                {
+                    motionMaster->MovePoint(0, safeThroughDestination, true);
+                    movementMode = "corner-run-through-generated";
+                }
                 issued = true;
             }
             else

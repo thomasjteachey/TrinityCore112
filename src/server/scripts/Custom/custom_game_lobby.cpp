@@ -63,9 +63,8 @@ enum GossipAction : uint32
     ACTION_LEAVE_TEAM,
     ACTION_ADD_BOT,
     ACTION_ADD_RANDOM_BOT,
-    ACTION_REMOVE_BOT,
+    ACTION_REMOVE_BOT_OR_CLONE,
     ACTION_ADD_DARK,
-    ACTION_REMOVE_DARK,
     ACTION_SELECT_GAME_MENU = 280,
     ACTION_SELECT_ARENA_MENU,
     ACTION_SELECT_BATTLEGROUND_MENU,
@@ -1432,35 +1431,40 @@ public:
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random playerbot", team, ACTION_ADD_RANDOM_BOT);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot...", team, ACTION_REMOVE_BOT);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add player clone...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove player clone...", team, ACTION_REMOVE_DARK);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot/player clone...", team, ACTION_REMOVE_BOT_OR_CLONE);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
-        void ShowCloneRemovalMenu(Player* player, uint32 team, bool playerbotClone)
+        void ShowCloneRemovalMenu(Player* player, uint32 team)
         {
             CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
             if (!lobby || (team != ALLIANCE && team != HORDE))
                 return;
 
-            uint32 const actionBase = playerbotClone ? ACTION_REMOVE_BOT_CHOICE_BASE : ACTION_REMOVE_DARK_CHOICE_BASE;
-            uint32 filteredIndex = 0;
+            uint32 playerbotIndex = 0;
+            uint32 playerCloneIndex = 0;
+            uint32 rosterCount = 0;
             for (CloneRequest const& request : lobby->CloneRequests)
             {
-                if (request.Team != team || request.IsPlayerbot != playerbotClone)
+                if (request.Team != team)
                     continue;
 
+                uint32& filteredIndex = request.IsPlayerbot ? playerbotIndex : playerCloneIndex;
                 if (filteredIndex < ACTION_REMOVE_CHOICE_LIMIT)
-                    AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove " + request.SourceName,
+                {
+                    uint32 const actionBase = request.IsPlayerbot ? ACTION_REMOVE_BOT_CHOICE_BASE : ACTION_REMOVE_DARK_CHOICE_BASE;
+                    AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                        "Remove " + request.SourceName + (request.IsPlayerbot ? " (playerbot)" : " (player clone)"),
                         team, actionBase + filteredIndex);
+                }
+
                 ++filteredIndex;
+                ++rosterCount;
             }
 
-            if (!filteredIndex)
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    playerbotClone ? "No playerbots are on this team." : "No player clones are on this team.",
-                    team, ACTION_STATUS);
+            if (!rosterCount)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No playerbots or player clones are on this team.", team, ACTION_STATUS);
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", team, ACTION_REMOVE_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
@@ -1638,7 +1642,7 @@ public:
                 action < ACTION_REMOVE_BOT_CHOICE_BASE + ACTION_REMOVE_CHOICE_LIMIT)
             {
                 manager.RemoveCloneRequest(player, sender, true, action - ACTION_REMOVE_BOT_CHOICE_BASE);
-                ShowCloneRemovalMenu(player, sender, true);
+                ShowCloneRemovalMenu(player, sender);
                 return true;
             }
 
@@ -1646,7 +1650,7 @@ public:
                 action < ACTION_REMOVE_DARK_CHOICE_BASE + ACTION_REMOVE_CHOICE_LIMIT)
             {
                 manager.RemoveCloneRequest(player, sender, false, action - ACTION_REMOVE_DARK_CHOICE_BASE);
-                ShowCloneRemovalMenu(player, sender, false);
+                ShowCloneRemovalMenu(player, sender);
                 return true;
             }
 
@@ -1656,8 +1660,7 @@ public:
                 case ACTION_JOIN_TEAM: manager.SetTeam(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
                 case ACTION_ADD_RANDOM_BOT: manager.AddRandomPlayerbotClone(player, sender); ShowTeamMenu(player, sender); return true;
-                case ACTION_REMOVE_BOT: ShowCloneRemovalMenu(player, sender, true); return true;
-                case ACTION_REMOVE_DARK: ShowCloneRemovalMenu(player, sender, false); return true;
+                case ACTION_REMOVE_BOT_OR_CLONE: ShowCloneRemovalMenu(player, sender); return true;
                 case ACTION_REMOVE_LIST_BACK: ShowTeamMenu(player, sender); return true;
                 case ACTION_SELECT_GAME_MENU: ShowGameSelectionMenu(player); return true;
                 case ACTION_SELECT_ARENA_MENU: ShowArenaSelectionMenu(player); return true;

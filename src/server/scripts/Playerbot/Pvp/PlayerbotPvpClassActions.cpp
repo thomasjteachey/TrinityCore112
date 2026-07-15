@@ -2942,7 +2942,29 @@ void CommandPetAttackTarget(Player* player, Unit* target)
     }
 
     Pet* pet = player->GetPet();
-    if (!pet || !pet->IsAlive() || !pet->IsValidAttackTarget(target))
+    if (!pet || !pet->IsAlive())
+        return;
+
+    bool const inBattlegroundPreparation = player->InBattleground() &&
+        (player->HasAura(SPELL_PREPARATION) || player->HasAura(SPELL_ARENA_PREPARATION) ||
+            player->HasUnitFlag(UNIT_FLAG_PREPARATION));
+    if (inBattlegroundPreparation)
+    {
+        if (CharmInfo* charmInfo = pet->GetCharmInfo())
+        {
+            charmInfo->SetIsCommandAttack(false);
+            charmInfo->SetIsAtStay(false);
+            charmInfo->SetIsCommandFollow(true);
+            charmInfo->SetCommandState(COMMAND_FOLLOW);
+        }
+        pet->AttackStop();
+        pet->CombatStop(true);
+        if (MotionMaster* motionMaster = pet->GetMotionMaster())
+            motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        return;
+    }
+
+    if (!pet->IsValidAttackTarget(target))
         return;
 
     if (CharmInfo* charmInfo = pet->GetCharmInfo())

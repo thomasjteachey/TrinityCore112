@@ -37,6 +37,7 @@
 #include "Map.h"
 #include "MotionMaster.h"
 #include "Opcodes.h"
+#include "Pet.h"
 #include "Player.h"
 #include "Realm.h"
 #include "SpellDefines.h"
@@ -789,6 +790,28 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
 
     if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
         return;
+
+    if (battleground->GetStatus() == STATUS_WAIT_JOIN)
+    {
+        // The preparation aura prevents player damage, but an aggressive pet
+        // can still acquire an enemy or retain a command issued by a stale
+        // combat context. Enforce the closed-gates invariant on every bot tick.
+        if (Pet* pet = player->GetPet(); pet && pet->IsAlive() &&
+            (pet->GetVictim() || pet->IsInCombat() || pet->HasUnitState(UNIT_STATE_CHASE | UNIT_STATE_CHASE_MOVE)))
+        {
+            if (CharmInfo* charmInfo = pet->GetCharmInfo())
+            {
+                charmInfo->SetIsCommandAttack(false);
+                charmInfo->SetIsAtStay(false);
+                charmInfo->SetIsCommandFollow(true);
+                charmInfo->SetCommandState(COMMAND_FOLLOW);
+            }
+            pet->AttackStop();
+            pet->CombatStop(true);
+            if (MotionMaster* motionMaster = pet->GetMotionMaster())
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+        }
+    }
 
     // Persistent bots reach preparation through the normal lifecycle below.
     // Transient custom-game copies return before that lifecycle ownership, so
