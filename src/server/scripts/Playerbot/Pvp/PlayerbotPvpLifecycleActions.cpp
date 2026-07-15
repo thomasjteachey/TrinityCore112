@@ -1882,11 +1882,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
         }
 
-        // Roots and snares are a hold-and-cast state for playerbots.  Clear any
-        // target-relative order installed before the debuff so it cannot keep
-        // rotating/restarting the bot or resume another positioning step while
-        // the class decision graph is trying to cast from the current spot.
-        if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+        // Only roots forbid locomotion. Snares still permit pursuit and
+        // retreat; the class executor independently plants for cast-time
+        // spells and preserves movement for instant spells.
+        if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
         {
             if (MotionMaster* motionMaster = player->GetMotionMaster())
                 motionMaster->Clear(MOTION_SLOT_ACTIVE);
@@ -4454,10 +4453,10 @@ namespace playerbot
         if (TryMoveOutOfHazardousLiquid(player))
             return true;
 
-        // Do not let the 50 ms tactical owner install objective, pursuit, or
-        // spacing movement while rooted/snared. Class execution still runs
-        // after this and can cast normally from the bot's current position.
-        if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+        // A root cannot execute objective, pursuit, or spacing movement. A
+        // snare can: melee still chases, while ranged retreat continues behind
+        // instant casts and is stopped by the class executor for hard casts.
+        if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
         {
             if (MotionMaster* motionMaster = player->GetMotionMaster())
                 motionMaster->Clear(MOTION_SLOT_ACTIVE);

@@ -3933,11 +3933,9 @@ bool CanIssueFollowCommands(Player const* player)
     if (HasActiveStationaryChannel(player))
         return false;
 
-    // A snared caster should use whatever is castable from its current
-    // position instead of repeatedly replacing spell attempts with another
-    // chase/follow/flee order.  This also covers roots whose aura state can be
-    // present before UNIT_STATE_ROOT is reflected on the unit.
-    if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+    // Roots prevent locomotion; snares only reduce its speed. A snared bot
+    // must remain able to chase an out-of-range target or retreat from melee.
+    if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
         return false;
 
     if (IsCrowdControlledForAction(player) ||
@@ -4006,12 +4004,14 @@ void FaceTargetForInstantCast(Player* player, Unit* target, SpellInfo const* spe
     if (spellInfo->CalcCastTime() > 0)
         return;
 
-    // Do not re-issue a facing packet for auto-repeat ranged spells when the
-    // target is already in front. Diagnostics showed SetFacingToObject can
-    // briefly restore stale forward/spline movement flags on virtual sessions
-    // after StopPlayerbotForStationaryCast cleared them, and that 100ms
-    // movement blip cancels wand Shoot before the first repeat tick lands.
-    if (spellInfo->IsAutoRepeatRangedSpell() && player->isInFront(target))
+    // SetFacingToObject launches a zero-distance facing spline. Do not let an
+    // instant-cast decision replace an active translational spline: doing so
+    // makes virtual-session bots snap back and forth as movement and class
+    // decisions alternately replace each other's spline.
+    if (!player->IsStopped() || (player->movespline && !player->movespline->Finalized()))
+        return;
+
+    if (player->isInFront(target))
         return;
 
     player->SetFacingToObject(target);
@@ -4183,10 +4183,11 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
         return false;
 
-    // A stale follow/chase order must not defer a usable stationary cast while
-    // the caster is rooted or snared.  Lifecycle clears that movement order;
-    // class execution should stop and cast from the current location now.
-    if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+    // A rooted caster cannot make progress on a stale chase order, so stop and
+    // cast whatever is usable from its current position. A snared caster can
+    // still chase when the spell is genuinely out of range; when it is ready,
+    // genericReady below plants the caster immediately.
+    if (playerbot::PvpCore::IsMovementPreventedByRoot(player))
         return false;
 
     // If this spell is genuinely ready from the current position, stopping is
@@ -4577,16 +4578,9 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (!target || !target->HasBreakableByDamageCrowdControlAura())
             CommandPetAttackTarget(player, target);
 
-        // Virtual sessions normally need an immediate server-side face update.
-        // A committed flag route is different: the movement spline owns facing,
-        // and its admission guard only permits enemy instants already in front.
-        // Re-facing here would visibly turn the runner away from the route and
-        // can disturb virtual-session spline movement.
-        if (!context.preserveFlagObjectiveMovement)
-        {
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
-        }
+        // Facing is resolved only after movement/range admission below. Doing
+        // it here would replace an active movement spline even when the spell
+        // is subsequently rejected for range, line of sight, or movement.
     }
     else if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally)
     {
@@ -4938,6 +4932,35 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         NotifyWandDiagnostic(player, target, "post_stationary_stop", resolvedSpellId);
     }
 
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy &&
+        !context.preserveFlagObjectiveMovement && !player->isInFront(target))
+    {
+        bool const hasActiveMovementSpline = !player->IsStopped() ||
+            (player->movespline && !player->movespline->Finalized());
+        if (hasActiveMovementSpline)
+        {
+            if (requiresStationaryCast)
+            {
+                failureReason = "stationary_cast_still_moving_after_stop";
+                return false;
+            }
+
+            // Instant and explicitly move-allowed spells cast during the
+            // existing retreat/chase. Set the server orientation directly;
+            // SetFacingToObject would launch a zero-distance spline and cancel
+            // that movement. The cast is attempted immediately after this, so
+            // it observes the corrected facing without interrupting the path.
+            player->SetInFront(target);
+            if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+                player->SendMovementFlagUpdate();
+        }
+        else
+        {
+            player->SetFacingToObject(target);
+            player->SetInFront(target);
+        }
+    }
+
     // Blink (1953) is a leap-forward spell with a destination target
     // (TARGET_DEST_CASTER_FRONT_LEAP). For virtual bot sessions, casting only
     // on a unit target can leave relocation unresolved; provide an explicit
@@ -4961,19 +4984,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
                 NotifyWandDiagnostic(player, target, "post_face_stop", resolvedSpellId);
             }
         }
-    }
-
-    // Starfire (and anything else IsPlayerbotMovableCastTimeSpell allows) can
-    // be cast while moving via the caster-side snare mechanic in Spell.cpp,
-    // so unlike a normal cast-time spell the bot is not necessarily already
-    // stationary and facing the target when the cast starts - it could still
-    // be turned toward whatever direction it was last kiting. Force facing
-    // immediately before the cast attempt instead of relying on whatever
-    // orientation movement last left the bot in.
-    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && IsPlayerbotMovableCastTimeSpell(player, spellInfo))
-    {
-        player->SetFacingToObject(target);
-        player->SetInFront(target);
     }
 
     NotifyWandDiagnostic(player, target, "pre_cast", resolvedSpellId);
@@ -5872,6 +5882,14 @@ bool PvpClassActions::Execute(Player* player, PvpClassSpellContext const& contex
                 break;
             }
             case PvpClassSpellContext::MovementDirective::FaceSpellTarget:
+                // A facing spline replaces the current movement spline. Let
+                // the active segment finish instead of alternating movement
+                // and zero-distance facing splines every decision tick.
+                if (!player->IsStopped() || (player->movespline && !player->movespline->Finalized()))
+                {
+                    SetLastExecutionStatus(player, "move_face_deferred_active_spline");
+                    return true;
+                }
                 player->SetFacingToObject(movementTarget);
                 player->SetInFront(movementTarget);
                 break;
