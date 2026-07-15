@@ -4201,6 +4201,11 @@ namespace playerbot
         return didExecute;
     }
 
+    bool BattlegroundLifecycleActions::HandleDeathPrimitive(Player* player)
+    {
+        return HandleBattlegroundDeathState(player);
+    }
+
     bool BattlegroundLifecycleActions::JoinQueuePrimitive(Player* player)
     {
         if (!player || !IsLifecycleGateEnabled())

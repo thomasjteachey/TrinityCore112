@@ -1777,13 +1777,20 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     TryFinalizePendingManagedBotTeleport(player);
     TryUsePlayerbotInsigniaBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
+
+    bool const isTransientClone = PlayerbotObcCloneManager::IsActiveClone(player);
+    if (isTransientClone && player && player->InBattleground() &&
+        BattlegroundLifecycleActions::HandleDeathPrimitive(player))
+        return;
+
     ProcessBattlegroundPlayerbotTick(player);
 
     // Dark clones deliberately share the playerbot tactical implementation,
     // but the clone manager alone owns their battleground membership and team.
-    // Do not let the normal persistent-bot lifecycle queue, leave, or rebalance
-    // these transient players after their tactical tick has run.
-    if (PlayerbotObcCloneManager::IsActiveClone(player))
+    // Their death/release/resurrection state is handled above, but do not let
+    // the normal persistent-bot lifecycle queue, leave, or rebalance these
+    // transient players after their tactical tick has run.
+    if (isTransientClone)
         return;
 
     if (!CanProcessPlayerLifecycle(player))

@@ -36,6 +36,7 @@ public:
     static bool AcceptInvitePrimitive(Player* player);
     static bool DeclineInvitePrimitive(Player* player);
     static bool HandleInProgressStatusPrimitive(Player* player);
+    static bool HandleDeathPrimitive(Player* player);
 };
 
 class BattlegroundTacticalActions
