@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <cmath>
@@ -179,6 +180,7 @@ struct ManagedBotUpdatePulseState
 };
 
 std::unordered_map<uint64, ManagedBotUpdatePulseState> g_ManagedBotUpdatePulseByGuid;
+std::mutex g_ManagedBotUpdatePulseLock;
 
 Unit* GetCurrentMotionTarget(Player* bot)
 {
@@ -214,6 +216,8 @@ void RecordManagedBotUpdatePulse(Player* bot, uint32 diff)
 {
     if (!bot || !playerbot::IsManagedRandomBot(bot))
         return;
+
+    std::lock_guard<std::mutex> pulseLock(g_ManagedBotUpdatePulseLock);
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
     ManagedBotUpdatePulseState& state = g_ManagedBotUpdatePulseByGuid[bot->GetGUID().GetRawValue()];
@@ -295,11 +299,15 @@ std::string BuildManagedBotUpdateDiagnosticLine(Player* bot)
         return "PB update diag unavailable.";
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    auto itr = g_ManagedBotUpdatePulseByGuid.find(bot->GetGUID().GetRawValue());
-    if (itr == g_ManagedBotUpdatePulseByGuid.end())
-        return "PB update diag: no-update-pulse-recorded";
+    ManagedBotUpdatePulseState state;
+    {
+        std::lock_guard<std::mutex> pulseLock(g_ManagedBotUpdatePulseLock);
+        auto itr = g_ManagedBotUpdatePulseByGuid.find(bot->GetGUID().GetRawValue());
+        if (itr == g_ManagedBotUpdatePulseByGuid.end())
+            return "PB update diag: no-update-pulse-recorded";
 
-    ManagedBotUpdatePulseState const& state = itr->second;
+        state = itr->second;
+    }
     uint32 const updateAgeMs = state.lastUpdateMs != 0 && nowMs >= state.lastUpdateMs ? nowMs - state.lastUpdateMs : 0;
     uint32 const progressAgeMs = state.lastProgressMs != 0 && nowMs >= state.lastProgressMs ? nowMs - state.lastProgressMs : 0;
     float const progressDx = bot->GetPositionX() - state.lastProgressX;

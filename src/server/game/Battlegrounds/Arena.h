@@ -20,6 +20,8 @@
 
 #include "Battleground.h"
 
+#include <set>
+
 enum ArenaBroadcastTexts
 {
     ARENA_TEXT_START_ONE_MINUTE             = 15740,
@@ -51,7 +53,7 @@ class TC_GAME_API Arena : public Battleground
         Arena();
 
         void AddPlayer(Player* player) override;
-        void RemovePlayer(Player* /*player*/, ObjectGuid /*guid*/, uint32 /*team*/) override;
+        void RemovePlayer(Player* /*player*/, ObjectGuid guid, uint32 /*team*/) override;
 
         void FillInitialWorldStates(WorldPackets::WorldState::InitWorldStates& packet) override;
         void UpdateArenaWorldState();
@@ -59,9 +61,17 @@ class TC_GAME_API Arena : public Battleground
         void HandleKillPlayer(Player* player, Player* killer) override;
 
     private:
+        uint32 GetArenaAlivePlayersCountByTeam(uint32 team) const;
+
         void RemovePlayerAtLeave(ObjectGuid guid, bool transport, bool sendPacket) override;
         void CheckWinConditions() override;
         void EndBattleground(uint32 winner) override;
+
+        // In-memory custom-game clones are authoritative battleground-roster
+        // participants even when the global connected-player accessor cannot
+        // resolve them during a death transition. Arenas are elimination games,
+        // so retain the eliminated GUIDs and count survivors from m_Players.
+        std::set<ObjectGuid> _customGameEliminatedPlayers;
 };
 
 #endif // TRINITY_ARENA_H

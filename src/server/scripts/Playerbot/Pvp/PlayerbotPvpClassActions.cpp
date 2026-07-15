@@ -48,6 +48,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -725,152 +726,6 @@ bool IssueStrictHumanFollow(Player* player, Unit* target, float desiredDistance)
     return IssueStrictHumanMove(player, BuildFollowDestination(player, target, desiredDistance), 8.0f, 900);
 }
 
-bool IsSafeDownhillTerrainDestination(Player* player, Position const& destination)
-{
-    if (!player)
-        return false;
-
-    Map const* map = player->FindMap();
-    if (!map)
-        return false;
-
-    PositionFullTerrainStatus terrainStatus;
-    map->GetFullTerrainStatusForPosition(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
-        destination.GetPositionZ() + player->GetCollisionHeight(), terrainStatus, MAP_ALL_LIQUIDS, player->GetCollisionHeight());
-
-    if (terrainStatus.floorZ <= INVALID_HEIGHT)
-        return false;
-
-    float const floorDelta = std::fabs(destination.GetPositionZ() - (terrainStatus.floorZ + player->GetHoverOffset()));
-    if (floorDelta > 1.5f)
-        return false;
-
-    LiquidData liquidData{};
-    if (map->GetLiquidStatus(player->GetPhaseMask(), destination.GetPositionX(), destination.GetPositionY(),
-            destination.GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()) &&
-        !player->CanSwim() && !player->HasAuraType(SPELL_AURA_WATER_WALK))
-        return false;
-
-    return true;
-}
-
-bool TryBuildSafeDownhillTeleportDestination(Player* player, Unit* target, Position& teleportDestination, float& teleportStep, char const*& teleportMode)
-{
-    teleportMode = "none";
-    if (!player || !target || !player->InBattleground())
-        return false;
-
-    float const verticalDeltaToTarget = player->GetPositionZ() - target->GetPositionZ();
-    float const dxToTarget = target->GetPositionX() - player->GetPositionX();
-    float const dyToTarget = target->GetPositionY() - player->GetPositionY();
-    float const planarDistanceToTarget = std::sqrt(dxToTarget * dxToTarget + dyToTarget * dyToTarget);
-    if (verticalDeltaToTarget <= 8.0f || planarDistanceToTarget <= 30.0f)
-        return false;
-
-    teleportStep = std::clamp(planarDistanceToTarget * 0.20f, 12.0f, 35.0f);
-    float const teleportFraction = std::min(teleportStep / std::max(0.01f, planarDistanceToTarget), 1.0f);
-    Position requestedDestination(
-        player->GetPositionX() + dxToTarget * teleportFraction,
-        player->GetPositionY() + dyToTarget * teleportFraction,
-        player->GetPositionZ() - std::min(10.0f, verticalDeltaToTarget * teleportFraction),
-        player->GetOrientation());
-
-    PathGenerator path(player);
-    path.SetPathLengthLimit(45.0f);
-    bool const pathOk = path.CalculatePath(requestedDestination.GetPositionX(), requestedDestination.GetPositionY(), requestedDestination.GetPositionZ(), true);
-    PathType const pathType = path.GetPathType();
-    uint32 const forbiddenPathFlags = PATHFIND_SHORTCUT | PATHFIND_NOT_USING_PATH | PATHFIND_NOPATH;
-    if (pathOk && (pathType & forbiddenPathFlags) == 0)
-    {
-        Movement::PointsArray const& points = path.GetPath();
-        G3D::Vector3 const* bestPoint = nullptr;
-        float bestPlanarDistance = 0.0f;
-        for (G3D::Vector3 const& point : points)
-        {
-            float const dx = point.x - player->GetPositionX();
-            float const dy = point.y - player->GetPositionY();
-            float const planarDistance = std::sqrt(dx * dx + dy * dy);
-            if (planarDistance > teleportStep + 1.0f)
-                break;
-
-            if (planarDistance >= 3.0f && planarDistance > bestPlanarDistance)
-            {
-                bestPoint = &point;
-                bestPlanarDistance = planarDistance;
-            }
-        }
-
-        if (bestPoint)
-        {
-            // bestPoint->z is Detour's raw navmesh sample for this corner.
-            // The (x,y) and path connectivity are trustworthy - the path was
-            // rejected above if it wasn't a real route - but the navmesh
-            // surface itself is a simplified approximation of the actual
-            // walkable geometry and can sit a little off true floor height,
-            // especially over reused dungeon geometry with multiple room
-            // volumes stacked in the same X/Y footprint. Re-ground it and
-            // sanity-check the floor the same way the terrain-snap fallback
-            // below already does, instead of teleporting to the raw sample.
-            Position candidateDestination(bestPoint->x, bestPoint->y, bestPoint->z, player->GetOrientation());
-            Position const safeCandidateDestination = BuildCollisionSafeDestination(player, candidateDestination);
-            Map* pathSafetyMap = player->FindMap();
-            bool const candidateHasLos = pathSafetyMap && pathSafetyMap->isInLineOfSight(
-                player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + player->GetCollisionHeight(),
-                safeCandidateDestination.GetPositionX(), safeCandidateDestination.GetPositionY(), safeCandidateDestination.GetPositionZ() + player->GetCollisionHeight(),
-                player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-            if (candidateHasLos && IsSafeDownhillTerrainDestination(player, safeCandidateDestination))
-            {
-                teleportDestination = safeCandidateDestination;
-                teleportStep = bestPlanarDistance;
-                teleportMode = "path_safe_teleport";
-                return true;
-            }
-        }
-    }
-
-    // Some battleground graveyards/cliffs have no navmesh route down even
-    // though the lower terrain is walkable. Fall back to a capped terrain snap
-    // in the same generic downhill direction, but only accept points that snap
-    // to the destination floor and are not unsafe liquid for this bot.
-    Position terrainDestination = requestedDestination;
-    float terrainZ = terrainDestination.GetPositionZ();
-    player->UpdateAllowedPositionZ(terrainDestination.GetPositionX(), terrainDestination.GetPositionY(), terrainZ);
-    terrainDestination.Relocate(terrainDestination.GetPositionX(), terrainDestination.GetPositionY(), terrainZ, player->GetOrientation());
-
-    float const terrainDx = terrainDestination.GetPositionX() - player->GetPositionX();
-    float const terrainDy = terrainDestination.GetPositionY() - player->GetPositionY();
-    float const terrainPlanarDistance = std::sqrt(terrainDx * terrainDx + terrainDy * terrainDy);
-    float const downwardDelta = player->GetPositionZ() - terrainDestination.GetPositionZ();
-    if (terrainPlanarDistance >= 3.0f && terrainPlanarDistance <= teleportStep + 1.0f && downwardDelta > 1.0f &&
-        IsSafeDownhillTerrainDestination(player, terrainDestination))
-    {
-        // The terrain-height query above finds *a* floor near that X/Y - not
-        // necessarily one actually connected to where the bot is standing.
-        // Battlegrounds built on top of a larger dungeon map (multiple rooms/
-        // levels stacked in the same X/Y footprint) can have an unrelated
-        // lower chamber's floor picked up here. NearTeleportTo has no path
-        // validation at all, so require an unobstructed line of sight to the
-        // candidate point first; if there is a wall/floor between here and
-        // there, the "floor" that was found is on the other side of it, not
-        // reachable from here, and teleporting to it drops the bot through
-        // the world instead of down a legitimate slope/cliff.
-        Map* map = player->FindMap();
-        bool const hasLos = map && map->isInLineOfSight(
-            player->GetPositionX(), player->GetPositionY(), player->GetPositionZ() + player->GetCollisionHeight(),
-            terrainDestination.GetPositionX(), terrainDestination.GetPositionY(), terrainDestination.GetPositionZ() + player->GetCollisionHeight(),
-            player->GetPhaseMask(), LINEOFSIGHT_ALL_CHECKS, VMAP::ModelIgnoreFlags::Nothing);
-        if (hasLos)
-        {
-            teleportDestination = terrainDestination;
-            teleportStep = terrainPlanarDistance;
-            teleportMode = "terrain_safe_teleport";
-            return true;
-        }
-    }
-
-    return false;
-}
-
 bool PrepareMotionMasterForExplicitBotMovement(Player* player)
 {
     if (!player || !player->IsInWorld())
@@ -1270,8 +1125,8 @@ MotionPrimeResult PrimeTargetRelativeMotion(Player* player)
 
     result.attempted = true;
     // MotionMaster::HasFlag(...) is private in this TrinityCore branch, so do not
-    // introspect MOTIONMASTER_FLAG_* here. We still log the public current motion
-    // and the top MovementGenerator flags, then prime one motion tick.
+    // introspect MOTIONMASTER_FLAG_* here. Snapshot only public generator state;
+    // the map's normal MotionMaster update must own initialization and movement.
     result.mmSizeBefore = motionMaster->Size();
     result.motionBefore = motionMaster->GetCurrentMovementGeneratorType();
     result.movingBefore = player->isMoving();
@@ -1283,12 +1138,6 @@ MotionPrimeResult PrimeTargetRelativeMotion(Player* player)
         result.topInitPendingBefore = top->HasFlag(MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING);
         result.topDeactivatedBefore = top->HasFlag(MOVEMENTGENERATOR_FLAG_DEACTIVATED);
     }
-
-    // Force Initialize()+first Update() for freshly queued Chase/Follow.
-    // Without this, virtual-session playerbots can show motion=chase/follow
-    // for >1s while CHASE_MOVE/FOLLOW_MOVE never gets set.
-    motionMaster->Update(1);
-    result.updateCalled = true;
 
     result.mmSizeAfter = motionMaster->Size();
     result.motionAfter = motionMaster->GetCurrentMovementGeneratorType();
@@ -2020,51 +1869,6 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
             player->GetGUID().ToString(), target->GetGUID().ToString(), safeDistance, currentDistance);
     }
 
-    // Disabled entirely (2026-07-12): this was built to un-stick bots that
-    // spawned at Twin Peaks (map 726) graveyards where the release point has
-    // no VMAP area data (VMAP AreaInfo ok=0) and PathGenerator can't route
-    // them down to the walkable ground below at all. Applied broadly to any
-    // 8y+ vertical / 30y+ horizontal gap, it became a general-purpose
-    // "can't find a path, so blind-teleport toward the target" hammer that
-    // was dropping bots through the floor on other maps (confirmed on
-    // Blackrock Throne) even after hardening both destination-selection
-    // branches with LOS/floor checks - the underlying problem is that a
-    // terrain-height or navmesh-corner sample near reused/complex geometry
-    // can land inside a different, disconnected room below the intended
-    // floor, and no single-point sanity check reliably catches every case of
-    // that. If the graveyard-stuck problem needs solving again, it should be
-    // scoped narrowly to graveyard release positions specifically rather
-    // than firing for any bot with a large vertical/horizontal gap to target.
-    bool const shouldForceDownhillCommit = false;
-    if (shouldForceDownhillCommit)
-    {
-        Position teleportDestination;
-        float teleportStep = 0.0f;
-        char const* teleportMode = "none";
-        if (TryBuildSafeDownhillTeleportDestination(player, target, teleportDestination, teleportStep, teleportMode))
-        {
-            float const preTeleportDistance = player->GetDistance(teleportDestination);
-            motionMaster->Clear(MOTION_SLOT_ACTIVE);
-            player->NearTeleportTo(teleportDestination, false);
-
-            stallState.targetGuid = target->GetGUID();
-            stallState.lastDistance = currentDistance;
-            stallState.lastSampleMs = nowMs;
-            stallState.lastIssueMs = nowMs;
-            stallState.lastIssuedRange = safeDistance;
-            stallState.lastIssuedMode = 1;
-
-            std::ostringstream diag;
-            diag << BuildRangedMovementDiag(player, target, "bg_downhill_commit_safe_teleport",
-                safeDistance, safeDistance, targetLos, targetAttackable, true, initialMotionType, teleportMode)
-                 << " teleport_dist=" << preTeleportDistance
-                 << " teleport_step=" << teleportStep
-                 << " cooldown_ms=3000";
-            SetLastMovementDebugStatus(player, diag.str());
-            return;
-        }
-    }
-
     // For target-relative ranged approach, do NOT use MovePoint here.
     // MoveChase/MoveFollow keep the movement generator attached to the target
     // and route through the server movement/pathing stack instead of pushing a
@@ -2159,7 +1963,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         stallState.lastIssuedMode = shouldEscalateContactRescue ? 3 : (moveResult == TargetRelativeRangedMoveResult::FollowIssued ? 2 : 1);
         stallState.stagnantSamples = staleQueuedGenerator ? 1 : 0;
 
-        char const* label = "near_edge_chase_nudge";
+        char const* label = "near_edge_pathing_chase";
         if (staleQueuedGenerator)
         {
             if (shouldEscalateContactRescue)
@@ -2944,6 +2748,7 @@ std::unordered_map<CasterSpellCooldownKey, std::chrono::steady_clock::time_point
 
 std::unordered_map<uint64, std::string> g_LastClassExecutionStatusByGuid;
 std::unordered_map<uint64, std::string> g_LastMovementDebugStatusByGuid;
+std::mutex g_ClassDiagnosticStatusLock;
 struct LastDirectiveState
 {
     playerbot::PvpClassSpellContext::MovementDirective directive = playerbot::PvpClassSpellContext::MovementDirective::None;
@@ -2999,6 +2804,7 @@ void SetLastExecutionStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     g_LastClassExecutionStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
@@ -3007,6 +2813,7 @@ void SetLastMovementDebugStatus(Player const* player, std::string const& status)
     if (!player)
         return;
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     g_LastMovementDebugStatusByGuid[player->GetGUID().GetRawValue()] = status;
 }
 
@@ -3650,7 +3457,7 @@ bool IsHazardousLiquidDestination(Player const* player, Position const& destinat
         (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
 }
 
-bool IsValidatedDirectHazardEgress(Player const* player, Position const& destination)
+bool IsValidatedPathingHazardEgress(Player const* player, Position const& destination)
 {
     if (!player || IsHazardousLiquidDestination(player, destination))
         return false;
@@ -3666,9 +3473,9 @@ bool IsValidatedDirectHazardEgress(Player const* player, Position const& destina
     return player->IsWithinLOS(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ() + 0.5f);
 }
 
-bool IssueValidatedDirectHazardEgress(Player* player, Position const& destination, char const* debugStatus)
+bool IssueValidatedPathingHazardEgress(Player* player, Position const& destination, char const* debugStatus)
 {
-    if (!IsValidatedDirectHazardEgress(player, destination))
+    if (!IsValidatedPathingHazardEgress(player, destination))
         return false;
 
     MotionMaster* motionMaster = player->GetMotionMaster();
@@ -3676,7 +3483,7 @@ bool IssueValidatedDirectHazardEgress(Player* player, Position const& destinatio
         return false;
 
     motionMaster->Clear(MOTION_SLOT_ACTIVE);
-    motionMaster->MovePoint(0, destination, false);
+    motionMaster->MovePoint(0, destination, true);
     SetLastMovementDebugStatus(player, debugStatus);
     return true;
 }
@@ -3732,7 +3539,7 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
     }
 
     if (state.hasLastSafePosition && player->GetExactDist(state.lastSafePosition) > 1.0f &&
-        IssueValidatedDirectHazardEgress(player, state.lastSafePosition, "hazardous_liquid_direct_return_to_last_safe"))
+        IssueValidatedPathingHazardEgress(player, state.lastSafePosition, "hazardous_liquid_pathing_return_to_last_safe"))
         return true;
 
     float const baseAngle = player->GetOrientation();
@@ -3771,7 +3578,7 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
             float const angle = baseAngle + offset;
             destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
             destination = BuildCollisionSafeDestination(player, destination);
-            if (IssueValidatedDirectHazardEgress(player, destination, "hazardous_liquid_direct_move_out"))
+            if (IssueValidatedPathingHazardEgress(player, destination, "hazardous_liquid_pathing_move_out"))
                 return true;
         }
     }
@@ -5555,6 +5362,7 @@ std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
     if (!player)
         return "none";
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     auto const itr = g_LastClassExecutionStatusByGuid.find(player->GetGUID().GetRawValue());
     if (itr == g_LastClassExecutionStatusByGuid.end())
         return "none";
@@ -5567,6 +5375,7 @@ std::string PvpClassActions::GetLastMovementDebugStatus(Player const* player)
     if (!player)
         return "none";
 
+    std::lock_guard<std::mutex> statusLock(g_ClassDiagnosticStatusLock);
     auto const itr = g_LastMovementDebugStatusByGuid.find(player->GetGUID().GetRawValue());
     if (itr == g_LastMovementDebugStatusByGuid.end())
         return "none";

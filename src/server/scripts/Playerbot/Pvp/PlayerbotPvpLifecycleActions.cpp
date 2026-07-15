@@ -983,7 +983,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
     }
 
-    bool IsValidatedDirectHazardEgress(Player const* player, Position const& destination)
+    bool IsValidatedPathingHazardEgress(Player const* player, Position const& destination)
     {
         if (!player || IsHazardousLiquidDestination(player, destination))
             return false;
@@ -1063,10 +1063,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 return true;
             }
 
-            if (IsValidatedDirectHazardEgress(player, state.lastSafePosition))
+            if (IsValidatedPathingHazardEgress(player, state.lastSafePosition))
             {
                 motionMaster->Clear(MOTION_SLOT_ACTIVE);
-                motionMaster->MovePoint(0, state.lastSafePosition, false);
+                motionMaster->MovePoint(0, state.lastSafePosition, true);
                 return true;
             }
         }
@@ -1114,11 +1114,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 float const angle = baseAngle + offset;
                 destination.RelocateOffset({ std::cos(angle) * distance, std::sin(angle) * distance, 0.0f, 0.0f });
                 destination = BuildCollisionSafeDestination(player, destination);
-                if (!IsValidatedDirectHazardEgress(player, destination))
+                if (!IsValidatedPathingHazardEgress(player, destination))
                     continue;
 
                 motionMaster->Clear(MOTION_SLOT_ACTIVE);
-                motionMaster->MovePoint(0, destination, false);
+                motionMaster->MovePoint(0, destination, true);
                 return true;
             }
         }
@@ -2640,7 +2640,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         return true;
     }
 
-    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason, bool allowEmergencyPathFallback = false)
+    bool IssueHunterStutterFlee(Player* player, Unit* target, float desiredExactDistance, char const* reason)
     {
         if (player && player->GetClass() == CLASS_HUNTER && HunterIsHardCastingStationaryShot(player))
         {
@@ -2660,7 +2660,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // even if a recent stop/face/autoshot command just ran.
         bool const alreadyMoving = player->isMoving() || player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
         uint32& lastFleeIssueMs = g_HunterLastFleeIssueMs[guid];
-        if (alreadyMoving && nowMs < lastFleeIssueMs + PLAYERBOT_HUNTER_FLEE_REISSUE_MS)
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        bool const activeStutterPath = motionMaster &&
+            motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE && alreadyMoving;
+        if (activeStutterPath && nowMs < lastFleeIssueMs + PLAYERBOT_HUNTER_FLEE_REISSUE_MS)
             return true;
 
         int8& side = g_HunterKiteSideByGuid[guid];
@@ -2689,12 +2692,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         ClearEatDrinkAurasForMovement(player);
         Position const safeDestination = BuildCollisionSafeDestination(player, destination);
         bool issued = false;
-        char const* movementMode = "direct";
+        char const* movementMode = "none";
         PathType pathType = PathType(0);
-        if (MotionMaster* motionMaster = player->GetMotionMaster())
+        if (motionMaster)
         {
             MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
-            if (currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
+            if (currentMovement == CHASE_MOTION_TYPE || currentMovement == FOLLOW_MOTION_TYPE || currentMovement == DISTRACT_MOTION_TYPE)
                 motionMaster->Clear();
 
             bool const shouldUsePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
@@ -2712,36 +2715,22 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             }
             else if (!player->InBattleground())
             {
-                // Outside battlegrounds keep the old lightweight behavior, but
-                // still request path generation when possible so we do not draw
-                // straight splines through nearby terrain.
-                motionMaster->MovePoint(0, safeDestination, shouldUsePath);
-                movementMode = shouldUsePath ? "path" : "direct";
-                issued = true;
-            }
-            else if (alreadyMoving)
-            {
-                // Existing movement is safer than issuing a direct no-path flee
-                // through WMO geometry. Let the current path continue and retry
-                // on the next flee tick.
-                movementMode = "preserve-existing";
-                issued = true;
-            }
-            else if (allowEmergencyPathFallback && shouldUsePath)
-            {
-                // If a hunter is inside melee/dead-zone, freezing in place is
-                // worse than taking a short normal pathing move. This still asks
-                // MotionMaster to generate a path; it does not use the old raw
-                // no-path spline that clipped through Blackrock Throne walls.
+                // PvP locomotion always goes through the path generator. Actual
+                // spell teleports are handled by their spell effects, not here.
                 motionMaster->MovePoint(0, safeDestination, true);
-                movementMode = "emergency-path-fallback";
+                movementMode = "path";
                 issued = true;
             }
             else
             {
-                movementMode = "blocked-no-mmap";
+                // Strict segment probing can reject a short otherwise usable
+                // route. Fall back to normal generated pathing for every stutter
+                // phase, not only dead-zone emergencies, so Auto Shot charging
+                // never turns the hunter into a stationary turret.
+                motionMaster->MovePoint(0, safeDestination, true);
+                movementMode = "generated-path-fallback";
+                issued = true;
             }
-
             if (issued)
                 lastFleeIssueMs = nowMs;
         }
@@ -2795,7 +2784,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             {
                 forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
                 MarkHunterKiteHold(player);
-                return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 8.0f, 17.0f), "breakable-cc-reposition-too-close", true);
+                return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 8.0f, 17.0f), "breakable-cc-reposition-too-close");
             }
 
             forceFleeUntilMs = 0;
@@ -2833,7 +2822,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             clearPlantState();
             forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
             MarkHunterKiteHold(player);
-            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone", true);
+            return IssueHunterStutterFlee(player, target, std::max(safeShootMin + 6.0f, 15.0f), "too-close-or-deadzone");
         }
 
         if (plantUntilMs > nowMs)
@@ -3533,29 +3522,7 @@ namespace playerbot
             return false;
         }
 
-        uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
-        TeamId const teamId = ResolveTeamId(assignedTeam ? assignedTeam : player->GetBGTeam());
-        TeamId const startTeam = (teamId == TEAM_NEUTRAL) ? player->GetTeamId() : teamId;
-        Position const* start = battleground->GetTeamStartPosition(startTeam);
-        if (!start)
-            return false;
-
         SetWaitJoinMovementLock(player, true);
-
-        float const dist = player->GetDistance(
-            start->GetPositionX(),
-            start->GetPositionY(),
-            start->GetPositionZ());
-
-        // Hard correction: they should not be moving at all before the battleground starts.
-        if (dist > 1.0f)
-        {
-            player->NearTeleportTo(
-                start->GetPositionX(),
-                start->GetPositionY(),
-                start->GetPositionZ(),
-                start->GetOrientation());
-        }
 
         if (player->isMoving())
             player->StopMoving();

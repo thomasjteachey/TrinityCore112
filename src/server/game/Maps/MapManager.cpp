@@ -281,7 +281,10 @@ void MapManager::Update(uint32 diff)
     std::vector<Map*> maps;
     {
         std::lock_guard<std::mutex> lock(_mapsLock);
-        maps.reserve(i_maps.size());
+        // Server-only lobby submaps are updated alongside base maps. Reserve
+        // the complete snapshot so merely having a custom lobby does not force
+        // a vector reallocation (and allocator free) on every map tick.
+        maps.reserve(i_maps.size() + i_worldSubMaps.size());
         for (auto const& mapPair : i_maps)
             maps.push_back(mapPair.second);
         for (auto const& mapPair : i_worldSubMaps)

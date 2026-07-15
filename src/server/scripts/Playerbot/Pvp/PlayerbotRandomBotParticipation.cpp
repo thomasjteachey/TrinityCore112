@@ -160,6 +160,11 @@ constexpr uint32 kHolyPriestProfileTalentSpellId = 724;
 
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
+// Player::Update can run concurrently for different maps. The PvP decision
+// modules intentionally retain per-bot movement, targeting, and cooldown state
+// in shared containers, so a complete decision tick must not overlap another
+// map's tick and mutate those containers concurrently.
+std::mutex g_PlayerbotPvpDecisionLock;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextPlayerbotInsigniaCheckTimeByGuid;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid;
 std::mutex g_PlayerbotInsigniaCheckLock;
@@ -1773,13 +1778,25 @@ bool TryRecoverPlayerbotFromUnderMap(Player* player)
 
 void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 {
+    if (!player)
+        return;
+
+    bool const isTransientClone = PlayerbotObcCloneManager::IsActiveClone(player);
+    if (!isTransientClone && !playerbot::IsManagedRandomBot(player))
+        return;
+
+    // PlayerScript::OnUpdate is invoked from Map::Update. With more than one
+    // map-update thread, bots on different maps reach the PvP modules at the
+    // same time. Serialize the whole tick so all of the modules' per-GUID
+    // state remains coherent for both persistent bots and transient clones.
+    std::lock_guard<std::mutex> decisionLock(g_PlayerbotPvpDecisionLock);
+
     TryRecoverPlayerbotFromUnderMap(player);
     TryReviveManagedBotAfterStartup(player);
     TryFinalizePendingVirtualPlayerTeleport(player);
     TryUsePlayerbotInsigniaBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
 
-    bool const isTransientClone = PlayerbotObcCloneManager::IsActiveClone(player);
     if (isTransientClone && player && player->InBattleground() &&
         BattlegroundLifecycleActions::HandleDeathPrimitive(player))
         return;

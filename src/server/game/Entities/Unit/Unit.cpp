@@ -3992,6 +3992,11 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
         if (sConditionMgr->IsSpellUsedInSpellClickConditions(aurApp->GetBase()->GetId()))
             player->UpdateVisibleGameobjectsOrSpellClicks();
 
+    // The diagnostic above describes the operation currently in progress. Do
+    // not leave a successfully removed aura as the apparent cause of a later,
+    // unrelated allocator or map-update failure on the same thread.
+    Trinity::ClearCrashContext();
+
     i = m_appliedAuras.begin();
 }
 
