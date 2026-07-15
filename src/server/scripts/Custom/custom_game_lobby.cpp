@@ -44,6 +44,7 @@ constexpr uint32 CUSTOM_GAME_CHROMIE_ENTRY = 900004;
 constexpr uint32 CUSTOM_GAME_CHAIR_ENTRY = 178934;
 constexpr uint32 CUSTOM_GAME_MAP_ID = 1;
 constexpr uint32 CUSTOM_GAME_MAX_PLAYERS_PER_TEAM = 40;
+constexpr uint32 CUSTOM_GAME_GOSSIP_PAGE_SIZE = 28;
 constexpr uint32 BLUE_FLAG_VISUAL = 32609;
 constexpr uint32 RED_FLAG_VISUAL = 32610;
 
@@ -69,6 +70,8 @@ enum GossipAction : uint32
     ACTION_DUPLICATE_HUMAN_MEMBER,
     ACTION_DUPLICATE_CLONE_MEMBER,
     ACTION_DUPLICATE_LIST_BACK,
+    ACTION_DUPLICATE_PAGE = 240,
+    ACTION_REMOVE_PAGE,
     ACTION_SELECT_GAME_MENU = 280,
     ACTION_SELECT_ARENA_MENU,
     ACTION_SELECT_BATTLEGROUND_MENU,
@@ -114,6 +117,21 @@ enum GossipAction : uint32
 constexpr uint32 ACTION_REMOVE_BOT_CHOICE_BASE = 1000;
 constexpr uint32 ACTION_REMOVE_DARK_CHOICE_BASE = 1100;
 constexpr uint32 ACTION_REMOVE_CHOICE_LIMIT = 100;
+
+uint32 MakePagedTeamSender(uint32 team, uint32 page)
+{
+    return (page << 16) | (team & 0xFFFF);
+}
+
+uint32 GetPagedTeam(uint32 sender)
+{
+    return sender & 0xFFFF;
+}
+
+uint32 GetPagedPage(uint32 sender)
+{
+    return sender >> 16;
+}
 
 struct CloneRequest
 {
@@ -1545,13 +1563,22 @@ public:
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
-        void ShowDuplicateTeamMemberMenu(Player* player, uint32 team)
+        void ShowDuplicateTeamMemberMenu(Player* player, uint32 team, uint32 page = 0)
         {
             CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
             if (!lobby || (team != ALLIANCE && team != HORDE))
                 return;
 
-            uint32 rosterCount = 0;
+            struct DuplicateMenuEntry
+            {
+                std::string Label;
+                uint32 Sender;
+                uint32 Action;
+            };
+
+            std::vector<DuplicateMenuEntry> entries;
+            entries.reserve(lobby->Teams.size() + lobby->CloneRequests.size());
+
             for (auto const& [guid, assignedTeam] : lobby->Teams)
             {
                 if (assignedTeam != team)
@@ -1563,12 +1590,8 @@ public:
                 else if (CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(guid))
                     name = characterInfo->Name;
 
-                if (name.empty())
-                    continue;
-
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Duplicate " + name + " (player)",
-                    guid.GetCounter(), ACTION_DUPLICATE_HUMAN_MEMBER);
-                ++rosterCount;
+                if (!name.empty())
+                    entries.push_back({ "Duplicate " + name + " (player)", guid.GetCounter(), ACTION_DUPLICATE_HUMAN_MEMBER });
             }
 
             for (CloneRequest const& request : lobby->CloneRequests)
@@ -1576,28 +1599,65 @@ public:
                 if (request.Team != team)
                     continue;
 
-                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                entries.push_back({
                     "Duplicate " + request.SourceName + (request.IsPlayerbot ? " (playerbot)" : " (player clone)"),
-                    request.RosterSlotId, ACTION_DUPLICATE_CLONE_MEMBER);
-                ++rosterCount;
+                    request.RosterSlotId, ACTION_DUPLICATE_CLONE_MEMBER });
             }
 
-            if (!rosterCount)
+            std::sort(entries.begin(), entries.end(), [](DuplicateMenuEntry const& left, DuplicateMenuEntry const& right)
+            {
+                if (left.Label != right.Label)
+                    return left.Label < right.Label;
+                if (left.Action != right.Action)
+                    return left.Action < right.Action;
+                return left.Sender < right.Sender;
+            });
+
+            uint32 const pageCount = std::max<uint32>(1,
+                (static_cast<uint32>(entries.size()) + CUSTOM_GAME_GOSSIP_PAGE_SIZE - 1) / CUSTOM_GAME_GOSSIP_PAGE_SIZE);
+            page = std::min(page, pageCount - 1);
+            uint32 const begin = page * CUSTOM_GAME_GOSSIP_PAGE_SIZE;
+            uint32 const end = std::min<uint32>(begin + CUSTOM_GAME_GOSSIP_PAGE_SIZE, static_cast<uint32>(entries.size()));
+
+            for (uint32 index = begin; index < end; ++index)
+            {
+                DuplicateMenuEntry const& entry = entries[index];
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, entry.Label, entry.Sender, entry.Action);
+            }
+
+            if (entries.empty())
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No team members are available to duplicate.", team, ACTION_STATUS);
+
+            if (page > 0)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Previous page (" + std::to_string(page) + "/" + std::to_string(pageCount) + ")",
+                    MakePagedTeamSender(team, page - 1), ACTION_DUPLICATE_PAGE);
+            if (page + 1 < pageCount)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Next page (" + std::to_string(page + 2) + "/" + std::to_string(pageCount) + ")",
+                    MakePagedTeamSender(team, page + 1), ACTION_DUPLICATE_PAGE);
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", team, ACTION_DUPLICATE_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
-        void ShowCloneRemovalMenu(Player* player, uint32 team)
+        void ShowCloneRemovalMenu(Player* player, uint32 team, uint32 page = 0)
         {
             CustomGameLobby* lobby = CustomGameLobbyManager::Instance().GetLobby(player);
             if (!lobby || (team != ALLIANCE && team != HORDE))
                 return;
 
+            struct RemovalMenuEntry
+            {
+                std::string Label;
+                uint32 Action;
+            };
+
+            std::vector<RemovalMenuEntry> entries;
+            entries.reserve(lobby->CloneRequests.size());
+
             uint32 playerbotIndex = 0;
             uint32 playerCloneIndex = 0;
-            uint32 rosterCount = 0;
             for (CloneRequest const& request : lobby->CloneRequests)
             {
                 if (request.Team != team)
@@ -1607,17 +1667,38 @@ public:
                 if (filteredIndex < ACTION_REMOVE_CHOICE_LIMIT)
                 {
                     uint32 const actionBase = request.IsPlayerbot ? ACTION_REMOVE_BOT_CHOICE_BASE : ACTION_REMOVE_DARK_CHOICE_BASE;
-                    AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    entries.push_back({
                         "Remove " + request.SourceName + (request.IsPlayerbot ? " (playerbot)" : " (player clone)"),
-                        team, actionBase + filteredIndex);
+                        actionBase + filteredIndex });
                 }
 
                 ++filteredIndex;
-                ++rosterCount;
             }
 
-            if (!rosterCount)
+            uint32 const pageCount = std::max<uint32>(1,
+                (static_cast<uint32>(entries.size()) + CUSTOM_GAME_GOSSIP_PAGE_SIZE - 1) / CUSTOM_GAME_GOSSIP_PAGE_SIZE);
+            page = std::min(page, pageCount - 1);
+            uint32 const begin = page * CUSTOM_GAME_GOSSIP_PAGE_SIZE;
+            uint32 const end = std::min<uint32>(begin + CUSTOM_GAME_GOSSIP_PAGE_SIZE, static_cast<uint32>(entries.size()));
+            uint32 const pagedSender = MakePagedTeamSender(team, page);
+
+            for (uint32 index = begin; index < end; ++index)
+            {
+                RemovalMenuEntry const& entry = entries[index];
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, entry.Label, pagedSender, entry.Action);
+            }
+
+            if (entries.empty())
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "No playerbots or player clones are on this team.", team, ACTION_STATUS);
+
+            if (page > 0)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Previous page (" + std::to_string(page) + "/" + std::to_string(pageCount) + ")",
+                    MakePagedTeamSender(team, page - 1), ACTION_REMOVE_PAGE);
+            if (page + 1 < pageCount)
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT,
+                    "Next page (" + std::to_string(page + 2) + "/" + std::to_string(pageCount) + ")",
+                    MakePagedTeamSender(team, page + 1), ACTION_REMOVE_PAGE);
 
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Back", team, ACTION_REMOVE_LIST_BACK);
             SendGossipMenuFor(player, 1, me->GetGUID());
@@ -1794,16 +1875,20 @@ public:
             if (action >= ACTION_REMOVE_BOT_CHOICE_BASE &&
                 action < ACTION_REMOVE_BOT_CHOICE_BASE + ACTION_REMOVE_CHOICE_LIMIT)
             {
-                manager.RemoveCloneRequest(player, sender, true, action - ACTION_REMOVE_BOT_CHOICE_BASE);
-                ShowCloneRemovalMenu(player, sender);
+                uint32 const team = GetPagedTeam(sender);
+                uint32 const page = GetPagedPage(sender);
+                manager.RemoveCloneRequest(player, team, true, action - ACTION_REMOVE_BOT_CHOICE_BASE);
+                ShowCloneRemovalMenu(player, team, page);
                 return true;
             }
 
             if (action >= ACTION_REMOVE_DARK_CHOICE_BASE &&
                 action < ACTION_REMOVE_DARK_CHOICE_BASE + ACTION_REMOVE_CHOICE_LIMIT)
             {
-                manager.RemoveCloneRequest(player, sender, false, action - ACTION_REMOVE_DARK_CHOICE_BASE);
-                ShowCloneRemovalMenu(player, sender);
+                uint32 const team = GetPagedTeam(sender);
+                uint32 const page = GetPagedPage(sender);
+                manager.RemoveCloneRequest(player, team, false, action - ACTION_REMOVE_DARK_CHOICE_BASE);
+                ShowCloneRemovalMenu(player, team, page);
                 return true;
             }
 
@@ -1814,6 +1899,10 @@ public:
                 case ACTION_LEAVE_TEAM: manager.LeaveTeam(player); ShowTeamMenu(player, sender); return true;
                 case ACTION_ADD_RANDOM_BOT: manager.AddRandomPlayerbotClone(player, sender); ShowTeamMenu(player, sender); return true;
                 case ACTION_DUPLICATE_TEAM_MEMBER: ShowDuplicateTeamMemberMenu(player, sender); return true;
+                case ACTION_DUPLICATE_PAGE:
+                    ShowDuplicateTeamMemberMenu(player, GetPagedTeam(sender), GetPagedPage(sender)); return true;
+                case ACTION_REMOVE_PAGE:
+                    ShowCloneRemovalMenu(player, GetPagedTeam(sender), GetPagedPage(sender)); return true;
                 case ACTION_DUPLICATE_HUMAN_MEMBER:
                 {
                     uint32 const team = me->GetEntry() == CUSTOM_GAME_BLUE_ENTRY ? ALLIANCE : HORDE;
