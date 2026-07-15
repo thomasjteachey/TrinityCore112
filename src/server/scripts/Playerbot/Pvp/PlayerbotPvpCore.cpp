@@ -4301,6 +4301,13 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     float const manaPct = player->GetPowerPct(POWER_MANA);
     bool const isFireMage = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isArcaneMage = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
+    // Arcane Time Travel turns the next Blink into a return teleport to the
+    // stored origin.  Re-selecting Blink while this aura is active makes a bot
+    // alternate between two positions on the 500 ms class cadence, which looks
+    // like a position/animation desync rather than a normal forward Blink.
+    // Preserve tactical Blink, but only start a fresh Blink sequence after the
+    // return opportunity has expired.
+    bool const timeTravelReturnActive = player->HasAura(89780);
     Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
     Unit const* castingTarget = IsSpellReady(player, 2139) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* polymorphTarget =
@@ -4321,7 +4328,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     {
         { "critical health", !isFireMage && player->HealthBelowPct(25) && IsSpellReady(player, 11958), 60.0f,
             { "mage ice block", "self-preservation emergency", 11958, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "mage is stunned or rooted", blinkableControl && IsSpellReady(player, 1953), 61.0f,
+        { "mage is stunned or rooted", !timeTravelReturnActive && blinkableControl && IsSpellReady(player, 1953), 61.0f,
             { "mage blink", "escape stun/root control", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "arcane burst window", arcanePowerReady, 57.0f,
             { "mage arcane power", "open the sub-50-percent burst window", 12042, playerbot::PvpClassSpellContext::TargetMode::Self } },
@@ -4329,7 +4336,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage presence of mind", "queue an instant pyroblast during the burst window", 12043, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "arcane burst window", burstPyroblastReady, 56.6f,
             { "mage pyroblast", "instant burst finisher under presence of mind", 18809, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
-        { "enemy too close for spell", closePressure && IsSpellReady(player, 1953), 45.0f,
+        { "enemy too close for spell", !timeTravelReturnActive && closePressure && IsSpellReady(player, 1953), 45.0f,
             { "mage blink", "escape melee pressure", 1953, playerbot::PvpClassSpellContext::TargetMode::Self } },
         { "enemy is casting", castingTarget && IsSpellReady(player, 2139), 44.0f,
             { "mage counterspell", "interrupt any enemy cast in range", 2139, playerbot::PvpClassSpellContext::TargetMode::Enemy, castingTarget ? castingTarget->GetGUID() : ObjectGuid::Empty } },
@@ -5822,12 +5829,21 @@ PvpCoreConfig const& PvpCore::GetConfig()
 
 bool PvpCore::CanMageBlinkOutOfControl(Player const* player)
 {
-    return IsMageBlinkableControl(player) && IsSpellReady(player, 1953);
+    // With Time Travel active, spell 1953 is no longer a forward control
+    // escape: the spell script converts it into a return teleport.  Do not let
+    // the fast CC path create the same two-position oscillation avoided by the
+    // normal mage decision graph.
+    return player && !player->HasAura(89780) && IsMageBlinkableControl(player) && IsSpellReady(player, 1953);
 }
 
 bool PvpCore::CanHunterBestialWrathOutOfControl(Player const* player)
 {
     return IsHunterBestialWrathBreakableControl(player) && IsSpellReady(player, 81300);
+}
+
+bool PvpCore::IsMovementImpairedByRootOrSnare(Player const* player)
+{
+    return IsRootedOrSnared(player);
 }
 
 PvpValues PvpCore::CollectValues(Player const* player)
@@ -6074,6 +6090,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         return context;
 
     bool const inSpiritOfRedemption = IsPriestInSpiritOfRedemption(player);
+    bool const movementImpairedByRootOrSnare = IsRootedOrSnared(player);
     bool const criticalLowMana = !inSpiritOfRedemption &&
         !UsesMeleeSpacingProfile(player, profileSelection) &&
         player->GetClass() != CLASS_HUNTER &&
@@ -6086,7 +6103,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     // oscillating between chase and retreat as their mana crosses the threshold.
     // Spirit of Redemption is exempt because its healing casts are free and the
     // aura duration is too short to spend on drinking or disengaging.
-    if (criticalLowMana)
+    if (criticalLowMana && !movementImpairedByRootOrSnare)
     {
         if (player->IsInCombat())
         {
@@ -6246,7 +6263,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
     {
         Unit const* losRecoveryTarget = resolveTargetByGuid(context.targetGuid);
-        if (losRecoveryTarget && !player->IsWithinLOSInMap(losRecoveryTarget))
+        if (losRecoveryTarget && !player->IsWithinLOSInMap(losRecoveryTarget) && !movementImpairedByRootOrSnare)
         {
             SpellInfo const* recoverySpellInfo = sSpellMgr->GetSpellInfo(context.spellId);
             float const spellMaxRange = recoverySpellInfo ? player->GetSpellMaxRangeForTarget(losRecoveryTarget, recoverySpellInfo) : 0.0f;
@@ -6270,7 +6287,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         (context.targetMode == PvpClassSpellContext::TargetMode::Enemy || context.targetMode == PvpClassSpellContext::TargetMode::Ally))
     {
         Unit const* facingTarget = resolveTargetByGuid(context.targetGuid);
-        if (facingTarget && !player->HasInArc(static_cast<float>(M_PI), facingTarget) &&
+        if (facingTarget && !movementImpairedByRootOrSnare && !player->HasInArc(static_cast<float>(M_PI), facingTarget) &&
             context.spellId != kPriestWyrmsShadowSpellId)
         {
             ConsiderMovementDirective(context, PvpClassSpellContext::MovementDirective::FaceSpellTarget, facingTarget->GetGUID(), 0.0f,
@@ -6283,7 +6300,8 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
         }
     }
 
-    if (context.spellId && context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
+    if (context.spellId && !movementImpairedByRootOrSnare &&
+        context.targetMode == PvpClassSpellContext::TargetMode::Enemy && UsesMeleeSpacingProfile(player, profileSelection))
     {
         Unit const* meleeTarget = resolveTargetByGuid(context.targetGuid);
         // Gap closers and ranged chase tools belong on this allowlist: they are
@@ -6320,7 +6338,7 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
 
     // If the selected spell is not immediately castable due spacing, switch this
     // tick into movement-directive execution to mirror reference trigger flow.
-    if (context.spellId && UsesRangedSpacingProfile(player, profileSelection))
+    if (context.spellId && !movementImpairedByRootOrSnare && UsesRangedSpacingProfile(player, profileSelection))
     {
         Unit const* spacingTarget = nullptr;
         if (context.targetMode == PvpClassSpellContext::TargetMode::Enemy ||

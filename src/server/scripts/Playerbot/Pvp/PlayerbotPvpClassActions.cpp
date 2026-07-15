@@ -3933,6 +3933,13 @@ bool CanIssueFollowCommands(Player const* player)
     if (HasActiveStationaryChannel(player))
         return false;
 
+    // A snared caster should use whatever is castable from its current
+    // position instead of repeatedly replacing spell attempts with another
+    // chase/follow/flee order.  This also covers roots whose aura state can be
+    // present before UNIT_STATE_ROOT is reflected on the unit.
+    if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+        return false;
+
     if (IsCrowdControlledForAction(player) ||
         player->HasUnitState(UNIT_STATE_ROOT) ||
         player->HasUnitState(UNIT_STATE_STUNNED) ||
@@ -4174,6 +4181,12 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
         return false;
 
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
+        return false;
+
+    // A stale follow/chase order must not defer a usable stationary cast while
+    // the caster is rooted or snared.  Lifecycle clears that movement order;
+    // class execution should stop and cast from the current location now.
+    if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
         return false;
 
     // If this spell is genuinely ready from the current position, stopping is

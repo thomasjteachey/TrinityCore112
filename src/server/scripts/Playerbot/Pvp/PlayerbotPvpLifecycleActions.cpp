@@ -1862,8 +1862,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
         }
 
-        if (player->HasUnitState(UNIT_STATE_ROOT) ||
-            player->HasUnitState(UNIT_STATE_STUNNED) ||
+        if (player->HasUnitState(UNIT_STATE_STUNNED) ||
             player->HasUnitState(UNIT_STATE_CONFUSED) ||
             player->HasUnitState(UNIT_STATE_FLEEING))
         {
@@ -1880,6 +1879,18 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (HasPlayerbotGapCloserInFlight(player))
         {
             EmitRehgarMovementGuardServerDiagnostic(player, "movement_blocked_effect");
+            return false;
+        }
+
+        // Roots and snares are a hold-and-cast state for playerbots.  Clear any
+        // target-relative order installed before the debuff so it cannot keep
+        // rotating/restarting the bot or resume another positioning step while
+        // the class decision graph is trying to cast from the current spot.
+        if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+        {
+            if (MotionMaster* motionMaster = player->GetMotionMaster())
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            StopVirtualPlayerbotMovement(player);
             return false;
         }
 
@@ -3871,6 +3882,13 @@ namespace playerbot
             player->IsWithinMeleeRange(target) &&
             target->HasInArc(static_cast<float>(M_PI), player))
         {
+            // The tactical loop runs every 50 ms. Replacing an angled Follow
+            // generator on every tick repeatedly initializes it (which calls
+            // StopMoving) and can overwrite the class action's rear-follow.
+            // Preserve the existing order long enough to initialize and move.
+            if (!CanIssueMovementCommand(player, 500))
+                return true;
+
             ClearEatDrinkAurasForMovement(player);
             player->GetMotionMaster()->MoveFollow(target, 1.5f, static_cast<float>(M_PI));
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -3889,6 +3907,12 @@ namespace playerbot
 
             if (isStealthedMeleeOpener)
             {
+                // Do not continually replace the same Follow generator. Each
+                // replacement initializes with StopMoving and can prevent the
+                // current target-relative spline from making progress.
+                if (!CanIssueMovementCommand(player, 500))
+                    return true;
+
                 // Stealth openers intentionally run without a committed victim for
                 // part of the engage. MoveChase can pause when victim linkage is
                 // absent, so use follow semantics to keep continuous closing.
@@ -4429,6 +4453,17 @@ namespace playerbot
         // ground. Continue an active crossing or escape before doing anything.
         if (TryMoveOutOfHazardousLiquid(player))
             return true;
+
+        // Do not let the 50 ms tactical owner install objective, pursuit, or
+        // spacing movement while rooted/snared. Class execution still runs
+        // after this and can cast normally from the bot's current position.
+        if (playerbot::PvpCore::IsMovementImpairedByRootOrSnare(player))
+        {
+            if (MotionMaster* motionMaster = player->GetMotionMaster())
+                motionMaster->Clear(MOTION_SLOT_ACTIVE);
+            StopVirtualPlayerbotMovement(player);
+            return false;
+        }
 
         // The node-capture OPEN_LOCK spell owns the bot until it completes or
         // is interrupted by normal spell rules. Tactical movement and combat
