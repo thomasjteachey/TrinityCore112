@@ -183,10 +183,34 @@ namespace
 
     bool IsHunterTrapSpellForCombatDiagnostic(SpellInfo const* spellInfo)
     {
-        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER &&
-            ((spellInfo->SpellFamilyFlags[0] & 0x18) ||
-                spellInfo->Id == 57879 ||
-                (spellInfo->SpellFamilyFlags[2] & 0x00024000));
+        // The SpellFamilyFlags mask this used to check (0x18 on flags[0], plus
+        // 0x00024000 on flags[2]) is not trap-exclusive -- see Spell.cpp:2237's
+        // own comment: flags[0] & 0x18 also matches Freezing Arrow, a Survival
+        // Hunter shot with no relation to traps. Casting anything sharing
+        // those bits made this function report "a trap was cast" even when it
+        // was not, silently clearing the pending feign-death/no-trap
+        // diagnostic instead of firing it. Match by exact spell ID (rank-
+        // normalized) instead, same as IsHunterTrapSpell in
+        // PlayerbotPvpClassActions.cpp.
+        if (!spellInfo)
+            return false;
+
+        if (spellInfo->Id == 57879)
+            return true;
+
+        SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
+        uint32 const firstRankSpellId = firstRank ? firstRank->Id : spellInfo->Id;
+
+        switch (firstRankSpellId)
+        {
+            case 1499:  // Freezing Trap
+            case 13795: // Immolation Trap
+            case 13809: // Frost Trap
+            case 13813: // Explosive Trap
+                return true;
+            default:
+                return false;
+        }
     }
 
     uint32 ResolveKnownCombatDiagnosticSpell(Player const* player, uint32 baseSpellId)

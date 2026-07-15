@@ -243,14 +243,17 @@ uint32 GetHunterStationaryCastTimeMs(SpellInfo const* spellInfo)
     if (spellInfo->Id == 982)
         return std::max<uint32>(castTimeMs, 1000);
 
-    // Multi-Shot is short, but it still has a stationary firing delay/cast
-    // window in this branch. It must be protected from stutter movement too;
-    // otherwise the hunter starts Multi-Shot, immediately resumes fleeing, and
-    // clips the shot before it launches. Use a short explicit guard even when
-    // custom DBC data reports zero cast time.
-    if (IsHunterMultiShotSpell(spellInfo))
-        return std::max<uint32>(castTimeMs, 500);
-
+    // Multi-Shot used to get an artificial 500ms floor here to protect its
+    // animation from the stutter-flee movement loop. That floor made
+    // IsHunterCastTimeShot()/HoldHunterStationaryCast() treat Multi-Shot as a
+    // stationary hard-cast, which armed kPlayerbotHunterStationaryCastLockToken
+    // on every Multi-Shot cast. EngageSelectedEnemyPlayer() checks
+    // HoldHunterStationaryCast() first and returns immediately (before ever
+    // reaching the Auto Shot cast below) whenever that lock is active --
+    // Multi-Shot is selectable roughly every GCD, so this kept Auto Shot from
+    // ever getting a chance to start. Multi-Shot is a genuine 0-cast-time
+    // instant with no cast bar to clip; let it fall through to the normal
+    // cast-time calculation like any other instant shot.
     return castTimeMs > 0 ? castTimeMs : 0;
 }
 
