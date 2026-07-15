@@ -12,6 +12,7 @@
 #include "Group.h"
 #include "GameTime.h"
 #include "GameObject.h"
+#include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "ObjectAccessor.h"
