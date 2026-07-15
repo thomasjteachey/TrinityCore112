@@ -45,6 +45,7 @@ namespace Trinity
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
     TC_COMMON_API void FatalSignalHandler(int sigval);
     TC_COMMON_API void InitCrashSignalHandlers();
+    TC_COMMON_API void InitializeEmergencyCrashLog(std::string const& filename);
 #endif
 
 } // namespace Trinity
