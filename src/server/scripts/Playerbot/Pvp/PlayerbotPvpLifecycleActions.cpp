@@ -36,6 +36,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MotionMaster.h"
+#include "Movement/AbstractFollower.h"
 #include "MoveSpline.h"
 #include "MovementTypedefs.h"
 #include "Opcodes.h"
@@ -1136,6 +1137,30 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // false here used to hand the tick back to class logic, allowing a bot
         // with no accepted probe to stand still and cast until it died.
         return true;
+    }
+
+    bool HasActiveTargetRelativeMovementFor(Player const* player, Unit const* target)
+    {
+        if (!player || !target)
+            return false;
+
+        MotionMaster const* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
+            return false;
+
+        MovementGeneratorType const movementType = motionMaster->GetCurrentMovementGeneratorType();
+        if (movementType != CHASE_MOTION_TYPE && movementType != FOLLOW_MOTION_TYPE)
+            return false;
+
+        MovementGenerator const* movement = motionMaster->GetCurrentMovementGenerator();
+        AbstractFollower const* follower = movement ? dynamic_cast<AbstractFollower const*>(movement) : nullptr;
+        if (!follower || follower->GetTarget() != target)
+            return false;
+
+        bool const activeSpline = player->movespline && player->movespline->Initialized() &&
+            !player->movespline->Finalized();
+        return activeSpline || player->isMoving() ||
+            player->HasUnitState(UNIT_STATE_CHASE_MOVE | UNIT_STATE_FOLLOW_MOVE);
     }
 
     bool IssueHumanLikeFollow(Player* player, Unit* target, float desiredDistance, float destinationChangeThreshold, uint32 minReissueMs)
@@ -3882,6 +3907,16 @@ namespace playerbot
         if (distance > profile.preferredMaxPressureRange || !player->IsWithinMeleeRange(target))
         {
             bool const isStealthedMeleeOpener = IsStealthedMeleeOpener(player);
+
+            // Chase/Follow continuously repaths against a moving target. Do
+            // not replace an already-running generator on the lifecycle's
+            // 500 ms command cadence: MoveSplineInit synchronizes the server
+            // to the old spline before launching the replacement, while an
+            // observer may still be interpolating the prior packet. That
+            // discrepancy renders as a sporadic forward teleport.
+            if (HasActiveTargetRelativeMovementFor(player, target))
+                return true;
+
             if (!isStealthedMeleeOpener && !CanIssueMovementCommand(player, 500))
                 return true;
 
