@@ -3919,10 +3919,26 @@ namespace playerbot
                     float maxAutoShotRange = 0.0f;
                     bool const hasHunterRange = GetHunterAutoShotRange(player, target, exactDistance, minAutoShotRange, maxAutoShotRange);
 
-                    if (IsHunterAutoShotBand(player, target))
+                    // Beast Mastery's "weave" profile (GetCombatPositioningProfile)
+                    // deliberately holds a much tighter ideal/max-pressure range
+                    // than Auto Shot's own castable range, so it can melee-weave
+                    // Mongoose Bite. The two shortcuts below ("Auto Shot can
+                    // still reach from here, so just hold and shoot in place")
+                    // are correct for MM/SV's wide profile, where the profile's
+                    // preferred band and the spell's actual range are roughly
+                    // aligned -- but for BM they defeated the entire point of
+                    // the tight profile: any distance within Auto Shot's full
+                    // ~3-35y range satisfied them, so the outer ">preferredMaxPressureRange"
+                    // branch never actually closed distance past wherever the
+                    // bot first engaged from, oscillating near Auto Shot's own
+                    // max range instead of BM's much tighter one.
+                    bool const isWeaveProfile = hasHunterRange && profile.preferredIdealRange > 0.0f &&
+                        profile.preferredIdealRange < maxAutoShotRange * 0.5f;
+
+                    if (!isWeaveProfile && IsHunterAutoShotBand(player, target))
                         return StopHunterAndStartAutoShot(player, target, "hold-autoshot-over-preferred-max");
 
-                    if (hasHunterRange && exactDistance <= maxAutoShotRange + 1.0f)
+                    if (!isWeaveProfile && hasHunterRange && exactDistance <= maxAutoShotRange + 1.0f)
                     {
                         StopVirtualPlayerbotMovement(player);
                         if (hasLos)
@@ -3937,7 +3953,8 @@ namespace playerbot
                     }
 
                     // IssueHumanLikeFollow gates internally; see MoveAwayFromUnit above.
-                    float const closeToRange = hasHunterRange ? std::max(1.0f, maxAutoShotRange - 1.0f) : profile.preferredMaxPressureRange;
+                    float const closeToRange = isWeaveProfile ? profile.preferredMaxPressureRange :
+                        (hasHunterRange ? std::max(1.0f, maxAutoShotRange - 1.0f) : profile.preferredMaxPressureRange);
                     if (!IssueHumanLikeFollow(player, target, closeToRange, 6.0f, 500))
                         return true;
                     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
