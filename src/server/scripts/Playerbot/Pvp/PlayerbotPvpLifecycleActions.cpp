@@ -1250,6 +1250,22 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             motionMaster->Clear();
         }
 
+        // Once the reissue cadence elapses, do not clear and reissue an
+        // identical order just because the timer fired. If the destination
+        // has not changed and the bot is already actively moving via the
+        // correct (POINT_MOTION_TYPE) generator, the existing spline is still
+        // correct and reissuing accomplishes nothing functionally -- but it
+        // does resync the server's authoritative position to the client
+        // mid-spline, which renders as a visible teleport/snap. This was most
+        // visible with many bots converging on the same fixed objective point
+        // (an OBC/EotS-style center flag, a node banner, etc.) at once: each
+        // one independently re-clearing/reissuing every ~500ms throttle
+        // window while already correctly en route, purely a client-visible
+        // artifact, not an actual position discontinuity or delayed combat
+        // engagement (server-side progress and range checks were unaffected).
+        if (!destinationChanged && botCurrentlyMoving && currentMovement == POINT_MOTION_TYPE)
+            return true;
+
         bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
         Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
 
