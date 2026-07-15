@@ -3657,6 +3657,8 @@ namespace playerbot
                 continue;
             if (!player->IsValidAttackTarget(candidate))
                 continue;
+            if (playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate))
+                continue;
             if (attackableEnemies)
                 ++(*attackableEnemies);
 
@@ -3671,6 +3673,41 @@ namespace playerbot
         return nearestEnemy;
     }
 
+    void StopDamageAgainstEffectivelyImmuneTarget(Player* player, Unit* target)
+    {
+        if (!player || !target)
+            return;
+
+        auto interruptSpellTargeting = [target](Unit* attacker, CurrentSpellTypes spellType)
+        {
+            Spell const* spell = attacker ? attacker->GetCurrentSpell(spellType) : nullptr;
+            if (spell && spell->m_targets.GetUnitTargetGUID() == target->GetGUID())
+                attacker->InterruptSpell(spellType);
+        };
+
+        if (player->GetVictim() && player->GetVictim()->GetGUID() == target->GetGUID())
+            player->AttackStop();
+
+        interruptSpellTargeting(player, CURRENT_GENERIC_SPELL);
+        interruptSpellTargeting(player, CURRENT_CHANNELED_SPELL);
+        interruptSpellTargeting(player, CURRENT_AUTOREPEAT_SPELL);
+
+        if (Pet* pet = player->GetPet())
+        {
+            if (pet->GetVictim() && pet->GetVictim()->GetGUID() == target->GetGUID())
+                pet->AttackStop();
+            interruptSpellTargeting(pet, CURRENT_GENERIC_SPELL);
+            interruptSpellTargeting(pet, CURRENT_CHANNELED_SPELL);
+        }
+
+        if (player->GetTarget() == target->GetGUID())
+            player->SetSelection(ObjectGuid::Empty);
+
+        TC_LOG_DEBUG("playerbots.pvp.lifecycle",
+            "Playerbot PvP stopped damage against effectively immune target: bot={} target={}.",
+            player->GetGUID().ToString(), target->GetGUID().ToString());
+    }
+
     Unit* AcquireCombatTarget(Player* player, float scanDistance)
     {
         if (!player)
@@ -3678,12 +3715,26 @@ namespace playerbot
 
         auto isAttackableTarget = [player](Unit* candidate) -> bool
         {
-            return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate);
+            return candidate && candidate->IsAlive() && player->IsValidAttackTarget(candidate) &&
+                !playerbot::PvpCore::IsEffectivelyImmuneTarget(player, candidate);
         };
 
         Unit* target = player->GetVictim();
+        if (target && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
+        {
+            StopDamageAgainstEffectivelyImmuneTarget(player, target);
+            target = nullptr;
+        }
         if (!isAttackableTarget(target))
             target = player->GetSelectedUnit();
+        if (target && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
+        {
+            StopDamageAgainstEffectivelyImmuneTarget(player, target);
+            target = nullptr;
+        }
+        if (Pet* pet = player->GetPet())
+            if (Unit* petVictim = pet->GetVictim(); petVictim && playerbot::PvpCore::IsEffectivelyImmuneTarget(player, petVictim))
+                StopDamageAgainstEffectivelyImmuneTarget(player, petVictim);
         if ((!target || !target->IsAlive()) && player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS)
         {
             Unit* duelOpponent = player->duel->Opponent;
@@ -3965,6 +4016,16 @@ namespace playerbot
     {
         if (!player || !player->IsAlive() || !target || !target->IsAlive() || !player->IsValidAttackTarget(target))
             return false;
+
+        if (playerbot::PvpCore::IsEffectivelyImmuneTarget(player, target))
+        {
+            StopDamageAgainstEffectivelyImmuneTarget(player, target);
+            target = player->InBattleground()
+                ? FindNearestEnemyBattlegroundPlayer(player, std::numeric_limits<float>::max(), nullptr, nullptr)
+                : nullptr;
+            if (!target)
+                return false;
+        }
 
         if (IsCrowdControlledForAction(player))
         {

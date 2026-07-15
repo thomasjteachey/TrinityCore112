@@ -2599,6 +2599,7 @@ bool ShouldUseCurseOfTongues(Unit const* unit)
     return IsCasterClass(player) && !IsMeleeClass(player);
 }
 
+bool IsTargetEffectivelyImmune(Player const* player, Unit const* target);
 bool IsTargetInvalidByImmunity(Player const* player, Unit const* target);
 
 uint8 GetArmorPriority(Unit const* unit)
@@ -3018,7 +3019,7 @@ bool IsInterruptibleCast(Unit const* unit)
         isInterruptibleCurrentSpell(CURRENT_CHANNELED_SPELL);
 }
 
-bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
+bool IsTargetEffectivelyImmune(Player const* player, Unit const* target)
 {
     if (!player || !target)
         return true;
@@ -3038,10 +3039,12 @@ bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
     if (IsPhysicalDamageClass(player->GetClass()) && HasAnyAura(target, { 1022, 5599, 10278 })) // Blessing of Protection ranks
         return true;
 
-    if (HasBreakableCrowdControl(target))
-        return true;
-
     return false;
+}
+
+bool IsTargetInvalidByImmunity(Player const* player, Unit const* target)
+{
+    return IsTargetEffectivelyImmune(player, target) || HasBreakableCrowdControl(target);
 }
 
 Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable)
@@ -5959,6 +5962,11 @@ bool PvpCore::CanHunterBestialWrathOutOfControl(Player const* player)
     return IsHunterBestialWrathBreakableControl(player) && IsSpellReady(player, 81300);
 }
 
+bool PvpCore::IsEffectivelyImmuneTarget(Player const* player, Unit const* target)
+{
+    return IsTargetEffectivelyImmune(player, target);
+}
+
 bool PvpCore::IsMovementPreventedByRoot(Player const* player)
 {
     return player &&
@@ -6159,10 +6167,13 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
     }
 
     ClassicProfileSelection const profileSelection = DetectClassicClassProfile(player);
+    Unit const* combatVictim = player->GetVictim();
+    bool const hasEffectivelyImmuneCombatVictim = combatVictim && HasHostileTarget(player, combatVictim) &&
+        IsTargetEffectivelyImmune(player, combatVictim);
     ObjectGuid const selectedTargetGuid = SelectCombatTargetGuid(player);
     ObjectGuid activeTargetGuid = selectedTargetGuid;
     if (activeTargetGuid.IsEmpty())
-        if (Unit const* combatVictim = player->GetVictim(); HasHostileTarget(player, combatVictim))
+        if (HasHostileTarget(player, combatVictim) && !hasEffectivelyImmuneCombatVictim)
             activeTargetGuid = combatVictim->GetGUID();
     if (activeTargetGuid.IsEmpty())
     {

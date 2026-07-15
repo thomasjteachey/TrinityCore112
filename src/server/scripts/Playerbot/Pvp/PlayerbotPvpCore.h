@@ -24,6 +24,7 @@
 
 class Player;
 class GameObject;
+class Unit;
 
 namespace playerbot
 {
@@ -228,6 +229,7 @@ public:
     static PvpValues CollectValues(Player const* player);
     static bool CanMageBlinkOutOfControl(Player const* player);
     static bool CanHunterBestialWrathOutOfControl(Player const* player);
+    static bool IsEffectivelyImmuneTarget(Player const* player, Unit const* target);
     static bool IsMovementPreventedByRoot(Player const* player);
     static bool IsTriggerActive(PvpTrigger trigger, PvpValues const& values);
     static BattlegroundTacticalContext BuildBattlegroundTacticalContext(Player const* player, PvpValues const& values);
