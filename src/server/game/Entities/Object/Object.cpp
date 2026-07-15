@@ -2804,6 +2804,22 @@ ReputationRank WorldObject::GetReactionTo(WorldObject const* target) const
                 if (selfPlayerOwner->duel && selfPlayerOwner->duel->Opponent == targetPlayerOwner && selfPlayerOwner->duel->State == DUEL_STATE_IN_PROGRESS)
                     return REP_HOSTILE;
 
+                // Battleground team assignment is authoritative while both
+                // affecting players are active participants in the same match.
+                // Temporary race factions, raid membership, zone PvP state and
+                // charm cleanup must not make teammates hostile or opponents
+                // friendly inside a battleground/arena.
+                if (Battleground* battleground = selfPlayerOwner->GetBattleground();
+                    battleground && battleground == targetPlayerOwner->GetBattleground())
+                {
+                    uint32 const selfBattlegroundTeam = battleground->GetPlayerTeam(selfPlayerOwner->GetGUID());
+                    uint32 const targetBattlegroundTeam = battleground->GetPlayerTeam(targetPlayerOwner->GetGUID());
+                    bool const selfIsParticipant = selfBattlegroundTeam == ALLIANCE || selfBattlegroundTeam == HORDE;
+                    bool const targetIsParticipant = targetBattlegroundTeam == ALLIANCE || targetBattlegroundTeam == HORDE;
+                    if (selfIsParticipant && targetIsParticipant)
+                        return selfBattlegroundTeam == targetBattlegroundTeam ? REP_FRIENDLY : REP_HOSTILE;
+                }
+
                 // same group - checks dependant only on our faction - skip FFA_PVP for example
                 if (selfPlayerOwner->IsInRaidWith(targetPlayerOwner))
                     return REP_FRIENDLY; // return true to allow config option AllowTwoSide.Interaction.Group to work

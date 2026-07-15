@@ -12871,7 +12871,21 @@ void Unit::RemoveCharmedBy(Unit* charmer)
 void Unit::RestoreFaction()
 {
     if (GetTypeId() == TYPEID_PLAYER)
-        ToPlayer()->SetFactionForRace(GetRace());
+    {
+        Player* player = ToPlayer();
+        if (player->InBattleground())
+        {
+            uint32 const battlegroundTeam = player->GetBGTeam();
+            if (battlegroundTeam == ALLIANCE)
+                player->SetFactionForRace(RACE_HUMAN);
+            else if (battlegroundTeam == HORDE)
+                player->SetFactionForRace(RACE_BLOODELF);
+            else
+                player->SetFactionForRace(GetRace());
+        }
+        else
+            player->SetFactionForRace(GetRace());
+    }
     else
     {
         if (HasUnitTypeMask(UNIT_MASK_MINION))

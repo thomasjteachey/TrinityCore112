@@ -21477,6 +21477,18 @@ void Player::ResetContestedPvP()
 
 void Player::UpdatePvPFlag(time_t currTime)
 {
+    // A battleground or arena is itself an authoritative PvP context. Area
+    // metadata may still describe the arena as friendly (custom maps are a
+    // common example), but that must never allow the normal five-minute PvP
+    // toggle-off timer to turn a live participant non-PvP mid-match.
+    if (InBattleground() && !IsGameMaster())
+    {
+        if (!IsPvP() || pvpInfo.EndTimer || HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER))
+            UpdatePvP(true, true);
+        RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
+        return;
+    }
+
     if (!IsPvP())
         return;
 
@@ -22917,6 +22929,17 @@ void Player::UpdatePvPState(bool onlyFFA)
 
     if (onlyFFA)
         return;
+
+    // Do not derive battleground PvP state from the current AreaTable entry.
+    // Participants are PvP-enabled for the lifetime of the match even when a
+    // custom arena reports a friendly/non-PvP zone.
+    if (InBattleground() && !IsGameMaster())
+    {
+        if (!IsPvP() || pvpInfo.EndTimer || HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER))
+            UpdatePvP(true, true);
+        RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_PVP_TIMER);
+        return;
+    }
 
     if (pvpInfo.IsHostile)                                  // in hostile area
     {
