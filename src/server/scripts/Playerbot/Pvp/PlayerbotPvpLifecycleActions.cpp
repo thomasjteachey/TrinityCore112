@@ -1190,18 +1190,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
 
         MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+        MovementGenerator const* currentGenerator = motionMaster->GetCurrentMovementGenerator();
         bool const activePointSpline = currentMovement == POINT_MOTION_TYPE &&
             player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+        bool const pointGeneratorOwnsOrder = currentMovement == POINT_MOTION_TYPE && currentGenerator &&
+            !currentGenerator->HasFlag(MOVEMENTGENERATOR_FLAG_FINALIZED);
         bool const botCurrentlyMoving = player->isMoving() || activePointSpline ||
             player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
-
-        // An active virtual-player spline can exist for a short window before
-        // Player::isMoving() becomes true. Preserve ownership during that window
-        // instead of letting the 50 ms tactical loop replace the same MovePoint.
-        if (!CanIssueMovementCommand(player, 500))
-            return botCurrentlyMoving;
-
-        ClearEatDrinkAurasForMovement(player);
 
         minReissueMs = std::max<uint32>(minReissueMs, 500);
 
@@ -1212,37 +1207,41 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         };
 
         static std::unordered_map<uint64, MoveOrderState> stateByGuid;
-        static std::unordered_map<uint64, uint8> stationaryReissueCountByGuid;
-        uint64 const botGuid = player->GetGUID().GetRawValue();
         MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
-        uint8& stationaryReissueCount = stationaryReissueCountByGuid[botGuid];
         uint32 const nowMs = GameTime::GetGameTimeMS();
 
         bool const destinationChanged = state.lastIssueMs == 0 ||
             state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
         bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-        bool const forcedStationaryReissue = !destinationChanged && !canReissueByTime && !botCurrentlyMoving;
-        if (forcedStationaryReissue)
-            stationaryReissueCount = std::min<uint8>(uint8(stationaryReissueCount + 1), 20);
-        else
-            stationaryReissueCount = 0;
 
-        if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
+        // The 50 ms tactical loop can revisit the same objective before a newly
+        // queued PointMovementGenerator has initialized its spline. During that
+        // window Player::isMoving(), unit movement state, and movespline can all
+        // still report false even though MotionMaster already owns the order.
+        // Reissuing here replaces the generator at the bot's newer authoritative
+        // position; nearby clients render each replacement as a teleport/snap.
+        // Preserve the existing point order until it naturally finalizes. This
+        // also covers a point generator temporarily interrupted by a cast/root;
+        // PointMovementGenerator will relaunch its own spline when movement is
+        // available again.
+        if (!destinationChanged && pointGeneratorOwnsOrder)
             return true;
 
-        uint32 bgStatus = 0;
-        if (Battleground* bg = player->GetBattleground())
-            bgStatus = uint32(bg->GetStatus());
+        // Never bypass the requested reissue cadence merely because the player
+        // movement flags have not caught up yet. The previous forced-stationary
+        // path could enqueue a replacement every fast tactical tick, which was
+        // especially visible when every OBC bot selected the fixed center flag.
+        if (!destinationChanged && !canReissueByTime)
+            return true;
 
-        if (forcedStationaryReissue)
-        {
-            EmitBattlegroundGmDebug(player,
-                "movepoint=forced-reissue reason=stationary-with-throttle lastIssueMs=" + std::to_string(state.lastIssueMs) +
-                " nowMs=" + std::to_string(nowMs) +
-                " motionType=" + std::to_string(uint32(player->GetMotionMaster()->GetCurrentMovementGeneratorType())) +
-                " bgStatus=" + std::to_string(bgStatus) +
-                " reissueCount=" + std::to_string(stationaryReissueCount), 1000);
-        }
+        // Consume the shared movement-command throttle only when this helper has
+        // actually decided that a new order may be required. Previously, calls
+        // that merely preserved an active spline still consumed the token and
+        // could starve a real destination change from another tactical action.
+        if (!CanIssueMovementCommand(player, 500))
+            return botCurrentlyMoving || pointGeneratorOwnsOrder || !destinationChanged;
+
+        ClearEatDrinkAurasForMovement(player);
 
         if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
         {
@@ -1268,22 +1267,6 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 "movepoint=clear-stale-generator motionType=" + std::to_string(uint32(currentMovement)), 1000);
             motionMaster->Clear();
         }
-
-        // Once the reissue cadence elapses, do not clear and reissue an
-        // identical order just because the timer fired. If the destination
-        // has not changed and the bot is already actively moving via the
-        // correct (POINT_MOTION_TYPE) generator, the existing spline is still
-        // correct and reissuing accomplishes nothing functionally -- but it
-        // does resync the server's authoritative position to the client
-        // mid-spline, which renders as a visible teleport/snap. This was most
-        // visible with many bots converging on the same fixed objective point
-        // (an OBC/EotS-style center flag, a node banner, etc.) at once: each
-        // one independently re-clearing/reissuing every ~500ms throttle
-        // window while already correctly en route, purely a client-visible
-        // artifact, not an actual position discontinuity or delayed combat
-        // engagement (server-side progress and range checks were unaffected).
-        if (!destinationChanged && botCurrentlyMoving && currentMovement == POINT_MOTION_TYPE)
-            return true;
 
         bool const generatePath = !player->IsFlying() && !player->HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
         Position const safeDestination = generatePath ? BuildCollisionSafeDestination(player, destination) : destination;
