@@ -4065,6 +4065,43 @@ namespace playerbot
         return true;
     }
 
+    // TEMPORARY, narrowly-scoped debugging aid for the Auto Shot investigation
+    // only -- deliberately does not go through WhisperHunterAimedLifecycleDiagnostic
+    // or WhisperPlayerbotDiagnostic, since those are gated to duel-opponent/active-GM
+    // by design to avoid spamming every playerbot's diagnostics. This instead
+    // reaches anyone actually present in the same battleground/arena instance
+    // as the bot, which is what's needed to observe a bot in a real arena/BG
+    // match without toggling GM mode. Remove once Auto Shot is confirmed fixed.
+    std::unordered_map<uint64, uint32> g_AutoShotDiagLastMsByGuid;
+
+    void WhisperAutoShotDiagnosticToArena(Player* player, std::string const& message, uint32 throttleMs = 0)
+    {
+        if (!player || !player->InBattleground())
+            return;
+
+        if (throttleMs)
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& lastMs = g_AutoShotDiagLastMsByGuid[player->GetGUID().GetRawValue()];
+            if (lastMs && nowMs < lastMs + throttleMs)
+                return;
+            lastMs = nowMs;
+        }
+
+        Map* map = player->FindMap();
+        if (!map)
+            return;
+
+        for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
+        {
+            Player* observer = itr->GetSource();
+            if (!observer || observer == player || observer->GetBattlegroundId() != player->GetBattlegroundId())
+                continue;
+
+            player->Whisper(message, LANG_UNIVERSAL, observer);
+        }
+    }
+
     bool EngageSelectedEnemyPlayer(Player* player, Unit* target, char const* reason)
     {
         if (!player || !player->IsAlive() || !target || !target->IsAlive() || !player->IsValidAttackTarget(target))
@@ -4178,17 +4215,17 @@ namespace playerbot
                     player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
 
                 std::ostringstream outOfRangeDiag;
-                outOfRangeDiag << "dist=" << distance << " min=" << minAutoShotRange << " max=" << maxAutoShotRange
-                    << " los=" << (hasLos ? 1 : 0) << " wasActive=" << (autoShotActive ? 1 : 0);
-                WhisperHunterAimedLifecycleDiagnostic(player, target, "engage-autoshot-out-of-range", outOfRangeDiag.str().c_str(), 1500);
+                outOfRangeDiag << "[AutoShot] out-of-range dist=" << distance << " min=" << minAutoShotRange
+                    << " max=" << maxAutoShotRange << " los=" << (hasLos ? 1 : 0) << " wasActive=" << (autoShotActive ? 1 : 0);
+                WhisperAutoShotDiagnosticToArena(player, outOfRangeDiag.str(), 1500);
             }
             else if (!autoShotActive)
             {
                 SpellCastResult const castResult = player->CastSpell(target, 75, false);
                 std::ostringstream castDiag;
-                castDiag << "dist=" << distance << " min=" << minAutoShotRange << " max=" << maxAutoShotRange
-                    << " resultCode=" << uint32(castResult);
-                WhisperHunterAimedLifecycleDiagnostic(player, target, "engage-autoshot-cast-attempt", castDiag.str().c_str(), 500);
+                castDiag << "[AutoShot] cast-attempt dist=" << distance << " min=" << minAutoShotRange
+                    << " max=" << maxAutoShotRange << " resultCode=" << uint32(castResult);
+                WhisperAutoShotDiagnosticToArena(player, castDiag.str(), 500);
             }
         }
 
