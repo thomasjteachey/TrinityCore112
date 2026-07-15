@@ -61,6 +61,38 @@ constexpr float VisibilityDistances[AsUnderlyingType(VisibilityDistanceType::Max
     MAX_VISIBILITY_DISTANCE
 };
 
+namespace
+{
+    enum class CustomArenaRosterRelation
+    {
+        None,
+        Teammate,
+        Opponent
+    };
+
+    CustomArenaRosterRelation GetCustomArenaRosterRelation(WorldObject const* left, WorldObject const* right)
+    {
+        Player const* leftPlayer = left ? left->GetAffectingPlayer() : nullptr;
+        Player const* rightPlayer = right ? right->GetAffectingPlayer() : nullptr;
+        if (!leftPlayer || !rightPlayer)
+            return CustomArenaRosterRelation::None;
+
+        Battleground const* battleground = leftPlayer->GetBattleground();
+        if (!battleground || !battleground->IsCustomGame() || !battleground->isArena() ||
+            battleground != rightPlayer->GetBattleground())
+            return CustomArenaRosterRelation::None;
+
+        uint32 const leftTeam = battleground->GetPlayerTeam(leftPlayer->GetGUID());
+        uint32 const rightTeam = battleground->GetPlayerTeam(rightPlayer->GetGUID());
+        bool const leftIsParticipant = leftTeam == ALLIANCE || leftTeam == HORDE;
+        bool const rightIsParticipant = rightTeam == ALLIANCE || rightTeam == HORDE;
+        if (!leftIsParticipant || !rightIsParticipant)
+            return CustomArenaRosterRelation::None;
+
+        return leftTeam == rightTeam ? CustomArenaRosterRelation::Teammate : CustomArenaRosterRelation::Opponent;
+    }
+}
+
 Object::Object()
 {
     m_objectTypeId      = TYPEID_OBJECT;
@@ -3150,8 +3182,16 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
             return false;
     }
 
-    // can't assist invisible
-    if ((!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE)) && !CanSeeOrDetect(target, bySpell && bySpell->IsAffectingArea()))
+    CustomArenaRosterRelation const customArenaRelation = GetCustomArenaRosterRelation(this, target);
+    bool const isCustomArenaPositiveTeammate = customArenaRelation == CustomArenaRosterRelation::Teammate &&
+        (!bySpell || bySpell->IsPositive());
+
+    // Custom-arena teammates are visible through their authoritative lobby
+    // roster even if transient battleground raid linkage is momentarily stale.
+    // This is the same condition that otherwise makes their names turn blue.
+    if (!isCustomArenaPositiveTeammate &&
+        (!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_INVISIBLE)) &&
+        !CanSeeOrDetect(target, bySpell && bySpell->IsAffectingArea()))
         return false;
 
     // can't assist dead
@@ -3160,6 +3200,15 @@ bool WorldObject::IsValidAssistTarget(WorldObject const* target, SpellInfo const
 
     // can't assist untargetable
     if ((!bySpell || !bySpell->HasAttribute(SPELL_ATTR6_CAN_TARGET_UNTARGETABLE)) && unitTarget && unitTarget->HasUnitFlag(UNIT_FLAG_UNINTERACTIBLE))
+        return false;
+
+    // The custom-game roster is the final authority for positive assistance.
+    // Private arenas bypass the public queue/team machinery, so relying on a
+    // temporary faction, PvP flag, immunity flag or Group pointer here can
+    // reject a real teammate after the playerbot selector already chose it.
+    if (isCustomArenaPositiveTeammate)
+        return true;
+    if (customArenaRelation == CustomArenaRosterRelation::Opponent)
         return false;
 
     // check flags for negative spells

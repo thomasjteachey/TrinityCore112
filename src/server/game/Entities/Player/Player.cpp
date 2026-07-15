@@ -229,6 +229,36 @@ namespace
 
         return knownSpellId;
     }
+
+    bool GetCustomArenaRosterTeam(Player const* player, Battleground const*& battleground, uint32& team)
+    {
+        battleground = player ? player->GetBattleground() : nullptr;
+        if (!battleground || !battleground->IsCustomGame() || !battleground->isArena() ||
+            !battleground->IsPlayerInBattleground(player->GetGUID()))
+            return false;
+
+        team = battleground->GetPlayerTeam(player->GetGUID());
+        return team == ALLIANCE || team == HORDE;
+    }
+
+    bool AreCustomArenaRosterTeammates(Player const* left, Player const* right, Battleground const** battlegroundOut = nullptr,
+        uint32* teamOut = nullptr)
+    {
+        Battleground const* leftBattleground = nullptr;
+        Battleground const* rightBattleground = nullptr;
+        uint32 leftTeam = 0;
+        uint32 rightTeam = 0;
+        if (!GetCustomArenaRosterTeam(left, leftBattleground, leftTeam) ||
+            !GetCustomArenaRosterTeam(right, rightBattleground, rightTeam) ||
+            leftBattleground != rightBattleground || leftTeam != rightTeam)
+            return false;
+
+        if (battlegroundOut)
+            *battlegroundOut = leftBattleground;
+        if (teamOut)
+            *teamOut = leftTeam;
+        return true;
+    }
 }
 #include "ArenaSpectator.h"
 
@@ -2756,6 +2786,13 @@ void Player::SetGMVisible(bool on)
 
 bool Player::IsGroupVisibleFor(Player const* p) const
 {
+    // Custom arenas are assembled directly from a private-lobby roster. That
+    // roster remains authoritative even if the transient battleground raid
+    // pointer is briefly missing or replaced while clones are added. Without
+    // this, teammates can lose party visibility and turn blue mid-match.
+    if (AreCustomArenaRosterTeammates(this, p))
+        return true;
+
     switch (sWorld->getIntConfig(CONFIG_GROUP_VISIBILITY))
     {
     default: return IsInSameGroupWith(p);
@@ -2767,14 +2804,31 @@ bool Player::IsGroupVisibleFor(Player const* p) const
 
 bool Player::IsInSameGroupWith(Player const* p) const
 {
-    return p == this || (GetGroup() != nullptr &&
-        GetGroup() == p->GetGroup() &&
-        GetGroup()->SameSubGroup(this, p));
+    if (p == this)
+        return true;
+
+    Battleground const* battleground = nullptr;
+    uint32 team = 0;
+    if (AreCustomArenaRosterTeammates(this, p, &battleground, &team))
+    {
+        // Party-only spells still respect the battleground raid subgroup. Use
+        // the roster-owned raid rather than the players' possibly stale group
+        // pointers.
+        if (Group const* battlegroundRaid = battleground->GetBgRaid(team))
+            return battlegroundRaid->IsMember(GetGUID()) && battlegroundRaid->IsMember(p->GetGUID()) &&
+                battlegroundRaid->SameSubGroup(GetGUID(), p->GetGUID());
+        return false;
+    }
+
+    return GetGroup() != nullptr && GetGroup() == p->GetGroup() && GetGroup()->SameSubGroup(this, p);
 }
 
 bool Player::IsInSameRaidWith(Player const* p) const
 {
-    return p == this || (GetGroup() != nullptr && GetGroup() == p->GetGroup());
+    if (p == this || AreCustomArenaRosterTeammates(this, p))
+        return true;
+
+    return GetGroup() != nullptr && GetGroup() == p->GetGroup();
 }
 
 ///- If the player is invited, remove him. If the group if then only 1 person, disband the group.
