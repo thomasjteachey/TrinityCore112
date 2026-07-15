@@ -868,7 +868,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
 
         G3D::Vector3 previous(player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
+        G3D::Vector3 lastRoutePoint = previous;
         float traversedDistance = 0.0f;
+        bool haveRoutePoint = false;
 
         for (std::size_t i = 1; i < points.size(); ++i)
         {
@@ -883,14 +885,20 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
             if (traversedDistance + segmentLength >= PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE)
             {
-                float const fraction = (PLAYERBOT_BG_MOVEMENT_SEGMENT_DISTANCE - traversedDistance) / segmentLength;
-                G3D::Vector3 const selected = previous + delta * fraction;
+                // Keep the endpoint on a real Detour route vertex. Interpolating
+                // XYZ between corners is unsafe on vertically stacked maps: the
+                // intermediate Z can sit between floors and a later height query
+                // may resolve the lower surface. Prefer the previous vertex once
+                // it represents useful progress; otherwise advance to this one.
+                G3D::Vector3 const& selected = haveRoutePoint && traversedDistance >= 8.0f ? lastRoutePoint : point;
                 segmentDestination.Relocate(selected.x, selected.y, selected.z, orientation);
-                return true;
+                return player->GetDistance(segmentDestination) > 0.5f;
             }
 
             traversedDistance += segmentLength;
             previous = point;
+            lastRoutePoint = point;
+            haveRoutePoint = true;
         }
 
         G3D::Vector3 const& finalPoint = points.back();
@@ -944,7 +952,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             if (!haveResolvedDestination)
                 return false;
 
-            resolvedDestination = BuildCollisionSafeDestination(player, resolvedDestination);
+            // This endpoint already came from the accepted Detour route. Do
+            // not run UpdateAllowedPositionZ over it again: on stacked geometry
+            // that generic map/VMap query can replace the navmesh floor with a
+            // lower one. MovePoint performs its normal generated-path validation
+            // against this exact route vertex.
             float const dx = resolvedDestination.GetPositionX() - player->GetPositionX();
             float const dy = resolvedDestination.GetPositionY() - player->GetPositionY();
             float const planarDelta = std::sqrt(dx * dx + dy * dy);

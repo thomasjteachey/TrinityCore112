@@ -841,6 +841,17 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         return;
 
+    // Release the preparation-room movement root before selecting the first
+    // live tactical order. Previously the gate-opening tick could install a
+    // PointMovementGenerator while the persistent bot was still rooted, then
+    // unroot it only after tactical and class movement had already run.
+    playerbot::BattlegroundLifecycleContext inProgressContext;
+    inProgressContext.lifecycleEnabled = true;
+    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
+    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
+    inProgressContext.shouldHandleInProgressStatus = true;
+    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
+
     // The normal class decision graph is deliberately skipped while crowd
     // controlled. Run the BM hunter's universal control break before that gate,
     // including roots/snares that do not pause the lifecycle tick.
@@ -880,13 +891,6 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
 
     bool const didExecuteClassSpell = (runCloneClassDecision || shouldForceClassMovementTick || shouldForcePetSpellTick) &&
         playerbot::PvpClassActions::Execute(player, classContext);
-
-    playerbot::BattlegroundLifecycleContext inProgressContext;
-    inProgressContext.lifecycleEnabled = true;
-    inProgressContext.queueOperation = playerbot::QueueOperationType::None;
-    inProgressContext.invitationResponse = playerbot::InvitationResponseType::None;
-    inProgressContext.shouldHandleInProgressStatus = true;
-    bool const didExecuteLifecycle = playerbot::BattlegroundLifecycleActions::Execute(player, inProgressContext);
 
     std::ostringstream tickDetail;
     uint32 const bgTeam = player->GetBGTeam();
