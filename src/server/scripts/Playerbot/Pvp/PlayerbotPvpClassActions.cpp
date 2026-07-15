@@ -2583,23 +2583,57 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
         return;
     }
 
-    if (RequiresStrictHumanPathing(player) && IssueStrictHumanFollow(player, target, 1.5f))
-        return;
-
-    if (RequiresStrictHumanPathing(player))
-    {
-        // Keep melee bots close to contact range instead of orbiting around a
-        // larger follow radius (which can look like "running away"). If strict
-        // pathing fails, fall back to regular chase so bots keep pressure.
-        TC_LOG_DEBUG("playerbots.pvp.classspell",
-            "Strict melee follow fallback to generic chase: guid={} target={}.",
-            player->GetGUID().ToString(), target->GetGUID().ToString());
-    }
-
     std::string preserveDiag;
     if (ShouldPreserveTargetRelativeMovement(player, target, 1.5f, 2000, "melee_existing_motion_preserved", &preserveDiag))
     {
         SetLastMovementDebugStatus(player, preserveDiag);
+        return;
+    }
+
+    // Native Chase/Follow continuously updates its path against a moving
+    // target. The old battleground-first path ran every melee pursuit through
+    // an 80-yard MovePoint segment instead. When the target drifted 8 yards,
+    // that path cleared the active spline and installed a new segment; virtual
+    // players were consequently rendered snapping toward the target at the
+    // reissue cadence. This affected every melee profile (for example feral
+    // druids and retribution paladins), although it only became visible for
+    // particular target movement/tick timing.
+    //
+    // Preserve an already-running recovery segment, and use strict segmented
+    // pathing only when a native target-relative generator genuinely failed to
+    // launch. Normal pursuit remains a continuous Chase/Follow spline.
+    MovementGeneratorType const currentMotionType = motionMaster->GetCurrentMovementGeneratorType();
+    bool const activePointRecovery = currentMotionType == POINT_MOTION_TYPE &&
+        (player->isMoving() ||
+            (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized()));
+    if (activePointRecovery)
+    {
+        SetLastMovementDebugStatus(player, "melee_strict_recovery_segment_preserved");
+        return;
+    }
+
+    bool useStrictRecovery = false;
+    if (RequiresStrictHumanPathing(player))
+    {
+        auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
+        if (orderItr != g_TargetRelativeMoveOrderByGuid.end() && orderItr->second.targetGuid == target->GetGUID())
+        {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32 const orderAgeMs = orderItr->second.lastIssueMs != 0 && nowMs >= orderItr->second.lastIssueMs
+                ? nowMs - orderItr->second.lastIssueMs
+                : 0;
+            bool const hasMovementSignal = player->isMoving() ||
+                player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
+                player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ||
+                (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
+            bool const nativeTargetRelativeMotion = currentMotionType == CHASE_MOTION_TYPE || currentMotionType == FOLLOW_MOTION_TYPE;
+            useStrictRecovery = nativeTargetRelativeMotion && orderAgeMs >= 350 && !hasMovementSignal;
+        }
+    }
+
+    if (useStrictRecovery && IssueStrictHumanFollow(player, target, 1.5f))
+    {
+        SetLastMovementDebugStatus(player, "melee_native_chase_unlaunched_strict_recovery");
         return;
     }
 
@@ -2616,6 +2650,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     }
 
     MotionPrimeResult meleePrimeResult = PrimeTargetRelativeMotion(player);
+    MarkTargetRelativeMovementLaunch(player);
     meleePrimeResult.addToWorldCalled = preparedMotionMaster;
 }
 

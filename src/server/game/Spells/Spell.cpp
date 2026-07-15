@@ -4323,7 +4323,7 @@ void Spell::finish(bool ok)
 
     if (!IsTriggered() && !m_triggeredByAuraSpell)
         if (Player* playerCaster = unitCaster->ToPlayer())
-            playerCaster->NotifyDirectSpellCast();
+            playerCaster->NotifyDirectSpellCast(m_spellInfo->Id);
 
     if (unitCaster->GetTypeId() == TYPEID_UNIT && unitCaster->IsSummon())
     {
@@ -4579,6 +4579,9 @@ void Spell::SendCastResult(SpellCastResult result, uint32* param1 /*= nullptr*/,
 
     if (m_caster->ToPlayer()->IsLoading())  // don't send cast results at loading time
         return;
+
+    if (!IsTriggered() && !m_triggeredByAuraSpell)
+        m_caster->ToPlayer()->NotifyCombatDiagnosticSpellFailure(m_spellInfo->Id, result);
 
     if (_triggeredCastFlags & TRIGGERED_DONT_REPORT_CAST_ERROR)
         result = SPELL_FAILED_DONT_REPORT;

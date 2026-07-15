@@ -957,7 +957,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
             bool validateAppearanceAsNewCharacter = true);
 
         void Update(uint32 time) override;
-        void NotifyDirectSpellCast();
+        void NotifyDirectSpellCast(uint32 spellId);
+        void NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result);
 
         static bool BuildEnumData(PreparedQueryResult result, WorldPacket* data);
 
@@ -2510,8 +2511,16 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_combatDiagnosticCombatTimer;
         uint32 m_combatDiagnosticDirectSpellTimer;
         uint32 m_combatDiagnosticCheckTimer;
+        uint32 m_combatDiagnosticFeignTrapTimer;
+        uint32 m_combatDiagnosticFeignHealth;
+        uint32 m_combatDiagnosticFeignLastDirectSpellId;
+        uint32 m_combatDiagnosticFeignFailedSpellId;
+        uint32 m_combatDiagnosticFeignFailedResult;
         bool m_combatDiagnosticSent;
         bool m_combatDiagnosticHasDirectSpellCast;
+        bool m_combatDiagnosticFeignTrapPending;
+        bool m_combatDiagnosticFeignSawAura;
+        bool m_combatDiagnosticFeignSawOutOfCombat;
 
         uint32 m_zoneUpdateId;
         uint32 m_zoneUpdateTimer;
@@ -2582,7 +2591,9 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void ApplyActiveStarfireSnare();
         void ApplyActiveStarfireSnare(UnitMoveType moveType);
         void UpdateCombatDiagnostic(uint32 diff);
+        void UpdateElgromFeignTrapDiagnostic(uint32 diff);
         void SendCombatDiagnostic();
+        void SendElgromFeignTrapDiagnostic();
 
         // internal common parts for CanStore/StoreItem functions
         InventoryResult CanStoreItem_InSpecificSlot(uint8 bag, uint8 slot, ItemPosCountVec& dest, ItemTemplate const* pProto, uint32& count, bool swap, Item* pSrcItem) const;

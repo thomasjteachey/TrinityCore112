@@ -93,6 +93,7 @@
 #include "Realm.h"
 #include "ReputationMgr.h"
 #include "SkillDiscovery.h"
+#include "SmartEnum.h"
 #include "SocialMgr.h"
 #include "Spell.h"
 #include "SpellAuraEffects.h"
@@ -124,6 +125,8 @@ namespace
     constexpr uint8 StarfireSnareRemovalGraceUpdates = 2;
     constexpr uint32 CombatDiagnosticDelay = 5 * IN_MILLISECONDS;
     constexpr uint32 CombatDiagnosticCheckInterval = 1 * IN_MILLISECONDS;
+    constexpr uint32 ElgromFeignTrapDiagnosticWindow = 1 * IN_MILLISECONDS;
+    constexpr uint32 ElgromFeignDeathSpell = 5384;
     constexpr float CombatDiagnosticEnemyRange = 10.0f;
     constexpr size_t CombatDiagnosticMaxReferences = 10;
     constexpr uint32 SpellRogueNeilyoImmunity = 81439;
@@ -167,6 +170,40 @@ namespace
         Trinity::UnitSearcher<CombatDiagnosticNearbyEnemyCheck> searcher(player, enemy, check);
         Cell::VisitAllObjects(player, searcher, CombatDiagnosticEnemyRange);
         return enemy != nullptr;
+    }
+
+    bool IsElgromHumanCombatDiagnosticTarget(Player const* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER || player->GetName() != "Elgrom")
+            return false;
+
+        WorldSession const* session = player->GetSession();
+        return session && !session->IsVirtualSession() && !session->IsTransientPlayerSession();
+    }
+
+    bool IsHunterTrapSpellForCombatDiagnostic(SpellInfo const* spellInfo)
+    {
+        return spellInfo && spellInfo->SpellFamilyName == SPELLFAMILY_HUNTER &&
+            ((spellInfo->SpellFamilyFlags[0] & 0x18) ||
+                spellInfo->Id == 57879 ||
+                (spellInfo->SpellFamilyFlags[2] & 0x00024000));
+    }
+
+    uint32 ResolveKnownCombatDiagnosticSpell(Player const* player, uint32 baseSpellId)
+    {
+        if (!player)
+            return 0;
+
+        SpellInfo const* baseSpellInfo = sSpellMgr->GetSpellInfo(baseSpellId);
+        if (!baseSpellInfo)
+            return 0;
+
+        uint32 knownSpellId = 0;
+        for (uint32 spellId = baseSpellInfo->GetFirstRankSpell()->Id; spellId; spellId = sSpellMgr->GetNextSpellInChain(spellId))
+            if (player->HasSpell(spellId))
+                knownSpellId = spellId;
+
+        return knownSpellId;
     }
 }
 #include "ArenaSpectator.h"
@@ -375,8 +412,16 @@ Player::Player(WorldSession* session) : Unit(true)
     m_combatDiagnosticCombatTimer = 0;
     m_combatDiagnosticDirectSpellTimer = CombatDiagnosticDelay;
     m_combatDiagnosticCheckTimer = 0;
+    m_combatDiagnosticFeignTrapTimer = 0;
+    m_combatDiagnosticFeignHealth = 0;
+    m_combatDiagnosticFeignLastDirectSpellId = 0;
+    m_combatDiagnosticFeignFailedSpellId = 0;
+    m_combatDiagnosticFeignFailedResult = 0;
     m_combatDiagnosticSent = false;
     m_combatDiagnosticHasDirectSpellCast = false;
+    m_combatDiagnosticFeignTrapPending = false;
+    m_combatDiagnosticFeignSawAura = false;
+    m_combatDiagnosticFeignSawOutOfCombat = false;
 
     m_swingErrorMsg = 0;
 
@@ -25709,15 +25754,55 @@ void Player::AtEnterCombat()
     m_combatDiagnosticSent = false;
 }
 
-void Player::NotifyDirectSpellCast()
+void Player::NotifyDirectSpellCast(uint32 spellId)
 {
     m_combatDiagnosticDirectSpellTimer = 0;
     m_combatDiagnosticCheckTimer = 0;
     m_combatDiagnosticHasDirectSpellCast = true;
+
+    if (!IsElgromHumanCombatDiagnosticTarget(this))
+        return;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (spellId == ElgromFeignDeathSpell)
+    {
+        m_combatDiagnosticFeignTrapTimer = 0;
+        m_combatDiagnosticFeignHealth = GetHealth();
+        m_combatDiagnosticFeignLastDirectSpellId = 0;
+        m_combatDiagnosticFeignFailedSpellId = 0;
+        m_combatDiagnosticFeignFailedResult = 0;
+        m_combatDiagnosticFeignTrapPending = true;
+        m_combatDiagnosticFeignSawAura = HasAura(ElgromFeignDeathSpell);
+        m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
+        return;
+    }
+
+    if (!m_combatDiagnosticFeignTrapPending)
+        return;
+
+    m_combatDiagnosticFeignLastDirectSpellId = spellId;
+    if (IsHunterTrapSpellForCombatDiagnostic(spellInfo) &&
+        m_combatDiagnosticFeignTrapTimer <= ElgromFeignTrapDiagnosticWindow)
+    {
+        m_combatDiagnosticFeignTrapPending = false;
+    }
+}
+
+void Player::NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsElgromHumanCombatDiagnosticTarget(this))
+        return;
+
+    if (!IsHunterTrapSpellForCombatDiagnostic(sSpellMgr->GetSpellInfo(spellId)))
+        return;
+
+    m_combatDiagnosticFeignFailedSpellId = spellId;
+    m_combatDiagnosticFeignFailedResult = uint32(result);
 }
 
 void Player::UpdateCombatDiagnostic(uint32 diff)
 {
+    UpdateElgromFeignTrapDiagnostic(diff);
     AdvanceCombatDiagnosticTimer(m_combatDiagnosticDirectSpellTimer, diff);
 
     if (!IsInCombat())
@@ -25746,6 +25831,78 @@ void Player::UpdateCombatDiagnostic(uint32 diff)
 
     SendCombatDiagnostic();
     m_combatDiagnosticSent = true;
+}
+
+void Player::UpdateElgromFeignTrapDiagnostic(uint32 diff)
+{
+    if (!m_combatDiagnosticFeignTrapPending)
+        return;
+
+    if (!IsElgromHumanCombatDiagnosticTarget(this))
+    {
+        m_combatDiagnosticFeignTrapPending = false;
+        return;
+    }
+
+    m_combatDiagnosticFeignSawAura = m_combatDiagnosticFeignSawAura || HasAura(ElgromFeignDeathSpell);
+    m_combatDiagnosticFeignSawOutOfCombat = m_combatDiagnosticFeignSawOutOfCombat || !IsInCombat();
+    AdvanceCombatDiagnosticTimer(m_combatDiagnosticFeignTrapTimer, diff);
+    if (m_combatDiagnosticFeignTrapTimer < ElgromFeignTrapDiagnosticWindow)
+        return;
+
+    SendElgromFeignTrapDiagnostic();
+    m_combatDiagnosticFeignTrapPending = false;
+}
+
+void Player::SendElgromFeignTrapDiagnostic()
+{
+    Spell const* generic = GetCurrentSpell(CURRENT_GENERIC_SPELL);
+    Spell const* channel = GetCurrentSpell(CURRENT_CHANNELED_SPELL);
+    Spell const* autoRepeat = GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+    auto currentSpellId = [](Spell const* spell) -> uint32
+    {
+        return spell && spell->GetSpellInfo() ? spell->GetSpellInfo()->Id : 0;
+    };
+
+    std::ostringstream diagnostic;
+    diagnostic << "[Combat diagnostic][Elgrom FD/trap] No trap completed within 1000ms"
+               << "; feignAuraNow=" << (HasAura(ElgromFeignDeathSpell) ? 1 : 0)
+               << ", sawFeignAura=" << (m_combatDiagnosticFeignSawAura ? 1 : 0)
+               << ", combatNow=" << (IsInCombat() ? 1 : 0)
+               << ", sawOutOfCombat=" << (m_combatDiagnosticFeignSawOutOfCombat ? 1 : 0)
+               << ", alive=" << (IsAlive() ? 1 : 0)
+               << ", hp=" << m_combatDiagnosticFeignHealth << "->" << GetHealth()
+               << ", moving=" << (isMoving() ? 1 : 0)
+               << ", stand=" << uint32(GetStandState())
+               << ", generic=" << currentSpellId(generic)
+               << ", channel=" << currentSpellId(channel)
+               << ", autoRepeat=" << currentSpellId(autoRepeat)
+               << ", lastCompletedDirectSpell=" << m_combatDiagnosticFeignLastDirectSpellId
+               << ", failedTrapSpell=" << m_combatDiagnosticFeignFailedSpellId
+               << ", failedTrapResult=" << m_combatDiagnosticFeignFailedResult;
+    if (m_combatDiagnosticFeignFailedSpellId)
+    {
+        EnumText const failedResult = EnumUtils::ToString(SpellCastResult(m_combatDiagnosticFeignFailedResult));
+        diagnostic << '(' << failedResult.Title << ')';
+    }
+
+    auto appendTrapReadiness = [this, &diagnostic](char const* label, uint32 baseSpellId)
+    {
+        uint32 const knownSpellId = ResolveKnownCombatDiagnosticSpell(this, baseSpellId);
+        SpellInfo const* spellInfo = knownSpellId ? sSpellMgr->GetSpellInfo(knownSpellId) : nullptr;
+        diagnostic << ", " << label << "Known=" << knownSpellId;
+        if (spellInfo)
+            diagnostic << ", " << label << "CooldownMs=" << GetSpellHistory()->GetRemainingCooldown(spellInfo)
+                       << ", " << label << "Gcd=" << (GetSpellHistory()->HasGlobalCooldown(spellInfo) ? 1 : 0);
+    };
+
+    appendTrapReadiness("freezing", 14311);
+    appendTrapReadiness("frost", 13809);
+    diagnostic << '.';
+
+    std::string const message = diagnostic.str();
+    TC_LOG_WARN("combat.diagnostic", "{}", message);
+    sWorld->SendServerMessage(SERVER_MSG_STRING, message, this);
 }
 
 void Player::SendCombatDiagnostic()
