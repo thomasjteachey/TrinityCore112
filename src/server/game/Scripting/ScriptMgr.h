@@ -691,6 +691,13 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player logs in.
         virtual void OnLogin(Player* player, bool firstLogin);
 
+        // Called while a character is loading, after its saved position and
+        // home bind are available but before its login map is created. Scripts
+        // may relocate the player and replace mapId/instanceId so the client
+        // enters the corrected map as part of the initial login instead of
+        // being far-teleported immediately afterward.
+        virtual void OnBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId);
+
         // Called when a player logs out.
         virtual void OnLogout(Player* player);
 
@@ -1041,6 +1048,7 @@ class TC_GAME_API ScriptMgr
         void OnPlayerTextEmote(Player* player, uint32 textEmote, uint32 emoteNum, ObjectGuid guid);
         void OnPlayerSpellCast(Player* player, Spell* spell, bool skipCheck);
         void OnPlayerLogin(Player* player, bool firstLogin);
+        void OnPlayerBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId);
         void OnPlayerLogout(Player* player);
         void OnPlayerCreate(Player* player);
         void OnPlayerDelete(ObjectGuid guid, uint32 accountId);

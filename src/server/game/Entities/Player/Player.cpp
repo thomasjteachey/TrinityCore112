@@ -18189,6 +18189,15 @@ bool Player::LoadFromDB(ObjectGuid guid, CharacterDatabaseQueryHolder const& hol
     _LoadBGData(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_BG_DATA));
 
     GetSession()->SetPlayer(this);
+
+    // Give scripts one last chance to repair a stale saved login location
+    // before any map is created or any initial world packets are sent. This
+    // is intentionally earlier than PlayerScript::OnLogin: a cross-map
+    // TeleportTo from the login hook can race the client's initial object and
+    // item data stream and leave the client showing "Unknown" names or
+    // "Retrieving item information" until another relog.
+    sScriptMgr->OnPlayerBeforeMapLoad(this, mapId, instanceId);
+
     MapEntry const* mapEntry = sMapStore.LookupEntry(mapId);
     Map* map = nullptr;
     bool player_at_bg = false;

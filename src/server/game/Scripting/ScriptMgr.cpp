@@ -1962,6 +1962,11 @@ void ScriptMgr::OnPlayerLogin(Player* player, bool firstLogin)
     FOREACH_SCRIPT(PlayerScript)->OnLogin(player, firstLogin);
 }
 
+void ScriptMgr::OnPlayerBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId)
+{
+    FOREACH_SCRIPT(PlayerScript)->OnBeforeMapLoad(player, mapId, instanceId);
+}
+
 void ScriptMgr::OnPlayerLogout(Player* player)
 {
     FOREACH_SCRIPT(PlayerScript)->OnLogout(player);
@@ -2720,6 +2725,10 @@ void PlayerScript::OnSpellCast(Player* /*player*/, Spell* /*spell*/, bool /*skip
 }
 
 void PlayerScript::OnLogin(Player* /*player*/, bool /*firstLogin*/)
+{
+}
+
+void PlayerScript::OnBeforeMapLoad(Player* /*player*/, uint32& /*mapId*/, uint32& /*instanceId*/)
 {
 }
 

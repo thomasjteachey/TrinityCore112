@@ -1099,26 +1099,6 @@ public:
 
     void OnPlayerUpdate(Player* player)
     {
-        if (!_pendingGurubashiReturn.empty())
-        {
-            auto pendingItr = _pendingGurubashiReturn.find(player->GetGUID());
-            if (pendingItr != _pendingGurubashiReturn.end())
-            {
-                _pendingGurubashiReturn.erase(pendingItr);
-                // Re-validate: a tick has passed since login, so the player
-                // may have already moved themselves out of the jail.
-                if (player->GetMapId() == CUSTOM_GAME_MAP_ID &&
-                    player->GetDistance(LobbyArrival) <= LOBBY_MAX_DISTANCE &&
-                    player->GetPositionZ() >= -80.0f && player->GetPositionZ() <= -45.0f)
-                {
-                    player->ClearWorldSubMap();
-                    player->TeleportTo(GurubashiGamesmasterLocation);
-                    Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
-                }
-                return;
-            }
-        }
-
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId)
             return;
@@ -1158,6 +1138,27 @@ public:
         RemoveLobbyMember(player, *lobby, false);
     }
 
+    void OnBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId)
+    {
+        if (!player || mapId != CUSTOM_GAME_MAP_ID ||
+            player->GetDistance(LobbyArrival) > LOBBY_MAX_DISTANCE ||
+            player->GetPositionZ() < -80.0f || player->GetPositionZ() > -45.0f)
+            return;
+
+        // Server-only world submaps and lobby membership intentionally do not
+        // survive logout/restart. Repair the saved location before the login
+        // map is created so the client enters Gurubashi directly; sending a
+        // far teleport immediately after initial login corrupts the client's
+        // initial name/item data stream until another relog.
+        mapId = GurubashiGamesmasterLocation.GetMapId();
+        instanceId = 0;
+        player->Relocate(GurubashiGamesmasterLocation.GetPositionX(),
+            GurubashiGamesmasterLocation.GetPositionY(),
+            GurubashiGamesmasterLocation.GetPositionZ(),
+            GurubashiGamesmasterLocation.GetOrientation());
+        _pendingGurubashiReturn.insert(player->GetGUID());
+    }
+
     void OnLogin(Player* player)
     {
         if (!player)
@@ -1172,22 +1173,8 @@ public:
                 return;
             }
 
-        // Lobby membership is intentionally discarded on logout. If the
-        // character was saved inside the jail, do not leave them stranded in
-        // the shared Map 1 copy when they next log in (including after a
-        // worldserver restart, when no lobby state survives). The actual
-        // teleport is deferred to the next OnPlayerUpdate tick: firing a
-        // cross-map TeleportTo synchronously out of the login hook races the
-        // client's own initial-login packet processing and leaves it in a
-        // corrupted state (item tooltips stuck on "Retrieving item
-        // information", nameplates showing "Unknown") until the player zones
-        // again.
-        if (player->GetMapId() == CUSTOM_GAME_MAP_ID &&
-            player->GetDistance(LobbyArrival) <= LOBBY_MAX_DISTANCE &&
-            player->GetPositionZ() >= -80.0f && player->GetPositionZ() <= -45.0f)
-        {
-            _pendingGurubashiReturn.insert(player->GetGUID());
-        }
+        if (_pendingGurubashiReturn.erase(player->GetGUID()))
+            Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
     }
 
     void Update()
@@ -1913,6 +1900,10 @@ class custom_game_lobby_player_script : public PlayerScript
 {
 public:
     custom_game_lobby_player_script() : PlayerScript("custom_game_lobby_player_script") { }
+    void OnBeforeMapLoad(Player* player, uint32& mapId, uint32& instanceId) override
+    {
+        CustomGameLobbyManager::Instance().OnBeforeMapLoad(player, mapId, instanceId);
+    }
     void OnLogin(Player* player, bool) override { CustomGameLobbyManager::Instance().OnLogin(player); }
     void OnMapChanged(Player* player) override { CustomGameLobbyManager::Instance().OnMapChanged(player); }
     void OnUpdate(Player* player, uint32) override { CustomGameLobbyManager::Instance().OnPlayerUpdate(player); }
