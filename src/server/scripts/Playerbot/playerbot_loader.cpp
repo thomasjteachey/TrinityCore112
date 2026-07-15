@@ -34,6 +34,7 @@
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
+#include "Spell.h"
 #include "SpellInfo.h"
 #include "SpellHistory.h"
 #include "SpellMgr.h"
@@ -643,6 +644,21 @@ public:
     {
         RecordManagedBotUpdatePulse(player, diff);
         playerbot::RandomBotParticipationManager::ProcessPlayerLifecycle(player);
+    }
+
+    void OnSpellCast(Player* player, Spell* spell, bool) override
+    {
+        if (!player || !spell || !spell->IsTriggered())
+            return;
+
+        SpellInfo const* spellInfo = spell->GetSpellInfo();
+        if (!spellInfo || spellInfo->Id != 75)
+            return;
+
+        if (!playerbot::IsManagedRandomBot(player) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(player))
+            return;
+
+        playerbot::NotifyHunterAutoShotFired(player);
     }
 
     void OnLogout(Player* player) override

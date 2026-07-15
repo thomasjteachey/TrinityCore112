@@ -25,6 +25,7 @@ namespace playerbot
 {
 bool NormalizeLifecycleQueueState(Player* player);
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
+void NotifyHunterAutoShotFired(Player* player);
 
 class BattlegroundLifecycleActions
 {

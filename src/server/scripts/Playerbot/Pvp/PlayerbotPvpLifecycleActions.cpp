@@ -84,8 +84,9 @@ namespace playerbot
 namespace
 {
     std::unordered_map<uint64, uint32> g_HunterAutoShotPauseUntilMs;
-    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantStartedMs;
-    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantLastTimerMs;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotPlantFireSequence;
+    std::mutex g_HunterAutoShotEventLock;
+    std::unordered_map<uint64, uint32> g_HunterAutoShotFireSequence;
     std::unordered_map<uint64, uint32> g_HunterForceFleeUntilMs;
     std::unordered_map<uint64, uint32> g_HunterLastFleeIssueMs;
     std::unordered_map<uint64, uint32> g_HunterKiteHoldUntilMs;
@@ -102,11 +103,9 @@ namespace
     std::unordered_map<uint64, HunterFleeState> g_HunterFleeStateByGuid;
     constexpr uint32 PLAYERBOT_HUNTER_KITE_HOLD_MS = 3500;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_STICK_MS = 4200;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MIN_PLANT_MS = 434;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS = 1500;
     constexpr uint32 PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS = 1150;
     constexpr uint32 PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS = 550;
-    constexpr uint32 PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS = 900;
     constexpr uint32 PLAYERBOT_HUNTER_FLEE_REISSUE_MS = 350;
     constexpr uint32 PLAYERBOT_PRIEST_ELUNES_GRACE_SPELL_ID = 81351;
     constexpr uint32 PLAYERBOT_PRIEST_WISP_FORM_SPELL_ID = 81352;
@@ -147,6 +146,16 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         uint32& existingUntilMs = g_HunterKiteHoldUntilMs[guid];
         if (existingUntilMs < untilMs)
             existingUntilMs = untilMs;
+    }
+
+    uint32 GetHunterAutoShotFireSequence(Player const* player)
+    {
+        if (!player)
+            return 0;
+
+        std::lock_guard<std::mutex> lock(g_HunterAutoShotEventLock);
+        auto itr = g_HunterAutoShotFireSequence.find(player->GetGUID().GetRawValue());
+        return itr != g_HunterAutoShotFireSequence.end() ? itr->second : 0;
     }
 
     std::unordered_map<uint64, uint32> g_BattlegroundNoHumanSinceMsByInstance;
@@ -2786,8 +2795,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         auto clearPlantState = [&]()
         {
             plantUntilMs = 0;
-            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = 0;
-            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = 0;
+            g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
         };
         float const safeShootMin = std::max(minAutoShotRange + 0.75f, 8.75f);
         bool const hasLos = player->IsWithinLOSInMap(target);
@@ -2853,31 +2861,23 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             stopFaceAndKeepAutoShot();
 
-            uint32 const currentAutoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
-            uint32& plantStartedMs = g_HunterAutoShotPlantStartedMs[hunterGuidRaw];
-            uint32& lastPlantTimerMs = g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw];
-            uint32 const elapsedPlantMs = plantStartedMs ? nowMs - plantStartedMs : 0;
+            uint32 const fireSequence = GetHunterAutoShotFireSequence(player);
+            auto const plantSequenceItr = g_HunterAutoShotPlantFireSequence.find(hunterGuidRaw);
+            uint32 const plantFireSequence = plantSequenceItr != g_HunterAutoShotPlantFireSequence.end()
+                ? plantSequenceItr->second : fireSequence;
 
-            // Do not resume movement merely because a fixed 500ms window elapsed.
-            // In this core, Auto Shot actually fires inside Unit::_UpdateAutoRepeatSpell()
-            // when RANGED_ATTACK becomes ready, then resetAttackTimer(RANGED_ATTACK)
-            // bumps the timer back up to bow/gun speed.  Hold still until we observe
-            // that reset/increase, unless deadzone/melee already forced us out above.
-            bool const observedTimerReset = elapsedPlantMs >= PLAYERBOT_HUNTER_STUTTER_MIN_PLANT_MS &&
-                ((currentAutoShotTimerMs >= PLAYERBOT_HUNTER_STUTTER_FIRED_TIMER_MS) ||
-                    (lastPlantTimerMs != 0 && currentAutoShotTimerMs > lastPlantTimerMs + 250));
-
-            if (observedTimerReset)
+            // Only the triggered Auto Shot projectile advances this sequence.
+            // Instant hunter abilities do not participate in the plant/flee
+            // transition, regardless of their normal combat timing.
+            if (fireSequence != plantFireSequence)
             {
                 plantUntilMs = 0;
-                plantStartedMs = 0;
-                lastPlantTimerMs = 0;
+                g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
                 forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
                 float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
                 return IssueHunterStutterFlee(player, target, desiredFleeDistance, "autoshot-fired-resume-flee");
             }
 
-            lastPlantTimerMs = currentAutoShotTimerMs;
             return true;
         }
 
@@ -2887,8 +2887,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (plantUntilMs != 0 && plantUntilMs <= nowMs)
         {
             plantUntilMs = 0;
-            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = 0;
-            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = 0;
+            g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
             forceFleeUntilMs = std::max(forceFleeUntilMs, nowMs + PLAYERBOT_HUNTER_POST_PLANT_FORCE_FLEE_MS);
         }
 
@@ -2907,37 +2906,21 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
         bool const autoShotActive = HunterHasActiveAutoShot(player);
-        bool const shouldPlantForAutoShot = inAutoShotBand && (autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
-
-        if (inAutoShotBand && !autoShotActive && !shouldPlantForAutoShot && player->HasSpell(75))
-        {
-            // Auto Shot can stay queued as an auto-repeat spell while the hunter
-            // is moving. Do not park early just because Auto Shot is inactive;
-            // start the auto-repeat and keep fleeing until the real shot window.
-            if (target->HasBreakableByDamageCrowdControlAura())
-            {
-                StopHunterAutoShotForBreakableCrowdControl(player, target, "activate-autoshot-suppressed-breakable-cc");
-                return false;
-            }
-            player->SetFacingToObject(target);
-            player->SetInFront(target);
-            player->CastSpell(target, 75, false);
-            float const desiredFleeDistance = std::max(safeShootMin + 7.0f, maxAutoShotRange - 2.0f);
-            return IssueHunterStutterFlee(player, target, desiredFleeDistance, "activate-autoshot-while-fleeing");
-        }
+        bool const shouldPlantForAutoShot = inAutoShotBand &&
+            (autoShotTimerMs == 0 || autoShotTimerMs <= PLAYERBOT_HUNTER_STUTTER_PLANT_LEAD_MS);
 
         if (shouldPlantForAutoShot)
         {
-            plantUntilMs = nowMs + PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS;
-            g_HunterAutoShotPlantStartedMs[hunterGuidRaw] = nowMs;
-            g_HunterAutoShotPlantLastTimerMs[hunterGuidRaw] = autoShotTimerMs;
+            uint32 const maxPlantMs = PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS;
+            plantUntilMs = nowMs + maxPlantMs;
+            g_HunterAutoShotPlantFireSequence[hunterGuidRaw] = GetHunterAutoShotFireSequence(player);
             g_HunterFleeStateByGuid.erase(hunterGuidRaw);
             stopFaceAndKeepAutoShot();
 
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP hunter stutter loop: bot={} target={} decision=plant-autoshot distance={} timer={} active={} maxPlantMs={}",
                 player->GetGUID().ToString(), target->GetGUID().ToString(), exactDistance, autoShotTimerMs,
-                autoShotActive ? 1 : 0, PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS);
+                autoShotActive ? 1 : 0, maxPlantMs);
             return true;
         }
 
@@ -3410,6 +3393,15 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
 namespace playerbot
 {
+    void NotifyHunterAutoShotFired(Player* player)
+    {
+        if (!player || player->GetClass() != CLASS_HUNTER)
+            return;
+
+        std::lock_guard<std::mutex> lock(g_HunterAutoShotEventLock);
+        ++g_HunterAutoShotFireSequence[player->GetGUID().GetRawValue()];
+    }
+
     uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
         return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType, false);
