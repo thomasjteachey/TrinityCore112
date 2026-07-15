@@ -882,15 +882,17 @@ void ProcessBattlegroundPlayerbotTick(Player* player)
     EmitLifecycleGmDebug(player, tickDetail.str(), 1500);
 }
 
-void TryFinalizePendingVirtualPlayerTeleport(Player* player)
+bool TryFinalizePendingVirtualPlayerTeleport(Player* player)
 {
     if (!player || (!playerbot::IsManagedRandomBot(player) &&
         !playerbot::PlayerbotObcCloneManager::IsActiveClone(player)))
-        return;
+        return false;
 
     WorldSession* session = player->GetSession();
-    if (!session || !session->IsVirtualSession())
-        return;
+    if (!session || (!session->IsVirtualSession() && !session->IsTransientPlayerSession()))
+        return false;
+
+    bool finalizedTeleport = false;
 
     if (player->IsBeingTeleportedFar())
     {
@@ -898,6 +900,7 @@ void TryFinalizePendingVirtualPlayerTeleport(Player* player)
             "Playerbot lifecycle pre-check teleport finalization: guid={} type=far.",
             player->GetGUID().ToString());
         session->HandleMoveWorldportAck();
+        finalizedTeleport = true;
     }
 
     if (player->IsBeingTeleportedNear())
@@ -905,6 +908,11 @@ void TryFinalizePendingVirtualPlayerTeleport(Player* player)
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot lifecycle pre-check teleport finalization: guid={} type=near.",
             player->GetGUID().ToString());
+
+        player->StopMoving();
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+
         WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
         teleportAck << player->GetPackGUID();
         teleportAck << uint32(0);
@@ -937,7 +945,11 @@ void TryFinalizePendingVirtualPlayerTeleport(Player* player)
             player->ResummonPetTemporaryUnSummonedIfAny();
             player->ProcessDelayedOperations();
         }
+
+        finalizedTeleport = true;
     }
+
+    return finalizedTeleport;
 }
 
 void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
@@ -954,7 +966,11 @@ void RecoverManagedVirtualBotTeleports(ManagedBotAccountIds const& botAccounts)
             if (!session || !session->IsVirtualSession())
                 continue;
 
-            if (!player->IsBeingTeleported())
+            // Near teleports are completed by ProcessPlayerLifecycle on the
+            // player's map-update thread so no world-thread recovery can race
+            // the following combat/movement tick. Far transfers may remove the
+            // player from normal map updates and still require world recovery.
+            if (!player->IsBeingTeleportedFar())
                 continue;
 
             managedTeleportGuids.push_back(guid);
@@ -1793,7 +1809,11 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 
     TryRecoverPlayerbotFromUnderMap(player);
     TryReviveManagedBotAfterStartup(player);
-    TryFinalizePendingVirtualPlayerTeleport(player);
+    // A near teleport such as Blink must finish in its own player-update turn.
+    // Issuing combat movement immediately after the synthetic ACK can launch
+    // observer-visible movement from both the old and new positions.
+    if (TryFinalizePendingVirtualPlayerTeleport(player))
+        return;
     TryUsePlayerbotInsigniaBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
 

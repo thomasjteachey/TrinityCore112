@@ -1262,6 +1262,12 @@ void Battleground::AddPlayer(Player* player)
         player->SetFactionForRace(RACE_BLOODELF);
     }
 
+    // Battleground participation itself is authoritative PvP state. Do not
+    // rely on a later zone update to force the flag: transient playerbots and
+    // custom-game clones are inserted directly into the map, and a stale PvP
+    // end timer can otherwise turn their overhead names blue mid-match.
+    player->UpdatePvP(true, true);
+
     BattlegroundPlayer bp;
     bp.OfflineRemoveTime = 0;
     bp.Team = team;

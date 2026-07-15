@@ -33,7 +33,6 @@
 #include "PathGenerator.h"
 #include "Pet.h"
 #include "Position.h"
-#include "Protocol/Opcodes.h"
 #include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellInfo.h"
@@ -3035,37 +3034,6 @@ void NotifySpellCastFailureToGameMasters(Player* bot, playerbot::PvpClassSpellCo
     }
 }
 
-void FinalizeVirtualNearTeleport(Player* player)
-{
-    if (!player || !player->IsBeingTeleportedNear())
-        return;
-
-    uint32 const oldZone = player->GetZoneId();
-    WorldLocation dest = player->GetTeleportDest();
-    float safeDestZ = dest.GetPositionZ();
-    player->UpdateAllowedPositionZ(dest.GetPositionX(), dest.GetPositionY(), safeDestZ);
-    dest.Relocate(dest.GetPositionX(), dest.GetPositionY(), safeDestZ, dest.GetOrientation());
-
-    player->SetSemaphoreTeleportNear(false);
-    player->UpdatePosition(dest, true);
-
-    uint32 newZone = 0;
-    uint32 newArea = 0;
-    player->GetZoneAndAreaId(newZone, newArea);
-    player->UpdateZone(newZone, newArea);
-
-    if (oldZone != newZone)
-    {
-        if (player->pvpInfo.IsHostile)
-            player->CastSpell(player, 2479, true);
-        else if (player->IsPvP() && !player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_IN_PVP))
-            player->UpdatePvP(false, false);
-    }
-
-    player->ResummonPetTemporaryUnSummonedIfAny();
-    player->ProcessDelayedOperations();
-}
-
 char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
 {
     switch (mode)
@@ -4833,6 +4801,15 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     SpellCastResult castResult = SPELL_FAILED_ERROR;
     if (resolvedSpellId == 1953 && context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self)
     {
+        // Blink is a discontinuous relocation. Retaining a Chase/Follow/Point
+        // generator lets its pre-Blink spline relaunch before the virtual
+        // session's ACK is processed on the next player update, making remote
+        // clients alternate between the origin and destination. Land idle and
+        // let combat positioning calculate a fresh path afterward.
+        player->StopMoving();
+        if (MotionMaster* motionMaster = player->GetMotionMaster())
+            motionMaster->Clear();
+
         // GetFirstCollisionPosition only raycasts for navmesh/VMap collision;
         // it does not re-ground the resulting Z against actual terrain height.
         // On multi-layer geometry (bridges, cliffs, caves) that can leave the
@@ -5056,9 +5033,6 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         ScheduleHunterFeignDeathStandup(player);
     }
 
-    // Outmaneuver performs its hunter/pet swap from a dummy spell script, so
-    // its DBC effects do not advertise the near teleport performed at runtime.
-    bool hasTeleportEffect = resolvedSpellId == 81297;
     bool hasChargeEffect = false;
     for (uint8 effectIndex = 0; effectIndex < MAX_SPELL_EFFECTS; ++effectIndex)
     {
@@ -5072,39 +5046,21 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
             case SPELL_EFFECT_LEAP_BACK:
             case SPELL_EFFECT_CHARGE:
             case SPELL_EFFECT_CHARGE_DEST:
-                hasTeleportEffect = true;
                 hasChargeEffect = true;
                 break;
             default:
                 break;
         }
 
-        if (hasTeleportEffect)
+        if (hasChargeEffect)
             break;
     }
 
-    // Bot players do not own a real game client to naturally ACK near teleports
-    // (for example Blink). If a teleport is still pending after cast, synthesize
-    // the teleport ACK immediately so other combat actions (like Charge) resolve
-    // against the post-Blink location.
-    if (hasTeleportEffect && player->IsBeingTeleportedNear())
-    {
-        WorldSession* session = player->GetSession();
-        if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
-        {
-            TC_LOG_DEBUG("playerbots.pvp.class",
-                "Playerbot PvP teleport ACK synthesized: guid={} spell={} map={} x={} y={} z={}.",
-                player->GetGUID().ToString(), resolvedSpellId, player->GetMapId(), player->GetPositionX(), player->GetPositionY(), player->GetPositionZ());
-            WorldPacket teleportAck(MSG_MOVE_TELEPORT_ACK, 20);
-            teleportAck << player->GetPackGUID();
-            teleportAck << uint32(0);
-            teleportAck << uint32(0);
-            session->HandleMoveTeleportAck(teleportAck);
-
-            if (player->IsBeingTeleportedNear())
-                FinalizeVirtualNearTeleport(player);
-        }
-    }
+    // Virtual and transient players have no client to ACK a near teleport.
+    // Do not complete it inline with the spell cast: doing so lets the same AI
+    // update install movement against both the pre- and post-Blink positions.
+    // The lifecycle pre-check owns completion on the next player update and
+    // reserves that update exclusively for teleport synchronization.
 
     // Charge/Intercept target switching: preserve the intended enemy target in
     // selection/combat context, but do not override effect movement with the
