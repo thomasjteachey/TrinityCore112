@@ -1176,8 +1176,21 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player)
             return false;
 
-        if (!CanIssueMovementCommand(player, 500))
+        MotionMaster* motionMaster = player->GetMotionMaster();
+        if (!motionMaster)
             return false;
+
+        MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
+        bool const activePointSpline = currentMovement == POINT_MOTION_TYPE &&
+            player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
+        bool const botCurrentlyMoving = player->isMoving() || activePointSpline ||
+            player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
+
+        // An active virtual-player spline can exist for a short window before
+        // Player::isMoving() becomes true. Preserve ownership during that window
+        // instead of letting the 50 ms tactical loop replace the same MovePoint.
+        if (!CanIssueMovementCommand(player, 500))
+            return botCurrentlyMoving;
 
         ClearEatDrinkAurasForMovement(player);
 
@@ -1199,7 +1212,6 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         bool const destinationChanged = state.lastIssueMs == 0 ||
             state.lastDestination.GetExactDist(destination) >= destinationChangeThreshold;
         bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + minReissueMs;
-        bool const botCurrentlyMoving = player->isMoving();
         bool const forcedStationaryReissue = !destinationChanged && !canReissueByTime && !botCurrentlyMoving;
         if (forcedStationaryReissue)
             stationaryReissueCount = std::min<uint8>(uint8(stationaryReissueCount + 1), 20);
@@ -1207,7 +1219,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             stationaryReissueCount = 0;
 
         if (!destinationChanged && !canReissueByTime && botCurrentlyMoving)
-            return false;
+            return true;
 
         uint32 bgStatus = 0;
         if (Battleground* bg = player->GetBattleground())
@@ -1223,8 +1235,6 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 " reissueCount=" + std::to_string(stationaryReissueCount), 1000);
         }
 
-        MotionMaster* motionMaster = player->GetMotionMaster();
-        MovementGeneratorType const currentMovement = motionMaster->GetCurrentMovementGeneratorType();
         if (player->InBattleground() && currentMovement == EFFECT_MOTION_TYPE && HasPlayerbotGapCloserInFlight(player))
         {
             EmitRehgarMovementGuardServerDiagnostic(player, "movepoint_blocked_effect");
@@ -4191,7 +4201,10 @@ namespace playerbot
         for (Map::PlayerList::const_iterator itr = map->GetPlayers().begin(); itr != map->GetPlayers().end(); ++itr)
         {
             Player* observer = itr->GetSource();
-            if (!observer || observer == player || observer->GetBattlegroundId() != player->GetBattlegroundId())
+            bool const observerIsPlayerbot = observer &&
+                (playerbot::IsManagedRandomBot(observer) || playerbot::PlayerbotObcCloneManager::IsActiveClone(observer));
+            if (!observer || observer == player || observerIsPlayerbot ||
+                observer->GetBattlegroundId() != player->GetBattlegroundId())
                 continue;
 
             player->Whisper(message, LANG_UNIVERSAL, observer);

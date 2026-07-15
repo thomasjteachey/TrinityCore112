@@ -714,7 +714,15 @@ public:
         if (IsChromieWhisperFacade(sender) || IsChromieWhisperFacade(receiver))
             return;
 
-        if (!playerbot::IsManagedRandomBot(receiver) && !playerbot::PlayerbotObcCloneManager::IsActiveClone(receiver))
+        bool const senderIsPlayerbot = playerbot::IsManagedRandomBot(sender) ||
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(sender);
+        bool const receiverIsPlayerbot = playerbot::IsManagedRandomBot(receiver) ||
+            playerbot::PlayerbotObcCloneManager::IsActiveClone(receiver);
+
+        // Diagnostic commands are human/GM -> bot only. A reply emitted by one
+        // bot must never be interpreted as a fresh command by another bot, or
+        // Whisper -> OnPlayerChat -> Whisper recursively re-enters forever.
+        if (!receiverIsPlayerbot || senderIsPlayerbot || sender == receiver)
             return;
 
         std::string command = msg;
