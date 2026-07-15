@@ -1553,7 +1553,12 @@ void StopHunterAndStartAutoShot(Player* player, Unit* target, char const* reason
         motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
     player->StopMoving();
-    if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+    // Clone mirrors use a transient (not virtual) session but are equally
+    // socketless -- see the matching fix in StopVirtualPlayerbotMovement
+    // (PlayerbotPvpLifecycleActions.cpp). Without this, a clone's stale
+    // MOVEMENTFLAG_MASK_MOVING bit made the engine treat it as still moving
+    // on the very next Auto Shot cast attempt below, clipping it.
+    if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
     {
         player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
         player->SendMovementFlagUpdate();
@@ -5184,7 +5189,14 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
         if (player->GetVictim() != target || !player->HasUnitState(UNIT_STATE_MELEE_ATTACKING))
         {
             WorldSession* session = player->GetSession();
-            if (session && session->IsVirtualSession())
+            // Clone mirrors (transient session) need this same delayed-attack
+            // deferral as persistent managed bots (virtual session) -- both
+            // are socketless bot-controlled players where an eager immediate
+            // Attack() call below can replace an in-flight charge/leap spline
+            // in the same tick. Checking only IsVirtualSession() left clones
+            // taking the immediate-Attack() branch and reintroduced the charge
+            // hijack this deferral exists to prevent.
+            if (session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 ObjectGuid const playerGuid = player->GetGUID();
                 ObjectGuid const targetGuid = target->GetGUID();

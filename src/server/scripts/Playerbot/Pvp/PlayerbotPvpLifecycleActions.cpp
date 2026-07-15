@@ -2007,7 +2007,14 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return;
 
         player->StopMoving();
-        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        // Both persistent managed bots (virtual session) and OBC/custom-game
+        // clone mirrors (transient session) are socketless and need the same
+        // synthetic movement-flag clear here -- a real client would send its
+        // own stop packet, but neither of these has one. Checking only
+        // IsVirtualSession() left clones with a stale MOVEMENTFLAG_MASK_MOVING
+        // bit after every stop, which made the engine treat them as still
+        // moving on the very next Auto Shot cast attempt and clip it.
+        if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
             player->SendMovementFlagUpdate();
@@ -2149,7 +2156,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (MotionMaster* motionMaster = player->GetMotionMaster())
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
 
-        if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+        if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
         {
             player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
@@ -3945,7 +3952,7 @@ namespace playerbot
                 return StopHunterAndStartAutoShot(player, target, "hold-band-autoshot");
 
             player->StopMoving();
-            if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
+            if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
                 player->SendMovementFlagUpdate();

@@ -3948,14 +3948,18 @@ bool IsHunterBestialWrathBreakableControl(Player const* player)
         !player->HasTalent(81300, player->GetActiveSpec()))
         return false;
 
-    // Spell 81300 uses the same complete movement-impairment/loss-of-control
-    // immunity mask as a PvP trinket. Trigger it for every mechanic it can
-    // actually clear, rather than only stun/fear/polymorph.
-    return IsRootedOrSnared(player) ||
-        player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED | UNIT_STATE_STUNNED |
+    // Only genuine incapacitating crowd control -- stun/fear/confuse/polymorph
+    // and similar states that stop the bot from acting at all -- should burn
+    // this. IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK is the real
+    // PvP-trinket mechanic mask, so it (correctly, for a trinket) also
+    // includes MECHANIC_ROOT and MECHANIC_SNARE; combined with the separate
+    // IsRootedOrSnared() check below, a mere root or snare counted as
+    // "breakable control" here. Arena Preparation itself applies a root to
+    // hold players in place before the gates open, so this fired Bestial
+    // Wrath the instant the match started rather than only during real CC.
+    return player->HasUnitState(UNIT_STATE_CONTROLLED | UNIT_STATE_POSSESSED | UNIT_STATE_STUNNED |
             UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING) ||
         player->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
-        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK) ||
         player->IsPolymorphed();
 }
 

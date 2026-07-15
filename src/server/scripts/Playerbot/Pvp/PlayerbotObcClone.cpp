@@ -301,6 +301,124 @@ bool CreateHunterPetMirror(Player* clone, Pet* sourcePet)
     return true;
 }
 
+std::unordered_map<ObjectGuid, uint32> g_PendingHunterPetSpellQueryByClone;
+
+// Applies the source's trained pet_spell rows (fetched asynchronously, since
+// the CHAR_SEL_PET_SPELL statement is async-connection-only) to the clone's
+// hunter pet once the query resolves. Re-validates that the clone still has
+// the same pet this query was started for -- the periodic mirror sync could
+// have replaced or removed it in the meantime (e.g. the source's real pet
+// went live and CreateHunterPetMirror took over).
+void ApplyLoadedHunterPetSpells(ObjectGuid cloneGuid, uint32 expectedClonePetNumber, PreparedQueryResult result)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto itr = g_PendingHunterPetSpellQueryByClone.find(cloneGuid);
+        if (itr != g_PendingHunterPetSpellQueryByClone.end() && itr->second == expectedClonePetNumber)
+            g_PendingHunterPetSpellQueryByClone.erase(itr);
+    }
+
+    if (!result)
+        return;
+
+    Player* clone = ObjectAccessor::FindConnectedPlayer(cloneGuid);
+    if (!clone || !clone->IsInWorld())
+        return;
+
+    Pet* pet = clone->GetPet();
+    if (!pet || pet->getPetType() != HUNTER_PET || !pet->GetCharmInfo() ||
+        pet->GetCharmInfo()->GetPetNumber() != expectedClonePetNumber)
+        return;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        pet->addSpell(fields[0].GetUInt32(), ActiveStates(fields[1].GetUInt8()), PETSPELL_UNCHANGED);
+    }
+    while (result->NextRow());
+
+    // InitPetCreateSpells() already set up the baseline native action bar;
+    // rebuild it now that the taught abilities are also known, so trained
+    // spells actually show up as usable rather than just being in memory.
+    pet->GetCharmInfo()->InitPetActionBar();
+    pet->CastPetAuras(false);
+}
+
+// Builds a working hunter pet for the clone directly from the source's
+// persisted pet stable data, without requiring the source to have a live,
+// currently-summoned Pet at all. An online player's PetStable stays populated
+// (their last-known current/unslotted pet) regardless of whether the pet is
+// actually summoned right now, so this covers the common case where the
+// source simply hasn't called their pet out yet this match.
+//
+// Trained pet_spell rows (Beast Training) are not part of PetStable::PetInfo
+// and are loaded afterward via an async query keyed on the source's pet
+// number (see ApplyLoadedHunterPetSpells); this function gives the mirror
+// baseline native family abilities immediately (via Pet::InitPetCreateSpells)
+// so it is not left with zero attacks while that query is in flight.
+bool CreateHunterPetMirrorFromStable(Player* clone, PetStable::PetInfo const& info, uint32& outClonePetNumber)
+{
+    outClonePetNumber = 0;
+    if (!clone || info.Type != HUNTER_PET || !info.CreatureId)
+        return true;
+
+    CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(info.CreatureId);
+    if (!creatureTemplate)
+        return false;
+
+    Map* map = clone->FindMap();
+    if (!map || !clone->IsInWorld())
+        return false;
+
+    PetStable& petStable = clone->GetOrInitPetStable();
+    if (petStable.CurrentPet)
+        return false;
+
+    std::unique_ptr<Pet> pet = std::make_unique<Pet>(clone, HUNTER_PET);
+    if (!pet->CreateBaseAtCreatureInfo(creatureTemplate, clone))
+        return false;
+
+    pet->SetCreatorGUID(clone->GetGUID());
+    pet->SetFaction(clone->GetFaction());
+    pet->SetCreatedBySpell(info.CreatedBySpellId);
+    pet->ReplaceAllUnitFlags(UNIT_FLAG_PLAYER_CONTROLLED);
+
+    uint8 const petLevel = info.Level > 0 ? info.Level : uint8(clone->GetLevel());
+    if (!pet->InitStatsForLevel(petLevel))
+        return false;
+
+    uint32 const petNumber = sObjectMgr->GeneratePetNumber();
+    outClonePetNumber = petNumber;
+    pet->GetCharmInfo()->SetPetNumber(petNumber, true);
+    if (!info.Name.empty())
+        pet->SetName(info.Name);
+    if (info.DisplayId)
+    {
+        pet->SetNativeDisplayId(info.DisplayId);
+        pet->SetDisplayId(info.DisplayId);
+    }
+    if (info.ReactState)
+        pet->SetReactState(info.ReactState);
+
+    pet->InitPetCreateSpells();
+
+    pet->CastPetAuras(false);
+    pet->SetFullHealth();
+    for (uint8 power = POWER_MANA; power < MAX_POWERS; ++power)
+        if (pet->GetMaxPower(Powers(power)))
+            pet->SetFullPower(Powers(power));
+    pet->SetPower(POWER_HAPPINESS, 166500);
+
+    Pet* petRaw = pet.get();
+    if (!map->AddToMap(petRaw->ToCreature()))
+        return false;
+
+    pet->FillPetInfo(&petStable.CurrentPet.emplace());
+    clone->SetMinion(petRaw, true);
+    pet.release();
+    return true;
+}
+
 void SynchronizeHunterPetMirror(Player* human, Player* clone)
 {
     if (!human || !clone || human->GetClass() != CLASS_HUNTER || clone->GetClass() != CLASS_HUNTER)
@@ -317,10 +435,56 @@ void SynchronizeHunterPetMirror(Player* human, Player* clone)
         clonePet = nullptr;
     }
 
-    if (!sourcePet || clonePet)
+    if (clonePet)
         return;
 
-    CreateHunterPetMirror(clone, sourcePet);
+    if (sourcePet)
+    {
+        CreateHunterPetMirror(clone, sourcePet);
+        return;
+    }
+
+    // The source has no pet summoned right now. Fall back to whatever their
+    // persisted pet stable still has on record (current or unslotted hunter
+    // pet) so the clone is not permanently petless just because the source
+    // hasn't called theirs out yet.
+    PetStable const* stable = human->GetPetStable();
+    if (!stable)
+        return;
+
+    std::pair<PetStable::PetInfo const*, PetSaveMode> const loadInfo = Pet::GetLoadPetInfo(*stable, 0, 0, false);
+    PetStable::PetInfo const* info = loadInfo.first;
+    if (!info || info->Type != HUNTER_PET || info->Health == 0)
+        return;
+
+    uint32 const sourcePetNumber = info->PetNumber;
+    uint32 clonePetNumber = 0;
+    if (!CreateHunterPetMirrorFromStable(clone, *info, clonePetNumber) || !clonePetNumber)
+        return;
+
+    // Fetch the source's trained pet_spell rows (Beast Training) so the
+    // mirror ends up with the abilities the hunter actually taught it, not
+    // just baseline native attacks. CHAR_SEL_PET_SPELL is async-connection
+    // only, so this cannot be a blocking Query() call.
+    ObjectGuid const cloneGuid = clone->GetGUID();
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        auto& pending = g_PendingHunterPetSpellQueryByClone[cloneGuid];
+        if (pending == clonePetNumber)
+            return;
+        pending = clonePetNumber;
+    }
+
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_PET_SPELL);
+    stmt->setUInt32(0, sourcePetNumber);
+    if (WorldSession* session = human->GetSession())
+    {
+        session->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(stmt).WithPreparedCallback(
+            [cloneGuid, clonePetNumber](PreparedQueryResult result)
+            {
+                ApplyLoadedHunterPetSpells(cloneGuid, clonePetNumber, result);
+            }));
+    }
 }
 
 void DestroyUnseatedClone(std::unique_ptr<WorldSession>& session, Player* clone)
