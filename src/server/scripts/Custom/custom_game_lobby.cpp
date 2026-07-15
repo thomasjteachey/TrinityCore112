@@ -32,6 +32,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace
@@ -1098,6 +1099,26 @@ public:
 
     void OnPlayerUpdate(Player* player)
     {
+        if (!_pendingGurubashiReturn.empty())
+        {
+            auto pendingItr = _pendingGurubashiReturn.find(player->GetGUID());
+            if (pendingItr != _pendingGurubashiReturn.end())
+            {
+                _pendingGurubashiReturn.erase(pendingItr);
+                // Re-validate: a tick has passed since login, so the player
+                // may have already moved themselves out of the jail.
+                if (player->GetMapId() == CUSTOM_GAME_MAP_ID &&
+                    player->GetDistance(LobbyArrival) <= LOBBY_MAX_DISTANCE &&
+                    player->GetPositionZ() >= -80.0f && player->GetPositionZ() <= -45.0f)
+                {
+                    player->ClearWorldSubMap();
+                    player->TeleportTo(GurubashiGamesmasterLocation);
+                    Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
+                }
+                return;
+            }
+        }
+
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || player->GetMapId() != CUSTOM_GAME_MAP_ID || player->GetInstanceId() != lobby->InstanceId)
             return;
@@ -1128,6 +1149,7 @@ public:
     void OnLogout(Player* player)
     {
         _pendingInvites.erase(player->GetGUID());
+        _pendingGurubashiReturn.erase(player->GetGUID());
 
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby)
@@ -1153,14 +1175,18 @@ public:
         // Lobby membership is intentionally discarded on logout. If the
         // character was saved inside the jail, do not leave them stranded in
         // the shared Map 1 copy when they next log in (including after a
-        // worldserver restart, when no lobby state survives).
+        // worldserver restart, when no lobby state survives). The actual
+        // teleport is deferred to the next OnPlayerUpdate tick: firing a
+        // cross-map TeleportTo synchronously out of the login hook races the
+        // client's own initial-login packet processing and leaves it in a
+        // corrupted state (item tooltips stuck on "Retrieving item
+        // information", nameplates showing "Unknown") until the player zones
+        // again.
         if (player->GetMapId() == CUSTOM_GAME_MAP_ID &&
             player->GetDistance(LobbyArrival) <= LOBBY_MAX_DISTANCE &&
             player->GetPositionZ() >= -80.0f && player->GetPositionZ() <= -45.0f)
         {
-            player->ClearWorldSubMap();
-            player->TeleportTo(GurubashiGamesmasterLocation);
-            Notify(player, "Your custom-game lobby is no longer active. You have been returned to Gurubashi Arena.");
+            _pendingGurubashiReturn.insert(player->GetGUID());
         }
     }
 
@@ -1474,6 +1500,7 @@ private:
 
     std::unordered_map<uint32, std::unique_ptr<CustomGameLobby>> _lobbies;
     std::unordered_map<ObjectGuid, PendingLobbyInvite> _pendingInvites;
+    std::unordered_set<ObjectGuid> _pendingGurubashiReturn;
 };
 
 class custom_game_lobby_npc : public CreatureScript

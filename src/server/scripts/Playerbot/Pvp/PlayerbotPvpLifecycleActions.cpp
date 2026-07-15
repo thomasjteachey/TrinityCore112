@@ -2142,6 +2142,42 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
         }
 
+        // TEMPORARY diagnostic: this is the code that actually runs every pass
+        // while a plant is held (the kite loop is short-circuited upstream by
+        // the IsHunterAutoShotPlantActive guards). Player::Update runs
+        // Unit::Update -- and with it Unit::_UpdateAutoRepeatSpell -- right
+        // before these AI passes, and nothing in between touches this state.
+        // Sampling here, before the stop/face calls below re-clean movement
+        // flags, therefore reports the exact gate values the core's
+        // auto-repeat update just evaluated: its isMoving()/casting
+        // early-return inputs and the live CheckCast(true) verdict. For spell
+        // 75 a CheckCast failure neither interrupts nor resets the ranged
+        // timer, making it invisible for a socketless bot without this.
+        {
+            static std::unordered_map<uint64, uint32> coreGateDiagLastMsByGuid;
+            uint32& lastDiagMs = coreGateDiagLastMsByGuid[guidRaw];
+            if (!lastDiagMs || nowMs >= lastDiagMs + 750)
+            {
+                lastDiagMs = nowMs;
+
+                bool const engineSawMoving = player->isMoving();
+                uint32 const engineMoveFlags = player->GetUnitMovementFlags();
+                bool const engineSawCastBlock = player->IsNonMeleeSpellCast(false, false, true, true);
+                uint32 const engineTimerMs = player->getAttackTimer(RANGED_ATTACK);
+                Spell* autoRepeatMutable = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
+                SpellCastResult const liveCheck = autoRepeatMutable ? autoRepeatMutable->CheckCast(true) : SPELL_CAST_OK;
+
+                std::ostringstream coreGateDiag;
+                coreGateDiag << "[AutoShot] core-gate moving=" << (engineSawMoving ? 1 : 0)
+                    << " flags=0x" << std::hex << engineMoveFlags << std::dec
+                    << " castBlock=" << (engineSawCastBlock ? 1 : 0)
+                    << " timer=" << engineTimerMs
+                    << " dist=" << rangeInfo.exactDistance
+                    << " check=" << (!autoRepeatMutable ? "NO_SPELL" : (liveCheck == SPELL_CAST_OK ? "OK" : EnumUtils::ToString(liveCheck).Title));
+                WhisperAutoShotDiagnosticToArena(player, coreGateDiag.str(), 0);
+            }
+        }
+
         // Keep the hunter settled and facing a strafing target while every
         // tactical/class movement source yields to this plant. Facing updates
         // do not restart movement, but failing to track the target can make the
@@ -3161,36 +3197,6 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         if (plantUntilMs > nowMs)
         {
-            // TEMPORARY diagnostic: Player::Update runs Unit::Update (which
-            // contains Unit::_UpdateAutoRepeatSpell) immediately before this
-            // OnPlayerUpdate AI pass, and nothing between them touches this
-            // state. Sampling here -- before stopFaceAndKeepAutoShot() cleans
-            // movement flags for the next tick -- therefore reports the exact
-            // gate values the core's auto-repeat update just evaluated:
-            // its isMoving()/casting early-return inputs and, when the ranged
-            // timer is ready, the live CheckCast(true) verdict it acts on.
-            // For spell 75 a CheckCast failure neither interrupts nor resets
-            // the timer, which is invisible to a socketless bot without this.
-            {
-                bool const engineSawMoving = player->isMoving();
-                uint32 const engineMoveFlags = player->GetUnitMovementFlags();
-                bool const engineSawCastBlock = player->IsNonMeleeSpellCast(false, false, true, true);
-                uint32 const engineTimerMs = player->getAttackTimer(RANGED_ATTACK);
-                Spell* autoRepeatSpell = player->GetCurrentSpell(CURRENT_AUTOREPEAT_SPELL);
-                SpellCastResult liveCheck = SPELL_CAST_OK;
-                if (autoRepeatSpell)
-                    liveCheck = autoRepeatSpell->CheckCast(true);
-
-                std::ostringstream coreGateDiag;
-                coreGateDiag << "[AutoShot] core-gate moving=" << (engineSawMoving ? 1 : 0)
-                    << " flags=0x" << std::hex << engineMoveFlags << std::dec
-                    << " castBlock=" << (engineSawCastBlock ? 1 : 0)
-                    << " timer=" << engineTimerMs
-                    << " active=" << (autoRepeatSpell ? 1 : 0)
-                    << " check=" << (!autoRepeatSpell ? "NO_SPELL" : (liveCheck == SPELL_CAST_OK ? "OK" : EnumUtils::ToString(liveCheck).Title));
-                WhisperAutoShotDiagnosticToArena(player, coreGateDiag.str(), 750);
-            }
-
             stopFaceAndKeepAutoShot();
 
             uint32 const fireSequence = GetHunterAutoShotFireSequence(player);
