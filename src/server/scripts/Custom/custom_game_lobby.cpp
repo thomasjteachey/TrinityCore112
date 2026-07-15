@@ -64,7 +64,6 @@ enum GossipAction : uint32
     ACTION_ADD_BOT,
     ACTION_ADD_RANDOM_BOT,
     ACTION_REMOVE_BOT_OR_CLONE,
-    ACTION_ADD_DARK,
     ACTION_DUPLICATE_TEAM_MEMBER,
     ACTION_DUPLICATE_HUMAN_MEMBER,
     ACTION_DUPLICATE_CLONE_MEMBER,
@@ -527,7 +526,7 @@ public:
         Notify(player, "You are now unteamed and will spectate when the match starts.");
     }
 
-    bool AddCloneRequest(Player* player, uint32 team, std::string name, bool playerbotClone)
+    bool AddCloneRequest(Player* player, uint32 team, std::string name)
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || !normalizePlayerName(name))
@@ -545,19 +544,9 @@ public:
         std::vector<uint32> const botAccountIds = playerbot::RandomBotParticipationManager::GetConfiguredBotAccountIds();
         bool const configuredBotAccount = std::find(botAccountIds.begin(), botAccountIds.end(), characterInfo->AccountId) != botAccountIds.end();
         bool const managedBot = configuredBotAccount || (source && playerbot::IsManagedRandomBot(source));
-        if (playerbotClone && !managedBot)
-        {
-            Notify(player, "That character does not belong to a configured playerbot account.");
-            return false;
-        }
-        if (!playerbotClone && managedBot)
-        {
-            Notify(player, "Use the playerbot option for that character.");
-            return false;
-        }
 
         lobby->CloneRequests.push_back({ lobby->NextCloneRosterSlotId++, sourceGuid, characterInfo->Name, team,
-            playerbotClone });
+            managedBot });
         RefreshLobbyClonePreviews(*lobby);
 
         return true;
@@ -1520,11 +1509,10 @@ public:
             else
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, std::string("Join team ") + TeamName(team), team, ACTION_JOIN_TEAM);
 
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot...", team, ACTION_ADD_BOT, "Enter player name", 0, true);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add playerbot", team, ACTION_ADD_BOT, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add random playerbot", team, ACTION_ADD_RANDOM_BOT);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Add player clone...", team, ACTION_ADD_DARK, "Enter player name", 0, true);
             AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Duplicate existing team member...", team, ACTION_DUPLICATE_TEAM_MEMBER);
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot/player clone...", team, ACTION_REMOVE_BOT_OR_CLONE);
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Remove playerbot", team, ACTION_REMOVE_BOT_OR_CLONE);
             SendGossipMenuFor(player, 1, me->GetGUID());
         }
 
@@ -1801,14 +1789,14 @@ public:
                 {
                     uint32 const team = me->GetEntry() == CUSTOM_GAME_BLUE_ENTRY ? ALLIANCE : HORDE;
                     manager.DuplicateTeamMember(player, team, sender, false);
-                    ShowTeamMenu(player, team);
+                    ShowDuplicateTeamMemberMenu(player, team);
                     return true;
                 }
                 case ACTION_DUPLICATE_CLONE_MEMBER:
                 {
                     uint32 const team = me->GetEntry() == CUSTOM_GAME_BLUE_ENTRY ? ALLIANCE : HORDE;
                     manager.DuplicateTeamMember(player, team, sender, true);
-                    ShowTeamMenu(player, team);
+                    ShowDuplicateTeamMemberMenu(player, team);
                     return true;
                 }
                 case ACTION_DUPLICATE_LIST_BACK: ShowTeamMenu(player, sender); return true;
@@ -1883,9 +1871,8 @@ public:
             }
             else
             {
-                bool const bot = action == ACTION_ADD_BOT;
-                if (bot || action == ACTION_ADD_DARK)
-                    manager.AddCloneRequest(player, sender, value, bot);
+                if (action == ACTION_ADD_BOT)
+                    manager.AddCloneRequest(player, sender, value);
                 ShowTeamMenu(player, sender);
                 return true;
             }
