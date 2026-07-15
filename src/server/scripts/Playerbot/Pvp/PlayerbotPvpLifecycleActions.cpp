@@ -4159,21 +4159,37 @@ namespace playerbot
             }
 
             bool inAutoShotRange = false;
+            float minAutoShotRange = 0.0f;
+            float maxAutoShotRange = 0.0f;
+            float distance = 0.0f;
+            bool hasLos = false;
             if (SpellInfo const* autoShotInfo = sSpellMgr->GetSpellInfo(75))
             {
-                float const minAutoShotRange = autoShotInfo->GetMinRange(false);
-                float const maxAutoShotRange = autoShotInfo->GetMaxRange(false);
-                float const distance = player->GetDistance(target);
-                inAutoShotRange = player->IsWithinLOSInMap(target) && distance > minAutoShotRange && distance <= maxAutoShotRange;
+                minAutoShotRange = autoShotInfo->GetMinRange(false);
+                maxAutoShotRange = autoShotInfo->GetMaxRange(false);
+                distance = player->GetDistance(target);
+                hasLos = player->IsWithinLOSInMap(target);
+                inAutoShotRange = hasLos && distance > minAutoShotRange && distance <= maxAutoShotRange;
             }
 
             if (!inAutoShotRange)
             {
                 if (autoShotActive)
                     player->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
+
+                std::ostringstream outOfRangeDiag;
+                outOfRangeDiag << "dist=" << distance << " min=" << minAutoShotRange << " max=" << maxAutoShotRange
+                    << " los=" << (hasLos ? 1 : 0) << " wasActive=" << (autoShotActive ? 1 : 0);
+                WhisperHunterAimedLifecycleDiagnostic(player, target, "engage-autoshot-out-of-range", outOfRangeDiag.str().c_str(), 1500);
             }
             else if (!autoShotActive)
-                player->CastSpell(target, 75, false);
+            {
+                SpellCastResult const castResult = player->CastSpell(target, 75, false);
+                std::ostringstream castDiag;
+                castDiag << "dist=" << distance << " min=" << minAutoShotRange << " max=" << maxAutoShotRange
+                    << " resultCode=" << uint32(castResult);
+                WhisperHunterAimedLifecycleDiagnostic(player, target, "engage-autoshot-cast-attempt", castDiag.str().c_str(), 500);
+            }
         }
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
