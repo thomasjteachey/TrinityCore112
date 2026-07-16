@@ -71,6 +71,20 @@ bool HasAnyNonVirtualHumanParticipant(Battleground const* battleground)
             return true;
     }
 
+    // A real custom-game spectator is still actively occupying and observing
+    // the match. Do not auto-end a bot-populated battleground merely because
+    // the only connected human is stored outside m_Players in m_Spectators.
+    if (battleground->IsCustomGame())
+        for (Player const* spectator : battleground->GetSpectators())
+        {
+            if (!spectator || !spectator->IsInWorld())
+                continue;
+
+            WorldSession const* session = spectator->GetSession();
+            if (session && !session->IsVirtualSession())
+                return true;
+        }
+
     return false;
 }
 
@@ -278,7 +292,7 @@ void Battleground::Update(uint32 diff)
                 else if ((m_NoNonVirtualHumanElapsed += diff) >= NO_NON_VIRTUAL_HUMAN_END_DELAY_MS)
                 {
                     TC_LOG_INFO("bg.battleground",
-                        "Battleground::Update ending map={} instance={} because no non-virtual participants remained for {} ms.",
+                        "Battleground::Update ending map={} instance={} because no non-virtual participants or custom-game spectators remained for {} ms.",
                         GetMapId(), GetInstanceID(), NO_NON_VIRTUAL_HUMAN_END_DELAY_MS);
                     EndNow();
                     return;
@@ -336,7 +350,12 @@ inline void Battleground::_CheckSafePositions(uint32 diff)
         {
             if (Player* player = ObjectAccessor::FindPlayer(itr->first))
             {
-                if (player->IsGameMaster())
+                // Spectators are not combatants and may intentionally move
+                // outside either team's closed-gate preparation area. They
+                // must never be snapped to a team start by the preparation
+                // anti-exploit check, even if stale state temporarily leaves
+                // one present in m_Players during a worldport transition.
+                if (player->IsGameMaster() || player->IsSpectator())
                     continue;
 
                 Position pos = player->GetPosition();
@@ -1107,7 +1126,7 @@ void Battleground::RemovePlayerAtLeave(ObjectGuid guid, bool Transport, bool Sen
             !HasAnyNonVirtualHumanParticipant(this))
         {
             TC_LOG_DEBUG("bg.battleground",
-                "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants remain.",
+                "Battleground::RemovePlayerAtLeave forced end: map={} instance={} no non-virtual participants or custom-game spectators remain.",
                 GetMapId(), GetInstanceID());
             EndBattleground(PVP_TEAM_NEUTRAL);
         }

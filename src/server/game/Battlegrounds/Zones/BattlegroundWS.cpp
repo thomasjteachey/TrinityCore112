@@ -290,26 +290,35 @@ void BattlegroundWS::PostUpdateImpl(uint32 diff)
 {
     if (GetStatus() == STATUS_IN_PROGRESS)
     {
-        bool hasHumanPlayer = false;
-        for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
+        // Public WSG instances retain the legacy empty-human shutdown, but a
+        // custom game is explicitly allowed to run entirely on virtual clones
+        // while one or more real players watch from m_Spectators. The old test
+        // examined only m_Players, so a 40v40 custom WSG ended on its very first
+        // in-progress update and the lobby manager immediately returned its
+        // spectator to the retained lobby.
+        if (!IsCustomGame())
         {
-            Player* player = ObjectAccessor::FindPlayer(itr->first);
-            if (!player)
-                continue;
+            bool hasHumanPlayer = false;
+            for (BattlegroundPlayerMap::const_iterator itr = m_Players.begin(); itr != m_Players.end(); ++itr)
+            {
+                Player* player = ObjectAccessor::FindPlayer(itr->first);
+                if (!player)
+                    continue;
 
-            WorldSession* session = player->GetSession();
-            if (!session || session->IsVirtualSession())
-                continue;
+                WorldSession* session = player->GetSession();
+                if (!session || session->IsVirtualSession())
+                    continue;
 
-            hasHumanPlayer = true;
-            break;
-        }
+                hasHumanPlayer = true;
+                break;
+            }
 
-        if (!hasHumanPlayer)
-        {
-            TC_LOG_INFO("bg.warsong", "BattlegroundWS::PostUpdateImpl: Ending WSG instance {} because no human players remain.", GetInstanceID());
-            EndNow();
-            return;
+            if (!hasHumanPlayer)
+            {
+                TC_LOG_INFO("bg.warsong", "BattlegroundWS::PostUpdateImpl: Ending WSG instance {} because no human players remain.", GetInstanceID());
+                EndNow();
+                return;
+            }
         }
 
         if (_flagState[TEAM_ALLIANCE] == BG_WS_FLAG_STATE_WAIT_RESPAWN)
