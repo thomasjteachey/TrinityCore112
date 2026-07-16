@@ -222,9 +222,18 @@ std::mutex g_RandomBotLifecycleCadenceLock;
 // battleground through one global mutex.
 std::mutex g_PlayerbotDecisionLockRegistryLock;
 std::unordered_map<uint64, std::unique_ptr<std::mutex>> g_PlayerbotDecisionLockByMapInstance;
+// Diagnostic kill switch (Playerbot.PvpDecision.GlobalLock): serializes every
+// decision tick through one mutex again, exactly like the pre-per-map-lock
+// build. Flipping this isolates whether a crash comes from cross-map bot
+// concurrency or from something unrelated.
+std::atomic<bool> g_UseGlobalDecisionLock{ false };
+std::mutex g_GlobalDecisionFallbackLock;
 
 std::mutex& GetDecisionTickLockForPlayer(Player const* player)
 {
+    if (g_UseGlobalDecisionLock.load(std::memory_order_relaxed))
+        return g_GlobalDecisionFallbackLock;
+
     uint64 key = 0;
     if (player)
         if (Map const* map = player->FindMap())
@@ -1803,6 +1812,9 @@ void RandomBotParticipationManager::ResetCadence()
 
 void RandomBotParticipationManager::LoadPopulationConfig()
 {
+    g_UseGlobalDecisionLock.store(sConfigMgr->GetBoolDefault("Playerbot.PvpDecision.GlobalLock", false),
+        std::memory_order_relaxed);
+
     std::lock_guard<std::mutex> lock(g_RandomPopulationLock);
     LoadPopulationConfigLocked(g_RandomPopulation);
 }

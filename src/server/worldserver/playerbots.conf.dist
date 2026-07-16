@@ -253,3 +253,12 @@ Playerbot.Governor.MaxTotalCustomMatchBots = 160
 #        Default:     5
 
 Playerbot.Governor.BotShedCooldownSeconds = 5
+
+#    Playerbot.PvpDecision.GlobalLock
+#        Description: Diagnostic switch. 1 restores the old behavior of serializing every bot
+#                     decision tick through one global mutex instead of one lock per map
+#                     instance. Costs multi-battleground parallelism; use it to isolate whether
+#                     a crash or corruption comes from cross-map bot concurrency.
+#        Default:     0
+
+Playerbot.PvpDecision.GlobalLock = 0

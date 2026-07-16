@@ -540,7 +540,29 @@ public:
         if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
             return;
 
-        lobby->Teams[player->GetGUID()] = team;
+        ObjectGuid const playerGuid = player->GetGUID();
+        auto const currentItr = lobby->Teams.find(playerGuid);
+        if (currentItr != lobby->Teams.end() && currentItr->second == team)
+        {
+            Notify(player, std::string("You are already on team ") + TeamName(team) + ".");
+            return;
+        }
+
+        uint32 teamSize = 0;
+        for (auto const& [guid, assignedTeam] : lobby->Teams)
+            if (assignedTeam == team && guid != playerGuid)
+                ++teamSize;
+        for (CloneRequest const& request : lobby->CloneRequests)
+            if (request.Team == team)
+                ++teamSize;
+        if (teamSize >= CUSTOM_GAME_MAX_PLAYERS_PER_TEAM)
+        {
+            Notify(player, std::string("Team ") + TeamName(team) + " already has the maximum of " +
+                std::to_string(CUSTOM_GAME_MAX_PLAYERS_PER_TEAM) + " participants.");
+            return;
+        }
+
+        lobby->Teams[playerGuid] = team;
         ApplyTeamVisual(player, team);
         Notify(player, std::string("You joined team ") + TeamName(team) + ".");
     }

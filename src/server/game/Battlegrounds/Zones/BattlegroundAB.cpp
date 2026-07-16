@@ -453,6 +453,9 @@ void BattlegroundAB::EventPlayerClickedOnFlag(Player* source, GameObject* /*targ
     if (GetStatus() != STATUS_IN_PROGRESS)
         return;
 
+    if (source->IsSpectator())
+        return;
+
     uint8 node = BG_AB_NODE_STABLES;
     GameObject* obj = GetBgMap()->GetGameObject(BgObjects[node*8+7]);
     while ((node < BG_AB_DYNAMIC_NODES_COUNT) && ((!obj) || (!source->IsWithinDistInMap(obj, 10))))

@@ -369,6 +369,9 @@ void BattlegroundBFG::EventPlayerClickedOnFlag(Player* player, GameObject* gameO
     if (GetStatus() != STATUS_IN_PROGRESS || !player->IsWithinDistInMap(gameObject, 10.0f))
         return;
 
+    if (player->IsSpectator())
+        return;
+
     uint8 node = GILNEAS_BG_NODE_LIGHTHOUSE;
     for (; node < GILNEAS_BG_DYNAMIC_NODES_COUNT; ++node)
         if (player->GetDistance2d(GILNEAS_BG_NodePositions[node][0], GILNEAS_BG_NodePositions[node][1]) < 10.0f)

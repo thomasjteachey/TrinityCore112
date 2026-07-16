@@ -3649,6 +3649,17 @@ void StopPlayerbotForStationaryCast(Player* player)
     // would send before casting.
     player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+
+    // StopMoving() above only re-syncs terrain/liquid status (and thus the
+    // swim flag) when it actually halts an in-flight movespline. Bots call
+    // this stop/prep path defensively on every cast attempt, not just on
+    // real state transitions, so a tick where the spline already finished
+    // would otherwise leave a stale (often non-swimming) flag frozen at the
+    // bot's current position. If that freeze happens while the bot is in
+    // water, other clients render it standing on the surface instead of
+    // treading. Force a terrain re-check so the swim flag always matches
+    // where the bot actually is before the flag update goes out.
+    player->UpdatePositionData();
     player->SendMovementFlagUpdate();
 }
 

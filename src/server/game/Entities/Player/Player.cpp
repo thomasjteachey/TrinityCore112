@@ -26274,6 +26274,7 @@ bool Player::CanUseBattlegroundObject(GameObject* gameobject) const
     // Vanish protection is consumed when flag use resolves.
     return ((!isTotalImmune() || CanBypassBattlegroundObjectImmunity(gameobject)) &&
         !HasAura(SPELL_RECENTLY_DROPPED_FLAG) &&       // Still has recently held flag debuff
+        !IsSpectator() &&                              // Spectators cannot interact with BG objects
         IsAlive());                                    // Alive
 }
 
