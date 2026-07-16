@@ -172,6 +172,7 @@ struct CustomGameLobby
     uint32 NextCloneRosterSlotId = 1;
     bool ClonesSpawned = false;
     bool Closing = false;
+    uint32 LastBotShedNoticeMs = 0;
 };
 
 char const* TeamName(uint32 team)
@@ -258,6 +259,15 @@ uint32 DefaultResourceLimit(BattlegroundTypeId type)
         case BATTLEGROUND_EY: return 1600;
         case BATTLEGROUND_BFG: return 2000;
         default: return 0;
+    }
+}
+
+uint32 DefaultDeathmatchKillLimit(BattlegroundTypeId type)
+{
+    switch (type)
+    {
+        case BATTLEGROUND_OBC: return 50;
+        default: return 30;
     }
 }
 
@@ -1344,20 +1354,26 @@ private:
         return false;
     }
 
-    // Under sustained hard resource pressure, end one custom match per
-    // governor cooldown. Matches with human PARTICIPANTS are never touched;
-    // bot-only matches nobody is even spectating go first, then bot matches
-    // humans are only spectating. Ending the battleground reuses the normal
-    // completion flow, so members return to their retained lobby.
+    // Under sustained hard resource pressure, shed load in strict priority
+    // order. Tier 1: end bot-only matches nobody is even spectating. Tier 2:
+    // end bot matches humans are only spectating. Tier 3: once no cullable
+    // match remains, remove bots one at a time from human-participant matches
+    // (largest bot roster first) until pressure clears. Ending a battleground
+    // reuses the normal completion flow, so members return to their lobby.
     void CullCustomMatchesForResources()
     {
-        if (!playerbot::ResourceGovernor::ShouldCullNow())
+        bool const cullReady = playerbot::ResourceGovernor::ShouldCullNow();
+        bool const shedReady = playerbot::ResourceGovernor::ShouldShedBotNow();
+        if (!cullReady && !shedReady)
             return;
 
         CustomGameLobby* victim = nullptr;
         Battleground* victimBattleground = nullptr;
         uint32 victimSpectators = 0;
         uint32 victimBots = 0;
+
+        CustomGameLobby* shedTarget = nullptr;
+        uint32 shedTargetBots = 0;
 
         for (auto& [instanceId, lobbyPtr] : _lobbies)
         {
@@ -1383,10 +1399,17 @@ private:
                     ++humanSpectators;
             }
 
-            if (humanParticipants)
-                continue;
-
             uint32 const bots = uint32(lobby.CloneRequests.size());
+            if (humanParticipants)
+            {
+                if (bots > shedTargetBots)
+                {
+                    shedTarget = &lobby;
+                    shedTargetBots = bots;
+                }
+                continue;
+            }
+
             bool const candidateUnwatched = humanSpectators == 0;
             bool const victimUnwatched = victim && victimSpectators == 0;
             if (!victim ||
@@ -1400,19 +1423,46 @@ private:
             }
         }
 
-        if (!victim || !victimBattleground)
+        // Tiers 1-2: a cullable (no human participants) match exists. It is
+        // always shed before any bot leaves a human match, even if that means
+        // waiting out the cull cooldown.
+        if (victim && victimBattleground)
+        {
+            if (!cullReady)
+                return;
+
+            for (auto const& [guid, member] : victim->Members)
+                if (Player* human = ObjectAccessor::FindConnectedPlayer(guid))
+                    Notify(human, "Your custom match has been culled for resource considerations: the server is under heavy load and bot-only matches are ended first.");
+
+            TC_LOG_INFO("playerbots.governor",
+                "Resource governor culled custom match: bgInstanceId={} bgType={} bots={} spectators={}.",
+                victim->ActiveBattlegroundId, uint32(victim->ActiveBattlegroundType), victimBots, victimSpectators);
+
+            victimBattleground->EndBattleground(PVP_TEAM_NEUTRAL);
+            playerbot::ResourceGovernor::NoteCullExecuted();
+            return;
+        }
+
+        // Tier 3: only human-participant matches remain. Remove one bot from
+        // the match with the largest bot roster, then wait for the shed
+        // cooldown so the update-time average can react before the next one.
+        if (!shedReady || !shedTarget)
             return;
 
-        for (auto const& [guid, member] : victim->Members)
-            if (Player* human = ObjectAccessor::FindConnectedPlayer(guid))
-                Notify(human, "Your custom match has been culled for resource considerations: the server is under heavy load and bot-only matches are ended first.");
+        if (!playerbot::PlayerbotObcCloneManager::ShedOneCustomGameClone(shedTarget->ActiveBattlegroundId))
+            return;
 
-        TC_LOG_INFO("playerbots.governor",
-            "Resource governor culled custom match: bgInstanceId={} bgType={} bots={} spectators={}.",
-            victim->ActiveBattlegroundId, uint32(victim->ActiveBattlegroundType), victimBots, victimSpectators);
+        playerbot::ResourceGovernor::NoteBotShedExecuted();
 
-        victimBattleground->EndBattleground(PVP_TEAM_NEUTRAL);
-        playerbot::ResourceGovernor::NoteCullExecuted();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        if (!shedTarget->LastBotShedNoticeMs || nowMs >= shedTarget->LastBotShedNoticeMs + 30000)
+        {
+            shedTarget->LastBotShedNoticeMs = nowMs;
+            for (auto const& [guid, member] : shedTarget->Members)
+                if (Player* human = ObjectAccessor::FindConnectedPlayer(guid))
+                    Notify(human, "The server is under heavy load: bots are being removed from your match one at a time until performance recovers.");
+        }
     }
 
     void InvalidateLobbyInvites(uint32 instanceId)
@@ -1931,7 +1981,7 @@ public:
             if (lobby->SelectedType == BATTLEGROUND_SCM || lobby->SelectedType == BATTLEGROUND_BRT ||
                 lobby->SelectedType == BATTLEGROUND_OBC)
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT,
-                    "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, 30),
+                    "Deathmatch kills: " + ConfiguredValue(lobby->Rules.DeathmatchKillLimit, DefaultDeathmatchKillLimit(lobby->SelectedType)),
                     GOSSIP_SENDER_MAIN, ACTION_RULE_KILLS, "Winning kill total (0 restores default)", 0, true);
 
             if (!IsArenaSelection(lobby->SelectedType))

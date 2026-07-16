@@ -244,3 +244,12 @@ Playerbot.Governor.SoftMatchBotCap = 20
 #        Default:     160
 
 Playerbot.Governor.MaxTotalCustomMatchBots = 160
+
+#    Playerbot.Governor.BotShedCooldownSeconds
+#        Description: Once no cullable bot-only/spectator-only match remains but hard pressure
+#                     persists, one bot is removed from the human-participant match with the
+#                     largest bot roster every this many seconds (dead bots and the larger team
+#                     are preferred) until the update-time average recovers.
+#        Default:     5
+
+Playerbot.Governor.BotShedCooldownSeconds = 5

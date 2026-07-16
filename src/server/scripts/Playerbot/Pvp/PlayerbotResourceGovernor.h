@@ -67,6 +67,12 @@ public:
     static bool ShouldCullNow();
     static void NoteCullExecuted();
 
+    // Escalation once no cullable match remains: remove a single bot from a
+    // human-participant match. Shorter cooldown than full culls so the load
+    // steps down bot by bot until pressure clears.
+    static bool ShouldShedBotNow();
+    static void NoteBotShedExecuted();
+
     static ResourceGovernorSnapshot GetSnapshot();
 };
 }

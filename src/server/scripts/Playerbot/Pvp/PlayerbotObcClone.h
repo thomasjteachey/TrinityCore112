@@ -76,6 +76,12 @@ public:
         uint32 team, std::string const& displayPrefix);
     static void DestroyCustomGameClones(uint32 battlegroundInstanceId);
 
+    // Resource-governor load shedding: remove a single clone from a running
+    // custom match. Picks the team currently fielding more clones and prefers
+    // a dead clone so the removal is as unobtrusive as possible. Returns true
+    // when a clone was removed.
+    static bool ShedOneCustomGameClone(uint32 battlegroundInstanceId);
+
     // Create inert, transient roster previews in a private custom-game lobby.
     // rosterSlotId identifies one requested copy, allowing the same source
     // character to appear more than once in a lobby roster.

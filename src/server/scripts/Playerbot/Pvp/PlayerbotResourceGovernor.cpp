@@ -34,6 +34,7 @@ struct GovernorConfig
     uint32 hardUpdateTimeMs = 180;
     uint32 hardSustainMs = 10000;
     uint32 cullCooldownMs = 20000;
+    uint32 botShedCooldownMs = 5000;
     uint32 softMatchBotCap = 20;
     uint32 maxTotalCustomMatchBots = 160;
 };
@@ -47,6 +48,13 @@ std::atomic<uint32> g_AverageUpdateMs{ 0 };
 std::atomic<uint8> g_PressureLevel{ uint8(playerbot::ResourcePressureLevel::Normal) };
 std::atomic<uint32> g_HardPressureSinceMs{ 0 };
 std::atomic<uint32> g_LastCullMs{ 0 };
+std::atomic<uint32> g_LastBotShedMs{ 0 };
+
+bool IsHardPressureSustained(uint32 nowMs)
+{
+    uint32 const hardSinceMs = g_HardPressureSinceMs.load(std::memory_order_relaxed);
+    return hardSinceMs && nowMs >= hardSinceMs + g_GovernorConfig.hardSustainMs;
+}
 }
 
 namespace playerbot
@@ -59,14 +67,15 @@ void ResourceGovernor::LoadConfig()
         g_GovernorConfig.softUpdateTimeMs + 1);
     g_GovernorConfig.hardSustainMs = sConfigMgr->GetIntDefault("Playerbot.Governor.HardSustainSeconds", 10) * IN_MILLISECONDS;
     g_GovernorConfig.cullCooldownMs = sConfigMgr->GetIntDefault("Playerbot.Governor.CullCooldownSeconds", 20) * IN_MILLISECONDS;
+    g_GovernorConfig.botShedCooldownMs = sConfigMgr->GetIntDefault("Playerbot.Governor.BotShedCooldownSeconds", 5) * IN_MILLISECONDS;
     g_GovernorConfig.softMatchBotCap = sConfigMgr->GetIntDefault("Playerbot.Governor.SoftMatchBotCap", 20);
     g_GovernorConfig.maxTotalCustomMatchBots = sConfigMgr->GetIntDefault("Playerbot.Governor.MaxTotalCustomMatchBots", 160);
 
     TC_LOG_INFO("server.loading",
-        "Playerbot resource governor loaded (enabled: {}, soft: {} ms, hard: {} ms, sustain: {} ms, cullCooldown: {} ms, softMatchBotCap: {}, maxTotalCustomMatchBots: {}).",
+        "Playerbot resource governor loaded (enabled: {}, soft: {} ms, hard: {} ms, sustain: {} ms, cullCooldown: {} ms, botShedCooldown: {} ms, softMatchBotCap: {}, maxTotalCustomMatchBots: {}).",
         g_GovernorConfig.enabled ? "true" : "false", g_GovernorConfig.softUpdateTimeMs, g_GovernorConfig.hardUpdateTimeMs,
-        g_GovernorConfig.hardSustainMs, g_GovernorConfig.cullCooldownMs, g_GovernorConfig.softMatchBotCap,
-        g_GovernorConfig.maxTotalCustomMatchBots);
+        g_GovernorConfig.hardSustainMs, g_GovernorConfig.cullCooldownMs, g_GovernorConfig.botShedCooldownMs,
+        g_GovernorConfig.softMatchBotCap, g_GovernorConfig.maxTotalCustomMatchBots);
 }
 
 void ResourceGovernor::NoteWorldUpdate(uint32 diffMs)
@@ -142,12 +151,8 @@ bool ResourceGovernor::ShouldCullNow()
     if (GetPressureLevel() != ResourcePressureLevel::Hard)
         return false;
 
-    uint32 const hardSinceMs = g_HardPressureSinceMs.load(std::memory_order_relaxed);
-    if (!hardSinceMs)
-        return false;
-
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    if (nowMs < hardSinceMs + g_GovernorConfig.hardSustainMs)
+    if (!IsHardPressureSustained(nowMs))
         return false;
 
     uint32 const lastCullMs = g_LastCullMs.load(std::memory_order_relaxed);
@@ -157,6 +162,27 @@ bool ResourceGovernor::ShouldCullNow()
 void ResourceGovernor::NoteCullExecuted()
 {
     g_LastCullMs.store(GameTime::GetGameTimeMS(), std::memory_order_relaxed);
+}
+
+bool ResourceGovernor::ShouldShedBotNow()
+{
+    if (!g_GovernorConfig.enabled)
+        return false;
+
+    if (GetPressureLevel() != ResourcePressureLevel::Hard)
+        return false;
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    if (!IsHardPressureSustained(nowMs))
+        return false;
+
+    uint32 const lastShedMs = g_LastBotShedMs.load(std::memory_order_relaxed);
+    return !lastShedMs || nowMs >= lastShedMs + g_GovernorConfig.botShedCooldownMs;
+}
+
+void ResourceGovernor::NoteBotShedExecuted()
+{
+    g_LastBotShedMs.store(GameTime::GetGameTimeMS(), std::memory_order_relaxed);
 }
 
 ResourceGovernorSnapshot ResourceGovernor::GetSnapshot()

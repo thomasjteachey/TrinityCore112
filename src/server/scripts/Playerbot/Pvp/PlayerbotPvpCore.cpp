@@ -1368,6 +1368,32 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
 constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_MOUNT = 22328;
+constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
+
+// Bots must never sit down to eat/drink while standing in lava/slime, and
+// should not select eat/drink while actually submerged in water either --
+// mirrors the hazard check used for movement escape in
+// PlayerbotPvpLifecycleActions::IsInHazardousLiquid.
+bool IsInHazardousLiquidForRecovery(Player const* player)
+{
+    if (!player)
+        return false;
+
+    Map const* map = player->FindMap();
+    if (!map)
+        return false;
+
+    if (player->HasAura(kEnvironmentalMagmaDamageAuraId))
+        return true;
+
+    LiquidData liquidData{};
+    ZLiquidStatus const status = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(), player->GetPositionY(),
+        player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+    if ((status & MAP_LIQUID_STATUS_IN_CONTACT) == 0)
+        return false;
+
+    return (liquidData.type_flags & (MAP_LIQUID_TYPE_MAGMA | MAP_LIQUID_TYPE_SLIME)) != 0;
+}
 
 struct TacticalDecision
 {
@@ -1876,6 +1902,13 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
     // Do not attempt recovery/mount actions while hard controlled. This avoids
     // mount selections during fear/polymorph/stun/root states.
     if (IsHardControlled(player))
+        return decision;
+
+    // Never sit down to eat/drink while standing in lava/slime, or while
+    // actually submerged in water -- a real player cannot use food/drink
+    // items in those states, and bots have no client-side check to enforce
+    // this on their own.
+    if (IsInHazardousLiquidForRecovery(player) || player->IsUnderWater())
         return decision;
 
     bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;

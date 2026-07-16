@@ -180,6 +180,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     constexpr uint32 PLAYERBOT_BG_HUMAN_INTEREST_REBALANCE_THROTTLE_MS = 5000;
     constexpr uint32 PLAYERBOT_BG_SCM_REFILL_THROTTLE_MS = 3000;
     constexpr uint32 PLAYERBOT_BG_QUEUE_REQUEUE_TIMEOUT_MS = 15000;
+    constexpr uint32 PLAYERBOT_BG_RELEASE_SPIRIT_DELAY_MS = 1000;
     constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_EAT = 29073;
     constexpr uint32 SPELL_PLAYERBOT_OUT_OF_COMBAT_DRINK = 22734;
     constexpr uint32 SPELL_WAITING_FOR_RESURRECT = 2584;
@@ -1631,6 +1632,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
     bool HandleBattlegroundDeathState(Player* player)
     {
         static std::unordered_map<uint64, uint32> queuedSinceMsByGuid;
+        static std::unordered_map<uint64, uint32> deadSinceMsByGuid;
         auto resolveSpiritGuide = [](Player* candidate, uint32 preferredEntry) -> Creature*
         {
             if (!candidate)
@@ -1686,6 +1688,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             playerbot::LockedErase(g_BattlegroundDeadBotGuids, playerGuidRaw);
             playerbot::LockedErase(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
+            playerbot::LockedErase(deadSinceMsByGuid, playerGuidRaw);
             return false;
         }
 
@@ -1696,6 +1699,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             {
                 std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
                 queuedSinceMsByGuid.erase(playerGuidRaw);
+                deadSinceMsByGuid.erase(playerGuidRaw);
                 wasDead = g_BattlegroundDeadBotGuids.erase(playerGuidRaw) != 0;
                 wasSpiritQueued = g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw) != 0;
             }
@@ -1729,6 +1733,17 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
+            uint32 const nowMs = GameTime::GetGameTimeMS();
+            uint32& deadSinceMs = playerbot::LockedGetOrCreate(deadSinceMsByGuid, playerGuidRaw);
+            if (!deadSinceMs)
+                deadSinceMs = nowMs;
+
+            // Give human-like reaction time before auto-releasing spirit so bots
+            // don't insta-release the instant they die in BGs/arenas.
+            if (nowMs < deadSinceMs + PLAYERBOT_BG_RELEASE_SPIRIT_DELAY_MS)
+                return true;
+
+            playerbot::LockedErase(deadSinceMsByGuid, playerGuidRaw);
             player->BuildPlayerRepop();
             player->RepopAtGraveyard();
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",

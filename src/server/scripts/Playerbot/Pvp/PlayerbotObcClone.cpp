@@ -1349,6 +1349,59 @@ void PlayerbotObcCloneManager::DestroyCustomGameClones(uint32 battlegroundInstan
         TeardownCustomGameClone(cloneGuid);
 }
 
+bool PlayerbotObcCloneManager::ShedOneCustomGameClone(uint32 battlegroundInstanceId)
+{
+    std::vector<CustomGameCloneRecord> records;
+    {
+        std::lock_guard<std::mutex> lock(g_ObcCloneLock);
+        for (auto const& [cloneGuid, record] : g_CustomGameClones)
+            if (record.battlegroundInstanceId == battlegroundInstanceId)
+                records.push_back(record);
+    }
+
+    if (records.empty())
+        return false;
+
+    uint32 allianceClones = 0;
+    uint32 hordeClones = 0;
+    for (CustomGameCloneRecord const& record : records)
+        record.team == ALLIANCE ? ++allianceClones : ++hordeClones;
+
+    // Shed from the side fielding more clones so successive removals keep the
+    // match roughly balanced instead of hollowing out one team.
+    uint32 shedTeam = allianceClones >= hordeClones ? ALLIANCE : HORDE;
+    if (!allianceClones)
+        shedTeam = HORDE;
+    else if (!hordeClones)
+        shedTeam = ALLIANCE;
+
+    ObjectGuid fallbackGuid;
+    ObjectGuid deadCloneGuid;
+    for (CustomGameCloneRecord const& record : records)
+    {
+        if (record.team != shedTeam)
+            continue;
+
+        if (fallbackGuid.IsEmpty())
+            fallbackGuid = record.cloneGuid;
+
+        if (deadCloneGuid.IsEmpty())
+            if (Player* clone = ObjectAccessor::FindConnectedPlayer(record.cloneGuid))
+                if (!clone->IsAlive())
+                    deadCloneGuid = record.cloneGuid;
+    }
+
+    ObjectGuid const target = deadCloneGuid.IsEmpty() ? fallbackGuid : deadCloneGuid;
+    if (target.IsEmpty())
+        return false;
+
+    TC_LOG_INFO("playerbots.governor",
+        "Resource governor shed custom-match clone: bgInstanceId={} team={} clone={} preferredDead={}.",
+        battlegroundInstanceId, shedTeam, target.ToString(), deadCloneGuid.IsEmpty() ? 0 : 1);
+    TeardownCustomGameClone(target);
+    return true;
+}
+
 bool PlayerbotObcCloneManager::QueueCustomGameLobbyClone(ObjectGuid sourceGuid, WorldSession* callbackSession,
     uint32 mapId, uint32 lobbyInstanceId, uint32 rosterSlotId, uint32 team, bool isPlayerbot, Position const& position,
     std::string const& displayPrefix)
