@@ -17,6 +17,7 @@
 
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotSharedStateGuard.h"
 #include "Chat.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
@@ -666,7 +667,7 @@ bool IssueStrictHumanMove(Player* player, Position const& destination, float des
 
     static std::unordered_map<uint64, MoveOrderState> stateByGuid;
     uint64 const botGuid = player->GetGUID().GetRawValue();
-    MoveOrderState& state = stateByGuid[botGuid];
+    MoveOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, botGuid);
     uint32 const nowMs = GameTime::GetGameTimeMS();
 
     // Compare against the last *requested* destination (e.g. a follow point
@@ -780,7 +781,7 @@ bool IssueThrottledFollowMovement(Player* player, Unit* target, float desiredDis
     };
 
     static std::unordered_map<uint64, FollowOrderState> stateByGuid;
-    FollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    FollowOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
     // Follow distance should allow true melee contact for stealth openers.
     // Clamping to >= 1.0f can leave bots hovering outside melee reach
     // depending on hitbox combinations.
@@ -848,7 +849,7 @@ void RecordTargetRelativeMovementOrder(Player const* player, Unit const* target,
     if (!player || !target)
         return;
 
-    TargetRelativeMoveOrderState& state = g_TargetRelativeMoveOrderByGuid[player->GetGUID().GetRawValue()];
+    TargetRelativeMoveOrderState& state = playerbot::LockedGetOrCreate(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
     state.targetGuid = target->GetGUID();
     state.issuedRange = issuedRange;
     state.lastDistance = player->GetDistance(target);
@@ -869,8 +870,8 @@ void MarkTargetRelativeMovementLaunch(Player const* player)
     if (!player)
         return;
 
-    auto itr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (itr == g_TargetRelativeMoveOrderByGuid.end())
+    TargetRelativeMoveOrderState* state = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+    if (!state)
         return;
 
     bool const hasActiveSpline = player->movespline && player->movespline->Initialized() && !player->movespline->Finalized();
@@ -881,7 +882,7 @@ void MarkTargetRelativeMovementLaunch(Player const* player)
     if (!launched)
         return;
 
-    itr->second.lastLaunchMs = GameTime::GetGameTimeMS();
+    state->lastLaunchMs = GameTime::GetGameTimeMS();
 }
 
 // A live CHASE/FOLLOW generator already actively targeting this exact unit
@@ -935,7 +936,7 @@ bool ShouldPreserveTargetRelativeMovement(Player const* player, Unit const* targ
     if (!activeTargetRelativeMotion)
         return false;
 
-    TargetRelativeMoveOrderState& state = g_TargetRelativeMoveOrderByGuid[player->GetGUID().GetRawValue()];
+    TargetRelativeMoveOrderState& state = playerbot::LockedGetOrCreate(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
     bool const sameTarget = state.targetGuid == target->GetGUID();
     if (!sameTarget)
         return false;
@@ -1481,10 +1482,9 @@ std::string BuildRangedMovementDiag(Player const* player, Unit const* target, ch
          << " follow_move=" << (player->HasUnitState(UNIT_STATE_FOLLOW_MOVE) ? "yes" : "no")
          << " casting_prevent=" << (player->IsMovementPreventedByCasting() ? "yes" : "no");
 
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (orderItr != g_TargetRelativeMoveOrderByGuid.end())
+    if (TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue()))
     {
-        TargetRelativeMoveOrderState const& order = orderItr->second;
+        TargetRelativeMoveOrderState const& order = *orderState;
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint32 const orderAgeMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : 0;
         uint32 const distanceProgressAgeMs = order.lastProgressMs != 0 && nowMs >= order.lastProgressMs ? nowMs - order.lastProgressMs : 0;
@@ -1745,7 +1745,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
     };
 
     static std::unordered_map<uint64, RangedApproachStallState> stallStateByGuid;
-    RangedApproachStallState& stallState = stallStateByGuid[player->GetGUID().GetRawValue()];
+    RangedApproachStallState& stallState = playerbot::LockedGetOrCreate(stallStateByGuid, player->GetGUID().GetRawValue());
 
     float const requestedSafeDistance = std::max(1.0f, desiredDistance);
     float const currentDistance = player->GetDistance(target);
@@ -2073,7 +2073,7 @@ void IssueRangedApproachMovement(Player* player, Unit* target, float desiredDist
         bool const strictIssued = IssueStrictHumanFollow(player, target, safeDistance);
         if (strictIssued)
         {
-            g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+            playerbot::LockedErase(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
             stallState.targetGuid = target->GetGUID();
             stallState.lastDistance = currentDistance;
             stallState.lastSampleMs = nowMs;
@@ -2262,7 +2262,7 @@ void IssueBehindTargetMeleeMovement(Player* player, Unit* target)
     };
 
     static std::unordered_map<uint64, BehindFollowOrderState> stateByGuid;
-    BehindFollowOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    BehindFollowOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
     uint32 const nowMs = GameTime::GetGameTimeMS();
     bool const canReissueByTime = state.lastIssueMs == 0 || nowMs >= state.lastIssueMs + 750;
     bool const targetChanged = state.targetGuid != target->GetGUID();
@@ -2346,7 +2346,7 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
             {
                 if (IssueStrictHumanFollow(player, target, 3.0f))
                 {
-                    g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+                    playerbot::LockedErase(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
 
                     std::ostringstream diag;
                     diag << "stealth_far_strict_segment_move"
@@ -2446,12 +2446,12 @@ void IssueMeleeApproachMovement(Player* player, Unit* target)
     bool useStrictRecovery = false;
     if (RequiresStrictHumanPathing(player))
     {
-        auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-        if (orderItr != g_TargetRelativeMoveOrderByGuid.end() && orderItr->second.targetGuid == target->GetGUID())
+        TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+        if (orderState && orderState->targetGuid == target->GetGUID())
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32 const orderAgeMs = orderItr->second.lastIssueMs != 0 && nowMs >= orderItr->second.lastIssueMs
-                ? nowMs - orderItr->second.lastIssueMs
+            uint32 const orderAgeMs = orderState->lastIssueMs != 0 && nowMs >= orderState->lastIssueMs
+                ? nowMs - orderState->lastIssueMs
                 : 0;
             bool const hasMovementSignal = player->isMoving() ||
                 player->HasUnitState(UNIT_STATE_CHASE_MOVE) ||
@@ -2506,7 +2506,7 @@ void IssueGapCloserRangeApproachMovement(Player* player, Unit* target, float max
     };
 
     static std::unordered_map<uint64, GapCloserApproachOrderState> stateByGuid;
-    GapCloserApproachOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    GapCloserApproachOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
 
     // Move to a stable point safely inside the gap-closer's real max range
     // instead of chasing all the way to melee. Reusing the point for a short
@@ -2536,7 +2536,7 @@ void IssueGapCloserRangeApproachMovement(Player* player, Unit* target, float max
 
     if (issued)
     {
-        g_TargetRelativeMoveOrderByGuid.erase(player->GetGUID().GetRawValue());
+        playerbot::LockedErase(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
         state.targetGuid = target->GetGUID();
         state.destination = destination;
         state.lastIssueMs = nowMs;
@@ -2814,7 +2814,7 @@ bool ShouldThrottleDirective(Player const* player, playerbot::PvpClassSpellConte
             return false;
     }
 
-    auto& state = g_LastDirectiveByBot[player->GetGUID()];
+    auto& state = playerbot::LockedGetOrCreate(g_LastDirectiveByBot, player->GetGUID());
     std::chrono::steady_clock::time_point const now = GameTime::Now();
     if (state.directive == context.movementDirective &&
         state.targetGuid == context.movementTargetGuid &&
@@ -3521,7 +3521,7 @@ bool TryMoveOutOfHazardousLiquid(Player* player)
     };
 
     static std::unordered_map<uint64, HazardEscapeState> stateByGuid;
-    HazardEscapeState& state = stateByGuid[player->GetGUID().GetRawValue()];
+    HazardEscapeState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
 
     if (!IsInHazardousLiquid(player))
     {
@@ -3952,10 +3952,9 @@ DruidShapeshiftMovementResumeState CaptureDruidShapeshiftMovementResume(Player* 
         (player->movespline && player->movespline->Initialized() && !player->movespline->Finalized());
 
     uint32 const nowMs = GameTime::GetGameTimeMS();
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (orderItr != g_TargetRelativeMoveOrderByGuid.end())
+    if (TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue()))
     {
-        TargetRelativeMoveOrderState const& order = orderItr->second;
+        TargetRelativeMoveOrderState const& order = *orderState;
         uint32 const orderAgeMs = order.lastIssueMs != 0 && nowMs >= order.lastIssueMs ? nowMs - order.lastIssueMs : 0;
         if (!order.targetGuid.IsEmpty() && orderAgeMs <= 6000)
         {
@@ -4072,8 +4071,7 @@ bool ShouldDeferStationaryCastForActiveMovement(Player* player, Unit* castTarget
     MovementGeneratorType const motionType = motionMaster ? motionMaster->GetCurrentMovementGeneratorType() : IDLE_MOTION_TYPE;
     bool const activeTargetRelativeMotion = motionType == CHASE_MOTION_TYPE || motionType == FOLLOW_MOTION_TYPE;
 
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    TargetRelativeMoveOrderState const* order = orderItr != g_TargetRelativeMoveOrderByGuid.end() ? &orderItr->second : nullptr;
+    TargetRelativeMoveOrderState const* order = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
 
     Unit* moveTarget = nullptr;
     if (order && !order->targetGuid.IsEmpty())
@@ -5333,6 +5331,7 @@ bool PvpClassActions::IsWarlockCurseTargetCooldownActive(Player const* player, U
         return false;
 
     WarlockCurseCooldownKey const key{ player->GetGUID(), target->GetGUID(), spellId };
+    std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
     auto const itr = g_WarlockCurseTargetCooldowns.find(key);
     if (itr == g_WarlockCurseTargetCooldowns.end())
         return false;
@@ -5351,7 +5350,7 @@ void PvpClassActions::RegisterWarlockCurseTargetCooldown(Player const* player, U
     if (!player || !target || !spellId || cooldown <= std::chrono::seconds::zero())
         return;
 
-    g_WarlockCurseTargetCooldowns[{ player->GetGUID(), target->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+    playerbot::LockedSet(g_WarlockCurseTargetCooldowns, WarlockCurseCooldownKey{ player->GetGUID(), target->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
 bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 spellId)
@@ -5360,6 +5359,7 @@ bool PvpClassActions::IsCasterSpellCooldownActive(Player const* player, uint32 s
         return false;
 
     CasterSpellCooldownKey const key{ player->GetGUID(), spellId };
+    std::lock_guard<std::mutex> guard(playerbot::SharedBotStateStructureLock());
     auto const itr = g_CasterSpellCooldowns.find(key);
     if (itr == g_CasterSpellCooldowns.end())
         return false;
@@ -5378,7 +5378,7 @@ void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 s
     if (!player || !spellId || cooldown <= std::chrono::seconds::zero())
         return;
 
-    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+    playerbot::LockedSet(g_CasterSpellCooldowns, CasterSpellCooldownKey{ player->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
 void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 spellId, std::chrono::milliseconds cooldown)
@@ -5386,7 +5386,7 @@ void PvpClassActions::RegisterCasterSpellCooldown(Player const* player, uint32 s
     if (!player || !spellId || cooldown <= std::chrono::milliseconds::zero())
         return;
 
-    g_CasterSpellCooldowns[{ player->GetGUID(), spellId }] = GameTime::Now() + cooldown;
+    playerbot::LockedSet(g_CasterSpellCooldowns, CasterSpellCooldownKey{ player->GetGUID(), spellId }, GameTime::Now() + cooldown);
 }
 
 std::string PvpClassActions::GetLastExecutionStatus(Player const* player)
@@ -5421,11 +5421,11 @@ bool PvpClassActions::HasRecentTargetRelativeMovementOrder(Player const* player,
     if (!player)
         return false;
 
-    auto orderItr = g_TargetRelativeMoveOrderByGuid.find(player->GetGUID().GetRawValue());
-    if (orderItr == g_TargetRelativeMoveOrderByGuid.end())
+    TargetRelativeMoveOrderState const* orderState = playerbot::LockedFind(g_TargetRelativeMoveOrderByGuid, player->GetGUID().GetRawValue());
+    if (!orderState)
         return false;
 
-    TargetRelativeMoveOrderState const& order = orderItr->second;
+    TargetRelativeMoveOrderState const& order = *orderState;
     if (target && order.targetGuid != target->GetGUID())
         return false;
 

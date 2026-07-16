@@ -43,6 +43,9 @@ class FollowMovementGenerator : public MovementGenerator, public AbstractFollowe
         void Finalize(Unit*, bool, bool) override;
         MovementGeneratorType GetMovementGeneratorType() const override { return FOLLOW_MOTION_TYPE; }
 
+        float GetRange() const { return _range; }
+        ChaseAngle const& GetAngle() const { return _angle; }
+
         void UnitSpeedChanged() override { _lastTargetPosition.reset(); }
 
     private:

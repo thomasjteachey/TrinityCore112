@@ -19,6 +19,7 @@
 #include "PlayerbotObcClone.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotRandomBotParticipation.h"
+#include "PlayerbotSharedStateGuard.h"
 #include "SpellHistory.h"
 #include "BattlegroundMgr.h"
 #include "Battleground.h"
@@ -132,6 +133,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (!player || player->GetClass() != CLASS_HUNTER)
             return false;
 
+        std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
         auto itr = g_HunterKiteHoldUntilMs.find(player->GetGUID().GetRawValue());
         if (itr == g_HunterKiteHoldUntilMs.end())
             return false;
@@ -153,7 +155,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const guid = player->GetGUID().GetRawValue();
         uint32 const untilMs = nowMs + holdMs;
-        uint32& existingUntilMs = g_HunterKiteHoldUntilMs[guid];
+        uint32& existingUntilMs = playerbot::LockedGetOrCreate(g_HunterKiteHoldUntilMs, guid);
         if (existingUntilMs < untilMs)
             existingUntilMs = untilMs;
     }
@@ -312,12 +314,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const botGuidRaw = player->GetGUID().GetRawValue();
-        uint32 const cooldownUntilMs = g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw];
+        uint32 const cooldownUntilMs = playerbot::LockedGetOrCreate(g_BattlegroundOverstackRequeueCooldownUntilMsByGuid, botGuidRaw);
         if (cooldownUntilMs && nowMs < cooldownUntilMs)
             return false;
 
         uint64 const instanceKey = playerbot::BuildBattlegroundInstanceKey(battleground);
-        uint32 const nextDepartureEarliestMs = g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey];
+        uint32 const nextDepartureEarliestMs = playerbot::LockedGetOrCreate(g_BattlegroundOverstackInstanceNextDepartureMsByInstance, instanceKey);
         if (nextDepartureEarliestMs && nowMs < nextDepartureEarliestMs)
             return false;
 
@@ -325,8 +327,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (nowMs % PLAYERBOT_BG_OVERSTACK_INSTANCE_JITTER_WINDOW_MS < jitterMs)
             return false;
 
-        g_BattlegroundOverstackRequeueCooldownUntilMsByGuid[botGuidRaw] = nowMs + PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS;
-        g_BattlegroundOverstackInstanceNextDepartureMsByInstance[instanceKey] = nowMs + PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS;
+        playerbot::LockedSet(g_BattlegroundOverstackRequeueCooldownUntilMsByGuid, botGuidRaw, nowMs + PLAYERBOT_BG_OVERSTACK_REQUEUE_COOLDOWN_MS);
+        playerbot::LockedSet(g_BattlegroundOverstackInstanceNextDepartureMsByInstance, instanceKey, nowMs + PLAYERBOT_BG_OVERSTACK_INSTANCE_DEPARTURE_SPACING_MS);
 
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP overstack rebalance trigger: guid={} bgTypeId={} instanceId={} assignedTeam={} teamCount={} otherTeamCount={} diff={}.",
@@ -451,6 +453,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         static std::unordered_map<uint64, uint32> indoorSinceMsByGuid;
         uint64 const guid = player->GetGUID().GetRawValue();
 
+        std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
         if (outdoors)
         {
             indoorSinceMsByGuid.erase(guid);
@@ -802,7 +805,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         static std::unordered_map<uint64, uint32> nextAllowedMoveCommandMsByGuid;
         uint64 const botGuid = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& nextAllowedMs = nextAllowedMoveCommandMsByGuid[botGuid];
+        uint32& nextAllowedMs = playerbot::LockedGetOrCreate(nextAllowedMoveCommandMsByGuid, botGuid);
         if (nowMs < nextAllowedMs)
             return false;
 
@@ -1046,7 +1049,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         };
 
         static std::unordered_map<uint64, HazardEscapeState> stateByGuid;
-        HazardEscapeState& state = stateByGuid[player->GetGUID().GetRawValue()];
+        HazardEscapeState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
 
         if (!IsInHazardousLiquid(player))
         {
@@ -1219,7 +1222,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         };
 
         static std::unordered_map<uint64, MoveOrderState> stateByGuid;
-        MoveOrderState& state = stateByGuid[player->GetGUID().GetRawValue()];
+        MoveOrderState& state = playerbot::LockedGetOrCreate(stateByGuid, player->GetGUID().GetRawValue());
         uint32 const nowMs = GameTime::GetGameTimeMS();
 
         bool const destinationChanged = state.lastIssueMs == 0 ||
@@ -1606,12 +1609,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         uint64 const guidRaw = player->GetGUID().GetRawValue();
         if (player->InBattleground() || !player->InBattlegroundQueue() || HasPendingBattlegroundInvite(player))
         {
-            g_BattlegroundQueuedNoInviteSinceMsByGuid.erase(guidRaw);
+            playerbot::LockedErase(g_BattlegroundQueuedNoInviteSinceMsByGuid, guidRaw);
             return false;
         }
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& queuedSinceMs = g_BattlegroundQueuedNoInviteSinceMsByGuid[guidRaw];
+        uint32& queuedSinceMs = playerbot::LockedGetOrCreate(g_BattlegroundQueuedNoInviteSinceMsByGuid, guidRaw);
         if (!queuedSinceMs)
         {
             queuedSinceMs = nowMs;
@@ -1681,16 +1684,21 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         uint64 const playerGuidRaw = player->GetGUID().GetRawValue();
         if (!player->InBattleground())
         {
-            g_BattlegroundDeadBotGuids.erase(playerGuidRaw);
-            g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw);
+            playerbot::LockedErase(g_BattlegroundDeadBotGuids, playerGuidRaw);
+            playerbot::LockedErase(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
             return false;
         }
 
         if (player->IsAlive())
         {
-            queuedSinceMsByGuid.erase(playerGuidRaw);
-            bool const wasDead = g_BattlegroundDeadBotGuids.erase(playerGuidRaw) != 0;
-            bool const wasSpiritQueued = g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw) != 0;
+            bool wasDead = false;
+            bool wasSpiritQueued = false;
+            {
+                std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+                queuedSinceMsByGuid.erase(playerGuidRaw);
+                wasDead = g_BattlegroundDeadBotGuids.erase(playerGuidRaw) != 0;
+                wasSpiritQueued = g_BattlegroundSpiritQueuedBotGuids.erase(playerGuidRaw) != 0;
+            }
             if (wasDead && wasSpiritQueued && player->GetMapId() == 726)
             {
                 // Twin Peaks' middle graveyards resurrect playerbots on cliff
@@ -1717,7 +1725,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
         }
 
-        g_BattlegroundDeadBotGuids.insert(playerGuidRaw);
+        playerbot::LockedInsert(g_BattlegroundDeadBotGuids, playerGuidRaw);
 
         if (!player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
         {
@@ -1735,9 +1743,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         if (battleground->IsPlayerInResurrectQueue(player->GetGUID()))
         {
-            g_BattlegroundSpiritQueuedBotGuids.insert(playerGuidRaw);
+            playerbot::LockedInsert(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32& queuedSinceMs = queuedSinceMsByGuid[playerGuidRaw];
+            uint32& queuedSinceMs = playerbot::LockedGetOrCreate(queuedSinceMsByGuid, playerGuidRaw);
             if (!queuedSinceMs)
                 queuedSinceMs = nowMs;
 
@@ -1778,8 +1786,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return true;
 
         battleground->AddPlayerToResurrectQueue(spiritGuide->GetGUID(), player->GetGUID());
-        g_BattlegroundSpiritQueuedBotGuids.insert(playerGuidRaw);
-        queuedSinceMsByGuid[player->GetGUID().GetRawValue()] = GameTime::GetGameTimeMS();
+        playerbot::LockedInsert(g_BattlegroundSpiritQueuedBotGuids, playerGuidRaw);
+        playerbot::LockedSet(queuedSinceMsByGuid, player->GetGUID().GetRawValue(), GameTime::GetGameTimeMS());
         sBattlegroundMgr->SendAreaSpiritHealerQueryOpcode(player, battleground, spiritGuide->GetGUID());
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP death handling: guid={} action=queue-resurrect spiritGuide={}.",
@@ -2092,12 +2100,25 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
 
         uint64 const guidRaw = player->GetGUID().GetRawValue();
-        auto plantUntilItr = g_HunterAutoShotPauseUntilMs.find(guidRaw);
-        if (plantUntilItr == g_HunterAutoShotPauseUntilMs.end())
-            return false;
+        uint32 plantUntilMs = 0;
+        uint32 plantFireSequence = 0;
+        bool hasPlantSequence = false;
+        {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+            auto plantUntilItr = g_HunterAutoShotPauseUntilMs.find(guidRaw);
+            if (plantUntilItr == g_HunterAutoShotPauseUntilMs.end())
+                return false;
+            plantUntilMs = plantUntilItr->second;
+
+            auto plantSequenceItr = g_HunterAutoShotPlantFireSequence.find(guidRaw);
+            hasPlantSequence = plantSequenceItr != g_HunterAutoShotPlantFireSequence.end();
+            if (hasPlantSequence)
+                plantFireSequence = plantSequenceItr->second;
+        }
 
         auto clearPlantState = [&]()
         {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
             g_HunterAutoShotPauseUntilMs.erase(guidRaw);
             g_HunterAutoShotPlantFireSequence.erase(guidRaw);
         };
@@ -2105,15 +2126,13 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // The triggered Auto Shot event occurs during Unit::Update, before the
         // playerbot tactical/class passes. Release the cross-module lock on
         // that very next pass rather than freezing until the safety deadline.
-        auto plantSequenceItr = g_HunterAutoShotPlantFireSequence.find(guidRaw);
-        if (plantSequenceItr != g_HunterAutoShotPlantFireSequence.end() &&
-            GetHunterAutoShotFireSequence(player) != plantSequenceItr->second)
+        if (hasPlantSequence && GetHunterAutoShotFireSequence(player) != plantFireSequence)
         {
             clearPlantState();
             return false;
         }
 
-        if (plantUntilItr->second <= nowMs)
+        if (plantUntilMs <= nowMs)
         {
             clearPlantState();
             return false;
@@ -2150,7 +2169,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // timer, making it invisible for a socketless bot without this.
         {
             static std::unordered_map<uint64, uint32> coreGateDiagLastMsByGuid;
-            uint32& lastDiagMs = coreGateDiagLastMsByGuid[guidRaw];
+            uint32& lastDiagMs = playerbot::LockedGetOrCreate(coreGateDiagLastMsByGuid, guidRaw);
             if (!lastDiagMs || nowMs >= lastDiagMs + 750)
             {
                 lastDiagMs = nowMs;
@@ -2430,7 +2449,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         };
         static std::unordered_map<uint64, LosRecoveryState> stateByGuid;
         uint64 const botGuid = player->GetGUID().GetRawValue();
-        LosRecoveryState& state = stateByGuid[botGuid];
+        LosRecoveryState& state = playerbot::LockedGetOrCreate(stateByGuid, botGuid);
 
         if (player->IsWithinLOSInMap(target))
         {
@@ -2828,14 +2847,14 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // that movement is success; if he is stopped, allow a forced flee issue
         // even if a recent stop/face/autoshot command just ran.
         bool const alreadyMoving = player->isMoving() || player->HasUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
-        uint32& lastFleeIssueMs = g_HunterLastFleeIssueMs[guid];
+        uint32& lastFleeIssueMs = playerbot::LockedGetOrCreate(g_HunterLastFleeIssueMs, guid);
         MotionMaster* motionMaster = player->GetMotionMaster();
         bool const activeStutterPath = motionMaster &&
             motionMaster->GetCurrentMovementGeneratorType() == POINT_MOTION_TYPE && alreadyMoving;
         if (activeStutterPath && nowMs < lastFleeIssueMs + PLAYERBOT_HUNTER_FLEE_REISSUE_MS)
             return true;
 
-        int8& side = g_HunterKiteSideByGuid[guid];
+        int8& side = playerbot::LockedGetOrCreate(g_HunterKiteSideByGuid, guid);
         if (side == 0)
             side = (guid & 1) ? int8(1) : int8(-1);
 
@@ -3032,12 +3051,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
 
         uint32 const nowMs = GameTime::GetGameTimeMS();
         uint64 const hunterGuidRaw = player->GetGUID().GetRawValue();
-        uint32& plantUntilMs = g_HunterAutoShotPauseUntilMs[hunterGuidRaw];
+        uint32& plantUntilMs = playerbot::LockedGetOrCreate(g_HunterAutoShotPauseUntilMs, hunterGuidRaw);
 
         auto clearPlantState = [&]()
         {
             plantUntilMs = 0;
-            g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
+            playerbot::LockedErase(g_HunterAutoShotPlantFireSequence, hunterGuidRaw);
         };
         float const safeShootMin = minAutoShotRange + playerbot::PLAYERBOT_HUNTER_AUTOSHOT_MIN_SAFETY_MARGIN;
 
@@ -3195,9 +3214,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             stopFaceAndKeepAutoShot();
 
             uint32 const fireSequence = GetHunterAutoShotFireSequence(player);
-            auto const plantSequenceItr = g_HunterAutoShotPlantFireSequence.find(hunterGuidRaw);
-            uint32 const plantFireSequence = plantSequenceItr != g_HunterAutoShotPlantFireSequence.end()
-                ? plantSequenceItr->second : fireSequence;
+            uint32 const* plantSequencePtr = playerbot::LockedFind(g_HunterAutoShotPlantFireSequence, hunterGuidRaw);
+            uint32 const plantFireSequence = plantSequencePtr ? *plantSequencePtr : fireSequence;
             uint32 const rangedTimerMs = player->getAttackTimer(RANGED_ATTACK);
 
             // During the plant, tactical movement and the hunter class executor
@@ -3234,7 +3252,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (plantUntilMs != 0 && plantUntilMs <= nowMs)
         {
             plantUntilMs = 0;
-            g_HunterAutoShotPlantFireSequence.erase(hunterGuidRaw);
+            playerbot::LockedErase(g_HunterAutoShotPlantFireSequence, hunterGuidRaw);
         }
 
         uint32 const autoShotTimerMs = player->getAttackTimer(RANGED_ATTACK);
@@ -3250,8 +3268,8 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             uint32 const maxPlantMs = PLAYERBOT_HUNTER_STUTTER_MAX_PLANT_MS;
             plantUntilMs = nowMs + maxPlantMs;
-            g_HunterAutoShotPlantFireSequence[hunterGuidRaw] = GetHunterAutoShotFireSequence(player);
-            g_HunterFleeStateByGuid.erase(hunterGuidRaw);
+            playerbot::LockedSet(g_HunterAutoShotPlantFireSequence, hunterGuidRaw, GetHunterAutoShotFireSequence(player));
+            playerbot::LockedErase(g_HunterFleeStateByGuid, hunterGuidRaw);
             stopFaceAndKeepAutoShot();
 
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
@@ -3404,7 +3422,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         Position capturePosition;
         if (battleground->GetFlagCapturePosition(player->GetGUID(), capturePosition))
         {
-            g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+            playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
 
             if (player->IsWithinDist3d(capturePosition.GetPositionX(), capturePosition.GetPositionY(), capturePosition.GetPositionZ(), 8.0f))
                 return true;
@@ -3423,6 +3441,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         ObjectGuid const pickupGuid = battleground->GetFlagPickupGUID(player->GetGUID());
         if (pickupGuid.IsEmpty())
         {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
             auto const delayItr = g_DroppedFlagPickupDelayByBotGuid.find(botGuidRaw);
             if (delayItr == g_DroppedFlagPickupDelayByBotGuid.end() ||
                 GameTime::GetGameTimeMS() >= delayItr->second.pickupNotBeforeMs)
@@ -3438,7 +3457,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (isDroppedFlag)
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            DroppedFlagPickupDelay& delay = g_DroppedFlagPickupDelayByBotGuid[botGuidRaw];
+            DroppedFlagPickupDelay& delay = playerbot::LockedGetOrCreate(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
             if (delay.flagGuid != pickupGuid)
             {
                 delay.flagGuid = pickupGuid;
@@ -3454,7 +3473,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 return true;
         }
         else
-            g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+            playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
 
         if (!flag->IsAtInteractDistance(player))
             return IssueMovePointThrottled(player, flag->GetPosition(), 6.0f, 500) || player->isMoving();
@@ -3463,7 +3482,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         // cleanup, form/stealth handling, and battleground eligibility checks
         // remain identical to a player click.
         flag->Use(player);
-        g_DroppedFlagPickupDelayByBotGuid.erase(botGuidRaw);
+        playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
         TC_LOG_DEBUG("playerbots.pvp.lifecycle",
             "Playerbot PvP flag pickup attempted: guid={} flag_guid={}.",
             player->GetGUID().ToString(), pickupGuid.ToString());
@@ -3837,14 +3856,14 @@ namespace playerbot
             return;
 
         uint64 const botGuid = player->GetGUID().GetRawValue();
-        bool const alreadyLocked = g_WaitJoinLockedBots.find(botGuid) != g_WaitJoinLockedBots.end();
+        bool const alreadyLocked = playerbot::LockedContains(g_WaitJoinLockedBots, botGuid);
 
         if (!locked)
         {
             if (alreadyLocked)
             {
                 player->SetControlled(false, UNIT_STATE_ROOT);
-                g_WaitJoinLockedBots.erase(botGuid);
+                playerbot::LockedErase(g_WaitJoinLockedBots, botGuid);
             }
             return;
         }
@@ -3861,7 +3880,7 @@ namespace playerbot
         if (!alreadyLocked)
         {
             player->SetControlled(true, UNIT_STATE_ROOT);
-            g_WaitJoinLockedBots.insert(botGuid);
+            playerbot::LockedInsert(g_WaitJoinLockedBots, botGuid);
         }
     }
 
@@ -3908,7 +3927,7 @@ namespace playerbot
 
         uint64 const botRawGuid = player->GetGUID().GetRawValue();
         uint32 const nowMs = GameTime::GetGameTimeMS();
-        uint32& attemptNotBeforeMs = g_WsgReturnAttemptNotBeforeMsByGuid[botRawGuid];
+        uint32& attemptNotBeforeMs = playerbot::LockedGetOrCreate(g_WsgReturnAttemptNotBeforeMsByGuid, botRawGuid);
 
         if (HumanTeammateNearDroppedFlag(player, droppedFlag, 7.0f))
         {
@@ -4317,7 +4336,7 @@ namespace playerbot
         if (throttleMs)
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32& lastMs = g_AutoShotDiagLastMsByGuid[player->GetGUID().GetRawValue()];
+            uint32& lastMs = playerbot::LockedGetOrCreate(g_AutoShotDiagLastMsByGuid, player->GetGUID().GetRawValue());
             if (lastMs && nowMs < lastMs + throttleMs)
                 return;
             lastMs = nowMs;
@@ -4530,7 +4549,7 @@ namespace playerbot
         if (!player || !delayMs)
             return;
 
-        DroppedFlagPickupDelay& delay = g_DroppedFlagPickupDelayByBotGuid[player->GetGUID().GetRawValue()];
+        DroppedFlagPickupDelay& delay = playerbot::LockedGetOrCreate(g_DroppedFlagPickupDelayByBotGuid, player->GetGUID().GetRawValue());
         delay.flagGuid.Clear();
         delay.pickupNotBeforeMs = GameTime::GetGameTimeMS() + delayMs;
     }
@@ -4692,7 +4711,7 @@ namespace playerbot
             if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
             {
                 battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+                playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, BuildBattlegroundInstanceKey(battleground));
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                     "Playerbot PvP lifecycle wait-join end due to no real human battleground interest: guid={} bgTypeId={} instanceId={}.",
                     player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -4703,14 +4722,14 @@ namespace playerbot
             if (!BattlegroundHasAnyRealHumanPlayers(player))
             {
                 uint32 const nowMs = GameTime::GetGameTimeMS();
-                uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+                uint32& noHumanSinceMs = playerbot::LockedGetOrCreate(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
                 if (!noHumanSinceMs)
                     noHumanSinceMs = nowMs;
 
                 if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_WAIT_JOIN_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
                 {
                     battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                    g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                    playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
                     TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                         "Playerbot PvP lifecycle wait-join end due to no real humans: guid={} bgTypeId={} instanceId={}.",
                         player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -4718,7 +4737,7 @@ namespace playerbot
                 }
             }
             else
-                g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
 
             TryRefillManagedScmSlots(player, battleground);
             return true;
@@ -4727,7 +4746,7 @@ namespace playerbot
         if (battleground->GetStatus() == STATUS_WAIT_LEAVE)
         {
             SetWaitJoinMovementLock(player, false);
-            g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, BuildBattlegroundInstanceKey(battleground));
 
             if (ShouldDeferBattlegroundLeaveForTeleportAck(player))
                 return false;
@@ -4749,7 +4768,7 @@ namespace playerbot
 
         if (battleground->GetStatus() != STATUS_IN_PROGRESS)
         {
-            g_BattlegroundNoHumanSinceMsByInstance.erase(BuildBattlegroundInstanceKey(battleground));
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, BuildBattlegroundInstanceKey(battleground));
             return false;
         }
 
@@ -4760,7 +4779,7 @@ namespace playerbot
         if (!HasAnyRealHumanInterestInBattleground(battleground->GetTypeID()))
         {
             battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
             TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                 "Playerbot PvP lifecycle end due to no real human battleground interest: guid={} bgTypeId={} instanceId={}.",
                 player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -4770,14 +4789,14 @@ namespace playerbot
         if (!BattlegroundHasAnyRealHumanPlayers(player))
         {
             uint32 const nowMs = GameTime::GetGameTimeMS();
-            uint32& noHumanSinceMs = g_BattlegroundNoHumanSinceMsByInstance[battlegroundInstanceKey];
+            uint32& noHumanSinceMs = playerbot::LockedGetOrCreate(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
             if (!noHumanSinceMs)
                 noHumanSinceMs = nowMs;
 
             if (nowMs >= noHumanSinceMs + PLAYERBOT_BG_NO_HUMAN_END_DELAY_MS && !ShouldDeferBattlegroundLeaveForTeleportAck(player))
             {
                 battleground->EndBattleground(PVP_TEAM_NEUTRAL);
-                g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+                playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
                 TC_LOG_DEBUG("playerbots.pvp.lifecycle",
                     "Playerbot PvP lifecycle end due to no real human participants: guid={} bgTypeId={} instanceId={}.",
                     player->GetGUID().ToString(), uint32(battleground->GetTypeID()), battleground->GetInstanceID());
@@ -4785,7 +4804,7 @@ namespace playerbot
             }
         }
         else
-            g_BattlegroundNoHumanSinceMsByInstance.erase(battlegroundInstanceKey);
+            playerbot::LockedErase(g_BattlegroundNoHumanSinceMsByInstance, battlegroundInstanceKey);
 
         TryRefillManagedScmSlots(player, battleground);
 

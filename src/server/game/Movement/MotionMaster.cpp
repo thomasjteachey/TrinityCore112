@@ -34,6 +34,7 @@
 #include "WaypointDefines.h"
 #include "WorldSession.h"
 #include <algorithm>
+#include <cmath>
 #include <iterator>
 
 #include "ChaseMovementGenerator.h"
@@ -86,6 +87,106 @@ void LogPlayerbotMotionMasterTrace(Unit const* owner, char const* phase, Movemen
         player->movespline && player->movespline->Initialized(), player->movespline ? player->movespline->Finalized() : true,
         player->movespline && player->movespline->HasStarted(), player->movespline ? player->movespline->currentPathIdx() : -1,
         player->movespline ? player->movespline->Duration() : 0, player->movespline ? player->movespline->Velocity() : 0.0f);
+}
+
+namespace
+{
+bool IsSocketlessPlayerbotMover(Unit const* owner)
+{
+    Player const* player = owner ? owner->ToPlayer() : nullptr;
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+
+bool NearlyEqual(float lhs, float rhs, float epsilon = 0.05f)
+{
+    return std::fabs(lhs - rhs) <= epsilon;
+}
+
+bool NearlyEqualRange(float lhs, float rhs)
+{
+    // Different spells commonly ask for neighboring pressure ranges on
+    // consecutive AI ticks. Rebuilding a live spline for a one- or two-yard
+    // preference change is visually much worse than letting the current
+    // generator finish/repath; truly different movement bands still replace it.
+    return NearlyEqual(lhs, rhs, 2.0f);
+}
+
+bool SameChaseAngle(ChaseAngle const& lhs, ChaseAngle const& rhs)
+{
+    return NearlyEqual(lhs.RelativeAngle, rhs.RelativeAngle) && NearlyEqual(lhs.Tolerance, rhs.Tolerance);
+}
+
+bool SameOptionalChaseAngle(Optional<ChaseAngle> const& lhs, Optional<ChaseAngle> const& rhs)
+{
+    if (bool(lhs) != bool(rhs))
+        return false;
+
+    return !lhs || SameChaseAngle(*lhs, *rhs);
+}
+
+bool SameOptionalChaseRange(Optional<ChaseRange> const& lhs, Optional<ChaseRange> const& rhs)
+{
+    if (bool(lhs) != bool(rhs))
+        return false;
+
+    return !lhs ||
+        (NearlyEqualRange(lhs->MinRange, rhs->MinRange) &&
+         NearlyEqualRange(lhs->MinTolerance, rhs->MinTolerance) &&
+         NearlyEqualRange(lhs->MaxTolerance, rhs->MaxTolerance) &&
+         NearlyEqualRange(lhs->MaxRange, rhs->MaxRange));
+}
+
+bool HasLiveTargetRelativeMotion(Unit const* owner, MovementGenerator const* movement, MovementGeneratorType type)
+{
+    if (!owner || !movement)
+        return false;
+
+    bool const activeSpline = owner->movespline && owner->movespline->Initialized() && !owner->movespline->Finalized();
+    bool const movementState = type == CHASE_MOTION_TYPE
+        ? owner->HasUnitState(UNIT_STATE_CHASE_MOVE)
+        : owner->HasUnitState(UNIT_STATE_FOLLOW_MOVE);
+    bool const waitingToInitialize = movement->HasFlag(
+        MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    bool const temporarilyBlocked = owner->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_ROOT | UNIT_STATE_STUNNED) ||
+        owner->IsMovementPreventedByCasting();
+
+    return waitingToInitialize || activeSpline || owner->isMoving() || movementState || temporarilyBlocked;
+}
+
+bool ShouldPreserveEquivalentFollow(Unit const* owner, Unit const* target, float range, ChaseAngle const& angle)
+{
+    if (!IsSocketlessPlayerbotMover(owner) || !target)
+        return false;
+
+    MotionMaster const* motionMaster = owner->GetMotionMaster();
+    MovementGenerator const* movement = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    FollowMovementGenerator const* follow = movement ? dynamic_cast<FollowMovementGenerator const*>(movement) : nullptr;
+    if (!follow || follow->GetTarget() != target)
+        return false;
+
+    if (!NearlyEqualRange(follow->GetRange(), range) || !SameChaseAngle(follow->GetAngle(), angle))
+        return false;
+
+    return HasLiveTargetRelativeMotion(owner, movement, FOLLOW_MOTION_TYPE);
+}
+
+bool ShouldPreserveEquivalentChase(Unit const* owner, Unit const* target, Optional<ChaseRange> const& range, Optional<ChaseAngle> const& angle)
+{
+    if (!IsSocketlessPlayerbotMover(owner) || !target)
+        return false;
+
+    MotionMaster const* motionMaster = owner->GetMotionMaster();
+    MovementGenerator const* movement = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    ChaseMovementGenerator const* chase = movement ? dynamic_cast<ChaseMovementGenerator const*>(movement) : nullptr;
+    if (!chase || chase->GetTarget() != target)
+        return false;
+
+    if (!SameOptionalChaseRange(chase->GetRange(), range) || !SameOptionalChaseAngle(chase->GetAngle(), angle))
+        return false;
+
+    return HasLiveTargetRelativeMotion(owner, movement, CHASE_MOTION_TYPE);
+}
 }
 
 inline void MovementGeneratorPointerDeleter(MovementGenerator* a)
@@ -640,6 +741,22 @@ void MotionMaster::MoveFollow(Unit* target, float dist, ChaseAngle angle, Moveme
     if (!target || target == _owner)
         return;
 
+    // Socketless playerbot AI has several independent movement owners (class
+    // casts, lifecycle positioning, stealth openers, and recovery paths). Some
+    // of them can request the exact same Follow order on a 250-500 ms cadence.
+    // DirectAdd replaces the current same-priority generator; Follow::Initialize
+    // then calls StopMoving(), so an otherwise healthy spline becomes a visible
+    // stop/snap/relaunch loop. Preserve an equivalent live order centrally so
+    // no caller can accidentally bypass the script-level throttles. A caller
+    // that intentionally needs a restart can Clear(MOTION_SLOT_ACTIVE) first.
+    if (slot == MOTION_SLOT_ACTIVE && ShouldPreserveEquivalentFollow(_owner, target, dist, angle))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.motion",
+            "PB MotionMaster preserved equivalent Follow: owner={} target={} range={}.",
+            _owner->GetGUID().ToString(), target->GetGUID().ToString(), dist);
+        return;
+    }
+
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MoveFollow: '{}', starts following '{}'", _owner->GetGUID().ToString(), target->GetGUID().ToString());
     Add(new FollowMovementGenerator(target, dist, angle), slot);
 }
@@ -649,6 +766,17 @@ void MotionMaster::MoveChase(Unit* target, Optional<ChaseRange> dist, Optional<C
     // Ignore movement request if target not exist
     if (!target || target == _owner)
         return;
+
+    // Chase already repaths internally as its target moves. Replacing an
+    // equivalent live Chase generator merely resynchronizes/relaunches its
+    // spline, which is rendered by observers as a periodic micro-teleport.
+    if (ShouldPreserveEquivalentChase(_owner, target, dist, angle))
+    {
+        TC_LOG_DEBUG("playerbots.pvp.motion",
+            "PB MotionMaster preserved equivalent Chase: owner={} target={}.",
+            _owner->GetGUID().ToString(), target->GetGUID().ToString());
+        return;
+    }
 
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MoveChase: '{}', starts chasing '{}'", _owner->GetGUID().ToString(), target->GetGUID().ToString());
     Add(new ChaseMovementGenerator(target, dist, angle));

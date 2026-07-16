@@ -21,6 +21,7 @@
 #include "PlayerbotPvpCore.h"
 #include "PlayerbotPvpClassActions.h"
 #include "PlayerbotPvpLifecycleActions.h"
+#include "PlayerbotSharedStateGuard.h"
 
 #include "AccountMgr.h"
 #include "Battleground.h"
@@ -56,6 +57,7 @@
 #include <chrono>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <sstream>
@@ -211,11 +213,29 @@ constexpr uint32 kHolyPriestProfileTalentSpellId = 724;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextRandomBotLifecycleProcessTimeByGuid;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextBattlegroundFastTickTimeByGuid;
 std::mutex g_RandomBotLifecycleCadenceLock;
-// Player::Update can run concurrently for different maps. The PvP decision
-// modules intentionally retain per-bot movement, targeting, and cooldown state
-// in shared containers, so a complete decision tick must not overlap another
-// map's tick and mutate those containers concurrently.
-std::mutex g_PlayerbotPvpDecisionLock;
+// Player::Update can run concurrently for different maps. Per-bot decision
+// state is only ever touched from the owning map's update thread, and the
+// shared by-GUID containers serialize their structural operations through
+// PlayerbotSharedStateGuard.h, so a decision tick only needs to exclude other
+// ticks on the same map instance. Locking per map instance lets concurrent
+// custom matches evaluate their bots in parallel instead of serializing every
+// battleground through one global mutex.
+std::mutex g_PlayerbotDecisionLockRegistryLock;
+std::unordered_map<uint64, std::unique_ptr<std::mutex>> g_PlayerbotDecisionLockByMapInstance;
+
+std::mutex& GetDecisionTickLockForPlayer(Player const* player)
+{
+    uint64 key = 0;
+    if (player)
+        if (Map const* map = player->FindMap())
+            key = (uint64(map->GetId()) << 32) | uint64(map->GetInstanceId());
+
+    std::lock_guard<std::mutex> registryGuard(g_PlayerbotDecisionLockRegistryLock);
+    std::unique_ptr<std::mutex>& lock = g_PlayerbotDecisionLockByMapInstance[key];
+    if (!lock)
+        lock = std::make_unique<std::mutex>();
+    return *lock;
+}
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_NextPlayerbotInsigniaCheckTimeByGuid;
 std::unordered_map<uint64, LifecycleCadenceTimePoint> g_PlayerbotInsigniaBreakableAuraFirstSeenTimeByGuid;
 std::mutex g_PlayerbotInsigniaCheckLock;
@@ -1912,9 +1932,10 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
 
     // PlayerScript::OnUpdate is invoked from Map::Update. With more than one
     // map-update thread, bots on different maps reach the PvP modules at the
-    // same time. Serialize the whole tick so all of the modules' per-GUID
-    // state remains coherent for both persistent bots and transient clones.
-    std::lock_guard<std::mutex> decisionLock(g_PlayerbotPvpDecisionLock);
+    // same time. Serialize per map instance: same-map ticks stay coherent,
+    // while concurrent custom matches on other maps evaluate in parallel.
+    // Cross-map container safety is provided by PlayerbotSharedStateGuard.h.
+    std::lock_guard<std::mutex> decisionLock(GetDecisionTickLockForPlayer(player));
 
     TryRecoverPlayerbotFromUnderMap(player);
     TryReviveManagedBotAfterStartup(player);
