@@ -83,11 +83,14 @@ namespace
 
     void EmergencyWrite(char const* data, std::size_t length)
     {
-        EmergencyWriteToFd(STDERR_FILENO, data, length);
-
+        // The crash file is the durable destination. Write it before stderr:
+        // stderr may be a full systemd/journald pipe during a high-load crash,
+        // and blocking there must not prevent Crash.log from receiving bytes.
         int fd = EmergencyCrashFileDescriptor;
         if (fd >= 0 && fd != STDERR_FILENO)
             EmergencyWriteToFd(fd, data, length);
+
+        EmergencyWriteToFd(STDERR_FILENO, data, length);
     }
 
     std::size_t EmergencyStringLength(char const* text, std::size_t maximum = static_cast<std::size_t>(-1))
@@ -155,9 +158,11 @@ namespace
         }
     }
 
-    void EmergencyLogFatalSignal(int signalId)
+    void EmergencyLogFatalSignalHeader(int signalId, siginfo_t const* signalInfo)
     {
-        char line[256];
+        // Keep the first durable write small and independent of stack unwinding,
+        // allocation, the normal logger, and thread-local crash context.
+        char line[512];
         char* cursor = line;
         char const prefix[] = "\nCaught fatal signal ";
         for (char character : prefix)
@@ -172,27 +177,60 @@ namespace
             *cursor++ = signalName[i];
         *cursor++ = ')';
         *cursor++ = '\n';
-        EmergencyWrite(line, std::size_t(cursor - line));
 
-        cursor = line;
         char const processPrefix[] = "Process id: ";
         for (char character : processPrefix)
             if (character)
                 *cursor++ = character;
         cursor = AppendUnsignedDecimal(cursor, uint64(getpid()));
         *cursor++ = '\n';
-        EmergencyWrite(line, std::size_t(cursor - line));
 
 #ifdef SYS_gettid
-        cursor = line;
         char const threadPrefix[] = "Thread id: ";
         for (char character : threadPrefix)
             if (character)
                 *cursor++ = character;
         cursor = AppendUnsignedDecimal(cursor, uint64(syscall(SYS_gettid)));
         *cursor++ = '\n';
-        EmergencyWrite(line, std::size_t(cursor - line));
 #endif
+
+        if (signalInfo)
+        {
+            char const codePrefix[] = "Signal code: ";
+            for (char character : codePrefix)
+                if (character)
+                    *cursor++ = character;
+            if (signalInfo->si_code < 0)
+            {
+                *cursor++ = '-';
+                cursor = AppendUnsignedDecimal(cursor, uint64(-int64(signalInfo->si_code)));
+            }
+            else
+                cursor = AppendUnsignedDecimal(cursor, uint64(signalInfo->si_code));
+            *cursor++ = '\n';
+
+            if (signalId == SIGSEGV
+#ifdef SIGBUS
+                || signalId == SIGBUS
+#endif
+            )
+            {
+                char const addressPrefix[] = "Fault address: ";
+                for (char character : addressPrefix)
+                    if (character)
+                        *cursor++ = character;
+                cursor = AppendHexPointer(cursor, reinterpret_cast<uintptr_t>(signalInfo->si_addr));
+                *cursor++ = '\n';
+            }
+        }
+
+        EmergencyWrite(line, std::size_t(cursor - line));
+    }
+
+    void EmergencyLogFatalSignalDetails()
+    {
+        char line[256];
+        char* cursor = line;
 
         if (EmergencyCrashContext[0])
         {
@@ -417,21 +455,49 @@ void AbortHandler(int sigval)
 }
 
 #if TRINITY_PLATFORM != TRINITY_PLATFORM_WINDOWS
+namespace
+{
+    void FatalSignalHandlerWithInfo(int sigval, siginfo_t* signalInfo, void*)
+    {
+        // This must be the first operation: commit a minimal report to Crash.log
+        // before touching TLS, unwinding, the normal logger, or stderr.
+        EmergencyLogFatalSignalHeader(sigval, signalInfo);
+
+        if (HandlingFatalSignal)
+        {
+            EmergencyWriteLiteral("Recursive fatal signal while writing crash report.\n");
+            _exit(128 + sigval);
+        }
+
+        HandlingFatalSignal = 1;
+        EmergencyLogFatalSignalDetails();
+
+        // Restore the default disposition only after the durable report exists,
+        // then re-raise so systemd/core_pattern/gdb still receive the original
+        // fatal signal and generate a normal core dump.
+        struct sigaction defaultAction;
+        memset(&defaultAction, 0, sizeof(defaultAction));
+        defaultAction.sa_handler = SIG_DFL;
+        sigemptyset(&defaultAction.sa_mask);
+        sigaction(sigval, &defaultAction, nullptr);
+
+        sigset_t unblockedSignals;
+        sigemptyset(&unblockedSignals);
+        sigaddset(&unblockedSignals, sigval);
+        sigprocmask(SIG_UNBLOCK, &unblockedSignals, nullptr);
+
+#ifdef SYS_tgkill
+        syscall(SYS_tgkill, getpid(), syscall(SYS_gettid), sigval);
+#else
+        raise(sigval);
+#endif
+        _exit(128 + sigval);
+    }
+}
+
 void FatalSignalHandler(int sigval)
 {
-    // The regular logger can be asynchronous and is not signal-safe. Write the
-    // minimum useful report directly to the pre-opened crash descriptor first.
-    if (HandlingFatalSignal)
-        _exit(128 + sigval);
-    HandlingFatalSignal = 1;
-
-    EmergencyLogFatalSignal(sigval);
-
-    // Restore the default disposition and re-raise so systemd/core_pattern/gdb
-    // still receive the original fatal signal.
-    signal(sigval, SIG_DFL);
-    raise(sigval);
-    _exit(128 + sigval);
+    FatalSignalHandlerWithInfo(sigval, nullptr, nullptr);
 }
 
 void InitializeEmergencyCrashLog(std::string const& filename)
@@ -491,12 +557,15 @@ void InitCrashSignalHandlers()
 {
     struct sigaction action;
     memset(&action, 0, sizeof(action));
-    action.sa_handler = &FatalSignalHandler;
+    action.sa_sigaction = &FatalSignalHandlerWithInfo;
     sigemptyset(&action.sa_mask);
 
     InitCurrentThreadCrashSignalStack();
 
-    action.sa_flags = SA_RESETHAND | SA_ONSTACK;
+    // Do not use SA_RESETHAND here. It resets the disposition process-wide
+    // before the handler starts, so a near-simultaneous fault on another map
+    // worker can terminate the process before the first worker writes anything.
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
 
     sigaction(SIGSEGV, &action, nullptr);
     sigaction(SIGFPE, &action, nullptr);
