@@ -1701,6 +1701,16 @@ uint32 WorldSession::DosProtection::GetMaxPacketCounterAllowed(uint16 opcode) co
             maxPacketCounterAllowed = PLAYER_SLOTS_COUNT;
             break;
         }
+
+        // A client must acknowledge every server-issued root/unroot transition. Large
+        // battleground fights can legitimately generate more than the default 100 per second.
+        case CMSG_FORCE_MOVE_ROOT_ACK:
+        case CMSG_FORCE_MOVE_UNROOT_ACK:
+        {
+            maxPacketCounterAllowed = 256;
+            break;
+        }
+
         default:
         {
             maxPacketCounterAllowed = 100;
