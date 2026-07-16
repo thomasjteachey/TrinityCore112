@@ -28696,6 +28696,24 @@ bool Player::SetHover(bool apply, bool packetOnly /*= false*/, bool updateAnimTi
     return true;
 }
 
+bool Player::SetSwim(bool enable)
+{
+    if (!Unit::SetSwim(enable))
+        return false;
+
+    // Real clients decide to swim locally and relay MSG_MOVE_START/STOP_SWIM
+    // to the server themselves (there is no SMSG_MOVE_SET_SWIM to request it,
+    // unlike hover/water-walk/feather-fall). This override only ever runs for
+    // virtual (bot) sessions -- see Unit::ProcessTerrainStatusUpdate -- so we
+    // build that same observer-relay packet ourselves so nearby real clients
+    // still see the bot's swim animation start/stop.
+    WorldPacket data(enable ? MSG_MOVE_START_SWIM : MSG_MOVE_STOP_SWIM, 64);
+    data << GetPackGUID();
+    BuildMovementPacket(&data);
+    SendMessageToSet(&data, false);
+    return true;
+}
+
 bool Player::SetWaterWalking(bool apply, bool packetOnly /*= false*/)
 {
     if (!packetOnly && !Unit::SetWaterWalking(apply))
