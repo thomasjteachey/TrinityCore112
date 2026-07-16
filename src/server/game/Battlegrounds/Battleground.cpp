@@ -1299,6 +1299,10 @@ void Battleground::AddPlayer(Player* player)
 {
     if (m_IsCustomGame && player->IsSpectator())
     {
+        // Keep every custom-game spectator on one deterministic viewing side.
+        // This is not participation: spectators remain in m_Spectators only.
+        player->SetBGTeam(ALLIANCE);
+        player->SetFactionForRace(RACE_HUMAN);
         AddSpectator(player);
         player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
         return;

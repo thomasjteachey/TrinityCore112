@@ -979,12 +979,19 @@ public:
             auto teamItr = lobby->Teams.find(guid);
             if (teamItr == lobby->Teams.end())
             {
+                // A spectator still needs a deterministic arena side for the
+                // client to color nearby players. Assign the Alliance viewing
+                // side before worldport so Alliance is green and Horde is red,
+                // while the spectator remains outside the participant roster.
+                constexpr uint32 spectatorViewTeam = ALLIANCE;
+                player->SetFactionForRace(RACE_HUMAN);
+                player->SetBGTeam(spectatorViewTeam);
                 player->SetIsSpectator(true);
                 player->SetUnitFlag(UNIT_FLAG_PACIFIED | UNIT_FLAG_UNINTERACTIBLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_IMMUNE_TO_NPC);
                 player->SetVisible(false);
                 player->SetPendingSpectatorForBG(bg->GetInstanceID());
-                player->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), 0, true, false, TEAM_NEUTRAL);
-                player->SetBGTeam(0);
+                player->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), 0, true, false,
+                    Battleground::GetTeamIndexByTeamId(spectatorViewTeam));
                 sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bg->GetTypeID());
                 continue;
             }

@@ -2844,11 +2844,24 @@ ReputationRank WorldObject::GetReactionTo(WorldObject const* target) const
                 if (Battleground* battleground = selfPlayerOwner->GetBattleground();
                     battleground && battleground == targetPlayerOwner->GetBattleground())
                 {
-                    uint32 const selfBattlegroundTeam = battleground->GetPlayerTeam(selfPlayerOwner->GetGUID());
-                    uint32 const targetBattlegroundTeam = battleground->GetPlayerTeam(targetPlayerOwner->GetGUID());
-                    bool const selfIsParticipant = selfBattlegroundTeam == ALLIANCE || selfBattlegroundTeam == HORDE;
-                    bool const targetIsParticipant = targetBattlegroundTeam == ALLIANCE || targetBattlegroundTeam == HORDE;
-                    if (selfIsParticipant && targetIsParticipant)
+                    uint32 selfBattlegroundTeam = battleground->GetPlayerTeam(selfPlayerOwner->GetGUID());
+                    uint32 targetBattlegroundTeam = battleground->GetPlayerTeam(targetPlayerOwner->GetGUID());
+
+                    // Custom spectators are deliberately absent from m_Players,
+                    // but their assigned BG team is still their viewing side.
+                    // Include it here before raid and FFA checks can make both
+                    // participant teams appear friendly or hostile.
+                    if (battleground->IsCustomGame())
+                    {
+                        if (selfPlayerOwner->IsSpectator())
+                            selfBattlegroundTeam = selfPlayerOwner->GetBGTeam();
+                        if (targetPlayerOwner->IsSpectator())
+                            targetBattlegroundTeam = targetPlayerOwner->GetBGTeam();
+                    }
+
+                    bool const selfHasBattlegroundSide = selfBattlegroundTeam == ALLIANCE || selfBattlegroundTeam == HORDE;
+                    bool const targetHasBattlegroundSide = targetBattlegroundTeam == ALLIANCE || targetBattlegroundTeam == HORDE;
+                    if (selfHasBattlegroundSide && targetHasBattlegroundSide)
                         return selfBattlegroundTeam == targetBattlegroundTeam ? REP_FRIENDLY : REP_HOSTILE;
                 }
 

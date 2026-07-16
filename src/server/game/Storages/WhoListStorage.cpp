@@ -37,7 +37,9 @@ void WhoListStorageMgr::Update()
     HashMapHolder<Player>::MapType const& m = ObjectAccessor::GetPlayers();
     for (HashMapHolder<Player>::MapType::const_iterator itr = m.begin(); itr != m.end(); ++itr)
     {
-        if (!itr->second->FindMap() || itr->second->GetSession()->PlayerLoading())
+        // Transient server-owned player mirrors are implementation details, not
+        // real online characters, and must never be exposed through /who.
+        if (itr->second->GetSession()->IsTransientPlayerSession() || !itr->second->FindMap() || itr->second->GetSession()->PlayerLoading())
             continue;
 
         std::string playerName = itr->second->GetName();
