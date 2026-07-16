@@ -20,6 +20,7 @@
 #include "Player.h"
 #include "Playerbot/Pvp/PlayerbotObcClone.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
+#include "Playerbot/Pvp/PlayerbotResourceGovernor.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
 #include "ScriptedGossip.h"
@@ -551,6 +552,9 @@ public:
         if (!lobby || lobby->ActiveBattlegroundId || !normalizePlayerName(name))
             return false;
 
+        if (!CanAddCloneUnderResourceBudget(player, *lobby))
+            return false;
+
         ObjectGuid const sourceGuid = sCharacterCache->GetCharacterGuidByName(name);
         CharacterCacheEntry const* characterInfo = sCharacterCache->GetCharacterCacheByGuid(sourceGuid);
         if (!sourceGuid || !characterInfo)
@@ -575,6 +579,9 @@ public:
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || (team != ALLIANCE && team != HORDE))
+            return false;
+
+        if (!CanAddCloneUnderResourceBudget(player, *lobby))
             return false;
 
         uint32 teamSize = 0;
@@ -640,6 +647,9 @@ public:
     {
         CustomGameLobby* lobby = GetLobby(player);
         if (!lobby || lobby->ActiveBattlegroundId || (expectedTeam != ALLIANCE && expectedTeam != HORDE))
+            return false;
+
+        if (!CanAddCloneUnderResourceBudget(player, *lobby))
             return false;
 
         ObjectGuid sourceGuid;
@@ -888,6 +898,15 @@ public:
         if (blueCount > CUSTOM_GAME_MAX_PLAYERS_PER_TEAM || redCount > CUSTOM_GAME_MAX_PLAYERS_PER_TEAM)
         {
             Notify(owner, "Custom games support up to 40 participants per team.");
+            return false;
+        }
+
+        // Human-participant matches always start. Bot-only matches (humans at
+        // most spectating) are the first load shed under resource pressure.
+        if (!hasHumanTeamParticipant &&
+            playerbot::ResourceGovernor::GetPressureLevel() == playerbot::ResourcePressureLevel::Hard)
+        {
+            Notify(owner, "Server load is too high to start a bot-only match right now. Please try again shortly.");
             return false;
         }
 
@@ -1226,6 +1245,8 @@ public:
             else
                 ++itr;
 
+        CullCustomMatchesForResources();
+
         std::vector<uint32> eraseIds;
         std::vector<uint32> completedMatchIds;
         for (auto& [instanceId, lobbyPtr] : _lobbies)
@@ -1305,6 +1326,95 @@ public:
     }
 
 private:
+    uint32 CountActiveCustomMatchBots() const
+    {
+        uint32 total = 0;
+        for (auto const& [instanceId, lobbyPtr] : _lobbies)
+            if (lobbyPtr && lobbyPtr->ActiveBattlegroundId)
+                total += uint32(lobbyPtr->CloneRequests.size());
+        return total;
+    }
+
+    bool CanAddCloneUnderResourceBudget(Player* requester, CustomGameLobby const& lobby)
+    {
+        if (playerbot::ResourceGovernor::CanAddCustomMatchBot(uint32(lobby.CloneRequests.size()), CountActiveCustomMatchBots()))
+            return true;
+
+        Notify(requester, "The server is near its resource limits; playerbot and clone additions are restricted right now.");
+        return false;
+    }
+
+    // Under sustained hard resource pressure, end one custom match per
+    // governor cooldown. Matches with human PARTICIPANTS are never touched;
+    // bot-only matches nobody is even spectating go first, then bot matches
+    // humans are only spectating. Ending the battleground reuses the normal
+    // completion flow, so members return to their retained lobby.
+    void CullCustomMatchesForResources()
+    {
+        if (!playerbot::ResourceGovernor::ShouldCullNow())
+            return;
+
+        CustomGameLobby* victim = nullptr;
+        Battleground* victimBattleground = nullptr;
+        uint32 victimSpectators = 0;
+        uint32 victimBots = 0;
+
+        for (auto& [instanceId, lobbyPtr] : _lobbies)
+        {
+            CustomGameLobby& lobby = *lobbyPtr;
+            if (!lobby.ActiveBattlegroundId || lobby.Closing || lobby.CloneRequests.empty())
+                continue;
+
+            Battleground* bg = sBattlegroundMgr->GetBattleground(lobby.ActiveBattlegroundId, lobby.ActiveBattlegroundType);
+            if (!bg || (bg->GetStatus() != STATUS_WAIT_JOIN && bg->GetStatus() != STATUS_IN_PROGRESS))
+                continue;
+
+            uint32 humanParticipants = 0;
+            uint32 humanSpectators = 0;
+            for (auto const& [guid, member] : lobby.Members)
+            {
+                Player* human = ObjectAccessor::FindConnectedPlayer(guid);
+                if (!human || human->GetBattlegroundId() != lobby.ActiveBattlegroundId)
+                    continue;
+
+                if (lobby.Teams.find(guid) != lobby.Teams.end())
+                    ++humanParticipants;
+                else
+                    ++humanSpectators;
+            }
+
+            if (humanParticipants)
+                continue;
+
+            uint32 const bots = uint32(lobby.CloneRequests.size());
+            bool const candidateUnwatched = humanSpectators == 0;
+            bool const victimUnwatched = victim && victimSpectators == 0;
+            if (!victim ||
+                (candidateUnwatched && !victimUnwatched) ||
+                (candidateUnwatched == victimUnwatched && bots > victimBots))
+            {
+                victim = &lobby;
+                victimBattleground = bg;
+                victimSpectators = humanSpectators;
+                victimBots = bots;
+            }
+        }
+
+        if (!victim || !victimBattleground)
+            return;
+
+        for (auto const& [guid, member] : victim->Members)
+            if (Player* human = ObjectAccessor::FindConnectedPlayer(guid))
+                Notify(human, "Your custom match has been culled for resource considerations: the server is under heavy load and bot-only matches are ended first.");
+
+        TC_LOG_INFO("playerbots.governor",
+            "Resource governor culled custom match: bgInstanceId={} bgType={} bots={} spectators={}.",
+            victim->ActiveBattlegroundId, uint32(victim->ActiveBattlegroundType), victimBots, victimSpectators);
+
+        victimBattleground->EndBattleground(PVP_TEAM_NEUTRAL);
+        playerbot::ResourceGovernor::NoteCullExecuted();
+    }
+
     void InvalidateLobbyInvites(uint32 instanceId)
     {
         for (auto& [invitedGuid, invitation] : _pendingInvites)

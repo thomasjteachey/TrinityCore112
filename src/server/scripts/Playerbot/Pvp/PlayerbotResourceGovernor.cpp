@@ -17,6 +17,7 @@
 
 #include "PlayerbotResourceGovernor.h"
 
+#include "Common.h"
 #include "Configuration/Config.h"
 #include "GameTime.h"
 #include "Log.h"

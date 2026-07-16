@@ -32,6 +32,7 @@
 #include "Playerbot/Pvp/PlayerbotPvpCore.h"
 #include "Playerbot/Pvp/PlayerbotPvpLifecycleActions.h"
 #include "Playerbot/Pvp/PlayerbotRandomBotParticipation.h"
+#include "Playerbot/Pvp/PlayerbotResourceGovernor.h"
 #include "RBAC.h"
 #include "ScriptMgr.h"
 #include "Spell.h"
@@ -587,6 +588,7 @@ public:
         playerbot::RandomBotParticipationManager::ResetCadence();
         playerbot::RandomBotParticipationManager::LoadPopulationConfig();
         playerbot::PlayerbotObcCloneManager::LoadConfig();
+        playerbot::ResourceGovernor::LoadConfig();
     }
 
     void OnStartup() override
@@ -597,6 +599,7 @@ public:
         playerbot::RandomBotParticipationManager::OnStartupBootstrap();
         playerbot::PlayerbotObcCloneManager::LoadConfig();
         playerbot::PlayerbotObcCloneManager::OnStartupSweep();
+        playerbot::ResourceGovernor::LoadConfig();
         playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
         playerbot::RandomBotPopulationSnapshot const population = playerbot::RandomBotParticipationManager::GetPopulationSnapshot();
 
@@ -613,6 +616,7 @@ public:
 
     void OnUpdate(uint32 diff) override
     {
+        playerbot::ResourceGovernor::NoteWorldUpdate(diff);
         playerbot::RandomBotParticipationManager::OnWorldUpdate(diff);
         playerbot::PlayerbotObcCloneManager::OnWorldUpdate(diff);
     }
