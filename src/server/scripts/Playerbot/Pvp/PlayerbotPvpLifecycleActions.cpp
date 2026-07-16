@@ -3424,7 +3424,27 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             playerbot::LockedErase(g_DroppedFlagPickupDelayByBotGuid, botGuidRaw);
 
-            if (player->IsWithinDist3d(capturePosition.GetPositionX(), capturePosition.GetPositionY(), capturePosition.GetPositionZ(), 8.0f))
+            // Playerbots move entirely on the server and do not send the
+            // client's CMSG_AREATRIGGER packet when they enter a CTF capture
+            // trigger. Reproduce the normal client path once the carrier is
+            // physically inside its team's real capture trigger.
+            uint32 captureTriggerId = 0;
+            uint32 const assignedTeam = battleground->GetPlayerTeam(player->GetGUID());
+            if (dynamic_cast<BattlegroundWS*>(battleground))
+                captureTriggerId = assignedTeam == ALLIANCE ? 3646 : assignedTeam == HORDE ? 3647 : 0;
+            else if (dynamic_cast<BattlegroundTP*>(battleground))
+                captureTriggerId = assignedTeam == ALLIANCE ? 5904 : assignedTeam == HORDE ? 5905 : 0;
+
+            if (captureTriggerId)
+            {
+                AreaTriggerEntry const* captureTrigger = sAreaTriggerStore.LookupEntry(captureTriggerId);
+                if (captureTrigger && player->IsInAreaTriggerRadius(captureTrigger))
+                {
+                    battleground->HandleAreaTrigger(player, captureTriggerId);
+                    return true;
+                }
+            }
+            else if (player->IsWithinDist3d(capturePosition.GetPositionX(), capturePosition.GetPositionY(), capturePosition.GetPositionZ(), 8.0f))
                 return true;
 
             bool const moved = IssueMovePointThrottled(player, capturePosition, 6.0f, 500);

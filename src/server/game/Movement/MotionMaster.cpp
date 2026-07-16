@@ -951,12 +951,26 @@ void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, floa
     // Use a mmap raycast to get a valid destination.
     _owner->MovePositionToFirstCollision(dest, dist, _owner->GetRelativeAngle(srcX, srcY) + float(M_PI));
 
+    float velocity = speedXY;
+    if (serverDrivenPlayer)
+    {
+        // Spline duration is 3D path length / velocity. For a near-vertical
+        // knock-up the raycast's z-adjustment of the destination dominates
+        // that length, so the floored speedXY (~0.1 yd/s) stretched the arc
+        // to tens of seconds. A real client resolves any knockback in exactly
+        // 2 * speedZ / gravity seconds; derive the velocity from the actual
+        // path length so the bot's arc matches that timing.
+        float const airTime = 2.f * moveTimeHalf;
+        if (airTime > 0.01f)
+            velocity = std::max(_owner->GetExactDist(&dest) / airTime, 0.01f);
+    }
+
     std::function<void(Movement::MoveSplineInit&)> initializer = [=](Movement::MoveSplineInit& init)
     {
         init.MoveTo(dest.GetPositionX(), dest.GetPositionY(), dest.GetPositionZ(), false);
         init.SetParabolic(max_height, 0);
         init.SetOrientationFixed(true);
-        init.SetVelocity(speedXY);
+        init.SetVelocity(velocity);
     };
 
     GenericMovementGenerator* movement = new GenericMovementGenerator(std::move(initializer), EFFECT_MOTION_TYPE, 0);
