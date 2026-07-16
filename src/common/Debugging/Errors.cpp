@@ -271,7 +271,7 @@ namespace
         free(symbols);
     }
 
-    volatile sig_atomic_t HandlingFatalSignal = 0;
+    thread_local volatile sig_atomic_t HandlingFatalSignal = 0;
 #endif
 
     [[noreturn]] void Crash(char const* message)
@@ -456,19 +456,45 @@ void InitializeEmergencyCrashLog(std::string const& filename)
     backtrace(warmupFrame, 1);
 }
 
+void InitCurrentThreadCrashSignalStack()
+{
+    // Alternate signal stacks are a property of the calling thread, not of
+    // the process. A stack installed by the main thread does not help a map,
+    // database, network, CLI, or SOAP worker whose regular stack overflowed.
+    alignas(16) thread_local unsigned char alternateSignalStack[64 * 1024];
+    thread_local bool alternateSignalStackInstalled = false;
+    if (alternateSignalStackInstalled)
+        return;
+
+    stack_t currentStack = {};
+    if (sigaltstack(nullptr, &currentStack) == 0 && !(currentStack.ss_flags & SS_DISABLE))
+    {
+        // Respect an alternate stack installed by another subsystem.
+        alternateSignalStackInstalled = true;
+        return;
+    }
+
+    stack_t alternateStack = {};
+    alternateStack.ss_sp = alternateSignalStack;
+    alternateStack.ss_size = sizeof(alternateSignalStack);
+    alternateStack.ss_flags = 0;
+    if (sigaltstack(&alternateStack, nullptr) != 0)
+    {
+        fprintf(stderr, "Could not install alternate fatal-signal stack for current thread: %s\n", std::strerror(errno));
+        return;
+    }
+
+    alternateSignalStackInstalled = true;
+}
+
 void InitCrashSignalHandlers()
 {
     struct sigaction action;
     memset(&action, 0, sizeof(action));
     action.sa_handler = &FatalSignalHandler;
     sigemptyset(&action.sa_mask);
-    alignas(16) static unsigned char alternateSignalStack[64 * 1024];
-    stack_t alternateStack = {};
-    alternateStack.ss_sp = alternateSignalStack;
-    alternateStack.ss_size = sizeof(alternateSignalStack);
-    alternateStack.ss_flags = 0;
-    if (sigaltstack(&alternateStack, nullptr) != 0)
-        fprintf(stderr, "Could not install alternate fatal-signal stack: %s\n", std::strerror(errno));
+
+    InitCurrentThreadCrashSignalStack();
 
     action.sa_flags = SA_RESETHAND | SA_ONSTACK;
 
@@ -479,6 +505,10 @@ void InitCrashSignalHandlers()
     sigaction(SIGBUS, &action, nullptr);
 #endif
     sigaction(SIGABRT, &action, nullptr);
+}
+#else
+void InitCurrentThreadCrashSignalStack()
+{
 }
 #endif
 

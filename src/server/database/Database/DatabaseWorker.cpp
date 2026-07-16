@@ -16,6 +16,7 @@
  */
 
 #include "DatabaseWorker.h"
+#include "Errors.h"
 #include "SQLOperation.h"
 #include "ProducerConsumerQueue.h"
 
@@ -38,6 +39,8 @@ DatabaseWorker::~DatabaseWorker()
 
 void DatabaseWorker::WorkerThread()
 {
+    Trinity::InitCurrentThreadCrashSignalStack();
+
     if (!_queue)
         return;
 

@@ -113,6 +113,8 @@ int kb_hit_return()
 /// %Thread start
 void CliThread()
 {
+    Trinity::InitCurrentThreadCrashSignalStack();
+
 #if TRINITY_PLATFORM == TRINITY_PLATFORM_WINDOWS
     // print this here the first time
     // later it will be printed after command queue updates

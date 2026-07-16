@@ -120,6 +120,8 @@ protected:
 
     void Run()
     {
+        Trinity::InitCurrentThreadCrashSignalStack();
+
         TC_LOG_DEBUG("misc", "Network Thread Starting");
 
         _updateTimer.expires_from_now(boost::posix_time::milliseconds(1));
