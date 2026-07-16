@@ -127,7 +127,7 @@ bool RecoverAirborneStrandedBot(Player* player)
     if (!player || !player->IsAlive() || player->IsInFlight())
         return false;
 
-    if (player->IsFlying() || player->IsSwimming() || player->GetTransport() || player->GetVehicle())
+    if (player->IsFlying()  || player->GetTransport() || player->GetVehicle())
         return false;
 
     // A pending or in-flight charge/leap/knockback keeps the bot airborne
