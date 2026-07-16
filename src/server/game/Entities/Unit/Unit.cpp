@@ -13311,7 +13311,17 @@ void Unit::UpdateObjectVisibility(bool forced)
 
 void Unit::KnockbackFrom(float x, float y, float speedXY, float speedZ)
 {
-    if (IsMovedByServer())
+    // Socketless playerbot sessions (virtual/transient) own a GameClient, so
+    // IsMovedByServer() reports false for them, but there is no real client to
+    // execute the SMSG_MOVE_KNOCK_BACK packet: it would vanish into the null
+    // socket and the bot would never move. Drive their knockback through the
+    // server-side spline like any other server-moved unit.
+    bool serverDrivenPlayer = false;
+    if (Player const* player = ToPlayer())
+        if (WorldSession const* session = player->GetSession())
+            serverDrivenPlayer = session->IsVirtualSession() || session->IsTransientPlayerSession();
+
+    if (IsMovedByServer() || serverDrivenPlayer)
     {
         GetMotionMaster()->MoveKnockbackFrom(x, y, speedXY, speedZ);
     }

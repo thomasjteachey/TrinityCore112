@@ -215,6 +215,12 @@ void AppendSplineSnapshot(std::ostringstream& os, Player const* bot, char const*
 
 void RecordManagedBotUpdatePulse(Player* bot, uint32 diff)
 {
+    // Pure diagnostics feeding the stall log and the whisper diag command:
+    // per-tick mutex + hash-map + spline bookkeeping for every player. Skip
+    // it entirely unless someone is actually watching the motion debug log.
+    if (!sLog->ShouldLog("playerbots.pvp.motion", LOG_LEVEL_DEBUG))
+        return;
+
     if (!bot || !playerbot::IsManagedRandomBot(bot))
         return;
 

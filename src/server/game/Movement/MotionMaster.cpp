@@ -32,6 +32,7 @@
 #include "ScriptSystem.h"
 #include "Unit.h"
 #include "WaypointDefines.h"
+#include "WorldSession.h"
 #include <algorithm>
 #include <iterator>
 
@@ -792,9 +793,24 @@ void MotionMaster::MoveCharge(PathGenerator const& path, float speed /*= SPEED_C
 
 void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, float speedZ)
 {
-    // This function may make players fall below map
-    if (_owner->GetTypeId() == TYPEID_PLAYER)
+    // This function may make players fall below map. Socketless playerbot
+    // sessions (virtual/transient) are the exception: they have no client to
+    // execute a knockback packet, so the server spline is their only way to
+    // be knocked around at all.
+    bool serverDrivenPlayer = false;
+    if (Player const* player = _owner->ToPlayer())
+        if (WorldSession const* session = player->GetSession())
+            serverDrivenPlayer = session->IsVirtualSession() || session->IsTransientPlayerSession();
+
+    if (_owner->GetTypeId() == TYPEID_PLAYER && !serverDrivenPlayer)
         return;
+
+    // Pure vertical knock-ups arrive with speedXY ~0. The spline duration is
+    // horizontal-distance / speedXY (= 2 * speedZ / gravity for any speedXY),
+    // so a tiny floor keeps the arc timing intact with negligible drift
+    // instead of dropping the effect entirely.
+    if (serverDrivenPlayer)
+        speedXY = std::max(speedXY, 0.1f);
 
     if (speedXY < 0.01f)
         return;

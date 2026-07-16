@@ -3023,8 +3023,12 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
     if (!player || !player->FindMap())
         return nullptr;
 
-    Unit const* best = nullptr;
-    float bestDistance = std::numeric_limits<float>::max();
+    // Gather attackable candidates with the cheap checks first, then spend
+    // immunity scans and line-of-sight raycasts nearest-first. The selected
+    // target is identical to evaluating every candidate, but usually only the
+    // closest one or two ever pay for a raycast.
+    std::vector<std::pair<float, Player const*>> candidates;
+    candidates.reserve(16);
     Map::PlayerList const& mapPlayers = player->FindMap()->GetPlayers();
     for (Map::PlayerList::const_iterator itr = mapPlayers.begin(); itr != mapPlayers.end(); ++itr)
     {
@@ -3033,23 +3037,31 @@ Unit const* SelectClosestEnemyTarget(Player const* player, bool requireReachable
             continue;
         if (!player->IsValidAttackTarget(candidate))
             continue;
-        if (IsTargetInvalidByImmunity(player, candidate))
-            continue;
-        if (!player->IsWithinLOSInMap(candidate))
-            continue;
 
         float const distance = player->GetDistance(candidate);
         if (requireReachable && distance > 35.0f)
             continue;
 
-        if (distance < bestDistance)
-        {
-            best = candidate;
-            bestDistance = distance;
-        }
+        candidates.emplace_back(distance, candidate);
     }
 
-    return best;
+    std::sort(candidates.begin(), candidates.end(),
+        [](std::pair<float, Player const*> const& left, std::pair<float, Player const*> const& right)
+    {
+        return left.first < right.first;
+    });
+
+    for (auto const& [distance, candidate] : candidates)
+    {
+        if (IsTargetInvalidByImmunity(player, candidate))
+            continue;
+        if (!player->IsWithinLOSInMap(candidate))
+            continue;
+
+        return candidate;
+    }
+
+    return nullptr;
 }
 
 Unit const* SelectEnemyCastingTarget(Player const* player, float maxDistance, Unit const* preferredTarget = nullptr)
