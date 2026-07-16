@@ -111,7 +111,7 @@ enum BG_OBC_BroadcastTexts
 
 enum BG_OBC_Constants
 {
-    BG_OBC_SCORE_LIMIT        = 30,
+    BG_OBC_SCORE_LIMIT        = 50,
     BG_OBC_POINTS_PER_KILL    = 1,
     BG_OBC_POINTS_PER_CAPTURE = 3,
     BG_OBC_FLAG_RESPAWN_TIME     = (8 * IN_MILLISECONDS),
