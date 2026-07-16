@@ -290,6 +290,10 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     /// (or they've been idling in character select)
     if (m_Socket && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
     {
+        TC_LOG_ERROR("network.disconnect",
+            "Closing idle world session: {} remote={} deadline={} now={} activeTimeoutSeconds={}",
+            GetPlayerInfo(), GetRemoteAddress(), m_timeOutTime, GameTime::GetGameTime(),
+            sWorld->getIntConfig(CONFIG_SOCKET_TIMEOUTTIME_ACTIVE));
         m_Socket->CloseSocket();
     }
 
@@ -656,8 +660,9 @@ void WorldSession::KickPlayer(std::string const& reason)
 {
     if (m_Socket)
     {
-        TC_LOG_INFO("network.kick", "Account: {} Character: '{}' {} kicked with reason: {}", GetAccountId(), _player ? _player->GetName() : "<none>",
-            _player ? _player->GetGUID().ToString() : "", reason);
+        TC_LOG_ERROR("network.disconnect", "Server kick: Account: {} Character: '{}' {} remote={} reason={}",
+            GetAccountId(), _player ? _player->GetName() : "<none>",
+            _player ? _player->GetGUID().ToString() : "", GetRemoteAddress(), reason);
 
         m_Socket->CloseSocket();
         forceExit = true;

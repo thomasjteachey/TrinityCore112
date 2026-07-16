@@ -140,10 +140,34 @@ void WorldSocket::HandleSendAuthSession()
 
 void WorldSocket::OnClose()
 {
-    {
-        std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
-        _worldSession = nullptr;
-    }
+    std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+
+    TC_LOG_ERROR("network.disconnect",
+        "World socket closed: remote={}:{} authenticated={} overspeedPings={} session={}",
+        GetRemoteIpAddress().to_string(), GetRemotePort(), _authed, _OverSpeedPings,
+        _worldSession ? _worldSession->GetPlayerInfo() : "<none>");
+
+    _worldSession = nullptr;
+}
+
+void WorldSocket::OnSocketError(char const* operation, boost::system::error_code const& error)
+{
+    std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+
+    TC_LOG_ERROR("network.disconnect",
+        "World socket transport failure: operation={} remote={}:{} error={} ({}) authenticated={} session={}",
+        operation, GetRemoteIpAddress().to_string(), GetRemotePort(), error.value(), error.message(), _authed,
+        _worldSession ? _worldSession->GetPlayerInfo() : "<none>");
+}
+
+void WorldSocket::OnSocketWriteZero(std::size_t attemptedBytes)
+{
+    std::lock_guard<std::mutex> sessionGuard(_worldSessionLock);
+
+    TC_LOG_ERROR("network.disconnect",
+        "World socket write returned zero bytes: remote={}:{} attempted={} authenticated={} session={}",
+        GetRemoteIpAddress().to_string(), GetRemotePort(), attemptedBytes, _authed,
+        _worldSession ? _worldSession->GetPlayerInfo() : "<none>");
 }
 
 void WorldSocket::ReadHandler()
