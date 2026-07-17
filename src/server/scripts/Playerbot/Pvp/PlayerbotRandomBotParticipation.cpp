@@ -263,25 +263,27 @@ void EmitLifecycleGmDebug(Player const* player, std::string const& detail, uint3
 
 uint32 GetHumanInsigniaRacialSpell(uint8 classId)
 {
-    // Custom human racials mirror the five class-specific PvP insignia variants.
+    // Custom human racials mirror the five class-specific PvP insignia
+    // variants granted via character_action - keep this mapping in lockstep
+    // with the class-group CASE in that insert (Warrior/Hunter/Shaman = 89149,
+    // Rogue/Warlock = 89148, Paladin/Priest = 89150, Mage = 89151, everything
+    // else/Druid = 89152).
     switch (classId)
     {
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return 89148;
         case CLASS_WARRIOR:
         case CLASS_HUNTER:
         case CLASS_SHAMAN:
-            return 89148;
-        case CLASS_ROGUE:
-        case CLASS_WARLOCK:
             return 89149;
-        case CLASS_DRUID:
-            return 89150;
-        case CLASS_PRIEST:
         case CLASS_PALADIN:
-            return 89151;
+        case CLASS_PRIEST:
+            return 89150;
         case CLASS_MAGE:
+            return 89151;
+        default: // Druid and anything else
             return 89152;
-        default:
-            return 0;
     }
 }
 
@@ -290,41 +292,12 @@ bool HasClassInsigniaBreakableAura(Player const* player)
     if (!player)
         return false;
 
-    bool const rooted = player->HasUnitState(UNIT_STATE_ROOT) ||
-        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
-        player->HasAuraWithMechanic(1u << MECHANIC_ROOT);
-    bool const snared = player->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
-        player->HasAuraWithMechanic(1u << MECHANIC_SNARE);
-    bool const stunned = player->HasUnitState(UNIT_STATE_STUNNED) ||
-        player->HasAuraType(SPELL_AURA_MOD_STUN) ||
-        player->HasAuraWithMechanic(1u << MECHANIC_STUN);
-    bool const charmed = player->HasAuraType(SPELL_AURA_MOD_CHARM) ||
-        player->HasAuraWithMechanic(1u << MECHANIC_CHARM);
-    bool const feared = player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->HasAuraType(SPELL_AURA_MOD_FEAR) ||
-        player->HasAuraWithMechanic(1u << MECHANIC_FEAR);
-    bool const polymorphed = player->IsPolymorphed() ||
-        player->HasAuraWithMechanic(1u << MECHANIC_POLYMORPH);
-
-    switch (player->GetClass())
-    {
-        case CLASS_WARRIOR:
-        case CLASS_HUNTER:
-        case CLASS_SHAMAN:
-            return rooted || snared || stunned;
-        case CLASS_ROGUE:
-        case CLASS_WARLOCK:
-            return charmed || feared || polymorphed;
-        case CLASS_DRUID:
-            return charmed || feared || stunned;
-        case CLASS_PRIEST:
-        case CLASS_PALADIN:
-            return feared || polymorphed || stunned;
-        case CLASS_MAGE:
-            return feared || polymorphed || snared;
-        default:
-            return false;
-    }
+    // A real PvP trinket (and the custom Every Man for Himself equivalents
+    // modeled on it) breaks every loss-of-control effect - stun, root, snare,
+    // fear, charm, polymorph, and the rest - not a curated subset per class.
+    return player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->IsPolymorphed() ||
+        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
 }
 
 bool IsPlayerbotInsigniaCheckReady(Player const* player)
@@ -381,6 +354,50 @@ bool TryCastHumanInsigniaRacial(Player* player)
     TC_LOG_DEBUG("playerbots.pvp.class",
         "Playerbot PvP human insignia racial attempt: guid={} spell={} result={}.",
         player->GetGUID().ToString(), spellId, uint32(castResult));
+    return castResult == SPELL_CAST_OK;
+}
+
+// Unlike the insignia/Every Man for Himself fast path, Stoneform's trigger
+// condition is "has a poison-dispel effect" (Blind included, since it is
+// classified as poison-dispel here), not the generic loss-of-control mask -
+// it cleanses poison/disease/bleed rather than breaking CC outright. It still
+// needs the same triggered cast bypass to reliably go off while the poison
+// in question (Blind) is simultaneously confusing the dwarf.
+bool PlayerHasPoisonForDwarfStoneform(Player const* player)
+{
+    if (!player)
+        return false;
+
+    for (Unit::AuraApplicationMap::value_type const& appliedAura : player->GetAppliedAuras())
+    {
+        AuraApplication const* aurApp = appliedAura.second;
+        SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
+        if (spellInfo && (spellInfo->Dispel == DISPEL_POISON || spellInfo->Id == 2094)) // 2094 = Blind
+            return true;
+    }
+
+    return false;
+}
+
+bool TryCastDwarfStoneformRacial(Player* player)
+{
+    constexpr uint32 stoneformSpellId = 20594;
+    if (!player || !player->HasSpell(stoneformSpellId))
+        return false;
+
+    if (player->HasStealthAura())
+        return false;
+
+    if (player->GetSpellHistory()->HasCooldown(stoneformSpellId))
+        return false;
+
+    if (!PlayerHasPoisonForDwarfStoneform(player))
+        return false;
+
+    SpellCastResult const castResult = player->CastSpell(player, stoneformSpellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_IGNORE_GCD | TRIGGERED_IGNORE_CAST_IN_PROGRESS)));
+    TC_LOG_DEBUG("playerbots.pvp.class",
+        "Playerbot PvP dwarf stoneform racial attempt: guid={} spell={} result={}.",
+        player->GetGUID().ToString(), stoneformSpellId, uint32(castResult));
     return castResult == SPELL_CAST_OK;
 }
 
@@ -609,6 +626,39 @@ bool TryUsePlayerbotInsigniaBreaker(Player* player)
         return TryCastHumanInsigniaRacial(player);
 
     return TryUseEquippedInsigniaTrinket(player);
+}
+
+// Stoneform's trigger (poison-dispel presence) does not overlap with the
+// generic loss-of-control mask HasClassInsigniaBreakableAura checks, so it
+// cannot share TryUsePlayerbotInsigniaBreaker's gate - a plain poison DoT
+// with no confuse component would never open that gate, and this needs to
+// fire for those too. This mirrors that function's own preamble instead.
+bool TryUsePlayerbotStoneformBreaker(Player* player)
+{
+    if (!player)
+        return false;
+
+    playerbot::PvpCoreConfig const& config = playerbot::PvpCore::GetConfig();
+    if (!config.moduleEnabled || !config.pvpCoreEnabled || !config.pvpClassSpellsEnabled)
+        return false;
+
+    if (!playerbot::IsManagedRandomBot(player) || !player->IsInWorld() || !player->IsAlive())
+        return false;
+
+    if (player->GetRace() != RACE_DWARF)
+        return false;
+
+    bool const inActiveBattleground = player->InBattleground() &&
+        player->GetBattleground() &&
+        player->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS;
+    bool const inActiveDuel = player->duel && player->duel->State == DUEL_STATE_IN_PROGRESS;
+    if (!inActiveBattleground && !inActiveDuel)
+        return false;
+
+    if (player->IsBeingTeleportedFar() || player->IsBeingTeleportedNear())
+        return false;
+
+    return TryCastDwarfStoneformRacial(player);
 }
 
 enum class LifecycleObservationReason : uint8
@@ -1957,6 +2007,7 @@ void RandomBotParticipationManager::ProcessPlayerLifecycle(Player* player)
     if (TryFinalizePendingVirtualPlayerTeleport(player))
         return;
     TryUsePlayerbotInsigniaBreaker(player);
+    TryUsePlayerbotStoneformBreaker(player);
     TryCastPriestSpiritOfRedemption(player);
 
     if (isTransientClone && player && player->InBattleground() &&
