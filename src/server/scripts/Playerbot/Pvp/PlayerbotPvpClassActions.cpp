@@ -3383,13 +3383,30 @@ void ScheduleWandDiagnostics(Player*, Unit*, uint32)
     // Intentionally silent; delayed wand diagnostics were temporary.
 }
 
-bool IsMindFlaySpell(SpellInfo const* spellInfo)
+// Volley, Rain of Fire, Blizzard, and Tranquility must be treated like Mind
+// Flay/Drain Life for playerbot movement even on DBC/custom data where the
+// generic channel flags look movable - none of these should have the bot
+// walking (and cancelling the channel) mid-cast.
+bool IsForcedStationaryChannelSpell(SpellInfo const* spellInfo)
 {
     if (!spellInfo)
         return false;
 
     SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
-    return firstRank && firstRank->Id == 15407;
+    if (!firstRank)
+        return false;
+
+    switch (firstRank->Id)
+    {
+        case 15407: // Mind Flay
+        case 1510:  // Volley
+        case 5740:  // Rain of Fire
+        case 10:    // Blizzard
+        case 740:   // Tranquility
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool IsPlayerbotStationaryChannel(SpellInfo const* spellInfo)
@@ -3397,9 +3414,7 @@ bool IsPlayerbotStationaryChannel(SpellInfo const* spellInfo)
     if (!spellInfo || !spellInfo->IsChanneled())
         return false;
 
-    // Mind Flay must be treated like Drain Life for playerbot movement even on
-    // DBC/custom data where the generic channel flags look movable.
-    return !spellInfo->IsMoveAllowedChannel() || IsMindFlaySpell(spellInfo);
+    return !spellInfo->IsMoveAllowedChannel() || IsForcedStationaryChannelSpell(spellInfo);
 }
 
 bool IsPlayerbotMovableCastTimeSpell(Player const* player, SpellInfo const* spellInfo)

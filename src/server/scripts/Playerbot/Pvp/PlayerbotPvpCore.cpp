@@ -78,7 +78,7 @@ constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
 // Explosion, Blizzard, Hurricane, Rain of Fire, Volley, and the Whirlwind
 // swarm-priority boost). Bump this to tune how large a fight needs to be
 // before bots reach for these instead of single-target rotation.
-constexpr uint32 kMassAoeEnemyCountThreshold = 4;
+constexpr uint32 kMassAoeEnemyCountThreshold = 7;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;

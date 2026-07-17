@@ -1882,13 +1882,30 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             motionMaster->Clear(MOTION_SLOT_ACTIVE);
     }
 
-    bool IsMindFlaySpell(SpellInfo const* spellInfo)
+    // Volley, Rain of Fire, Blizzard, and Tranquility must be treated like Mind
+    // Flay/Drain Life for playerbot movement even on DBC/custom data where the
+    // generic channel flags look movable - none of these should have the bot
+    // walking (and cancelling the channel) mid-cast.
+    bool IsForcedStationaryChannelSpell(SpellInfo const* spellInfo)
     {
         if (!spellInfo)
             return false;
 
         SpellInfo const* firstRank = spellInfo->GetFirstRankSpell();
-        return firstRank && firstRank->Id == 15407;
+        if (!firstRank)
+            return false;
+
+        switch (firstRank->Id)
+        {
+            case 15407: // Mind Flay
+            case 1510:  // Volley
+            case 5740:  // Rain of Fire
+            case 10:    // Blizzard
+            case 740:   // Tranquility
+                return true;
+            default:
+                return false;
+        }
     }
 
     bool HasActiveStationaryChannel(Player const* player)
@@ -1901,7 +1918,7 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
             return false;
 
         SpellInfo const* spellInfo = channel->GetSpellInfo();
-        return spellInfo && spellInfo->IsChanneled() && (!spellInfo->IsMoveAllowedChannel() || IsMindFlaySpell(spellInfo));
+        return spellInfo && spellInfo->IsChanneled() && (!spellInfo->IsMoveAllowedChannel() || IsForcedStationaryChannelSpell(spellInfo));
     }
 
     bool HasPlayerbotGapCloserInFlight(Player const* player)
