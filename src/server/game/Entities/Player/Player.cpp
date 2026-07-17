@@ -230,6 +230,26 @@ namespace
         return knownSpellId;
     }
 
+    // Delivers a feign diagnostic line to every session that enabled the Feign
+    // category (.gm diagnostics on feign). Returns whether anyone received it,
+    // so callers can tell "fired but nobody listening" apart from "never fired".
+    bool BroadcastFeignDiagnostic(std::string const& message)
+    {
+        bool delivered = false;
+        for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
+        {
+            WorldSession* observerSession = sessionPair.second;
+            if (!observerSession || !observerSession->GetPlayer() ||
+                !observerSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign))
+                continue;
+
+            ChatHandler(observerSession).SendSysMessage(message);
+            delivered = true;
+        }
+
+        return delivered;
+    }
+
     bool GetCustomArenaRosterTeam(Player const* player, Battleground const*& battleground, uint32& team)
     {
         battleground = player ? player->GetBattleground() : nullptr;
@@ -25901,6 +25921,13 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
         m_combatDiagnosticFeignTrapPending = true;
         m_combatDiagnosticFeignSawAura = HasAura(FeignDeathSpell);
         m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
+
+        std::ostringstream armed;
+        armed << "[Feign diagnostic] armed: player=" << GetName()
+              << ", feignAuraNow=" << (m_combatDiagnosticFeignSawAura ? 1 : 0)
+              << ", combatNow=" << (IsInCombat() ? 1 : 0)
+              << "; reporting in " << FeignTrapDiagnosticWindow << "ms unless a trap cast completes.";
+        BroadcastFeignDiagnostic(armed.str());
         return;
     }
 
@@ -25912,6 +25939,11 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
         m_combatDiagnosticFeignTrapTimer <= FeignTrapDiagnosticWindow)
     {
         m_combatDiagnosticFeignTrapPending = false;
+
+        std::ostringstream resolved;
+        resolved << "[Feign diagnostic] trap cast completed " << m_combatDiagnosticFeignTrapTimer
+                 << "ms after feign: spell=" << spellId << "; no report will follow.";
+        BroadcastFeignDiagnostic(resolved.str());
     }
 }
 
@@ -26036,20 +26068,12 @@ void Player::SendFeignTrapDiagnostic()
     diagnostic << '.';
 
     std::string const message = diagnostic.str();
-    bool delivered = false;
-    for (SessionMap::value_type const& sessionPair : sWorld->GetAllSessions())
-    {
-        WorldSession* observerSession = sessionPair.second;
-        if (!observerSession || !observerSession->GetPlayer() ||
-            !observerSession->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign))
-            continue;
+    bool const delivered = BroadcastFeignDiagnostic(message);
 
-        ChatHandler(observerSession).SendSysMessage(message);
-        delivered = true;
-    }
-
-    if (delivered)
-        TC_LOG_WARN("combat.diagnostic", "{}", message);
+    // Log even with no enabled observer session: an undelivered report must
+    // still leave a trace, otherwise "mask not enabled" and "never fired" are
+    // indistinguishable after the fact.
+    TC_LOG_WARN("combat.diagnostic", "{} (delivered={})", message, delivered ? 1 : 0);
 }
 
 void Player::SendCombatDiagnostic()
