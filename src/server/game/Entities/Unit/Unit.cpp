@@ -9510,10 +9510,12 @@ void Unit::SetSpeedRate(UnitMoveType mtype, float rate)
     float newSpeedFlat = rate * (IsControlledByPlayer() ? playerBaseMoveSpeed[mtype] : baseMoveSpeed[mtype]);
     if (IsMovedByClient() && IsInWorld())
     {
-        // Virtual sessions (for example managed playerbots) do not emit client-side
-        // movement change ACKs. Apply speed updates immediately so server-side motion
-        // generators (MovePoint/MoveFollow/etc.) use the correct aura-adjusted speed.
-        if (GameClient* controller = GetGameClientMovingMe(); controller && controller->GetWorldSession() && controller->GetWorldSession()->IsVirtualSession())
+        // Socketless sessions (managed playerbots, transient OBC clones) do not emit
+        // client-side movement change ACKs. Apply speed updates immediately so
+        // server-side motion generators (MovePoint/MoveFollow/etc.) use the correct
+        // aura-adjusted speed, and never queue pending changes no client will ack.
+        if (GameClient* controller = GetGameClientMovingMe(); controller && controller->GetWorldSession() &&
+            (controller->GetWorldSession()->IsVirtualSession() || controller->GetWorldSession()->IsTransientPlayerSession()))
         {
             SetSpeedRateReal(mtype, rate);
             MovementPacketSender::SendSpeedChangeToObservers(this, mtype, newSpeedFlat);
