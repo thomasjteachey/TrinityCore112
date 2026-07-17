@@ -5193,10 +5193,10 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
-    // Intervene requires Battle or Defensive Stance (never Berserker). Prot
+    // Intervene requires Defensive Stance (never Berserker). Prot
     // warriors already live in Defensive Stance via the stance rules below,
     // so no dedicated stance-swap prerequisite is needed here.
-    Unit const* interveneTarget = isProtWarrior && !inBerserkerStance && IsSpellReady(player, 3411) ?
+    Unit const* interveneTarget = isProtWarrior && inDefensiveStance && IsSpellReady(player, 3411) ?
         SelectFriendlyMeleePressureTarget(player, 25.0f, 100.0f) : nullptr;
     if (interveneTarget == player || (interveneTarget && player->IsWithinMeleeRange(interveneTarget)))
         interveneTarget = nullptr;
