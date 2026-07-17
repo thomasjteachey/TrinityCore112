@@ -125,6 +125,16 @@ constexpr uint32 kRacialUndeadWillOfTheForsakenSpellId = 7744;
 constexpr uint32 kRacialDwarfStoneformSpellId = 20594;
 constexpr uint32 kRacialGnomeSurpriseSpellId = 89160;
 constexpr uint32 kRacialHumanPerceptionSpellId = 20600;
+// Custom trinket-equivalent "Every Man for Himself" abilities - still the
+// Human racial, just implemented as five class-flavored variants instead of
+// one spell. Granted to Human characters via character_action keyed on class
+// group - see the class-group mapping in GetCustomEveryManForHimselfSpellId
+// below.
+constexpr uint32 kEveryManForHimselfWarlockGroupSpellId = 89148; // Rogue/Warlock
+constexpr uint32 kEveryManForHimselfHunterGroupSpellId = 89149;  // Warrior/Hunter/Shaman
+constexpr uint32 kEveryManForHimselfPriestGroupSpellId = 89150;  // Paladin/Priest
+constexpr uint32 kEveryManForHimselfMageGroupSpellId = 89151;    // Mage
+constexpr uint32 kEveryManForHimselfDruidGroupSpellId = 89152;   // Druid and anything else
 constexpr float kPlayerbotTotemRefreshDistance = 30.0f;
 // Carrier auras are a second source of truth for the short interval between a
 // flag click and the next collected battleground-state snapshot. Keep this
@@ -418,7 +428,13 @@ bool HasPoisonEffect(Player const* player)
     {
         AuraApplication const* aurApp = appliedAura.second;
         SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
-        if (spellInfo && spellInfo->Dispel == DISPEL_POISON)
+        if (!spellInfo)
+            continue;
+
+        // Blind (2094) is classified as a Poison-dispel effect, so Stoneform
+        // should clear it exactly like any other poison even if this server's
+        // spell data doesn't carry Dispel == DISPEL_POISON on it directly.
+        if (spellInfo->Dispel == DISPEL_POISON || spellInfo->Id == 2094)
             return true;
     }
 
@@ -437,6 +453,47 @@ bool HasWillOfTheForsakenBreakableControl(Player const* player)
 
     return player->HasUnitState(UNIT_STATE_FLEEING) ||
         player->HasAuraWithMechanic(wotfMechanicMask);
+}
+
+bool HasEveryManForHimselfBreakableControl(Player const* player)
+{
+    if (!player)
+        return false;
+
+    // Same mechanic mask real spell 59752 grants immunity against (see
+    // SpellInfo::_InitializeExplicitTargetMask's SPELL_AURA_MECHANIC_IMMUNITY
+    // handling for 59752, which the custom 89148-89152 trinket spells are
+    // modeled on), so this stays in lockstep with what they actually clear.
+    return player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
+}
+
+// The custom Every Man for Himself trinket equivalents are granted to Human
+// characters via a character_action insert keyed on class - see the class
+// groupings alongside the kEveryManForHimself*GroupSpellId constants above.
+// Caller is responsible for checking RACE_HUMAN before using this.
+uint32 GetCustomEveryManForHimselfSpellId(Player const* player)
+{
+    if (!player)
+        return 0;
+
+    switch (player->GetClass())
+    {
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return kEveryManForHimselfWarlockGroupSpellId;
+        case CLASS_WARRIOR:
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return kEveryManForHimselfHunterGroupSpellId;
+        case CLASS_PALADIN:
+        case CLASS_PRIEST:
+            return kEveryManForHimselfPriestGroupSpellId;
+        case CLASS_MAGE:
+            return kEveryManForHimselfMageGroupSpellId;
+        default:
+            return kEveryManForHimselfDruidGroupSpellId;
+    }
 }
 
 bool HasCastTimeSpellTargetingPlayer(Unit const* caster, Player const* target)
@@ -1032,6 +1089,18 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
     // of spending a racial before they engage.
     if (player->HasStealthAura())
         return {};
+
+    // Every Man for Himself is still the Human racial - it is just implemented
+    // as five custom class-flavored variants (89148-89152) instead of the
+    // single real spell 59752, granted to Human characters via
+    // character_action based on class. Check this before the per-race switch
+    // below since it needs the class-based spell ID lookup rather than a
+    // single constant.
+    if (player->GetRace() == RACE_HUMAN && HasEveryManForHimselfBreakableControl(player))
+    {
+        if (uint32 const emfhSpellId = GetCustomEveryManForHimselfSpellId(player); emfhSpellId && IsSpellReady(player, emfhSpellId))
+            return { "custom every man for himself", "break stun/root/fear/charm and other loss-of-control effects", emfhSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+    }
 
     switch (player->GetRace())
     {

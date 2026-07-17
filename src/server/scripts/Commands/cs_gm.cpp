@@ -248,9 +248,11 @@ public:
             diagnosticCategory = GmDiagnosticCategory::Playerbot;
         else if (category == "feign")
             diagnosticCategory = GmDiagnosticCategory::Feign;
+        else if (category == "channel")
+            diagnosticCategory = GmDiagnosticCategory::Channel;
         else
         {
-            handler->SendSysMessage("Usage: .gm diagnostics on/off [all/heartbeat/combat/playerbot/feign]");
+            handler->SendSysMessage("Usage: .gm diagnostics on/off [all/heartbeat/combat/playerbot/feign/channel]");
             handler->SetSentErrorMessage(true);
             return false;
         }
@@ -258,12 +260,13 @@ public:
         session->SetGmDiagnosticEnabled(diagnosticCategory, enable);
 
         handler->PSendSysMessage(
-            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s.",
+            "GM diagnostics %s for %s. Current: heartbeat=%s, combat=%s, playerbot=%s, feign=%s, channel=%s.",
             enable ? "enabled" : "disabled", category.c_str(),
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Heartbeat) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Combat) ? "on" : "off",
             session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Playerbot) ? "on" : "off",
-            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign) ? "on" : "off");
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Feign) ? "on" : "off",
+            session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel) ? "on" : "off");
         return true;
     }
 

@@ -3611,6 +3611,14 @@ void Spell::cancel()
             m_originalCaster = nullptr;
     }
 
+    if (m_spellInfo->IsChanneled())
+        if (Player* casterPlayer = m_caster->ToPlayer())
+            if (WorldSession* session = casterPlayer->GetSession())
+                if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+                    ChatHandler(session).PSendSysMessage(
+                        "[Channel] cancel() spell=%u oldState=%u originalCaster=%s",
+                        m_spellInfo->Id, oldState, m_originalCaster ? "resolved" : "NULL");
+
     // originalcaster handles gameobjects/dynobjects for gob caster
     if (m_originalCaster)
     {
@@ -5076,6 +5084,12 @@ void Spell::SendChannelUpdate(uint32 time)
     Unit* unitCaster = m_caster->ToUnit();
     if (!unitCaster)
         return;
+
+    if (Player* casterPlayer = unitCaster->ToPlayer())
+        if (WorldSession* session = casterPlayer->GetSession())
+            if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+                ChatHandler(session).PSendSysMessage("[Channel] SendChannelUpdate spell=%u time=%u%s",
+                    m_spellInfo->Id, time, time == 0 ? " (STOP)" : " (delay/pushback)");
 
     if (time == 0)
     {

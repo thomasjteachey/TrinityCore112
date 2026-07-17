@@ -5721,6 +5721,18 @@ void Unit::RemoveDynObject(uint32 spellId)
 {
     if (m_dynObj.empty())
         return;
+
+    if (Player* casterPlayer = ToPlayer())
+        if (WorldSession* session = casterPlayer->GetSession())
+            if (session->IsGmDiagnosticEnabled(GmDiagnosticCategory::Channel))
+            {
+                size_t matches = std::count_if(m_dynObj.begin(), m_dynObj.end(),
+                    [spellId](DynamicObject* dynObj) { return dynObj->GetSpellId() == spellId; });
+                ChatHandler(session).PSendSysMessage(
+                    "[Channel] RemoveDynObject spell=%u matches=%u (of %u tracked)",
+                    spellId, uint32(matches), uint32(m_dynObj.size()));
+            }
+
     for (DynObjectList::iterator i = m_dynObj.begin(); i != m_dynObj.end();)
     {
         DynamicObject* dynObj = *i;

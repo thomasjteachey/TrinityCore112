@@ -2677,7 +2677,17 @@ bool PlayerHasPoisonForStoneform(Player const* player)
     {
         AuraApplication const* aurApp = appliedAura.second;
         SpellInfo const* spellInfo = aurApp ? aurApp->GetBase()->GetSpellInfo() : nullptr;
-        if (spellInfo && spellInfo->Dispel == DISPEL_POISON)
+        if (!spellInfo)
+            continue;
+
+        // Blind (2094) is classified as a Poison-dispel effect, so Stoneform
+        // should be allowed to break it exactly like any other poison even if
+        // this server's spell data doesn't carry Dispel == DISPEL_POISON on it
+        // directly. Kept in sync with HasPoisonEffect in PlayerbotPvpCore.cpp,
+        // which gates whether the bot decides to cast Stoneform in the first
+        // place - this is the separate check that authorizes the cast to
+        // actually go through while the bot is flagged as crowd-controlled.
+        if (spellInfo->Dispel == DISPEL_POISON || spellInfo->Id == 2094)
             return true;
     }
 
@@ -2701,6 +2711,17 @@ bool IsControlBreakingRacialCast(Player const* player, playerbot::PvpClassSpellC
         }
         case 20594: // Stoneform
             return PlayerHasPoisonForStoneform(player);
+        // Custom trinket-equivalent Every Man for Himself abilities - still the
+        // Human racial, just implemented as five class-flavored variants
+        // granted via character_action. See the class-group mapping next to
+        // kEveryManForHimself*GroupSpellId in PlayerbotPvpCore.cpp.
+        case 89148: // Rogue/Warlock
+        case 89149: // Warrior/Hunter/Shaman
+        case 89150: // Paladin/Priest
+        case 89151: // Mage
+        case 89152: // Druid and anything else
+            return player->HasUnitState(UNIT_STATE_FLEEING) ||
+                player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
         default:
             return false;
     }

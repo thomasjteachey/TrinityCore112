@@ -68,7 +68,8 @@ enum class GmDiagnosticCategory : uint8
     Combat    = 0x02,
     Playerbot = 0x04,
     Feign     = 0x08,
-    All       = 0x0F
+    Channel   = 0x10,
+    All       = 0x1F
 };
 
 namespace lfg
