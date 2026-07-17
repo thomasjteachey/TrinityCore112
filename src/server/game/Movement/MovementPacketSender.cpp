@@ -84,14 +84,13 @@ void MovementPacketSender::SendSpeedChangeToObservers(Unit* unit, UnitMoveType m
 
     ASSERT(controller);
 
-    // Socketless player sessions (managed playerbots, transient OBC clones) never
-    // send movement packets, so unit->m_movementInfo is never refreshed and its
-    // position is permanently stale. Observing clients apply the MovementInfo
-    // embedded in MSG_MOVE_SET_*_SPEED as the unit's current movement state, which
-    // snaps the unit to that stale position and cancels its client-side spline
-    // playback until the next spline packet corrects it -- rendered as sporadic
-    // teleporting. These units move exclusively by splines, so send observers the
-    // spline-style speed opcode instead; it carries no MovementInfo block.
+    // Socketless player sessions (managed playerbots, transient OBC clones) move
+    // exclusively through server splines and have no client to acknowledge
+    // player-style movement changes. Their spline tick keeps m_movementInfo in
+    // sync, but publishing MSG_MOVE_SET_*_SPEED would still switch observers from
+    // spline playback to a client-movement stream that never follows. Keep the
+    // observer protocol server-driven as well by using the spline speed opcode,
+    // which carries no competing MovementInfo block.
     if (WorldSession const* session = controller->GetWorldSession();
         session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
     {

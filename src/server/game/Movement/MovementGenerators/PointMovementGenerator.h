@@ -40,6 +40,11 @@ class PointMovementGenerator : public MovementGeneratorMedium<T, PointMovementGe
         void UnitSpeedChanged() override { PointMovementGenerator<T>::AddFlag(MOVEMENTGENERATOR_FLAG_SPEED_UPDATE_PENDING); }
 
         uint32 GetId() const { return _movementId; }
+        float GetDestinationX() const { return _x; }
+        float GetDestinationY() const { return _y; }
+        float GetDestinationZ() const { return _z; }
+        bool GeneratesPath() const { return _generatePath; }
+        Optional<float> const& GetFinalOrientation() const { return _finalOrient; }
 
     private:
         void MovementInform(T*);

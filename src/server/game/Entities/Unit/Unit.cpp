@@ -98,6 +98,35 @@ bool IsIceFangSprintTurnRateAura(SpellInfo const* spellInfo)
 {
     return spellInfo->Id == SPELL_ICE_FANG_SPRINT;
 }
+
+bool IsSocketlessServerDrivenPlayer(Unit const* unit)
+{
+    Player const* player = unit ? unit->ToPlayer() : nullptr;
+    WorldSession const* session = player ? player->GetSession() : nullptr;
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+
+void SyncSocketlessServerDrivenMovementInfo(Unit* unit, float x, float y, float z, float orientation)
+{
+    if (!IsSocketlessServerDrivenPlayer(unit))
+        return;
+
+    unit->m_movementInfo.pos.Relocate(x, y, z, orientation);
+    unit->m_movementInfo.time = GameTime::GetGameTimeMS();
+}
+
+bool HasActiveTranslationalSpline(Unit const* unit)
+{
+    if (!unit || !unit->movespline || !unit->movespline->Initialized() || unit->movespline->Finalized())
+        return false;
+
+    Movement::Location const current = unit->movespline->ComputePosition();
+    G3D::Vector3 const destination = unit->movespline->FinalDestination();
+    float const dx = destination.x - current.x;
+    float const dy = destination.y - current.y;
+    float const dz = destination.z - current.z;
+    return dx * dx + dy * dy + dz * dz > 0.01f;
+}
 }
 
 float baseMoveSpeed[MAX_MOVE_TYPE] =
@@ -14066,6 +14095,14 @@ bool Unit::UpdatePosition(float x, float y, float z, float orientation, bool tel
         return false;
     }
 
+    // Real players refresh MovementInfo through client movement packets.
+    // Socketless playerbots never send those packets, so every authoritative
+    // server relocation (spline, teleport completion, knockback, or direct
+    // correction) must refresh the packet-facing position here as well. If it
+    // remains stale, a later player-style observer packet can pull clients back
+    // to the old coordinate until the next spline packet arrives.
+    SyncSocketlessServerDrivenMovementInfo(this, x, y, z, orientation);
+
     // Check if angular distance changed
     bool const turn = G3D::fuzzyGt(M_PI - fabs(fabs(GetOrientation() - orientation) - M_PI), 0.0f);
 
@@ -14103,6 +14140,7 @@ bool Unit::UpdatePosition(Position const& pos, bool teleport)
 void Unit::UpdateOrientation(float orientation)
 {
     SetOrientation(orientation);
+    SyncSocketlessServerDrivenMovementInfo(this, GetPositionX(), GetPositionY(), GetPositionZ(), GetOrientation());
     if (IsVehicle())
         GetVehicleKit()->RelocatePassengers();
 }
@@ -14437,6 +14475,18 @@ void Unit::SetFacingTo(float ori, bool force)
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
 
+    // SetFacingTo normally launches a zero-distance spline. For a socketless
+    // playerbot that replaces the translational spline observers are currently
+    // interpolating, and the movement generator then launches another travel
+    // spline on its next update. The alternating packets render as a sporadic
+    // back-and-forth teleport. Preserve travel and update only the authoritative
+    // facing needed by the immediate server-side spell/arc check.
+    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
+    {
+        UpdateOrientation(ori);
+        return;
+    }
+
     Movement::MoveSplineInit init(this);
     init.MoveTo(GetPositionX(), GetPositionY(), GetPositionZ(), false);
     if (HasUnitMovementFlag(MOVEMENTFLAG_ONTRANSPORT) && GetTransGUID())
@@ -14455,6 +14505,12 @@ void Unit::SetFacingToObject(WorldObject const* object, bool force)
     // do not face when already moving
     if (!force && (!IsStopped() || !movespline->Finalized()))
         return;
+
+    if (IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this))
+    {
+        UpdateOrientation(GetAbsoluteAngle(object));
+        return;
+    }
 
     /// @todo figure out under what conditions creature will move towards object instead of facing it where it currently is.
     Movement::MoveSplineInit init(this);

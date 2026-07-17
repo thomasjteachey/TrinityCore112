@@ -187,6 +187,43 @@ bool ShouldPreserveEquivalentChase(Unit const* owner, Unit const* target, Option
 
     return HasLiveTargetRelativeMotion(owner, movement, CHASE_MOTION_TYPE);
 }
+
+bool SameOptionalOrientation(Optional<float> const& lhs, Optional<float> const& rhs)
+{
+    if (bool(lhs) != bool(rhs))
+        return false;
+
+    return !lhs || NearlyEqual(*lhs, *rhs);
+}
+
+bool ShouldPreserveEquivalentPoint(Unit const* owner, uint32 id, float x, float y, float z, bool generatePath,
+    Optional<float> const& finalOrient)
+{
+    if (!IsSocketlessPlayerbotMover(owner))
+        return false;
+
+    MotionMaster const* motionMaster = owner->GetMotionMaster();
+    MovementGenerator const* movement = motionMaster ? motionMaster->GetCurrentMovementGenerator() : nullptr;
+    PointMovementGenerator<Player> const* point = movement ? dynamic_cast<PointMovementGenerator<Player> const*>(movement) : nullptr;
+    if (!point || point->Priority != MOTION_PRIORITY_NORMAL || point->GetId() != id || point->GeneratesPath() != generatePath ||
+        !SameOptionalOrientation(point->GetFinalOrientation(), finalOrient))
+    {
+        return false;
+    }
+
+    float const dx = point->GetDestinationX() - x;
+    float const dy = point->GetDestinationY() - y;
+    float const dz = point->GetDestinationZ() - z;
+    if (dx * dx + dy * dy + dz * dz > 0.25f)
+        return false;
+
+    bool const waitingToInitialize = movement->HasFlag(
+        MOVEMENTGENERATOR_FLAG_INITIALIZATION_PENDING | MOVEMENTGENERATOR_FLAG_DEACTIVATED);
+    bool const activeSpline = owner->movespline && owner->movespline->Initialized() && !owner->movespline->Finalized();
+    bool const temporarilyBlocked = owner->HasUnitState(UNIT_STATE_NOT_MOVE | UNIT_STATE_ROOT | UNIT_STATE_STUNNED) ||
+        owner->IsMovementPreventedByCasting();
+    return waitingToInitialize || activeSpline || temporarilyBlocked;
+}
 }
 
 inline void MovementGeneratorPointerDeleter(MovementGenerator* a)
@@ -822,6 +859,20 @@ void MotionMaster::MovePoint(uint32 id, float x, float y, float z, bool generate
 {
     if (_owner->GetTypeId() == TYPEID_PLAYER)
     {
+        // Point orders are frequently issued by objective, LOS, and class
+        // movement layers with the same destination before the existing order
+        // has initialized or completed. Replacing that live generator restarts
+        // its spline from the server's newer position and makes observers snap.
+        // Preserve only genuinely equivalent normal-priority orders; charges and
+        // deliberate destination changes continue through the normal path.
+        if (ShouldPreserveEquivalentPoint(_owner, id, x, y, z, generatePath, finalOrient))
+        {
+            TC_LOG_DEBUG("playerbots.pvp.motion",
+                "PB MotionMaster preserved equivalent Point: owner={} id={} destination=({}, {}, {}).",
+                _owner->GetGUID().ToString(), id, x, y, z);
+            return;
+        }
+
         TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MovePoint: '{}', targeted point Id: {} (X: {}, Y: {}, Z: {})", _owner->GetGUID().ToString(), id, x, y, z);
         Add(new PointMovementGenerator<Player>(id, x, y, z, generatePath, 0.0f, finalOrient));
     }
