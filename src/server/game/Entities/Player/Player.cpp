@@ -26314,6 +26314,7 @@ bool Player::CanCaptureTowerPoint() const
 {
     return (!HasStealthAura() &&                            // not stealthed
         !HasInvisibilityAura() &&                       // not invisible
+        !IsSpectator() &&                               // not a spectator
         IsAlive());                                     // live player
 }
 

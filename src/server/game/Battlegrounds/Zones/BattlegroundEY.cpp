@@ -363,7 +363,8 @@ void BattlegroundEY::AddPlayer(Player* player)
     if (!isInBattleground)
         PlayerScores[player->GetGUID().GetCounter()] = new BattlegroundEYScore(player->GetGUID());
 
-    m_PlayersNearPoint[EY_POINTS_MAX].push_back(player->GetGUID());
+    if (!player->IsSpectator())
+        m_PlayersNearPoint[EY_POINTS_MAX].push_back(player->GetGUID());
 }
 
 void BattlegroundEY::RemovePlayer(Player* player, ObjectGuid guid, uint32 /*team*/)

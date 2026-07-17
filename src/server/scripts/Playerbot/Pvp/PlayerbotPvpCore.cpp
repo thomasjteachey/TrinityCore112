@@ -1822,6 +1822,13 @@ bool CanCastMountSpellAtCurrentLocation(Player const* player, SpellInfo const* m
     if (!CanAttemptMount(player, mountSpellInfo))
         return false;
 
+    // A real client refuses to summon a mount while swimming. Bots have no
+    // such client-side gate, so without this check they could cast a ground
+    // mount while already standing in water and then never get dismounted
+    // until their next relocation tick re-evaluates terrain status.
+    if (player->IsInWater())
+        return false;
+
     // Playerbot mount selection must honor current terrain/WMO classification
     // even for custom mount spells that omitted the normal outdoors-only spell
     // attribute. Otherwise the AI repeatedly chooses those spells in indoor
@@ -1905,10 +1912,10 @@ SpellDecision SelectOutOfCombatEatDrinkOrMountSpell(Player const* player)
         return decision;
 
     // Never sit down to eat/drink while standing in lava/slime, or while
-    // actually submerged in water -- a real player cannot use food/drink
-    // items in those states, and bots have no client-side check to enforce
-    // this on their own.
-    if (IsInHazardousLiquidForRecovery(player) || player->IsUnderWater())
+    // in water at all -- a real player cannot use food/drink items while
+    // swimming (not just while fully submerged), and bots have no
+    // client-side check to enforce this on their own.
+    if (IsInHazardousLiquidForRecovery(player) || player->IsInWater())
         return decision;
 
     bool const usesMana = player->GetMaxPower(POWER_MANA) > 0;

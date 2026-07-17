@@ -2075,6 +2075,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (syntheticPlayerbotMover)
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            // StopMoving() above only resyncs terrain/liquid status (and thus
+            // the swim flag) when it halts an in-flight spline, which this
+            // per-tick planting stop usually won't hit. Force it explicitly
+            // so bots don't freeze mid-water with a stale non-swimming flag.
+            player->UpdatePositionData();
             player->SendMovementFlagUpdate();
         }
     }
@@ -2304,6 +2309,10 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+            // See DriveCombatPositioning: StopMoving() only resyncs the swim
+            // flag when it halts an in-flight spline, which this defensive
+            // per-tick stop usually won't hit. Force it explicitly.
+            player->UpdatePositionData();
             player->SendMovementFlagUpdate();
         }
 
@@ -4263,6 +4272,14 @@ namespace playerbot
             if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
+                // StopMoving() only re-syncs terrain/liquid status (and thus the
+                // swim flag) when it actually halts an in-flight movespline. This
+                // hold-band stop runs defensively every combat tick, so the
+                // spline is usually already finalized and that resync never
+                // fires -- leaving a stale swim flag frozen at the bot's current
+                // position if it's holding position in water. Force a fresh
+                // terrain check before broadcasting the flag update.
+                player->UpdatePositionData();
                 player->SendMovementFlagUpdate();
             }
             return true;
