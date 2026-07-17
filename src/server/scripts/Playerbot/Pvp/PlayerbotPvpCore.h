@@ -194,7 +194,8 @@ struct PvpClassSpellContext
         None = 0,
         Enemy,
         Self,
-        Ally
+        Ally,
+        Pet
     };
     TargetMode targetMode = TargetMode::None;
     ObjectGuid targetGuid = ObjectGuid::Empty;

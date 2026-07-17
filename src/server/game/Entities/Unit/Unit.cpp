@@ -123,7 +123,7 @@ bool HasActiveTranslationalSpline(Unit const* unit)
     // A closed pure-vertical knock-up spline has the same start and final
     // coordinates, but it is still active translational movement while its
     // parabolic elevation is resolving.
-    if (unit->movespline->splineflags.parabolic)
+    if (unit->movespline->isParabolic())
         return true;
 
     Movement::Location const current = unit->movespline->ComputePosition();

@@ -121,6 +121,7 @@ char const* ToString(playerbot::PvpClassSpellContext::TargetMode mode)
         case playerbot::PvpClassSpellContext::TargetMode::Enemy: return "enemy";
         case playerbot::PvpClassSpellContext::TargetMode::Ally: return "ally";
         case playerbot::PvpClassSpellContext::TargetMode::Self: return "self";
+        case playerbot::PvpClassSpellContext::TargetMode::Pet: return "pet";
         case playerbot::PvpClassSpellContext::TargetMode::None:
         default: return "none";
     }

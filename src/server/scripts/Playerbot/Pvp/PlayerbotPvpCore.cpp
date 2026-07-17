@@ -1418,12 +1418,15 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
         case playerbot::PvpClassSpellContext::TargetMode::Ally:
             resolvedTarget = defaultAllyTarget;
             break;
+        case playerbot::PvpClassSpellContext::TargetMode::Pet:
+            resolvedTarget = player->GetPet();
+            break;
         case playerbot::PvpClassSpellContext::TargetMode::None:
         default:
             return false;
     }
 
-    if (!decision.targetGuid.IsEmpty())
+    if (decision.targetMode != playerbot::PvpClassSpellContext::TargetMode::Pet && !decision.targetGuid.IsEmpty())
         if (Unit const* explicitTarget = ObjectAccessor::GetUnit(*player, decision.targetGuid))
             resolvedTarget = explicitTarget;
 
@@ -1438,6 +1441,8 @@ bool IsDecisionImmediatelyCastable(Player const* player, SpellDecision const& de
     if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Enemy && !player->IsValidAttackTarget(resolvedTarget, spellInfo))
         return false;
     if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Ally && !IsFriendlySupportTarget(player, resolvedTarget))
+        return false;
+    if (decision.targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet && resolvedTarget != player->GetPet())
         return false;
 
     if (!player->IsWithinLOSInMap(resolvedTarget))
@@ -6883,6 +6888,9 @@ PvpClassSpellContext PvpCore::BuildClassSpellContext(Player const* player, PvpVa
             break;
         case PvpClassSpellContext::TargetMode::Ally:
             targetModeLabel = "ally";
+            break;
+        case PvpClassSpellContext::TargetMode::Pet:
+            targetModeLabel = "pet";
             break;
         case PvpClassSpellContext::TargetMode::None:
         default:

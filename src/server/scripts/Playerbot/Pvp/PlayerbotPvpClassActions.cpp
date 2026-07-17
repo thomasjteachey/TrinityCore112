@@ -1661,6 +1661,11 @@ bool IsSpellReadyAtCurrentPosition(Player* player, Unit* target, SpellInfo const
         if (!IsFriendlySupportTarget(player, target, spellInfo))
             return false;
     }
+    else if (targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet)
+    {
+        if (target != player->GetPet())
+            return false;
+    }
     else if (targetMode != playerbot::PvpClassSpellContext::TargetMode::Self)
         return false;
 
@@ -3119,6 +3124,7 @@ char const* GetTargetModeLabel(playerbot::PvpClassSpellContext::TargetMode mode)
         case playerbot::PvpClassSpellContext::TargetMode::Enemy: return "enemy";
         case playerbot::PvpClassSpellContext::TargetMode::Self: return "self";
         case playerbot::PvpClassSpellContext::TargetMode::Ally: return "ally";
+        case playerbot::PvpClassSpellContext::TargetMode::Pet: return "pet";
         case playerbot::PvpClassSpellContext::TargetMode::None:
         default: return "none";
     }
@@ -3897,6 +3903,8 @@ Unit* ResolveTarget(Player* player, playerbot::PvpClassSpellContext const& conte
     {
         case playerbot::PvpClassSpellContext::TargetMode::Self:
             return player;
+        case playerbot::PvpClassSpellContext::TargetMode::Pet:
+            return player->GetPet();
         case playerbot::PvpClassSpellContext::TargetMode::Ally:
         case playerbot::PvpClassSpellContext::TargetMode::Enemy:
             if (!context.targetGuid.IsEmpty())
@@ -4440,6 +4448,11 @@ bool CastDirectSpell(Player* player, playerbot::PvpClassSpellContext const& cont
     if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Self && target != player)
     {
         failureReason = "self_target_mismatch";
+        return false;
+    }
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet && target != player->GetPet())
+    {
+        failureReason = "pet_target_mismatch";
         return false;
     }
 
@@ -5348,6 +5361,12 @@ bool UseDirectItem(Player* player, playerbot::PvpClassSpellContext const& contex
         target != player && !player->IsValidAssistTarget(target, itemSpellInfo))
     {
         failureReason = "item_ally_target_invalid";
+        return false;
+    }
+
+    if (context.targetMode == playerbot::PvpClassSpellContext::TargetMode::Pet && target != player->GetPet())
+    {
+        failureReason = "item_pet_target_invalid";
         return false;
     }
 
