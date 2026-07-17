@@ -117,7 +117,14 @@ constexpr uint32 kWarlockFirestoneItemEntry = 13701;
 constexpr uint32 kWarlockFirestoneUseSpellId = 81334;
 constexpr uint32 kMageManaRubyUseSpellId = 22044;
 constexpr uint32 kMageManaRubyItemId = 8008;
+// Blood Fury has three class-flavored variants in this server's skill_line_ability
+// data (skillline 125), all Orc-only: 20572 is the base physical-attack-power
+// version (Warrior/Hunter/Rogue and anything else not covered below), 33697 is
+// the Shaman melee-AP-plus-spell-damage hybrid, and 33702 is the Warlock pure
+// spell-power version.
 constexpr uint32 kRacialOrcBloodFurySpellId = 20572;
+constexpr uint32 kRacialOrcBloodFuryShamanSpellId = 33697;
+constexpr uint32 kRacialOrcBloodFuryWarlockSpellId = 33702;
 constexpr uint32 kRacialTrollBloodlustSpellId = 20554;
 constexpr uint32 kRacialNightElfShadowmeldSpellId = 20580;
 constexpr uint32 kRacialTaurenWarStompSpellId = 20549;
@@ -493,6 +500,25 @@ uint32 GetCustomEveryManForHimselfSpellId(Player const* player)
             return kEveryManForHimselfMageGroupSpellId;
         default:
             return kEveryManForHimselfDruidGroupSpellId;
+    }
+}
+
+// Orc-only racial - see the kRacialOrcBloodFury* constants above for the
+// three class-flavored variants this server's skill_line_ability data grants.
+// Caller is responsible for checking RACE_ORC before using this.
+uint32 GetOrcBloodFurySpellId(Player const* player)
+{
+    if (!player)
+        return kRacialOrcBloodFurySpellId;
+
+    switch (player->GetClass())
+    {
+        case CLASS_SHAMAN:
+            return kRacialOrcBloodFuryShamanSpellId;
+        case CLASS_WARLOCK:
+            return kRacialOrcBloodFuryWarlockSpellId;
+        default:
+            return kRacialOrcBloodFurySpellId;
     }
 }
 
@@ -1109,8 +1135,9 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
             bool const wantsThroughput = player->IsInCombat() &&
                 ((target && HasHostileTarget(player, target) && !HasBreakableCrowdControl(target)) ||
                  (allyTarget && IsFriendlySupportTarget(player, allyTarget) && allyTarget->GetHealthPct() < 85.0f));
-            if (wantsThroughput && IsSpellReady(player, kRacialOrcBloodFurySpellId))
-                return { "racial blood fury", "orc racial throughput for healing or damage", kRacialOrcBloodFurySpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
+            uint32 const bloodFurySpellId = GetOrcBloodFurySpellId(player);
+            if (wantsThroughput && IsSpellReady(player, bloodFurySpellId))
+                return { "racial blood fury", "orc racial throughput for healing or damage", bloodFurySpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
             break;
         }
         case RACE_TROLL:
