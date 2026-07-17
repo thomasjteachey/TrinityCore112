@@ -4925,6 +4925,12 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     Unit const* repentanceTarget = (isRetPaladin && IsSpellReady(player, 20066)) ? SelectEnemyCastingTarget(player, 20.0f, executeTarget) : nullptr;
     Unit const* stunnedJudgementTarget = (isRetPaladin && HasAuraFromSpellChain(player, 20375)) ? SelectStunnedEnemyTarget(player, executeTarget, 30.0f) : nullptr;
     Unit const* protectionTarget = IsSpellReady(player, 10278) ? SelectFriendlyMeleePressureTarget(player, 40.0f, 50.0f) : nullptr;
+    // Hand of Protection and Divine Shield apply the same Forbearance debuff,
+    // so self-casting Hand of Protection under moderate melee pressure would
+    // lock out Divine Shield for a full minute if health later crashes below
+    // its own emergency threshold. Self-protection stays Divine Shield's job.
+    if (protectionTarget == player)
+        protectionTarget = nullptr;
     if (protectionTarget && playerbot::PvpCore::IsBattlegroundFlagCarrier(protectionTarget->ToPlayer()))
         protectionTarget = nullptr;
     Unit const* holyStrikeFlashHealTarget = (isRetPaladin && player->HasAura(89796) && IsSpellReady(player, 19943)) ? SelectFriendlyLowestHealthTarget(player, 40.0f, 100.0f) : nullptr;
@@ -4973,7 +4979,7 @@ SpellDecision SelectPaladinSpell(Player const* player, Unit const* target, Class
     AddDecisionCandidate(candidates, CountNearbyEnemies(player, 8.0f) >= 2 && IsSpellReady(player, 26573), 52.0f,
         { "paladin consecration", "aoe pressure under close melee collapse", 26573, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, protectionTarget, 53.5f,
-        { "paladin hand of protection", "protect low-health ally under melee pressure", 10278, protectionTarget == player ? playerbot::PvpClassSpellContext::TargetMode::Self : playerbot::PvpClassSpellContext::TargetMode::Ally, protectionTarget ? protectionTarget->GetGUID() : ObjectGuid::Empty });
+        { "paladin hand of protection", "protect low-health ally under melee pressure", 10278, playerbot::PvpClassSpellContext::TargetMode::Ally, protectionTarget ? protectionTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, repentanceTarget, 52.5f,
         { "paladin repentance", "interrupt enemy spellcast", 20066, playerbot::PvpClassSpellContext::TargetMode::Enemy, repentanceTarget ? repentanceTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, executeTarget && executeTarget->HealthBelowPct(20) && IsSpellReady(player, 24239), 51.0f,
