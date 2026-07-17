@@ -276,16 +276,8 @@ void WorldSession::HandleMoveWorldportAck()
 
     {
         Battleground* spectatorBg = newMap->IsBattlegroundOrArena() ? ((BattlegroundMap*)newMap)->GetBG() : nullptr;
-        // A spectator can trigger another far teleport while already watching a
-        // match (e.g. falling into the void and repopping at a graveyard on the
-        // same battleground map). The pending-spectator flag is a one-shot
-        // consumed at the initial join, so it is already 0 by then; also
-        // recognize a player who is simply returning to the battleground they
-        // were already spectating so they are not silently demoted.
-        bool const alreadySpectatingThisBg = spectatorBg && _player->IsSpectator() &&
-            _player->GetBattlegroundId() == spectatorBg->GetInstanceID();
         if (spectatorBg && (newMap->IsBattleArena() || spectatorBg->IsCustomGame()) &&
-            (_player->HasPendingSpectatorForBG(((BattlegroundMap*)newMap)->GetInstanceId()) || alreadySpectatingThisBg))
+            _player->HasPendingSpectatorForBG(((BattlegroundMap*)newMap)->GetInstanceId()))
         {
             _player->ClearReceivedSpectatorResetFor();
             _player->SetIsSpectator(true);

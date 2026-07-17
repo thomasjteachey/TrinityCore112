@@ -2075,8 +2075,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (syntheticPlayerbotMover)
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            // Throttled/shared: see ResyncPlayerbotSwimStateForMovementStop.
-            playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
+            // StopMoving() above only resyncs terrain/liquid status (and thus
+            // the swim flag) when it halts an in-flight spline, which this
+            // per-tick planting stop usually won't hit. Force it explicitly
+            // so bots don't freeze mid-water with a stale non-swimming flag.
+            player->UpdatePositionData();
+            player->SendMovementFlagUpdate();
         }
     }
 
@@ -2305,8 +2309,11 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            // Throttled/shared: see ResyncPlayerbotSwimStateForMovementStop.
-            playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
+            // See DriveCombatPositioning: StopMoving() only resyncs the swim
+            // flag when it halts an in-flight spline, which this defensive
+            // per-tick stop usually won't hit. Force it explicitly.
+            player->UpdatePositionData();
+            player->SendMovementFlagUpdate();
         }
 
         if (wasMoving || activeWand || recentWandStart)
@@ -3800,39 +3807,6 @@ namespace playerbot
         WhisperAutoShotDiagnosticToArena(player, diag.str(), 0);
     }
 
-    void ResyncPlayerbotSwimStateForMovementStop(Player* player)
-    {
-        if (!player)
-            return;
-
-        // Several independent "freeze movement to cast/hold/plant" call sites
-        // (StopPlayerbotForStationaryCast, DriveCombatPositioning's hold-band
-        // stop, HoldPositionForWand, StopVirtualPlayerbotMovement) can all
-        // fire for the same bot on the same or adjacent decision ticks. Each
-        // one used to force its own terrain/liquid recheck and broadcast,
-        // which meant a bot holding position right at a shallow shoreline
-        // got resampled and rebroadcast several times per real tick -- any
-        // boundary noise in that classification then visibly popped the bot
-        // between "on the surface" and "submerged" instead of settling once.
-        // Collapse all of that down to a single throttled resync per bot.
-        static constexpr uint32 kMinResyncIntervalMs = 200;
-        static std::unordered_map<uint64, uint32> lastResyncMsByGuid;
-
-        uint64 const guidRaw = player->GetGUID().GetRawValue();
-        uint32 const nowMs = GameTime::GetGameTimeMS();
-
-        {
-            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
-            uint32& lastResyncMs = lastResyncMsByGuid[guidRaw];
-            if (lastResyncMs != 0 && nowMs - lastResyncMs < kMinResyncIntervalMs)
-                return;
-            lastResyncMs = nowMs;
-        }
-
-        player->UpdatePositionData();
-        player->SendMovementFlagUpdate();
-    }
-
     uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType)
     {
         return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType, false);
@@ -4298,8 +4272,15 @@ namespace playerbot
             if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-                // Throttled/shared: see ResyncPlayerbotSwimStateForMovementStop.
-                playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
+                // StopMoving() only re-syncs terrain/liquid status (and thus the
+                // swim flag) when it actually halts an in-flight movespline. This
+                // hold-band stop runs defensively every combat tick, so the
+                // spline is usually already finalized and that resync never
+                // fires -- leaving a stale swim flag frozen at the bot's current
+                // position if it's holding position in water. Force a fresh
+                // terrain check before broadcasting the flag update.
+                player->UpdatePositionData();
+                player->SendMovementFlagUpdate();
             }
             return true;
         }

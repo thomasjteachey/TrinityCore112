@@ -27,7 +27,6 @@ bool NormalizeLifecycleQueueState(Player* player);
 uint32 QueueEligibleManagedBotsForBattleground(BattlegroundTypeId bgTypeId, uint8 arenaType);
 void NotifyHunterAutoShotFired(Player* player);
 bool IsHunterAutoShotPlantActive(Player* player);
-void ResyncPlayerbotSwimStateForMovementStop(Player* player);
 
 class BattlegroundLifecycleActions
 {

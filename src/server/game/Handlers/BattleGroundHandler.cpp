@@ -399,9 +399,7 @@ void WorldSession::HandlePVPLogDataOpcode(WorldPacket & /*recvData*/)
         return;
 
     // Prevent players from sending BuildPvpLogDataPacket in an arena except for when sent in BattleGround::EndBattleGround.
-    // Replay viewers and spectators are exempt: they aren't live combatants, so there's no
-    // scouting concern, and they have no other way to pull up the scoreboard mid-match.
-    if (bg->isArena() && !bg->IsReplay() && !_player->IsSpectator())
+    if (bg->isArena())
         return;
 
     WorldPacket data;

@@ -3655,14 +3655,12 @@ void StopPlayerbotForStationaryCast(Player* player)
     // this stop/prep path defensively on every cast attempt, not just on
     // real state transitions, so a tick where the spline already finished
     // would otherwise leave a stale (often non-swimming) flag frozen at the
-    // bot's current position. This is one of several such "freeze movement"
-    // sites (see also DriveCombatPositioning/HoldPositionForWand/
-    // StopVirtualPlayerbotMovement in PlayerbotPvpLifecycleActions.cpp), so
-    // the actual resync/broadcast is throttled and shared across all of them
-    // -- otherwise a bot holding position right at a shoreline gets resampled
-    // and rebroadcast several times per tick and visibly pops between
-    // standing on the surface and appearing submerged.
-    playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
+    // bot's current position. If that freeze happens while the bot is in
+    // water, other clients render it standing on the surface instead of
+    // treading. Force a terrain re-check so the swim flag always matches
+    // where the bot actually is before the flag update goes out.
+    player->UpdatePositionData();
+    player->SendMovementFlagUpdate();
 }
 
 
