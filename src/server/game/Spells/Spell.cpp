@@ -7932,9 +7932,16 @@ void Spell::DelayedChannel()
             if (Unit* unit = (playerCaster->GetGUID() == targetInfo.TargetGUID) ? playerCaster : ObjectAccessor::GetUnit(*playerCaster, targetInfo.TargetGUID))
                 unit->DelayOwnedAuras(m_spellInfo->Id, m_originalCasterGUID, delaytime);
 
-    // partially interrupt persistent area auras
+    // Partially interrupt persistent area auras. If pushback consumed the
+    // entire remaining channel, remove the dynamic object now: the following
+    // update finishes the spell normally and does not run cancel() cleanup.
     if (DynamicObject* dynObj = playerCaster->GetDynObject(m_spellInfo->Id))
-        dynObj->Delay(delaytime);
+    {
+        if (m_timer == 0)
+            dynObj->Remove();
+        else
+            dynObj->Delay(delaytime);
+    }
 
     SendChannelUpdate(m_timer);
 }

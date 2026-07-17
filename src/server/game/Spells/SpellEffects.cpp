@@ -1955,6 +1955,16 @@ void Spell::EffectPersistentAA()
     if (Aura* aura = Aura::TryCreate(createInfo))
     {
         _dynObjAura = aura->ToDynObjAura();
+
+        // Channeled persistent area auras must use the same duration as the
+        // channel. The channel duration has already had haste and spell mods
+        // applied, while Aura::TryCreate starts from the raw spell duration.
+        if (m_spellInfo->IsChanneled() && m_channeledDuration > 0)
+        {
+            _dynObjAura->SetMaxDuration(m_channeledDuration);
+            _dynObjAura->SetDuration(m_channeledDuration);
+        }
+
         _dynObjAura->_RegisterForTargets();
     }
     else
