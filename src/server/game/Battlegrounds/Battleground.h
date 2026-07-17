@@ -411,6 +411,7 @@ class TC_GAME_API Battleground
         bool HasCustomGamePendingClones() const { return m_IsCustomGame && m_CustomGamePendingCloneCount != 0; }
         BattlegroundCustomRules const& GetCustomRules() const { return m_CustomRules; }
         void SendCustomGameRulesTo(Player* player) const;
+        void SendSpectatorBattlefieldStatusTo(Player* player);
         bool HasCustomWeatherOverride() const { return m_IsCustomGame && m_CustomRules.Weather != BattlegroundCustomWeather::Normal; }
         bool ShouldShowFlagOnMapTo(Player const* viewer, TeamId flagTeam) const;
         uint32 GetFlagCaptureLimit(uint32 defaultValue) const { return m_IsCustomGame && m_CustomRules.FlagCaptureLimit ? m_CustomRules.FlagCaptureLimit : defaultValue; }

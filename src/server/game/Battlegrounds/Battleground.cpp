@@ -1008,6 +1008,25 @@ void Battleground::EndBattleground(uint32 winner)
             player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND, player->GetMapId());
         sScriptMgr->OnBattlegroundEnd(this, winner);
     }
+
+    // Custom-game spectators live outside m_Players, so the loop above never
+    // hands them the final scoreboard. Send it so their client pops the
+    // end-of-match score frame (the winner byte in the log packet drives it)
+    // just like it does for combatants.
+    if (m_IsCustomGame)
+        for (Player* spectator : m_Spectators)
+        {
+            if (!spectator || !spectator->IsInWorld() || spectator->GetBattlegroundId() != GetInstanceID())
+                continue;
+            if (!spectator->GetSession() || spectator->GetSession()->IsVirtualSession())
+                continue;
+
+            spectator->SendDirectMessage(&pvpLogData);
+
+            WorldPacket data;
+            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, 0, STATUS_IN_PROGRESS, TIME_TO_AUTOREMOVE, GetStartTime(), GetArenaType(), spectator->GetBGTeam());
+            spectator->SendDirectMessage(&data);
+        }
 }
 
 uint32 Battleground::GetBonusHonorFromKill(uint32 kills) const
@@ -1305,6 +1324,7 @@ void Battleground::AddPlayer(Player* player)
         player->SetFactionForRace(RACE_HUMAN);
         AddSpectator(player);
         player->SendInitWorldStates(player->GetZoneId(), player->GetAreaId());
+        SendSpectatorBattlefieldStatusTo(player);
         return;
     }
 
@@ -1401,6 +1421,32 @@ void Battleground::SendCustomGameRulesTo(Player* player) const
     WorldPacket data;
     ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, message, 0);
     player->SendDirectMessage(&data);
+}
+
+void Battleground::SendSpectatorBattlefieldStatusTo(Player* player)
+{
+    if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
+        return;
+
+    // Spectators bypass the whole queue system, so none of the normal senders
+    // (queue invite, port opcode, CMSG_BATTLEFIELD_STATUS queue loop) ever tell
+    // their client the battleground is active. Without an ACTIVE status the
+    // client keeps the scoreboard toggle and the minimap battlefield icon
+    // disabled. Queue slot 0 is safe: a spectator holds no real queue entries.
+    WorldPacket data;
+    sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, this, 0, STATUS_IN_PROGRESS, GetEndTime(), GetStartTime(), GetArenaType(), player->GetBGTeam());
+    player->SendDirectMessage(&data);
+
+    // Seed the scoreboard so the first toggle isn't empty.
+    BuildPvPLogDataPacket(data);
+    player->SendDirectMessage(&data);
+
+    // Let the patched client UI know this session is spectating: the stock
+    // scoreboard toggle refuses to open for arena-typed matches, and the
+    // client has no other way to tell a spectator from a combatant.
+    WorldPacket hint;
+    ChatHandler::BuildChatPacket(hint, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, "CCGAME\tSPECTATE:1", 0);
+    player->SendDirectMessage(&hint);
 }
 
 // this method adds player to his team's bg group, or sets his correct group if player is already in bg group
