@@ -34,7 +34,16 @@ TEST_CASE("Socketless playerbot facing preserves active translation", "[playerbo
 {
     std::string const source = ReadFile("src/server/game/Entities/Unit/Unit.cpp");
     CHECK(source.find("bool HasActiveTranslationalSpline(Unit const* unit)") != std::string::npos);
+    CHECK(source.find("unit->movespline->splineflags.parabolic") != std::string::npos);
     CHECK(CountOccurrences(source, "IsSocketlessServerDrivenPlayer(this) && HasActiveTranslationalSpline(this)") >= 2);
+}
+
+TEST_CASE("Socketless pure vertical knock-up uses a closed client-timed spline", "[playerbot][movement]")
+{
+    std::string const source = ReadFile("src/server/game/Movement/MotionMaster.cpp");
+    CHECK(source.find("pureVerticalServerKnockup") != std::string::npos);
+    CHECK(source.find("Movement::PointsArray const path = { startPoint, arcPoint, startPoint };") != std::string::npos);
+    CHECK(source.find("2.f * VerticalKnockupSplineRadius / airTime") != std::string::npos);
 }
 
 TEST_CASE("Socketless playerbot equivalent point orders are centrally preserved", "[playerbot][movement]")

@@ -984,20 +984,55 @@ void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, floa
     if (_owner->GetTypeId() == TYPEID_PLAYER && !serverDrivenPlayer)
         return;
 
-    // Pure vertical knock-ups arrive with speedXY ~0. The spline duration is
-    // horizontal-distance / speedXY (= 2 * speedZ / gravity for any speedXY),
-    // so a tiny floor keeps the arc timing intact with negligible drift
-    // instead of dropping the effect entirely.
-    if (serverDrivenPlayer)
-        speedXY = std::max(speedXY, 0.1f);
+    bool const pureVerticalServerKnockup = serverDrivenPlayer && speedXY < 0.01f;
 
-    if (speedXY < 0.01f)
+    if (!pureVerticalServerKnockup && speedXY < 0.01f)
         return;
 
-    Position dest = _owner->GetPosition();
     float moveTimeHalf = speedZ / Movement::gravity;
-    float dist = 2 * moveTimeHalf * speedXY;
-    float max_height = -Movement::computeFallElevation(moveTimeHalf, false, -speedZ);
+    float const airTime = 2.f * moveTimeHalf;
+    if (airTime <= 0.01f)
+        return;
+
+    float const max_height = -Movement::computeFallElevation(moveTimeHalf, false, -speedZ);
+
+    if (pureVerticalServerKnockup)
+    {
+        // A real client can resolve a zero-horizontal-speed knock-up directly,
+        // but MoveSpline needs a path with nonzero length to assign it a
+        // duration. Use a closed, imperceptibly small horizontal path whose
+        // total length is traversed in the client's ballistic airtime. The bot
+        // therefore follows the same gravity parabola and lands at its exact
+        // starting point instead of drifting or crawling across terrain.
+        static constexpr float VerticalKnockupSplineRadius = 0.05f;
+
+        Position const start = _owner->GetPosition();
+        float const awayAngle = _owner->GetAbsoluteAngle(srcX, srcY) + float(M_PI);
+        G3D::Vector3 const startPoint(start.GetPositionX(), start.GetPositionY(), start.GetPositionZ());
+        G3D::Vector3 const arcPoint(
+            start.GetPositionX() + VerticalKnockupSplineRadius * std::cos(awayAngle),
+            start.GetPositionY() + VerticalKnockupSplineRadius * std::sin(awayAngle),
+            start.GetPositionZ());
+        Movement::PointsArray const path = { startPoint, arcPoint, startPoint };
+        float const velocity = 2.f * VerticalKnockupSplineRadius / airTime;
+
+        std::function<void(Movement::MoveSplineInit&)> initializer = [=](Movement::MoveSplineInit& init)
+        {
+            init.MovebyPath(path);
+            init.SetParabolic(max_height, 0);
+            init.SetOrientationFixed(true);
+            init.SetVelocity(velocity);
+        };
+
+        GenericMovementGenerator* movement = new GenericMovementGenerator(std::move(initializer), EFFECT_MOTION_TYPE, 0);
+        movement->Priority = MOTION_PRIORITY_HIGHEST;
+        movement->AddFlag(MOVEMENTGENERATOR_FLAG_PERSIST_ON_DEATH);
+        Add(movement);
+        return;
+    }
+
+    Position dest = _owner->GetPosition();
+    float dist = airTime * speedXY;
 
     // Use a mmap raycast to get a valid destination.
     _owner->MovePositionToFirstCollision(dest, dist, _owner->GetRelativeAngle(srcX, srcY) + float(M_PI));
@@ -1011,7 +1046,6 @@ void MotionMaster::MoveKnockbackFrom(float srcX, float srcY, float speedXY, floa
         // to tens of seconds. A real client resolves any knockback in exactly
         // 2 * speedZ / gravity seconds; derive the velocity from the actual
         // path length so the bot's arc matches that timing.
-        float const airTime = 2.f * moveTimeHalf;
         if (airTime > 0.01f)
             velocity = std::max(_owner->GetExactDist(&dest) / airTime, 0.01f);
     }

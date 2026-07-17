@@ -120,6 +120,12 @@ bool HasActiveTranslationalSpline(Unit const* unit)
     if (!unit || !unit->movespline || !unit->movespline->Initialized() || unit->movespline->Finalized())
         return false;
 
+    // A closed pure-vertical knock-up spline has the same start and final
+    // coordinates, but it is still active translational movement while its
+    // parabolic elevation is resolving.
+    if (unit->movespline->splineflags.parabolic)
+        return true;
+
     Movement::Location const current = unit->movespline->ComputePosition();
     G3D::Vector3 const destination = unit->movespline->FinalDestination();
     float const dx = destination.x - current.x;
