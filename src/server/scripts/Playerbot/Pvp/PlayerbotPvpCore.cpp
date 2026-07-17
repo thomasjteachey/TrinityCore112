@@ -1080,7 +1080,7 @@ SpellDecision SelectRacialSpell(Player const* player, Unit const* target, Unit c
             break;
         }
         case RACE_HUMAN:
-            if (HumanRecentlySawStealthTransition(player, 30.0f) && IsSpellReady(player, kRacialHumanPerceptionSpellId))
+            if (HumanRecentlySawStealthTransition(player, 50.0f) && IsSpellReady(player, kRacialHumanPerceptionSpellId))
                 return { "racial perception", "enemy just entered stealth nearby", kRacialHumanPerceptionSpellId, playerbot::PvpClassSpellContext::TargetMode::Self };
             break;
         default:
@@ -5402,6 +5402,15 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         return decision;
 
     bool const partyBenefitsFromWindfury = PartyBenefitsFromWindfuryTotem(player);
+    // Counter-totems should only go down when there's an actual reason nearby
+    // for them - otherwise shamans burn every totem slot maintaining totems
+    // nobody needs.
+    bool const manaEnemyNearby = SelectNearbyEnemyManaTarget(player, nullptr, 50.0f, 0.0f) != nullptr;
+    bool const fearCasterEnemyNearby = SelectEnemyClassTarget(player, CLASS_WARRIOR, 50.0f) ||
+        SelectEnemyClassTarget(player, CLASS_WARLOCK, 50.0f) ||
+        SelectEnemyClassTarget(player, CLASS_PRIEST, 50.0f);
+    bool const poisonEnemyNearby = SelectEnemyClassTarget(player, CLASS_ROGUE, 50.0f) ||
+        SelectEnemyClassTarget(player, CLASS_HUNTER, 50.0f);
 
     bool const dispelThrottleActive = playerbot::PvpClassActions::IsCasterSpellCooldownActive(player, kPlayerbotDispelCooldownToken);
     // 89745 lets an enhancement shaman weave in a low-priority heal.
@@ -5454,8 +5463,8 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman lightning shield", "maintain shield buff out of combat", 10432, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, hasHostileTarget && target->HasUnitState(UNIT_STATE_CASTING) && IsSpellReady(player, 10414), 60.0f,
         { "shaman earth shock", "interrupt enemy cast with shock", 10414, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && target->GetPowerType() == POWER_MANA && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
-        { "shaman grounding totem", "counter incoming caster pressure", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && !isRestoShaman && !isEnhancementShaman && !partyBenefitsFromWindfury && hasHostileTarget && manaEnemyNearby && !HasActiveAirTotem(player) && IsSpellReady(player, 8177), 59.0f,
+        { "shaman grounding totem", "counter incoming caster pressure from a mana user within 50 yards", 8177, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !isRestoShaman && IsSpellReady(player, 16166), 58.0f,
         { "shaman elemental mastery", "trigger burst throughput cooldown", 16166, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && nsHealTarget && !player->HasAura(16188), 59.5f,
@@ -5482,18 +5491,18 @@ SpellDecision SelectShamanSpell(Player const* player, Unit const* target, Unit c
         { "shaman frost shock", isEnhancementShaman && enhNeedsGapClose ? "snare the kill target while chasing" : "snare medium-range melee threats",
             10473, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     Unit const* poisonedAllyInTotemRange = inCombat && IsSpellReady(player, 8170) ? SelectFriendlyDispelTarget(player, DISPEL_POISON, 20.0f) : nullptr;
-    AddDecisionCandidate(candidates, inCombat && poisonedAllyInTotemRange && !HasActiveWaterTotem(player), 54.0f,
-        { "shaman poison cleansing totem", "answer rogue poison pressure with a nearby water totem", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && hasHostileTarget && (target->GetClass() == CLASS_PRIEST || target->GetClass() == CLASS_WARLOCK) && player->IsWithinDistInMap(target, 20.0f) && !HasActiveEarthTotem(player) && IsSpellReady(player, 8143), 53.0f,
-        { "shaman tremor totem", "mitigate fear pressure from priest/warlock", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && poisonedAllyInTotemRange && poisonEnemyNearby && !HasActiveWaterTotem(player), 54.0f,
+        { "shaman poison cleansing totem", "answer rogue/hunter poison pressure with a nearby water totem", 8170, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && fearCasterEnemyNearby && !HasActiveEarthTotem(player) && IsSpellReady(player, 8143), 53.0f,
+        { "shaman tremor totem", "mitigate fear pressure from a warrior/warlock/priest within 50 yards", 8143, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, inCombat && isRestoShaman && player->GetPowerPct(POWER_MANA) < 50.0f && !HasActiveWaterTotem(player) && IsSpellReady(player, 16190), 52.8f,
         { "shaman mana tide totem", "restore mana below half", 16190, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
-        { "shaman tremor totem", "maintain a nearby tremor totem", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
-        { "shaman poison cleansing totem", "maintain a nearby poison cleansing totem", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, inCombat && !partyBenefitsFromWindfury && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
-        { "shaman grounding totem", "maintain a nearby grounding totem", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && fearCasterEnemyNearby && !HasActiveEarthTotem(player) && IsSpellReady(player, 81476), 52.7f,
+        { "shaman tremor totem", "maintain a nearby tremor totem while a warrior/warlock/priest is within 50 yards", 81476, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && poisonEnemyNearby && !HasActiveWaterTotem(player) && IsSpellReady(player, 81477), 52.6f,
+        { "shaman poison cleansing totem", "maintain a nearby poison cleansing totem while a rogue/hunter is within 50 yards", 81477, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, inCombat && !partyBenefitsFromWindfury && manaEnemyNearby && !HasActiveAirTotem(player) && IsSpellReady(player, 81478), 52.5f,
+        { "shaman grounding totem", "maintain a nearby grounding totem while a mana user is within 50 yards", 81478, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, inCombat && partyBenefitsFromWindfury && !HasActiveAirTotem(player) && IsSpellReady(player, 10614), 52.5f,
         { "shaman windfury totem", "support an arms/fury warrior or retribution paladin", 10614, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isRestoShaman && SelectNearbyMeleeTarget(player, target, 8.0f) && player->HealthBelowPct(50) && IsSpellReady(player, 2645), 52.4f,
