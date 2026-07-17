@@ -1044,6 +1044,16 @@ public:
                 player->SetBattlegroundId(bg->GetInstanceID(), bg->GetTypeID(), 0, true, false,
                     Battleground::GetTeamIndexByTeamId(spectatorViewTeam));
                 sBattlegroundMgr->SendToBattleground(player, bg->GetInstanceID(), bg->GetTypeID());
+
+                // The client only offers the BG scoreboard/eye-icon once it has seen a
+                // STATUS_IN_PROGRESS packet for a queue slot. Spectators never go through
+                // the normal queue/port flow that would send one, so build it manually
+                // (mirrors the arena replay viewer setup in BGReplay.cpp).
+                {
+                    WorldPacket status;
+                    sBattlegroundMgr->BuildBattlegroundStatusPacket(&status, bg, 0, STATUS_IN_PROGRESS, 0, bg->GetStartTime(), bg->GetArenaType(), spectatorViewTeam);
+                    player->GetSession()->SendPacket(&status);
+                }
                 continue;
             }
 
