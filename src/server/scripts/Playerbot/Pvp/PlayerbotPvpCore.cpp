@@ -74,6 +74,11 @@ constexpr float kReferenceHunterMeleeDistance = 5.0f;
 constexpr float kReferenceHunterSwitchDistance = 8.0f;
 constexpr float kRangedSpacingEnterOutOfRangeBuffer = 2.0f;
 constexpr float kRangedSpacingEnterTooCloseBuffer = 1.0f;
+// Shared nearby-enemy-count gate for the "mass battle" aoe spells (Arcane
+// Explosion, Blizzard, Hurricane, Rain of Fire, Volley, and the Whirlwind
+// swarm-priority boost). Bump this to tune how large a fight needs to be
+// before bots reach for these instead of single-target rotation.
+constexpr uint32 kMassAoeEnemyCountThreshold = 4;
 constexpr uint32 kHunterAutoShotSpellId = 75;
 constexpr uint32 kHunterCallPetSpellId = 883;
 constexpr uint32 kHunterRevivePetSpellId = 982;
@@ -4422,7 +4427,7 @@ SpellDecision SelectHunterSpell(Player const* player, Unit const* target, bool i
     AddDecisionCandidate(candidates, hasBitePrimerOnKillTarget && activeTarget && player->IsWithinMeleeRange(activeTarget) && IsSpellReady(player, 81285), 27.0f,
         { "hunter mongoose bite", "consume hunter sting for melee burst", 81285, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, !activeTargetDeadZone && !targetBreakableCrowdControl && rangedMode && !inMelee &&
-            CountNearbyEnemies(player, 15.0f) >= 7 && IsSpellReady(player, 1510), 22.0f,
+            CountNearbyEnemies(player, 15.0f) >= kMassAoeEnemyCountThreshold && IsSpellReady(player, 1510), 22.0f,
         { "hunter volley", "prioritize channeled ranged aoe over single-target shots against a clustered enemy group", 1510, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, !readyToBiteKillTarget && !activeTargetDeadZone && !targetBreakableCrowdControl && (isSurvivalHunter || isBeastMasteryHunter) && rangedMode && !inMelee && activeTarget && IsSpellReady(player, 14287), 17.5f,
         { "hunter arcane shot", "instant pressure on kill target", 14287, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
@@ -4522,9 +4527,9 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage fire blast", isFireMage ? "instant fire blast pressure on cooldown" : "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "clustered enemies", isFireMage && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 13021), 29.5f,
             { "mage blast wave", "area fire pressure against nearby enemies", 13021, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "swarmed in melee", closePressure && CountNearbyEnemies(player, 10.0f) >= 7 && IsSpellReady(player, 1449), 29.7f,
+        { "swarmed in melee", closePressure && CountNearbyEnemies(player, 10.0f) >= kMassAoeEnemyCountThreshold && IsSpellReady(player, 1449), 29.7f,
             { "mage arcane explosion", "melee-range aoe burst when surrounded in a large fight", 1449, playerbot::PvpClassSpellContext::TargetMode::Self } },
-        { "large enemy cluster", isFrostMage && hasHostileTarget && CountNearbyEnemies(player, 15.0f) >= 7 && IsSpellReady(player, 10), 29.6f,
+        { "large enemy cluster", isFrostMage && hasHostileTarget && CountNearbyEnemies(player, 15.0f) >= kMassAoeEnemyCountThreshold && IsSpellReady(player, 10), 29.6f,
             { "mage blizzard", "sustained ranged aoe against a clustered enemy group", 10, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "polymorph", polymorphTarget && !polymorphTarget->HealthBelowPct(75), 29.0f,
             { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
@@ -4893,7 +4898,7 @@ SpellDecision SelectDruidSpell(Player const* player, Unit const* target, Classic
         { "druid leap", "disengage toward a nearby ally while still under melee pressure", 83111, playerbot::PvpClassSpellContext::TargetMode::Ally, balanceEscapeAlly ? balanceEscapeAlly->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, isBalanceDruid && target && balanceUnderMeleePressure && IsSpellReady(player, 5176), 40.0f,
         { "druid wrath", "ranged pressure while enemies are within 10 yards", 5176, playerbot::PvpClassSpellContext::TargetMode::Enemy });
-    AddDecisionCandidate(candidates, isBalanceDruid && target && !balanceUnderMeleePressure && CountNearbyEnemies(player, 15.0f) >= 7 && IsSpellReady(player, 16914), 39.7f,
+    AddDecisionCandidate(candidates, isBalanceDruid && target && !balanceUnderMeleePressure && CountNearbyEnemies(player, 15.0f) >= kMassAoeEnemyCountThreshold && IsSpellReady(player, 16914), 39.7f,
         { "druid hurricane", "channel aoe damage against a clustered enemy group while clear of melee pressure", 16914, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, isBalanceDruid && target && !balanceUnderMeleePressure && IsSpellReady(player, 2912), 39.5f,
         { "druid starfire", "primary nuke while clear of melee pressure; castable while moving", 2912, playerbot::PvpClassSpellContext::TargetMode::Enemy });
@@ -5122,7 +5127,7 @@ SpellDecision SelectWarlockSpell(Player const* player, Unit const* target, Class
         { "warlock death coil", "peel melee or finish low enemy target", 17926, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, isAfflictionWarlock && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 17928), 32.5f,
         { "warlock howl of terror", "fear clustered nearby enemies", 17928, playerbot::PvpClassSpellContext::TargetMode::Self });
-    AddDecisionCandidate(candidates, isDestructionWarlock && target && CountNearbyEnemies(player, 15.0f) >= 7 && IsSpellReady(player, 5740), 32.7f,
+    AddDecisionCandidate(candidates, isDestructionWarlock && target && CountNearbyEnemies(player, 15.0f) >= kMassAoeEnemyCountThreshold && IsSpellReady(player, 5740), 32.7f,
         { "warlock rain of fire", "ground-targeted aoe against a clustered enemy group", 5740, playerbot::PvpClassSpellContext::TargetMode::Enemy });
     AddDecisionCandidate(candidates, player->GetPower(POWER_MANA) < 400 && IsSpellReady(player, 11689), 32.0f,
         { "warlock life tap", "convert health to mana for sustained casting", 11689, playerbot::PvpClassSpellContext::TargetMode::Self });
@@ -5292,7 +5297,7 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* concussionTarget = isProtWarrior && IsSpellReady(player, 12809) ? SelectUnstunDREnemyTarget(player, activeTarget, 5.0f, 12809) : nullptr;
     AddDecisionCandidate(candidates, concussionTarget, 39.6f,
         { "warrior concussion blow", "stun a target without stun diminishing returns", 12809, playerbot::PvpClassSpellContext::TargetMode::Enemy, concussionTarget ? concussionTarget->GetGUID() : ObjectGuid::Empty });
-    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && CountNearbyEnemies(player, 10.0f) >= 3 &&
+    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && CountNearbyEnemies(player, 10.0f) >= kMassAoeEnemyCountThreshold &&
             player->GetPower(POWER_RAGE) >= 500 && IsSpellReady(player, 1680), 44.0f,
         { "warrior whirlwind", "prioritize aoe cleave over single-target pressure when surrounded", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) &&
