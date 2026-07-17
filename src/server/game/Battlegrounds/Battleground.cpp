@@ -1609,7 +1609,17 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
 {
     uint8 type = (isArena() ? 1 : 0);
 
-    data.Initialize(MSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * GetPlayerScoresSize());
+    // Battleground subclasses may create a score entry after the base AddPlayer
+    // rejected a spectator. Only active participants belong in the client
+    // scoreboard; custom-game spectators are deliberately kept outside
+    // m_Players.
+    std::vector<BattlegroundScore*> participantScores;
+    participantScores.reserve(PlayerScores.size());
+    for (auto const& score : PlayerScores)
+        if (m_Players.find(score.second->PlayerGuid) != m_Players.end())
+            participantScores.push_back(score.second);
+
+    data.Initialize(MSG_PVP_LOG_DATA, 1 + 1 + 4 + 40 * participantScores.size());
     data << uint8(type);                                // type (battleground = 0 / arena = 1)
 
     if (type)                                           // arena
@@ -1629,9 +1639,9 @@ void Battleground::BuildPvPLogDataPacket(WorldPacket& data)
     else
         data << uint8(0);                      // bg not ended
 
-    data << uint32(GetPlayerScoresSize());
-    for (auto const& score : PlayerScores)
-        score.second->AppendToPacket(data);
+    data << uint32(participantScores.size());
+    for (BattlegroundScore* score : participantScores)
+        score->AppendToPacket(data);
 }
 
 bool Battleground::UpdatePlayerScore(Player* player, uint32 type, uint32 value, bool doAddHonor)
