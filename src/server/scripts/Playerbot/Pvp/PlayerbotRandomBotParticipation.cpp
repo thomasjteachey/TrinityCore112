@@ -42,6 +42,7 @@
 #include "Pet.h"
 #include "Player.h"
 #include "Realm.h"
+#include "SpellAuras.h"
 #include "SpellDefines.h"
 #include "SpellHistory.h"
 #include "SpellInfo.h"
@@ -292,12 +293,43 @@ bool HasClassInsigniaBreakableAura(Player const* player)
     if (!player)
         return false;
 
-    // A real PvP trinket (and the custom Every Man for Himself equivalents
-    // modeled on it) breaks every loss-of-control effect - stun, root, snare,
-    // fear, charm, polymorph, and the rest - not a curated subset per class.
-    return player->HasUnitState(UNIT_STATE_FLEEING) ||
-        player->IsPolymorphed() ||
-        player->HasAuraWithMechanic(IMMUNE_TO_MOVEMENT_IMPAIRMENT_AND_LOSS_CONTROL_MASK);
+    bool const rooted = player->HasUnitState(UNIT_STATE_ROOT) ||
+        player->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_ROOT);
+    bool const snared = player->HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_SNARE);
+    bool const stunned = player->HasUnitState(UNIT_STATE_STUNNED) ||
+        player->HasAuraType(SPELL_AURA_MOD_STUN) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_STUN);
+    bool const charmed = player->HasAuraType(SPELL_AURA_MOD_CHARM) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_CHARM);
+    bool const feared = player->HasUnitState(UNIT_STATE_FLEEING) ||
+        player->HasAuraType(SPELL_AURA_MOD_FEAR) ||
+        player->HasAuraWithMechanic(1u << MECHANIC_FEAR);
+    bool const polymorphed = player->IsPolymorphed() ||
+        player->HasAuraWithMechanic(1u << MECHANIC_POLYMORPH);
+
+    // Same per-class CC groupings as before, just re-keyed onto the five
+    // groups that actually match the character_action spell grant (see
+    // GetHumanInsigniaRacialSpell above) instead of a mismatched six-way
+    // split with no catch-all default.
+    switch (player->GetClass())
+    {
+        case CLASS_ROGUE:
+        case CLASS_WARLOCK:
+            return charmed || feared || polymorphed;
+        case CLASS_WARRIOR:
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return rooted || snared || stunned;
+        case CLASS_PALADIN:
+        case CLASS_PRIEST:
+            return feared || polymorphed || stunned;
+        case CLASS_MAGE:
+            return feared || polymorphed || snared;
+        default: // Druid and anything else
+            return charmed || feared || stunned;
+    }
 }
 
 bool IsPlayerbotInsigniaCheckReady(Player const* player)
