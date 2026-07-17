@@ -524,8 +524,12 @@ Position BuildCollisionSafeDestination(Player* player, Position const& destinati
                 adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()))
         {
             bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
+            // 0.5 below the surface keeps in-water endpoints inside the
+            // stably-swimming band of the virtual-session swim hysteresis
+            // (engages above 0.35 depth); anything shallower parks the bot in
+            // the dead band where its swim flag never settles.
             if (!canWalkOnWater)
-                adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.25f));
+                adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.5f));
         }
     }
 
@@ -3651,16 +3655,12 @@ void StopPlayerbotForStationaryCast(Player* player)
     player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
 
     // StopMoving() above only re-syncs terrain/liquid status (and thus the
-    // swim flag) when it actually halts an in-flight movespline. Bots call
-    // this stop/prep path defensively on every cast attempt, not just on
-    // real state transitions, so a tick where the spline already finished
-    // would otherwise leave a stale (often non-swimming) flag frozen at the
-    // bot's current position. If that freeze happens while the bot is in
-    // water, other clients render it standing on the surface instead of
-    // treading. Force a terrain re-check so the swim flag always matches
-    // where the bot actually is before the flag update goes out.
-    player->UpdatePositionData();
-    player->SendMovementFlagUpdate();
+    // swim flag) when it actually halts an in-flight movespline, and bots
+    // call this stop/prep path defensively on every cast attempt. The
+    // throttled shared helper forces that resync, and additionally sinks a
+    // surface-riding bot into the stable in-water band so it treads water
+    // instead of standing on top of it.
+    playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
 }
 
 

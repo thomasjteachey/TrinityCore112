@@ -3593,8 +3593,35 @@ void Unit::ProcessTerrainStatusUpdate(ZLiquidStatus /*oldLiquidStatus*/, Optiona
         return;
 
     if (Player* player = ToPlayer())
+    {
         if (WorldSession* session = player->GetSession(); session && session->IsVirtualSession())
-            SetSwim(CanSwim() && IsInWater());
+        {
+            // Liquid classification is a hard step exactly at the surface
+            // (Map::GetLiquidStatus: delta > 0 is IN_WATER, delta > -0.1 is
+            // WATER_WALK). Bot pathing rides navmesh water polys whose Z sits
+            // exactly at the liquid level, so deriving the swim flag straight
+            // from IsInWater() flaps on centimeter-scale Z noise there and
+            // visibly bobs the bot between standing on the surface and
+            // swimming. Use a dead band instead: engage swim only when
+            // clearly below the surface of water too deep to stand in,
+            // disengage only when clearly at or above the surface (or the
+            // bot can stand on the bottom); keep the current state between.
+            bool const swimming = HasUnitMovementFlag(MOVEMENTFLAG_SWIMMING);
+            bool desiredSwimming = swimming;
+            if (!CanSwim() || !newLiquidData)
+                desiredSwimming = false;
+            else
+            {
+                float const depth = newLiquidData->level - GetPositionZ();
+                bool const tooDeepToStand = (newLiquidData->level - newLiquidData->depth_level) > GetCollisionHeight();
+                if (!tooDeepToStand || depth < 0.05f)
+                    desiredSwimming = false;
+                else if (depth > 0.35f)
+                    desiredSwimming = true;
+            }
+            SetSwim(desiredSwimming);
+        }
+    }
 
     // Remove appropriate auras if we are swimming/not swimming respectively.
     if (IsInWater())

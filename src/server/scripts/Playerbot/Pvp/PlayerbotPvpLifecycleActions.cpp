@@ -832,8 +832,12 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
                 adjustedZ + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight()))
             {
                 bool const canWalkOnWater = player->HasAuraType(SPELL_AURA_WATER_WALK);
+                // 0.5 below the surface keeps in-water endpoints inside the
+                // stably-swimming band of the virtual-session swim hysteresis
+                // (engages above 0.35 depth); anything shallower parks the bot
+                // in the dead band where its swim flag never settles.
                 if (!canWalkOnWater)
-                    adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.25f));
+                    adjustedZ = std::max(liquidData.depth_level + 0.05f, std::min(adjustedZ, liquidData.level - 0.5f));
             }
         }
 
@@ -2075,12 +2079,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         if (syntheticPlayerbotMover)
         {
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            // StopMoving() above only resyncs terrain/liquid status (and thus
-            // the swim flag) when it halts an in-flight spline, which this
-            // per-tick planting stop usually won't hit. Force it explicitly
-            // so bots don't freeze mid-water with a stale non-swimming flag.
-            player->UpdatePositionData();
-            player->SendMovementFlagUpdate();
+            // Throttled/shared swim-state resync; see
+            // ResyncPlayerbotSwimStateForMovementStop for the full rationale.
+            playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
         }
     }
 
@@ -2309,11 +2310,9 @@ constexpr uint32 kEnvironmentalMagmaDamageAuraId = 57634;
         {
             player->ClearUnitState(UNIT_STATE_MOVING | UNIT_STATE_MOVE);
             player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-            // See DriveCombatPositioning: StopMoving() only resyncs the swim
-            // flag when it halts an in-flight spline, which this defensive
-            // per-tick stop usually won't hit. Force it explicitly.
-            player->UpdatePositionData();
-            player->SendMovementFlagUpdate();
+            // Throttled/shared swim-state resync; see
+            // ResyncPlayerbotSwimStateForMovementStop for the full rationale.
+            playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
         }
 
         if (wasMoving || activeWand || recentWandStart)
@@ -3812,6 +3811,59 @@ namespace playerbot
         return ::QueueEligibleManagedBotsForBattleground(bgTypeId, arenaType, false);
     }
 
+    void ResyncPlayerbotSwimStateForMovementStop(Player* player)
+    {
+        if (!player || !player->IsInWorld())
+            return;
+
+        // Several independent "freeze movement to cast/hold/plant" call sites
+        // (StopPlayerbotForStationaryCast, DriveCombatPositioning's hold-band
+        // stop, HoldPositionForWand, StopVirtualPlayerbotMovement) can all
+        // fire for the same bot on the same or adjacent decision ticks.
+        // Collapse their terrain/swim resyncs into one throttled pass per bot
+        // so a bot holding position in water is not resampled and rebroadcast
+        // several times per real tick.
+        static constexpr uint32 kMinResyncIntervalMs = 200;
+        static std::unordered_map<uint64, uint32> lastResyncMsByGuid;
+
+        uint64 const guidRaw = player->GetGUID().GetRawValue();
+        uint32 const nowMs = GameTime::GetGameTimeMS();
+        {
+            std::lock_guard<std::mutex> stateGuard(playerbot::SharedBotStateStructureLock());
+            uint32& lastResyncMs = lastResyncMsByGuid[guidRaw];
+            if (lastResyncMs != 0 && nowMs - lastResyncMs < kMinResyncIntervalMs)
+                return;
+            lastResyncMs = nowMs;
+        }
+
+        // A bot stopped over water usually sits with Z exactly at the liquid
+        // surface, because navmesh water polys ride the liquid level. That is
+        // simultaneously the knife edge of the IN_WATER/WATER_WALK liquid
+        // classification (Map::GetLiquidStatus flips at delta 0) and the
+        // "standing on top of the water" visual. When the water is too deep
+        // to stand in, sink the bot just below the surface -- the same idiom
+        // BuildCollisionSafeDestination applies to movement destinations --
+        // so it classifies stably as swimming and renders treading water.
+        // In standable water, settle it onto the bottom instead. Never raise
+        // the bot: one already below the stable band is left where it is.
+        if (Map const* map = player->FindMap(); map && player->IsAlive() && !player->HasAuraType(SPELL_AURA_WATER_WALK))
+        {
+            LiquidData liquidData{};
+            ZLiquidStatus const liquidStatus = map->GetLiquidStatus(player->GetPhaseMask(), player->GetPositionX(),
+                player->GetPositionY(), player->GetPositionZ() + 0.5f, MAP_ALL_LIQUIDS, &liquidData, player->GetCollisionHeight());
+            if (liquidStatus & (LIQUID_MAP_WATER_WALK | LIQUID_MAP_IN_WATER | LIQUID_MAP_UNDER_WATER))
+            {
+                bool const tooDeepToStand = (liquidData.level - liquidData.depth_level) > player->GetCollisionHeight();
+                float const stableZ = tooDeepToStand ? liquidData.level - 0.5f : liquidData.depth_level + 0.05f;
+                if (player->GetPositionZ() - stableZ > 0.05f)
+                    player->UpdatePosition(player->GetPositionX(), player->GetPositionY(), stableZ, player->GetOrientation());
+            }
+        }
+
+        player->UpdatePositionData();
+        player->SendMovementFlagUpdate();
+    }
+
     void FinalizeManagedBotTeleportIfPending(Player* player)
     {
         if (!player)
@@ -4272,15 +4324,9 @@ namespace playerbot
             if (WorldSession* session = player->GetSession(); session && (session->IsVirtualSession() || session->IsTransientPlayerSession()))
             {
                 player->RemoveUnitMovementFlag(MOVEMENTFLAG_MASK_MOVING);
-                // StopMoving() only re-syncs terrain/liquid status (and thus the
-                // swim flag) when it actually halts an in-flight movespline. This
-                // hold-band stop runs defensively every combat tick, so the
-                // spline is usually already finalized and that resync never
-                // fires -- leaving a stale swim flag frozen at the bot's current
-                // position if it's holding position in water. Force a fresh
-                // terrain check before broadcasting the flag update.
-                player->UpdatePositionData();
-                player->SendMovementFlagUpdate();
+                // Throttled/shared swim-state resync; see
+                // ResyncPlayerbotSwimStateForMovementStop for the full rationale.
+                playerbot::ResyncPlayerbotSwimStateForMovementStop(player);
             }
             return true;
         }
