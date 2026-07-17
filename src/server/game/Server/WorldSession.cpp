@@ -1707,13 +1707,13 @@ uint32 WorldSession::DosProtection::GetMaxPacketCounterAllowed(uint16 opcode) co
         case CMSG_FORCE_MOVE_ROOT_ACK:
         case CMSG_FORCE_MOVE_UNROOT_ACK:
         {
-            maxPacketCounterAllowed = 256;
+            maxPacketCounterAllowed = 512;
             break;
         }
 
         default:
         {
-            maxPacketCounterAllowed = 100;
+            maxPacketCounterAllowed = 512;
             break;
         }
     }
