@@ -2331,6 +2331,12 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         target->SetDynamicFlag(UNIT_DYNFLAG_DEAD);         // blizz like 2.0.x
         target->AddUnitState(UNIT_STATE_DIED);
 
+        // The FinishSpell(..., false) above ends the feign cast before it can
+        // reach the Spell::finish(true) diagnostics hook, so the feign/trap
+        // watcher must be armed from the aura application itself.
+        if (Player* feignPlayer = target->ToPlayer())
+            feignPlayer->NotifyFeignDeathApplied();
+
         if (Creature* creature = target->ToCreature())
             creature->SetReactState(REACT_PASSIVE);
     }

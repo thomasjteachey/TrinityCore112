@@ -25910,27 +25910,11 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
     if (!IsHumanHunterFeignDiagnosticTarget(this))
         return;
 
+    // Feign Death (5384) never arrives here: HandleFeignDeath pre-finishes the
+    // feign spell itself with ok=false ("prevent interrupt message") while its
+    // aura is applied, so the later Spell::finish(true) is a no-op for it. The
+    // feign/trap watcher arms in NotifyFeignDeathApplied from the aura instead.
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-    if (spellId == FeignDeathSpell)
-    {
-        m_combatDiagnosticFeignTrapTimer = 0;
-        m_combatDiagnosticFeignHealth = GetHealth();
-        m_combatDiagnosticFeignLastDirectSpellId = 0;
-        m_combatDiagnosticFeignFailedSpellId = 0;
-        m_combatDiagnosticFeignFailedResult = 0;
-        m_combatDiagnosticFeignTrapPending = true;
-        m_combatDiagnosticFeignSawAura = HasAura(FeignDeathSpell);
-        m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
-
-        std::ostringstream armed;
-        armed << "[Feign diagnostic] armed: player=" << GetName()
-              << ", feignAuraNow=" << (m_combatDiagnosticFeignSawAura ? 1 : 0)
-              << ", combatNow=" << (IsInCombat() ? 1 : 0)
-              << "; reporting in " << FeignTrapDiagnosticWindow << "ms unless a trap cast completes.";
-        BroadcastFeignDiagnostic(armed.str());
-        return;
-    }
-
     if (!m_combatDiagnosticFeignTrapPending)
         return;
 
@@ -25945,6 +25929,41 @@ void Player::NotifyDirectSpellCast(uint32 spellId)
                  << "ms after feign: spell=" << spellId << "; no report will follow.";
         BroadcastFeignDiagnostic(resolved.str());
     }
+}
+
+void Player::NotifyFeignDeathApplied()
+{
+    if (!IsHumanHunterFeignDiagnosticTarget(this))
+    {
+        WorldSession const* session = GetSession();
+        // Bot feigns land here constantly; only surface the reject for real
+        // sessions (e.g. testing via .cast 5384 on a non-hunter character).
+        if (session && !session->IsVirtualSession() && !session->IsTransientPlayerSession())
+        {
+            std::ostringstream rejected;
+            rejected << "[Feign diagnostic] feign aura on " << GetName()
+                     << " ignored: class=" << uint32(GetClass()) << " is not a hunter.";
+            BroadcastFeignDiagnostic(rejected.str());
+            TC_LOG_WARN("combat.diagnostic", "{}", rejected.str());
+        }
+        return;
+    }
+
+    m_combatDiagnosticFeignTrapTimer = 0;
+    m_combatDiagnosticFeignHealth = GetHealth();
+    m_combatDiagnosticFeignLastDirectSpellId = 0;
+    m_combatDiagnosticFeignFailedSpellId = 0;
+    m_combatDiagnosticFeignFailedResult = 0;
+    m_combatDiagnosticFeignTrapPending = true;
+    m_combatDiagnosticFeignSawAura = true;
+    m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
+
+    std::ostringstream armed;
+    armed << "[Feign diagnostic] armed: player=" << GetName()
+          << ", combatNow=" << (IsInCombat() ? 1 : 0)
+          << "; reporting in " << FeignTrapDiagnosticWindow << "ms unless a trap cast completes.";
+    BroadcastFeignDiagnostic(armed.str());
+    TC_LOG_WARN("combat.diagnostic", "{}", armed.str());
 }
 
 void Player::NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result)

@@ -4467,6 +4467,7 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
     float const manaPct = player->GetPowerPct(POWER_MANA);
     bool const isFireMage = profileSelection.profile == ClassicClassProfile::SecondaryClassic;
     bool const isArcaneMage = profileSelection.profile == ClassicClassProfile::PrimaryClassic;
+    bool const isFrostMage = !isFireMage && !isArcaneMage;
     Unit const* cursedTarget = IsSpellReady(player, 475) ? SelectFriendlyCurseTarget(player, 40.0f) : nullptr;
     Unit const* castingTarget = IsSpellReady(player, 2139) ? SelectEnemyCastingTarget(player, 30.0f, target) : nullptr;
     Unit const* polymorphTarget =
@@ -4518,6 +4519,10 @@ SpellDecision SelectMageSpell(Player const* player, Unit const* target, bool inM
             { "mage fire blast", isFireMage ? "instant fire blast pressure on cooldown" : "instant execute pressure on low health target", 10199, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "clustered enemies", isFireMage && CountNearbyEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 13021), 29.5f,
             { "mage blast wave", "area fire pressure against nearby enemies", 13021, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "swarmed in melee", closePressure && CountNearbyEnemies(player, 10.0f) >= 3 && IsSpellReady(player, 1449), 29.7f,
+            { "mage arcane explosion", "melee-range aoe burst when surrounded in a large fight", 1449, playerbot::PvpClassSpellContext::TargetMode::Self } },
+        { "large enemy cluster", isFrostMage && hasHostileTarget && CountNearbyEnemies(player, 15.0f) >= 3 && IsSpellReady(player, 10), 29.6f,
+            { "mage blizzard", "sustained ranged aoe against a clustered enemy group", 10, playerbot::PvpClassSpellContext::TargetMode::Enemy } },
         { "polymorph", polymorphTarget && !polymorphTarget->HealthBelowPct(75), 29.0f,
             { "mage polymorph", "priority crowd control on non-dotted paladin/priest targets", 12826, playerbot::PvpClassSpellContext::TargetMode::Enemy, polymorphTarget ? polymorphTarget->GetGUID() : ObjectGuid::Empty } },
         { "default ranged", hasHostileTarget && IsSpellReady(player, (isFireMage || isArcaneMage) ? uint32(10207) : uint32(25304)), 18.0f,
@@ -5188,6 +5193,13 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* nearbyMeleeTarget = SelectNearbyMeleeTarget(player, activeTarget, 8.0f);
     Unit const* nearbyCastingTarget = SelectEnemyCastingTarget(player, 8.0f, activeTarget);
     Unit const* tauntTarget = isProtWarrior && IsSpellReady(player, 355) ? SelectWarriorTauntTarget(player, activeTarget, 30.0f) : nullptr;
+    // Intervene requires Battle or Defensive Stance (never Berserker). Prot
+    // warriors already live in Defensive Stance via the stance rules below,
+    // so no dedicated stance-swap prerequisite is needed here.
+    Unit const* interveneTarget = isProtWarrior && !inBerserkerStance && IsSpellReady(player, 3411) ?
+        SelectFriendlyMeleePressureTarget(player, 25.0f, 100.0f) : nullptr;
+    if (interveneTarget == player || (interveneTarget && player->IsWithinMeleeRange(interveneTarget)))
+        interveneTarget = nullptr;
     bool const revengeReady = isProtWarrior && player->IsWithinMeleeRange(activeTarget) && IsSpellReadyAndCasterAuraAllowed(player, 25288);
     bool const executeReady = activeTarget && activeTarget->HealthBelowPct(20) && IsSpellReady(player, 20662) && player->GetPower(POWER_RAGE) >= 150;
     bool const hasNearbyMeleeThreat = HasHostileTarget(player, nearbyMeleeTarget);
@@ -5217,6 +5229,8 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
         { "warrior defensive stance", "swap defensive before taunt", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
     AddDecisionCandidate(candidates, !warriorGapCloserInFlight && revengeReady && !inDefensiveStance && IsSpellReady(player, 71), 57.1f,
         { "warrior defensive stance", "swap defensive before revenge", 71, playerbot::PvpClassSpellContext::TargetMode::Self });
+    AddDecisionCandidate(candidates, interveneTarget, 56.85f,
+        { "warrior intervene", "rush to an ally under melee pressure and draw their attacker's aggro", 3411, playerbot::PvpClassSpellContext::TargetMode::Ally, interveneTarget ? interveneTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, tauntTarget && inDefensiveStance, 56.8f,
         { "warrior taunt", "taunt enemy pressuring an ally or current kill target", 355, playerbot::PvpClassSpellContext::TargetMode::Enemy, tauntTarget ? tauntTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, CountNearbyUnsNaredEnemies(player, 10.0f) >= 2 && IsSpellReady(player, 12323), 56.0f,
@@ -5268,6 +5282,9 @@ SpellDecision SelectWarriorSpell(Player const* player, Unit const* target, Class
     Unit const* concussionTarget = isProtWarrior && IsSpellReady(player, 12809) ? SelectUnstunDREnemyTarget(player, activeTarget, 5.0f, 12809) : nullptr;
     AddDecisionCandidate(candidates, concussionTarget, 39.6f,
         { "warrior concussion blow", "stun a target without stun diminishing returns", 12809, playerbot::PvpClassSpellContext::TargetMode::Enemy, concussionTarget ? concussionTarget->GetGUID() : ObjectGuid::Empty });
+    AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) && CountNearbyEnemies(player, 10.0f) >= 3 &&
+            player->GetPower(POWER_RAGE) >= 500 && IsSpellReady(player, 1680), 44.0f,
+        { "warrior whirlwind", "prioritize aoe cleave over single-target pressure when surrounded", 1680, playerbot::PvpClassSpellContext::TargetMode::Enemy, activeTarget ? activeTarget->GetGUID() : ObjectGuid::Empty });
     AddDecisionCandidate(candidates, player->IsWithinMeleeRange(activeTarget) &&
             (isProtWarrior ? !HasAuraFromSpellChain(activeTarget, 11597) : (!HasAuraFromSpellChain(activeTarget, 7373) || (activeTarget->GetAura(7373) && activeTarget->GetAura(7373)->GetDuration() < 2000))) &&
             IsSpellReady(player, isProtWarrior ? uint32(11597) : uint32(7373)), 39.0f,

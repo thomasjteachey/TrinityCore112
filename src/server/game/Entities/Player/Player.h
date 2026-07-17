@@ -958,6 +958,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
 
         void Update(uint32 time) override;
         void NotifyDirectSpellCast(uint32 spellId);
+        void NotifyFeignDeathApplied();
         void NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result);
 
         static bool BuildEnumData(PreparedQueryResult result, WorldPacket* data);
