@@ -3878,7 +3878,12 @@ namespace playerbot
         }
 
         player->UpdatePositionData();
-        player->SendMovementFlagUpdate();
+        // No MSG_MOVE_HEARTBEAT here: observer clients render bots from
+        // splines, and a heartbeat kicks them into a client-movement stream
+        // that never follows (sporadic porting). The swim toggle above
+        // (UpdatePositionData -> ProcessTerrainStatusUpdate -> SetSwim)
+        // already publishes SMSG_SPLINE_MOVE_START/STOP_SWIM, and the small
+        // stabilization Z-sink reaches observers with the next spline launch.
     }
 
     void FinalizeManagedBotTeleportIfPending(Player* player)

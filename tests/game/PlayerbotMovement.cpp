@@ -55,3 +55,32 @@ TEST_CASE("Socketless playerbot equivalent point orders are centrally preserved"
     CHECK(pointGenerator.find("GetDestinationX() const") != std::string::npos);
     CHECK(pointGenerator.find("GetFinalOrientation() const") != std::string::npos);
 }
+
+TEST_CASE("Socketless playerbot state toggles broadcast spline-family opcodes", "[playerbot][movement]")
+{
+    std::string const source = ReadFile("src/server/game/Entities/Player/Player.cpp");
+    CHECK(source.find("bool IsServerDrivenBotSession(Player const* player)") != std::string::npos);
+    // Every player-style movement-state toggle must have a bot branch that
+    // publishes the GUID-only spline opcode instead of MSG_MOVE_* + MovementInfo.
+    CHECK(source.find("SMSG_SPLINE_MOVE_GRAVITY_DISABLE : SMSG_SPLINE_MOVE_GRAVITY_ENABLE") != std::string::npos);
+    CHECK(source.find("SMSG_SPLINE_MOVE_SET_FLYING : SMSG_SPLINE_MOVE_UNSET_FLYING") != std::string::npos);
+    CHECK(source.find("SMSG_SPLINE_MOVE_SET_HOVER : SMSG_SPLINE_MOVE_UNSET_HOVER") != std::string::npos);
+    CHECK(source.find("SMSG_SPLINE_MOVE_START_SWIM : SMSG_SPLINE_MOVE_STOP_SWIM") != std::string::npos);
+    CHECK(source.find("SMSG_SPLINE_MOVE_WATER_WALK : SMSG_SPLINE_MOVE_LAND_WALK") != std::string::npos);
+    CHECK(source.find("SMSG_SPLINE_MOVE_FEATHER_FALL : SMSG_SPLINE_MOVE_NORMAL_FALL") != std::string::npos);
+    // The bot swim relay must no longer use the MovementInfo-carrying opcodes.
+    CHECK(source.find("MSG_MOVE_START_SWIM : MSG_MOVE_STOP_SWIM") == std::string::npos);
+    CHECK(CountOccurrences(source, "IsServerDrivenBotSession(this)") >= 6);
+}
+
+TEST_CASE("Socketless playerbot movers never broadcast MSG_MOVE_HEARTBEAT", "[playerbot][movement]")
+{
+    std::string const unitSource = ReadFile("src/server/game/Entities/Unit/Unit.cpp");
+    std::size_t const guardPos = unitSource.find("void Unit::SendMovementFlagUpdate(bool self /* = false */)");
+    REQUIRE(guardPos != std::string::npos);
+    std::string const functionBody = unitSource.substr(guardPos, unitSource.find("BuildHeartBeatMsg", guardPos) - guardPos);
+    CHECK(functionBody.find("IsSocketlessServerDrivenPlayer(this)") != std::string::npos);
+
+    std::string const lifecycleSource = ReadFile("src/server/scripts/Playerbot/Pvp/PlayerbotPvpLifecycleActions.cpp");
+    CHECK(lifecycleSource.find("player->SendMovementFlagUpdate();") == std::string::npos);
+}

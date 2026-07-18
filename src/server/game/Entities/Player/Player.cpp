@@ -28685,10 +28685,36 @@ bool Player::IsInWhisperWhiteList(ObjectGuid guid)
     return false;
 }
 
+namespace
+{
+// Socketless player sessions (managed playerbots, transient OBC clones) are
+// rendered by observer clients as server/spline-driven movers. Broadcasting a
+// player-style MSG_MOVE_* packet -- which embeds a full MovementInfo block --
+// switches those clients to a client-movement stream that never receives a
+// follow-up: the model freezes at the packet position, active spline playback
+// is cancelled, and the next SMSG_MONSTER_MOVE snaps it forward, rendered as
+// sporadic back-and-forth porting. Publish their movement-state toggles with
+// the spline-family opcodes (GUID only) instead, exactly like creatures do.
+// See MovementPacketSender::SendSpeedChangeToObservers for the same idiom.
+bool IsServerDrivenBotSession(Player const* player)
+{
+    WorldSession const* session = player->GetSession();
+    return session && (session->IsVirtualSession() || session->IsTransientPlayerSession());
+}
+}
+
 bool Player::SetDisableGravity(bool disable, bool packetOnly /*= false*/, bool updateAnimTier /*= true*/)
 {
     if (!packetOnly && !Unit::SetDisableGravity(disable, packetOnly, updateAnimTier))
         return false;
+
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(disable ? SMSG_SPLINE_MOVE_GRAVITY_DISABLE : SMSG_SPLINE_MOVE_GRAVITY_ENABLE, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(disable ? SMSG_MOVE_GRAVITY_DISABLE : SMSG_MOVE_GRAVITY_ENABLE, 12);
     data << GetPackGUID();
@@ -28706,6 +28732,17 @@ bool Player::SetCanFly(bool apply, bool packetOnly /*= false*/)
 {
     if (!apply)
         SetFallInformation(0, GetPositionZ());
+
+    if (IsServerDrivenBotSession(this))
+    {
+        if (!packetOnly && !Unit::SetCanFly(apply))
+            return false;
+
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_SET_FLYING : SMSG_SPLINE_MOVE_UNSET_FLYING, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(apply ? SMSG_MOVE_SET_CAN_FLY : SMSG_MOVE_UNSET_CAN_FLY, 12);
     data << GetPackGUID();
@@ -28729,6 +28766,14 @@ bool Player::SetHover(bool apply, bool packetOnly /*= false*/, bool updateAnimTi
     if (!packetOnly && !Unit::SetHover(apply, packetOnly, updateAnimTier))
         return false;
 
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_SET_HOVER : SMSG_SPLINE_MOVE_UNSET_HOVER, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
+
     WorldPacket data(apply ? SMSG_MOVE_SET_HOVER : SMSG_MOVE_UNSET_HOVER, 12);
     data << GetPackGUID();
     data << uint32(0);          //! movement counter
@@ -28747,14 +28792,13 @@ bool Player::SetSwim(bool enable)
         return false;
 
     // Real clients decide to swim locally and relay MSG_MOVE_START/STOP_SWIM
-    // to the server themselves (there is no SMSG_MOVE_SET_SWIM to request it,
-    // unlike hover/water-walk/feather-fall). This override only ever runs for
-    // virtual (bot) sessions -- see Unit::ProcessTerrainStatusUpdate -- so we
-    // build that same observer-relay packet ourselves so nearby real clients
-    // still see the bot's swim animation start/stop.
-    WorldPacket data(enable ? MSG_MOVE_START_SWIM : MSG_MOVE_STOP_SWIM, 64);
+    // to the server themselves. This override only ever runs for virtual (bot)
+    // sessions -- see Unit::ProcessTerrainStatusUpdate -- and observers render
+    // those as spline-driven movers, so relay the state with the spline-family
+    // opcode (GUID only, no MovementInfo). The old MSG_MOVE_START/STOP_SWIM
+    // relay stomped observers out of spline playback and read as porting.
+    WorldPacket data(enable ? SMSG_SPLINE_MOVE_START_SWIM : SMSG_SPLINE_MOVE_STOP_SWIM, 9);
     data << GetPackGUID();
-    BuildMovementPacket(&data);
     SendMessageToSet(&data, false);
     return true;
 }
@@ -28763,6 +28807,14 @@ bool Player::SetWaterWalking(bool apply, bool packetOnly /*= false*/)
 {
     if (!packetOnly && !Unit::SetWaterWalking(apply))
         return false;
+
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_WATER_WALK : SMSG_SPLINE_MOVE_LAND_WALK, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(apply ? SMSG_MOVE_WATER_WALK : SMSG_MOVE_LAND_WALK, 12);
     data << GetPackGUID();
@@ -28780,6 +28832,14 @@ bool Player::SetFeatherFall(bool apply, bool packetOnly /*= false*/)
 {
     if (!packetOnly && !Unit::SetFeatherFall(apply))
         return false;
+
+    if (IsServerDrivenBotSession(this))
+    {
+        WorldPacket data(apply ? SMSG_SPLINE_MOVE_FEATHER_FALL : SMSG_SPLINE_MOVE_NORMAL_FALL, 9);
+        data << GetPackGUID();
+        SendMessageToSet(&data, false);
+        return true;
+    }
 
     WorldPacket data(apply ? SMSG_MOVE_FEATHER_FALL : SMSG_MOVE_NORMAL_FALL, 12);
     data << GetPackGUID();

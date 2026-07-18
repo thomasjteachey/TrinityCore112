@@ -11304,6 +11304,16 @@ void Unit::ResumeMovement(uint32 timer/* = 0*/, uint8 slot/* = 0*/)
 
 void Unit::SendMovementFlagUpdate(bool self /* = false */)
 {
+    // MSG_MOVE_HEARTBEAT carries a full MovementInfo block and observer
+    // clients treat it as an authoritative client-movement state: it cancels
+    // spline playback and freezes the model at the packet position until the
+    // next SMSG_MONSTER_MOVE snaps it forward. Socketless playerbot movers are
+    // rendered purely from splines (and have no own client that needs the
+    // heartbeat), so publishing it for them only produces sporadic porting;
+    // their observers learn flag changes through the spline-family opcodes.
+    if (IsSocketlessServerDrivenPlayer(this))
+        return;
+
     WorldPacket data;
     BuildHeartBeatMsg(&data);
     SendMessageToSet(&data, self);
