@@ -399,10 +399,7 @@ void WorldSession::HandlePVPLogDataOpcode(WorldPacket & /*recvData*/)
         return;
 
     // Prevent players from sending BuildPvpLogDataPacket in an arena except for when sent in BattleGround::EndBattleGround.
-    // Replay viewers and spectators are exempt: they aren't live combatants,
-    // so there's no scouting concern, and this request is their only way to
-    // pull up the scoreboard mid-match.
-    if (bg->isArena() && !bg->IsReplay() && !_player->IsSpectator())
+    if (bg->isArena())
         return;
 
     WorldPacket data;
@@ -730,7 +727,8 @@ void WorldSession::HandleBattlefieldStatusOpcode(WorldPacket & /*recvData*/)
     // don't answer, a spectator's client never flags the battleground as
     // active, which keeps the scoreboard toggle and the minimap battlefield
     // icon disabled. (This is why pushing the status packet before the
-    // spectator's teleport never stuck.)
+    // spectator's teleport never stuck.) SendSpectatorBattlefieldStatusTo
+    // no-ops for arenas -- see its isArena() guard.
     if (_player->IsSpectator())
         if (Battleground* spectatedBg = _player->GetBattleground())
             if (spectatedBg->IsCustomGame() || spectatedBg->IsReplay())

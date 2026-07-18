@@ -1012,8 +1012,10 @@ void Battleground::EndBattleground(uint32 winner)
     // Custom-game spectators live outside m_Players, so the loop above never
     // hands them the final scoreboard. Send it so their client pops the
     // end-of-match score frame (the winner byte in the log packet drives it)
-    // just like it does for combatants.
-    if (m_IsCustomGame)
+    // just like it does for combatants. Arenas are excluded: see the isArena()
+    // guard in SendSpectatorBattlefieldStatusTo for why an ACTIVE-arena status
+    // packet breaks spectator nameplate coloring.
+    if (m_IsCustomGame && !isArena())
         for (Player* spectator : m_Spectators)
         {
             if (!spectator || !spectator->IsInWorld() || spectator->GetBattlegroundId() != GetInstanceID())
@@ -1428,6 +1430,18 @@ void Battleground::SendSpectatorBattlefieldStatusTo(Player* player)
     if (!player || !player->GetSession() || player->GetSession()->IsVirtualSession())
         return;
 
+    // Arenas are excluded: telling a spectator's client the battlefield is an
+    // ACTIVE arena (rather than leaving it in its default not-active state)
+    // switches the client's nameplate coloring from plain faction-reaction
+    // (green/red, correct here since custom-arena participants keep real
+    // Horde/Alliance factions) to Green-Team/Gold-Team arena coloring, which
+    // it cannot resolve for a spectator who isn't in either raid group -- the
+    // observed symptom was every participant's name rendering blue. Regular
+    // (non-arena) custom games don't hit this: isArena() is already false, so
+    // the client never enters that coloring mode regardless of this packet.
+    if (isArena())
+        return;
+
     // Spectators bypass the whole queue system, so none of the normal senders
     // (queue invite, port opcode, CMSG_BATTLEFIELD_STATUS queue loop) ever tell
     // their client the battleground is active. Without an ACTIVE status the
@@ -1440,13 +1454,6 @@ void Battleground::SendSpectatorBattlefieldStatusTo(Player* player)
     // Seed the scoreboard so the first toggle isn't empty.
     BuildPvPLogDataPacket(data);
     player->SendDirectMessage(&data);
-
-    // Let the patched client UI know this session is spectating: the stock
-    // scoreboard toggle refuses to open for arena-typed matches, and the
-    // client has no other way to tell a spectator from a combatant.
-    WorldPacket hint;
-    ChatHandler::BuildChatPacket(hint, CHAT_MSG_WHISPER, LANG_ADDON, ObjectGuid::Empty, ObjectGuid::Empty, "CCGAME\tSPECTATE:1", 0);
-    player->SendDirectMessage(&hint);
 }
 
 // this method adds player to his team's bg group, or sets his correct group if player is already in bg group
