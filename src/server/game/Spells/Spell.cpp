@@ -2594,7 +2594,16 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
         _spellHitTarget = spell->m_caster->ToUnit();
 
     if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()) && !spell->m_spellInfo->IsMindVision() && ShouldSpellStartCombat(spell->m_spellInfo, spell->m_originalCaster, spell->m_caster))
+    {
+        // Combat diagnostic: this is why a missed/resisted/dodged hostile cast
+        // can still re-enter combat with zero damage recorded -- combat entry
+        // here is unconditional on MissCondition (besides EVADE above), and
+        // runs before any hit/damage resolution.
+        if (Player* feignTarget = unit->ToPlayer())
+            feignTarget->NotifyCombatDiagnosticSpellEngage(spell->m_spellInfo->Id, uint8(MissCondition));
+
         unit->SetInCombatWith(spell->m_originalCaster);
+    }
 
     bool reportedNaturesGraspFailure = false;
     if (MissCondition != SPELL_MISS_NONE)

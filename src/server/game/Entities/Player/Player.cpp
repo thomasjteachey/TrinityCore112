@@ -262,6 +262,26 @@ namespace
         }
     }
 
+    char const* DescribeFeignCombatMiss(uint8 missCondition)
+    {
+        switch (SpellMissInfo(missCondition))
+        {
+            case SPELL_MISS_NONE:    return "hit";
+            case SPELL_MISS_MISS:    return "missed";
+            case SPELL_MISS_RESIST:  return "resisted";
+            case SPELL_MISS_DODGE:   return "dodged";
+            case SPELL_MISS_PARRY:   return "parried";
+            case SPELL_MISS_BLOCK:   return "blocked";
+            case SPELL_MISS_EVADE:   return "evaded";
+            case SPELL_MISS_IMMUNE:
+            case SPELL_MISS_IMMUNE2: return "immune";
+            case SPELL_MISS_DEFLECT: return "deflected";
+            case SPELL_MISS_ABSORB:  return "absorbed";
+            case SPELL_MISS_REFLECT: return "reflected";
+            default:                 return "unknown";
+        }
+    }
+
     uint32 ResolveKnownCombatDiagnosticSpell(Player const* player, uint32 baseSpellId)
     {
         if (!player)
@@ -546,6 +566,8 @@ Player::Player(WorldSession* session) : Unit(true)
     m_combatDiagnosticFeignDamageSourceSpell = 0;
     m_combatDiagnosticFeignDamageAmount = 0;
     m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatSpellId = 0;
+    m_combatDiagnosticFeignCombatMissCondition = 0;
     m_combatDiagnosticSent = false;
     m_combatDiagnosticHasDirectSpellCast = false;
     m_combatDiagnosticFeignTrapPending = false;
@@ -26015,6 +26037,8 @@ void Player::NotifyFeignDeathApplied()
     m_combatDiagnosticFeignDamageSourceSpell = 0;
     m_combatDiagnosticFeignDamageAmount = 0;
     m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatSpellId = 0;
+    m_combatDiagnosticFeignCombatMissCondition = 0;
     m_combatDiagnosticFeignTrapPending = true;
     m_combatDiagnosticFeignSawAura = true;
     m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
@@ -26095,6 +26119,24 @@ void Player::NotifyCombatDiagnosticCombatSource(Unit* source)
         return;
 
     m_combatDiagnosticFeignCombatSourceGuid = source ? source->GetGUID() : ObjectGuid::Empty;
+}
+
+// Fires from Spell::TargetInfo::PreprocessTarget, the exact point that decides
+// a hostile spell should start combat (SpellInfo::HasInitialAggro() or already
+// engaged) and calls target->SetInCombatWith(caster) -- unconditionally on
+// MissCondition except EVADE. This is why a missed/resisted/dodged attack can
+// still re-enter combat with zero damage recorded: this line runs before any
+// hit/damage resolution even happens.
+void Player::NotifyCombatDiagnosticSpellEngage(uint32 spellId, uint8 missCondition)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (m_combatDiagnosticFeignCombatSpellId)
+        return;
+
+    m_combatDiagnosticFeignCombatSpellId = spellId;
+    m_combatDiagnosticFeignCombatMissCondition = missCondition;
 }
 
 void Player::UpdateCombatDiagnostic(uint32 diff)
@@ -26233,7 +26275,9 @@ void Player::SendFeignTrapDiagnostic()
                << ", hitBy=" << describeUnit(m_combatDiagnosticFeignDamageSourceGuid)
                << ", hitSpell=" << m_combatDiagnosticFeignDamageSourceSpell
                << ", hitDmg=" << m_combatDiagnosticFeignDamageAmount
-               << ", combatReenterBy=" << describeUnit(m_combatDiagnosticFeignCombatSourceGuid);
+               << ", combatReenterBy=" << describeUnit(m_combatDiagnosticFeignCombatSourceGuid)
+               << ", combatSpell=" << m_combatDiagnosticFeignCombatSpellId
+               << ", combatSpellResult=" << (m_combatDiagnosticFeignCombatSpellId ? DescribeFeignCombatMiss(m_combatDiagnosticFeignCombatMissCondition) : "n/a");
     diagnostic << '.';
 
     std::string const message = diagnostic.str();
