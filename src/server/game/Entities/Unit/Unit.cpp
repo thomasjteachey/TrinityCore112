@@ -870,6 +870,12 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit* excludeCasterChannel) cons
         else
             victim->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TAKE_DAMAGE, 0);
 
+        // Combat diagnostic: names who kept hitting the player through a pending
+        // feign/trap watch, independent of whether this particular hit is what
+        // stripped the aura (NotifyFeignDeathInterrupted records that part).
+        if (Player* feignVictim = victim->ToPlayer())
+            feignVictim->NotifyCombatDiagnosticDamageTaken(attacker, spellProto ? spellProto->Id : 0, damage);
+
         // interrupt spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG on absorbed damage (no dots)
         if (!damage && damagetype != DOT && hasAbsorbedDamage)
         {
@@ -4596,6 +4602,10 @@ void Unit::RemoveAurasWithInterruptFlags(uint32 flag, uint32 except, bool skipMo
                 if (flag & protectedFlags)
                     continue;
             }
+
+            if (aura->GetId() == 5384 /* Hunter Feign Death: combat-diagnostic break-cause capture */)
+                if (Player* feignPlayer = ToPlayer())
+                    feignPlayer->NotifyFeignDeathInterrupted(flag);
 
             uint32 removedAuras = m_removedAurasCount;
             RemoveAura(aura);

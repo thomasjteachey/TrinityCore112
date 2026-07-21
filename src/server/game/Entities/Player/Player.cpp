@@ -213,6 +213,55 @@ namespace
         }
     }
 
+    char const* DescribeFeignInterruptFlag(uint32 flag)
+    {
+        switch (flag)
+        {
+            case 0:                                            return "none";
+            case AURA_INTERRUPT_FLAG_HITBYSPELL:                return "hit by negative spell";
+            case AURA_INTERRUPT_FLAG_TAKE_DAMAGE:               return "took damage";
+            case AURA_INTERRUPT_FLAG_CAST:                      return "cast a spell";
+            case AURA_INTERRUPT_FLAG_MOVE:                      return "moved";
+            case AURA_INTERRUPT_FLAG_TURNING:                   return "turned";
+            case AURA_INTERRUPT_FLAG_JUMP:                      return "jumped";
+            case AURA_INTERRUPT_FLAG_NOT_MOUNTED:               return "dismounted";
+            case AURA_INTERRUPT_FLAG_NOT_ABOVEWATER:            return "entered water";
+            case AURA_INTERRUPT_FLAG_NOT_UNDERWATER:            return "left water";
+            case AURA_INTERRUPT_FLAG_NOT_SHEATHED:              return "unsheathed weapon";
+            case AURA_INTERRUPT_FLAG_TALK:                      return "talked to an npc";
+            case AURA_INTERRUPT_FLAG_LOOTING:                   return "used/looted an object";
+            case AURA_INTERRUPT_FLAG_MELEE_ATTACK:              return "attacked";
+            case AURA_INTERRUPT_FLAG_SPELL_ATTACK:              return "attacked with a spell";
+            case AURA_INTERRUPT_FLAG_TRANSFORM:                 return "transformed";
+            case AURA_INTERRUPT_FLAG_MOUNT:                     return "mounted";
+            case AURA_INTERRUPT_FLAG_NOT_SEATED:                return "stood up";
+            case AURA_INTERRUPT_FLAG_CHANGE_MAP:                return "changed map";
+            case AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION:  return "gained immunity/lost selection";
+            case AURA_INTERRUPT_FLAG_TELEPORTED:                return "teleported";
+            case AURA_INTERRUPT_FLAG_ENTER_PVP_COMBAT:          return "entered pvp combat";
+            case AURA_INTERRUPT_FLAG_DIRECT_DAMAGE:             return "took direct damage";
+            case AURA_INTERRUPT_FLAG_LANDING:                   return "landed";
+            case AURA_INTERRUPT_FLAG_LEAVE_COMBAT:              return "left combat";
+            default:                                            return "multiple/unknown flag";
+        }
+    }
+
+    char const* DescribeFeignRemoveMode(uint8 removeMode)
+    {
+        if (removeMode == 0)
+            return "still applied";
+
+        switch (AuraRemoveMode(removeMode))
+        {
+            case AURA_REMOVE_BY_DEFAULT:     return "default (interrupt/scripted)";
+            case AURA_REMOVE_BY_CANCEL:      return "self-cancelled";
+            case AURA_REMOVE_BY_ENEMY_SPELL: return "dispelled/purged by enemy";
+            case AURA_REMOVE_BY_EXPIRE:      return "duration expired";
+            case AURA_REMOVE_BY_DEATH:       return "died";
+            default:                         return "unknown";
+        }
+    }
+
     uint32 ResolveKnownCombatDiagnosticSpell(Player const* player, uint32 baseSpellId)
     {
         if (!player)
@@ -491,6 +540,12 @@ Player::Player(WorldSession* session) : Unit(true)
     m_combatDiagnosticFeignLastDirectSpellId = 0;
     m_combatDiagnosticFeignFailedSpellId = 0;
     m_combatDiagnosticFeignFailedResult = 0;
+    m_combatDiagnosticFeignInterruptFlag = 0;
+    m_combatDiagnosticFeignRemoveMode = 0;
+    m_combatDiagnosticFeignDamageSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignDamageSourceSpell = 0;
+    m_combatDiagnosticFeignDamageAmount = 0;
+    m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
     m_combatDiagnosticSent = false;
     m_combatDiagnosticHasDirectSpellCast = false;
     m_combatDiagnosticFeignTrapPending = false;
@@ -25954,6 +26009,12 @@ void Player::NotifyFeignDeathApplied()
     m_combatDiagnosticFeignLastDirectSpellId = 0;
     m_combatDiagnosticFeignFailedSpellId = 0;
     m_combatDiagnosticFeignFailedResult = 0;
+    m_combatDiagnosticFeignInterruptFlag = 0;
+    m_combatDiagnosticFeignRemoveMode = 0;
+    m_combatDiagnosticFeignDamageSourceGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignDamageSourceSpell = 0;
+    m_combatDiagnosticFeignDamageAmount = 0;
+    m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
     m_combatDiagnosticFeignTrapPending = true;
     m_combatDiagnosticFeignSawAura = true;
     m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
@@ -25976,6 +26037,64 @@ void Player::NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult 
 
     m_combatDiagnosticFeignFailedSpellId = spellId;
     m_combatDiagnosticFeignFailedResult = uint32(result);
+}
+
+// Fires from Unit::RemoveAurasWithInterruptFlags right before the feign aura is
+// actually removed, with whichever AURA_INTERRUPT_FLAG_* bit triggered it. This
+// is the generic choke point every interrupt-driven removal funnels through
+// (movement, damage, casting, standing up, ...), so it names the mechanism
+// definitively instead of being inferred from before/after polling.
+void Player::NotifyFeignDeathInterrupted(uint32 interruptFlag)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignInterruptFlag)
+        m_combatDiagnosticFeignInterruptFlag = interruptFlag;
+}
+
+// Fires from AuraEffect::HandleFeignDeath's removal branch with the aura's
+// actual AuraRemoveMode (default/interrupt, cancel, enemy spell, expire,
+// death). Independent of NotifyFeignDeathInterrupted: this still fires even
+// when removal did not go through RemoveAurasWithInterruptFlags at all (e.g.
+// an explicit RemoveAurasByType(SPELL_AURA_FEIGN_DEATH) call from opening the
+// bank/mail/vendor, or a dispel).
+void Player::NotifyFeignDeathRemoved(uint8 removeMode)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignRemoveMode)
+        m_combatDiagnosticFeignRemoveMode = removeMode;
+}
+
+// Fires from Unit::DealDamage for the first hit landed on the player while the
+// feign/trap watch is pending, regardless of whether that hit ends up being
+// what breaks the aura -- names who kept attacking through the feign.
+void Player::NotifyCombatDiagnosticDamageTaken(Unit* attacker, uint32 spellId, uint32 damage)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignDamageSourceGuid.IsEmpty())
+        return;
+
+    m_combatDiagnosticFeignDamageSourceGuid = attacker ? attacker->GetGUID() : ObjectGuid::Empty;
+    m_combatDiagnosticFeignDamageSourceSpell = spellId;
+    m_combatDiagnosticFeignDamageAmount = damage;
+}
+
+// Fires from CombatManager::SetInCombatWith for whichever unit put the player
+// back into a combat reference while the feign/trap watch is pending.
+void Player::NotifyCombatDiagnosticCombatSource(Unit* source)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignCombatSourceGuid.IsEmpty())
+        return;
+
+    m_combatDiagnosticFeignCombatSourceGuid = source ? source->GetGUID() : ObjectGuid::Empty;
 }
 
 void Player::UpdateCombatDiagnostic(uint32 diff)
@@ -26047,6 +26166,28 @@ void Player::SendFeignTrapDiagnostic()
         return spell && spell->GetSpellInfo() ? spell->GetSpellInfo()->Id : 0;
     };
 
+    auto describeUnit = [this](ObjectGuid const& guid) -> std::string
+    {
+        if (!guid)
+            return "none";
+
+        Unit* unit = ObjectAccessor::GetUnit(*this, guid);
+        if (!unit)
+            return guid.ToString();
+
+        std::ostringstream out;
+        out << unit->GetName();
+        if (Player const* asPlayer = unit->ToPlayer())
+        {
+            WorldSession const* unitSession = asPlayer->GetSession();
+            bool const isBot = unitSession && (unitSession->IsVirtualSession() || unitSession->IsTransientPlayerSession());
+            out << (isBot ? " (bot)" : " (player)");
+        }
+        else
+            out << " (creature " << unit->GetEntry() << ")";
+        return out.str();
+    };
+
     std::ostringstream diagnostic;
     diagnostic << "[Feign diagnostic] player=" << GetName()
                << " guid=" << GetGUID().ToString()
@@ -26084,6 +26225,15 @@ void Player::SendFeignTrapDiagnostic()
 
     appendTrapReadiness("freezing", 14311);
     appendTrapReadiness("frost", 13809);
+
+    // Definitive break-cause block: captured live at the moment each event
+    // happened, not inferred from the snapshot fields above.
+    diagnostic << ", feignBrokenBy=" << DescribeFeignInterruptFlag(m_combatDiagnosticFeignInterruptFlag)
+               << ", feignRemoveMode=" << DescribeFeignRemoveMode(m_combatDiagnosticFeignRemoveMode)
+               << ", hitBy=" << describeUnit(m_combatDiagnosticFeignDamageSourceGuid)
+               << ", hitSpell=" << m_combatDiagnosticFeignDamageSourceSpell
+               << ", hitDmg=" << m_combatDiagnosticFeignDamageAmount
+               << ", combatReenterBy=" << describeUnit(m_combatDiagnosticFeignCombatSourceGuid);
     diagnostic << '.';
 
     std::string const message = diagnostic.str();

@@ -2354,6 +2354,11 @@ void AuraEffect::HandleFeignDeath(AuraApplication const* aurApp, uint8 mode, boo
         target->RemoveDynamicFlag(UNIT_DYNFLAG_DEAD);      // blizz like 2.0.x
         target->ClearUnitState(UNIT_STATE_DIED);
 
+        // Combat diagnostic: authoritative removal reason straight from the
+        // aura system (default/interrupt, cancel, enemy spell, expire, death).
+        if (Player* feignPlayer = target->ToPlayer())
+            feignPlayer->NotifyFeignDeathRemoved(uint8(aurApp->GetRemoveMode()));
+
         if (Creature* creature = target->ToCreature())
             creature->InitializeReactState();
     }

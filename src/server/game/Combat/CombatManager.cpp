@@ -228,6 +228,13 @@ bool CombatManager::SetInCombatWith(Unit* who, bool addSecondUnitSuppressed)
     if (!who || who == _owner)
         return false;
 
+    // Combat diagnostic: names whichever unit put a pending feign/trap watch
+    // back into combat, regardless of which side initiated this call.
+    if (Player* feignOwner = _owner->ToPlayer())
+        feignOwner->NotifyCombatDiagnosticCombatSource(who);
+    if (Player* feignWho = who->ToPlayer())
+        feignWho->NotifyCombatDiagnosticCombatSource(_owner);
+
     // Are we already in combat? If yes, refresh pvp combat
     if (PvPCombatReference* existingPvpRef = Trinity::Containers::MapGetValuePtr(_pvpRefs, who->GetGUID()))
     {

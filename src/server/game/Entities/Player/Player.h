@@ -959,7 +959,11 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void Update(uint32 time) override;
         void NotifyDirectSpellCast(uint32 spellId);
         void NotifyFeignDeathApplied();
+        void NotifyFeignDeathInterrupted(uint32 interruptFlag);
+        void NotifyFeignDeathRemoved(uint8 removeMode);
         void NotifyCombatDiagnosticSpellFailure(uint32 spellId, SpellCastResult result);
+        void NotifyCombatDiagnosticDamageTaken(Unit* attacker, uint32 spellId, uint32 damage);
+        void NotifyCombatDiagnosticCombatSource(Unit* source);
 
         static bool BuildEnumData(PreparedQueryResult result, WorldPacket* data);
 
@@ -2518,6 +2522,15 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         uint32 m_combatDiagnosticFeignLastDirectSpellId;
         uint32 m_combatDiagnosticFeignFailedSpellId;
         uint32 m_combatDiagnosticFeignFailedResult;
+        // Definitive break-cause capture: populated live by the code path that
+        // actually removed the feign aura / re-entered combat, not inferred
+        // after the fact from before/after snapshots.
+        uint32 m_combatDiagnosticFeignInterruptFlag;
+        uint8 m_combatDiagnosticFeignRemoveMode;
+        ObjectGuid m_combatDiagnosticFeignDamageSourceGuid;
+        uint32 m_combatDiagnosticFeignDamageSourceSpell;
+        uint32 m_combatDiagnosticFeignDamageAmount;
+        ObjectGuid m_combatDiagnosticFeignCombatSourceGuid;
         bool m_combatDiagnosticSent;
         bool m_combatDiagnosticHasDirectSpellCast;
         bool m_combatDiagnosticFeignTrapPending;
