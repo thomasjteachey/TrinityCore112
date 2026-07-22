@@ -3046,8 +3046,20 @@ SpellMissInfo Spell::PreprocessSpellHit(Unit* unit, bool scaleAura, TargetInfo& 
 
             if (m_originalCaster && unit->IsInCombat() && m_spellInfo->HasInitialAggro() && !unit->IsPet())
             {
-                if (m_originalCaster->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED)) // only do explicit combat forwarding for PvP enabled units
-                    m_originalCaster->GetCombatManager().InheritCombatStatesFrom(unit);    // for creature v creature combat, the threat forward does it for us
+                // Utility totems (Tremor, Stoneskin, Mana Spring, ...) pulse
+                // their effect on friendly party members constantly; without
+                // this check, assisting/cleansing/buffing an ally who happens
+                // to already be fighting someone would drag that unrelated
+                // enemy into combat with the totem, even though the totem
+                // never targeted or touched them. Fire totems (Searing,
+                // Magma, Fire Nova, ...) do deal damage and should still
+                // forward combat -- matches the fire-totem-only rule already
+                // used for the reverse direction in ShouldPropagateCombatToOwner
+                // (CombatManager.cpp).
+                Totem const* originalCasterTotem = m_originalCaster->ToTotem();
+                if (m_originalCaster->HasUnitFlag(UNIT_FLAG_PLAYER_CONTROLLED) && // only do explicit combat forwarding for PvP enabled units
+                    (!originalCasterTotem || originalCasterTotem->IsFireTotem()))
+                    m_originalCaster->GetCombatManager().InheritCombatStatesFrom(unit, m_spellInfo->Id);    // for creature v creature combat, the threat forward does it for us
                 unit->GetThreatManager().ForwardThreatForAssistingMe(m_originalCaster, 0.0f, nullptr, true);
             }
         }

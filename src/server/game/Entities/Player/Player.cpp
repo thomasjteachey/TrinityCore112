@@ -568,6 +568,8 @@ Player::Player(WorldSession* session) : Unit(true)
     m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
     m_combatDiagnosticFeignCombatSpellId = 0;
     m_combatDiagnosticFeignCombatMissCondition = 0;
+    m_combatDiagnosticFeignCombatInheritedFromGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatInheritedSpellId = 0;
     m_combatDiagnosticSent = false;
     m_combatDiagnosticHasDirectSpellCast = false;
     m_combatDiagnosticFeignTrapPending = false;
@@ -26039,6 +26041,8 @@ void Player::NotifyFeignDeathApplied()
     m_combatDiagnosticFeignCombatSourceGuid = ObjectGuid::Empty;
     m_combatDiagnosticFeignCombatSpellId = 0;
     m_combatDiagnosticFeignCombatMissCondition = 0;
+    m_combatDiagnosticFeignCombatInheritedFromGuid = ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatInheritedSpellId = 0;
     m_combatDiagnosticFeignTrapPending = true;
     m_combatDiagnosticFeignSawAura = true;
     m_combatDiagnosticFeignSawOutOfCombat = !IsInCombat();
@@ -26137,6 +26141,26 @@ void Player::NotifyCombatDiagnosticSpellEngage(uint32 spellId, uint8 missConditi
 
     m_combatDiagnosticFeignCombatSpellId = spellId;
     m_combatDiagnosticFeignCombatMissCondition = missCondition;
+}
+
+// Fires from CombatManager::InheritCombatStatesFrom, which runs when a
+// player-controlled unit (e.g. a totem, flagged UNIT_FLAG_PLAYER_CONTROLLED)
+// casts an initial-aggro spell on a friendly ally who is already in combat
+// (Spell.cpp's friendly-assist branch) -- the caster then inherits ALL of
+// that ally's combat opponents onto itself, including us, with zero action
+// on our part or the caster's. This is why a totem/pet that never touched
+// you can still clip your combat: it assisted someone who was already
+// fighting you, and the game forwards your fight onto the assister.
+void Player::NotifyCombatDiagnosticCombatInherited(Unit const* assistedAlly, uint32 causeSpellId)
+{
+    if (!m_combatDiagnosticFeignTrapPending || !IsHumanHunterFeignDiagnosticTarget(this))
+        return;
+
+    if (!m_combatDiagnosticFeignCombatInheritedFromGuid.IsEmpty())
+        return;
+
+    m_combatDiagnosticFeignCombatInheritedFromGuid = assistedAlly ? assistedAlly->GetGUID() : ObjectGuid::Empty;
+    m_combatDiagnosticFeignCombatInheritedSpellId = causeSpellId;
 }
 
 void Player::UpdateCombatDiagnostic(uint32 diff)
@@ -26277,7 +26301,9 @@ void Player::SendFeignTrapDiagnostic()
                << ", hitDmg=" << m_combatDiagnosticFeignDamageAmount
                << ", combatReenterBy=" << describeUnit(m_combatDiagnosticFeignCombatSourceGuid)
                << ", combatSpell=" << m_combatDiagnosticFeignCombatSpellId
-               << ", combatSpellResult=" << (m_combatDiagnosticFeignCombatSpellId ? DescribeFeignCombatMiss(m_combatDiagnosticFeignCombatMissCondition) : "n/a");
+               << ", combatSpellResult=" << (m_combatDiagnosticFeignCombatSpellId ? DescribeFeignCombatMiss(m_combatDiagnosticFeignCombatMissCondition) : "n/a")
+               << ", combatInheritedFrom=" << describeUnit(m_combatDiagnosticFeignCombatInheritedFromGuid)
+               << ", combatInheritedSpell=" << m_combatDiagnosticFeignCombatInheritedSpellId;
     diagnostic << '.';
 
     std::string const message = diagnostic.str();

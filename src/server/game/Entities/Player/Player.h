@@ -965,6 +965,7 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         void NotifyCombatDiagnosticDamageTaken(Unit* attacker, uint32 spellId, uint32 damage);
         void NotifyCombatDiagnosticCombatSource(Unit* source);
         void NotifyCombatDiagnosticSpellEngage(uint32 spellId, uint8 missCondition);
+        void NotifyCombatDiagnosticCombatInherited(Unit const* assistedAlly, uint32 causeSpellId);
 
         static bool BuildEnumData(PreparedQueryResult result, WorldPacket* data);
 
@@ -2534,6 +2535,8 @@ class TC_GAME_API Player : public Unit, public GridObject<Player>
         ObjectGuid m_combatDiagnosticFeignCombatSourceGuid;
         uint32 m_combatDiagnosticFeignCombatSpellId;
         uint8 m_combatDiagnosticFeignCombatMissCondition;
+        ObjectGuid m_combatDiagnosticFeignCombatInheritedFromGuid;
+        uint32 m_combatDiagnosticFeignCombatInheritedSpellId;
         bool m_combatDiagnosticSent;
         bool m_combatDiagnosticHasDirectSpellCast;
         bool m_combatDiagnosticFeignTrapPending;
