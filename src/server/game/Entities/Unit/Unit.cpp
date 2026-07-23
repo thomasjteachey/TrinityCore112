@@ -4089,6 +4089,13 @@ void Unit::_UnapplyAura(AuraApplication* aurApp, AuraRemoveMode removeMode)
     ABORT();
 }
 
+// Same seal test as spell_pal_judgement: Seal of Justice (20164) sits outside
+// the seal family-flag collection and needs the explicit id check.
+static bool IsTwistableSeal(SpellInfo const* spellInfo)
+{
+    return spellInfo->GetSpellSpecific() == SPELL_SPECIFIC_SEAL || spellInfo->Id == 20164;
+}
+
 void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)
 {
     SpellInfo const* spellProto = aura->GetSpellInfo();
@@ -4103,10 +4110,35 @@ void Unit::_RemoveNoStackAurasDueToAura(Aura* aura, bool owned)
         return;
     }
 
+    // Seal twisting: a seal replacing another seal leaves the old one up for a
+    // short grace window instead of removing it, so a swing landing inside the
+    // window benefits from both seals (classic spell-batch behaviour). Safe
+    // against double judging even though Judgement is off-GCD: the Judgement
+    // script unleashes only the freshest seal and then strips every seal
+    // through direct removal, which never passes through this stacking path.
+    int32 const twistWindow = int32(sWorld->getIntConfig(CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS));
+    auto keepForSealTwist = [&](Aura const* existingAura)
+    {
+        if (!twistWindow || !IsTwistableSeal(spellProto) || !IsTwistableSeal(existingAura->GetSpellInfo()))
+            return false;
+
+        int32 const remaining = existingAura->GetDuration();
+        if (remaining < 0) // permanent aura, must not outlive its replacement
+            return false;
+
+        if (remaining > twistWindow)
+        {
+            Aura* existing = const_cast<Aura*>(existingAura); // owned by this unit, only the duration is shortened
+            existing->SetDuration(twistWindow);
+            existing->SetNeedClientUpdateForTargets();
+        }
+        return true;
+    };
+
     if (owned)
-        RemoveOwnedAuras([aura](Aura const* ownedAura) { return !aura->CanStackWith(ownedAura); }, AURA_REMOVE_BY_DEFAULT);
+        RemoveOwnedAuras([&](Aura const* ownedAura) { return !aura->CanStackWith(ownedAura) && !keepForSealTwist(ownedAura); }, AURA_REMOVE_BY_DEFAULT);
     else
-        RemoveAppliedAuras([aura](AuraApplication const* appliedAura) { return !aura->CanStackWith(appliedAura->GetBase()); }, AURA_REMOVE_BY_DEFAULT);
+        RemoveAppliedAuras([&](AuraApplication const* appliedAura) { return !aura->CanStackWith(appliedAura->GetBase()) && !keepForSealTwist(appliedAura->GetBase()); }, AURA_REMOVE_BY_DEFAULT);
 }
 
 void Unit::_RegisterAuraEffect(AuraEffect* aurEff, bool apply)

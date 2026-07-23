@@ -1523,6 +1523,10 @@ void World::LoadConfigSettings(bool reload)
     m_int_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION] = sConfigMgr->GetIntDefault("Centurion.HeartbeatResist.Regression", 30);
     m_float_configs[CONFIG_CENTURION_HEARTBEATRESIST_REGRESSION_LERP] = sConfigMgr->GetFloatDefault("Centurion.HeartbeatResist.RegressionLerp", .2f);
 
+    // Seal twisting: how long (ms) a paladin seal survives being replaced by
+    // another seal, letting one melee swing benefit from both. 0 disables.
+    m_int_configs[CONFIG_CENTURION_PALADIN_SEAL_TWIST_WINDOW_MS] = sConfigMgr->GetIntDefault("Centurion.Paladin.SealTwistWindowMs", 400);
+
     // Max instances per hour
     m_int_configs[CONFIG_MAX_INSTANCES_PER_HOUR] = sConfigMgr->GetIntDefault("AccountInstancesPerHour", 5);
 

@@ -1482,6 +1482,10 @@ private:
         // Some seals have SPELL_AURA_DUMMY in EFFECT_2.  Do not cast or remove
         // auras while iterating this list: triggered Judgement effects can alter
         // the caster's seal auras and invalidate the AuraEffectList iterator.
+        // Judgement is off-GCD, so during the seal-twist grace window two seals
+        // can be up at once: judge only the one with the most time left (the
+        // seal cast last), never the replaced seal that is about to expire.
+        AuraEffect const* judgedSeal = nullptr;
         Unit::AuraEffectList const& auras = caster->GetAuraEffectsByType(SPELL_AURA_DUMMY);
         for (Unit::AuraEffectList::const_iterator i = auras.begin(); i != auras.end(); ++i)
         {
@@ -1497,13 +1501,17 @@ private:
                 auraEffect->GetEffIndex() != EFFECT_2 || !sSpellMgr->GetSpellInfo(auraEffect->GetAmount()))
                 continue;
 
-            spellId2 = auraEffect->GetAmount();
+            if (!judgedSeal || auraEffect->GetBase()->GetDuration() > judgedSeal->GetBase()->GetDuration())
+                judgedSeal = auraEffect;
+        }
+
+        if (judgedSeal)
+        {
+            spellId2 = judgedSeal->GetAmount();
 
             if (Aura* sanctifiedSeals = caster->GetAuraOfRankedSpell(SPELL_PALADIN_SANCTIFIED_SEALS))
                 if (sanctifiedSeals->GetSpellInfo())
-                    sealManaRefund = auraSpellInfo->ManaCost * 8 / 10;
-
-            break;
+                    sealManaRefund = judgedSeal->GetSpellInfo()->ManaCost * 8 / 10;
         }
 
         if (sealManaRefund)
@@ -1519,9 +1527,11 @@ private:
         // Remove all seal spells.
         caster->RemoveAurasDueToSpell(20164);
 
+        // Loop: during the seal-twist grace window two ranks of the same seal
+        // chain can be up at once and both must go.
         auto removeRankedSeal = [caster](uint32 spellId)
         {
-            if (AuraApplication* seal = caster->GetAuraApplicationOfRankedSpell(spellId))
+            while (AuraApplication* seal = caster->GetAuraApplicationOfRankedSpell(spellId))
                 caster->RemoveAurasDueToSpell(seal->GetBase()->GetId());
         };
 
